@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:130px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">INK — THE VOID</div>
+  
+  <canvas id="c" width="700" height="130"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const sw = [
+  ['INK-0',     '#0A0F0A', 'canvas void'],
+  ['INK-1',     '#121A12', 'modals'],
+  ['INK-2',     '#1A2A1A', 'ground tile'],
+  ['INK-3',     '#243424', 'speckle'],
+];
+A.runCard(c, (ctx,{loopT}) => {
+  let x = 22;
+  for (const [n,v,sub] of sw) {
+    ctx.fillStyle = v;
+    ctx.fillRect(x, 30, 80, 50);
+    ctx.strokeStyle = '#39FF14';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x+0.5, 30.5, 80, 50);
+    ctx.fillStyle = '#39FF14';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur=3;
+    ctx.fillText(n, x, 96);
+    ctx.shadowBlur=0;
+    ctx.fillStyle = '#28B30E';
+    ctx.fillText(v, x, 108);
+    ctx.fillStyle = '#196407';
+    ctx.fillText(sub, x, 120);
+    x += 165;
+  }
+}, { post: true });
+
+</script>
+</body></html>

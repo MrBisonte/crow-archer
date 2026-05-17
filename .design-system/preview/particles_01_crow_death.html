@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:150px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PARTICLES — CROW DEATH</div>
+  
+  <canvas id="c" width="700" height="150"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles();
+let next = 0;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  next -= dt;
+  if (next <= 0) {
+    ps.burst(350, 75, {
+      shapeMix: [['circle', 0.8], ['spark', 0.2]],
+      colors: ['#0A0A0A','#1F1F1F','#3A3A3A','#FFB400'],
+      count: 14,
+      speedMin: 40, speedMax: 120,
+      decay: 1.8,
+      damping: 0.6,
+      shadowBlur: 4,
+      forceColor: '#FFB400',
+    });
+    next = 1.0;
+  }
+  ps.update(dt); ps.draw(ctx);
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('14 PARTICLES    80% CIRCLE + 20% SPARK    40–120 px/s    DECAY 1.8', 350, 130);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

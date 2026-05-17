@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">TYPE — SCALE</div>
+  
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx, {loopT}) => {
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+
+  ctx.shadowBlur = 8;
+  ctx.font = 'bold 24px ui-monospace, monospace';
+  ctx.letterSpacing = '2px';
+  ctx.fillText('24PX HEAD', 22, 30);
+
+  ctx.shadowBlur = 4;
+  ctx.font = '12px ui-monospace, monospace';
+  ctx.fillText('12PX BODY — HUD AND BANNERS', 22, 80);
+
+  ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.fillStyle = '#28B30E';
+  ctx.fillText('10PX MICRO — LABELS, METADATA, UNITS', 22, 105);
+
+  ctx.shadowBlur = 0;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.fillStyle = '#196407';
+  ctx.fillText('STACK: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace', 22, 140);
+  ctx.fillText('TRACKING: 2px on banners + heads; 0 elsewhere', 22, 158);
+  ctx.fillText('WEIGHT: regular for body, bold for headings only', 22, 176);
+});
+
+</script>
+</body></html>

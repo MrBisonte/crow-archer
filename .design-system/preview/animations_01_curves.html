@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">ANIMATIONS — EASING CURVES</div>
+  
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  const baseY = 110;
+  const span = 580, x0 = 60;
+  const curves = [
+    { name: 'sin',         color: '#39FF14', fn: x => Math.sin(x*Math.PI*2)*0.5 + 0.5 },
+    { name: 'sin²',     color: '#39E0FF', fn: x => { const s = Math.sin(x*Math.PI*2); return s*s; } },
+    { name: 'smoothstep',  color: '#FFB400', fn: x => x*x*(3-2*x) },
+    { name: 'linear',      color: '#FF7A1F', fn: x => x },
+  ];
+  let cy = 30;
+  for (const cv of curves) {
+    ctx.strokeStyle = cv.color;
+    ctx.shadowColor = cv.color;
+    ctx.shadowBlur = 4;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= 60; i++) {
+      const x = i/60;
+      const y = cv.fn(x);
+      const px = x0 + x*span;
+      const py = cy + 30 - y*30;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = cv.color;
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(cv.name, x0 + span + 4, cy + 20);
+    cy += 35;
+  }
+  // moving dot showing live loopT phase
+  const phase = (loopT % 2)/2;
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = 6;
+  for (let i = 0; i < curves.length; i++) {
+    const y = curves[i].fn(phase);
+    ctx.beginPath();
+    ctx.arc(x0 + phase*span, 30 + i*35 + 30 - y*30, 3, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

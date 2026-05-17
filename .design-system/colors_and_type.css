@@ -1,0 +1,160 @@
+/* ============================================================
+   CROW ARCHER — Color & Type Tokens
+   All values are also reproduced as literal hex/rgba in the
+   developer-facing entity specs so canvas code never has to
+   resolve CSS variables.
+   ============================================================ */
+
+:root {
+  /* -------- BASE COLORS -------- */
+
+  /* Brand: phosphor green */
+  --phosphor:        #39FF14;   /* primary brand, HUD text, friendly glow */
+  --phosphor-dim:    #28B30E;   /* hover/selected darker step */
+  --phosphor-deep:   #196407;   /* underline / muted brand */
+  --phosphor-bg:     rgba(57, 255, 20, 0.08);  /* tint over ink */
+
+  /* Ink (the void) */
+  --ink-0:           #0A0F0A;   /* canvas void, overlay wash */
+  --ink-1:           #121A12;   /* slightly lifted ink — modals, banners */
+  --ink-2:           #1A2A1A;   /* EMPTY tile fill (ground) */
+  --ink-3:           #243424;   /* ground speckle, tile micro-texture */
+
+  /* Threat — red */
+  --red-hot:         #FF1F1F;   /* aggro crow fill, low-HP pulse, eyes */
+  --red-deep:        #8A1010;   /* boss wings, dynamite body */
+  --red-blood:       #5A0808;   /* explosion ring inner */
+  --amber-fire:      #FFB400;   /* explosion core, fire-trail head */
+
+  /* Power-ups */
+  --cyan-ric:        #39E0FF;   /* ricochet arrows + pickup */
+  --cyan-dim:        #1B7A8A;   /* ricochet trail tail */
+  --orange-fire:     #FF7A1F;   /* fire arrows + pickup + fire patch */
+  --orange-deep:     #B23A00;   /* fire patch outer / smoke */
+
+  /* Arrow (default) */
+  --arrow-shaft:     #D4A832;
+  --arrow-head:      #F0C830;
+  --arrow-fletch:    #A07828;
+
+  /* Player */
+  --player-body:     #3A5F88;   /* steel-blue tunic */
+  --player-skin:     #D9B98A;
+  --player-hat:      #0E1410;
+  --player-cloak:    #0E1410;
+  --player-cloak-edge: #39FF14; /* 1px phosphor accent stitched on cloak */
+
+  /* Tree (already exists, listed for reference) */
+  --tree-trunk:      #5B3A1F;
+  --tree-canopy-1:   #2C5A22;
+  --tree-canopy-2:   #1F4A19;
+  --tree-canopy-hl:  #3F7A2C;
+
+  /* Rock + water (reference) */
+  --rock:            #5C5C5C;
+  --rock-shade:      #3F3F3F;
+  --water-1:         #173A78;
+  --water-2:         #2A66B0;
+
+  /* Diegetic shadow (ground shadow ellipses) */
+  --shadow-flat:     rgba(0, 0, 0, 0.45);
+
+  /* CRT effects */
+  --scanline:        rgba(0, 0, 0, 0.12);
+  --scan-sweep:      rgba(57, 255, 20, 0.04);
+  --vignette:        rgba(0, 0, 0, 0.6);
+  --overlay-wash:    rgba(10, 15, 10, 0.78);
+
+  /* -------- TYPE -------- */
+
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-micro:  10px;    /* HUD micro-labels */
+  --fs-body:   12px;    /* HUD body, banners, gameplay strings */
+  --fs-head:   24px;    /* overlay headings (menu, game over) */
+
+  --lh-tight:  1.0;
+  --lh-body:   1.2;
+
+  --tracking-tight:  0;       /* default */
+  --tracking-banner: 2px;     /* banners, headings */
+
+  /* -------- SEMANTIC ROLES -------- */
+  --fg:          var(--phosphor);
+  --fg-muted:    var(--phosphor-dim);
+  --bg:          var(--ink-0);
+  --bg-elev:     var(--ink-1);
+  --separator:   var(--phosphor);
+  --hp-good:     var(--phosphor);
+  --hp-low:      var(--red-hot);
+  --pickup-ric:  var(--cyan-ric);
+  --pickup-fire: var(--orange-fire);
+
+  /* Glow caps (for ctx.shadowBlur) */
+  --glow-soft:   6;
+  --glow-pulse-low:  4;
+  --glow-pulse-high: 12;
+  --glow-max:    16;
+}
+
+/* Semantic element styles — applied to docs/preview chrome, not the game canvas */
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  margin: 0;
+}
+
+h1, .display {
+  font-family: var(--font-mono);
+  font-size: var(--fs-head);
+  letter-spacing: var(--tracking-banner);
+  text-transform: uppercase;
+  color: var(--fg);
+  text-shadow: 0 0 8px var(--phosphor);
+  margin: 0;
+}
+
+h2 {
+  font-size: 16px;
+  letter-spacing: var(--tracking-banner);
+  text-transform: uppercase;
+  color: var(--fg);
+  text-shadow: 0 0 4px var(--phosphor);
+}
+
+h3 {
+  font-size: var(--fs-body);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+p, li, code, .body {
+  font-size: var(--fs-body);
+  color: var(--fg);
+}
+
+.micro {
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.banner {
+  font-size: var(--fs-body);
+  letter-spacing: var(--tracking-banner);
+  text-transform: uppercase;
+  color: var(--fg);
+  text-shadow: 0 0 6px var(--phosphor);
+}
+
+hr, .separator {
+  border: 0;
+  border-top: 1px solid var(--separator);
+  box-shadow: 0 0 4px var(--phosphor);
+}

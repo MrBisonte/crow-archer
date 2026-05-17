@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:180px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">01. PLAYER</div>
+  <div class="label right">~22px tall</div>
+  <canvas id="c" width="700" height="180"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // 4 states: idle, walking, aiming, fully-charged
+  const states = [
+    { label: 'IDLE',         aim: 0,         charge: 0,    walk: 0,         move: false },
+    { label: 'WALK',         aim: Math.PI*0.1, charge: 0,    walk: loopT*8,   move: true  },
+    { label: 'AIM',          aim: -Math.PI*0.25, charge: 0.3,  walk: 0,       move: false },
+    { label: 'FULL CHARGE',  aim: -Math.PI*0.25, charge: 1.0,  walk: 0,       move: false },
+  ];
+  let x = 100;
+  for (const s of states) {
+    A.drawPlayer(ctx, x, 90, { aimAngle: s.aim, bowCharge: s.charge, walkPhase: s.walk, cloakSway: 0.15*Math.sin(loopT*2.2), moving: s.move });
+    ctx.fillStyle = '#39FF14';
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(s.label, x, 150);
+    ctx.shadowBlur = 0;
+    x += 167;
+  }
+});
+
+</script>
+</body></html>

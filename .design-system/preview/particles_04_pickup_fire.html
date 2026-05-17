@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:150px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PARTICLES — PICKUP FIRE</div>
+  
+  <canvas id="c" width="700" height="150"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles();
+let next = 0;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  next -= dt;
+  if (next <= 0) {
+    ps.burst(350, 75, {
+      shapeMix: [['circle', 0.6], ['spark', 0.4]],
+      colors: ['#FFB400','#FF7A1F','#FFFFFF','#B23A00'],
+      count: 16,
+      speedMin: 50, speedMax: 140,
+      decay: 1.6,
+      gravity: -20,
+      shadowBlur: 8,
+    });
+    next = 0.9;
+  }
+  ps.update(dt); ps.draw(ctx);
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('16 PARTICLES    GRAVITY -20 (RISES)    SMOKE LINGERS', 350, 130);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

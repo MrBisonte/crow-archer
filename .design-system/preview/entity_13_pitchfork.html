@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:180px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">13. PITCHFORK — 3-PHASE SWING</div>
+  
+  <canvas id="c" width="700" height="180"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+let swingT = -0.4;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  swingT += dt;
+  if (swingT > 0.7) swingT = -0.3;
+  // wind-up / strike / recover indicator
+  const WINDUP = 0.12, STRIKE = 0.18, RECOVER = 0.36;
+  let phase = 'IDLE';
+  if (swingT >= 0 && swingT < WINDUP) phase = 'WIND-UP';
+  else if (swingT >= WINDUP && swingT < STRIKE) phase = 'STRIKE';
+  else if (swingT >= STRIKE && swingT < RECOVER) phase = 'RECOVER';
+  // four stills of the swing at fixed times
+  const stills = [0.0, 0.10, 0.15, 0.28];
+  const lbls = ['START', 'WIND-UP', 'STRIKE', 'RECOVER'];
+  for (let i = 0; i < 4; i++) {
+    const cx = 100 + i*167;
+    A.drawPlayer(ctx, cx, 80, { aimAngle: 0, bowCharge: 0, walkPhase: 0, moving: false });
+    A.drawPitchfork(ctx, cx, 80, { swingT: stills[i], swingAngle: 0, loopT });
+    ctx.fillStyle = '#39FF14';
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(lbls[i], cx, 145);
+    ctx.shadowBlur = 0;
+  }
+  // live runner small at top
+  ctx.fillStyle = '#196407';
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('LIVE: ' + phase + '   t=' + Math.max(0,swingT).toFixed(2) + 's', 22, 168);
+});
+
+</script>
+</body></html>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">CROW ARCHER</div>
+  <div class="label right">WORDMARK</div>
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const ctx = c.getContext('2d');
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  ctx.save();
+  ctx.translate(350, 100);
+  // wordmark, in two stacked lines
+  ctx.font = 'bold 36px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = 8 + 4*Math.sin(loopT*2);
+  ctx.fillStyle = '#39FF14';
+  ctx.letterSpacing = '6px';
+  // render letters one at a time for letter-spacing
+  const draw = (str, y) => {
+    let x = -((str.length-1)*22)/2;
+    for (const ch of str) { ctx.fillText(ch, x, y); x += 22; }
+  };
+  draw('CROW',  -22);
+  draw('ARCHER', 18);
+  ctx.shadowBlur = 0;
+  // bracket flourish
+  ctx.strokeStyle = '#39FF14';
+  ctx.lineWidth = 1;
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = 6;
+  const bl = -80, br = 80;
+  ctx.beginPath();
+  ctx.moveTo(bl, -45); ctx.lineTo(bl, 45);
+  ctx.moveTo(br, -45); ctx.lineTo(br, 45);
+  ctx.moveTo(bl, -45); ctx.lineTo(bl+6, -45);
+  ctx.moveTo(br, -45); ctx.lineTo(br-6, -45);
+  ctx.moveTo(bl, 45); ctx.lineTo(bl+6, 45);
+  ctx.moveTo(br, 45); ctx.lineTo(br-6, 45);
+  ctx.stroke();
+  ctx.restore();
+  // crow silhouette
+  A.drawCrow(ctx, 100, 100, { wingPhase: loopT*12, entityPhase: 0, loopT, facing: -1 });
+  // archer
+  A.drawPlayer(ctx, 600, 100, { aimAngle: Math.PI, bowCharge: 0.4 + 0.4*Math.sin(loopT*2), walkPhase: 0, moving: false });
+});
+
+</script>
+</body></html>
