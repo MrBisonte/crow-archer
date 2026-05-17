@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:130px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">BANNER — INCOMING FLASH</div>
+  
+  <canvas id="c" width="700" height="130"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // background strip
+  ctx.fillStyle = '#121A12';
+  ctx.fillRect(0, 40, 700, 50);
+  ctx.strokeStyle = '#39FF14';
+  ctx.lineWidth = 1;
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.moveTo(0, 40.5); ctx.lineTo(700, 40.5);
+  ctx.moveTo(0, 89.5); ctx.lineTo(700, 89.5);
+  ctx.stroke();
+
+  const pulse = 4 + 6*Math.abs(Math.sin(loopT*8));
+  ctx.fillStyle = '#FF1F1F';
+  ctx.shadowColor = '#FF1F1F';
+  ctx.shadowBlur = pulse;
+  ctx.font = 'bold 24px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // letter spacing manually
+  const text = 'INCOMING';
+  let x = 350 - (text.length-1)*15/2*2;
+  ctx.fillText('I N C O M I N G', 350, 65);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

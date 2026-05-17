@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:180px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">VOICE — HUD STRINGS</div>
+  
+  <canvas id="c" width="700" height="180"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  ctx.font = '14px ui-monospace, monospace';
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = 4;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.letterSpacing = '2px';
+  const lines = [
+    'HP 03/05    ARROWS x07    WAVE 04    SCORE 1240',
+    'INCOMING',
+    'BOSS APPROACHING',
+    'RICOCHET ACQUIRED',
+    'YOU DIED   [R] RETRY',
+  ];
+  let y = 26;
+  for (const l of lines) {
+    if (l === 'INCOMING') {
+      ctx.shadowBlur = 4 + 6*Math.abs(Math.sin(loopT*8));
+      ctx.fillStyle = '#FF1F1F';
+      ctx.shadowColor = '#FF1F1F';
+    } else if (l === 'BOSS APPROACHING') {
+      ctx.shadowBlur = 4 + 4*Math.abs(Math.sin(loopT*4));
+      ctx.fillStyle = '#FF1F1F'; ctx.shadowColor = '#FF1F1F';
+    } else if (l === 'RICOCHET ACQUIRED') {
+      ctx.fillStyle = '#39E0FF'; ctx.shadowColor = '#39E0FF'; ctx.shadowBlur = 6;
+    } else {
+      ctx.fillStyle = '#39FF14'; ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4;
+    }
+    ctx.fillText(l, 22, y);
+    y += 24;
+  }
+}, { post: true });
+
+</script>
+</body></html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">05. BOSS</div>
+  
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  A.drawBoss(ctx, 350, 100, { wingPhase: loopT*5, entityPhase: 0, loopT, facing: -1 });
+  // compare-size: a normal crow
+  A.drawCrow(ctx, 590, 130, { wingPhase: loopT*12, entityPhase: 0, loopT, facing: -1 });
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('56x36 body    5 SPIKES    BIGGER EYES + CORONA    (v2 grown)', 350, 180);
+  ctx.fillText('vs', 590, 105);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

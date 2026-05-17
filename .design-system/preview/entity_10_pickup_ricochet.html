@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:150px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">10. PICKUP — RICOCHET</div>
+  
+  <canvas id="c" width="700" height="150"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  A.drawPickupRicochet(ctx, 230, 70, { loopT, bobPhase: 0 });
+  A.drawPickupRicochet(ctx, 460, 70, { loopT, bobPhase: 1.7 });
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BLINK + HALO BREATHE    BOUNCE PIPS    FLOAT BOB ±2 PX', 350, 130);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

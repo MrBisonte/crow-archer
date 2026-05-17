@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:160px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">04. CROW (AGGRO)</div>
+  
+  <canvas id="c" width="700" height="160"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // moving crows — aggro overlay
+  const t = loopT * 80;
+  const crows = [
+    {x: 180 + Math.sin(loopT)*30, y: 80, p: 0.0, vx: 100, vy: 0},
+    {x: 360 + Math.sin(loopT+1)*30, y: 90, p: 1.5, vx: 100, vy: 30},
+    {x: 540 + Math.sin(loopT+2)*30, y: 75, p: 3.0, vx: 100, vy: -20},
+  ];
+  for (const c of crows) {
+    A.drawCrow(ctx, c.x, c.y, { wingPhase: loopT*12 + c.p, entityPhase: c.p, loopT, facing: -1 });
+    A.drawAggroOverlay(ctx, c.x, c.y, { vx: c.vx, vy: c.vy, loopT });
+  }
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PULSE RING    EYE FLARE    (v2: speed trail removed)', 350, 135);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:150px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">12. FIRE PATCH</div>
+  
+  <canvas id="c" width="700" height="150"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles();
+let emit = 0;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  // emit embers from each patch
+  const positions = [{x: 200, y: 70, ph: 0, life: 4}, {x: 350, y: 70, ph: 1.2, life: 2}, {x: 500, y: 70, ph: 2.4, life: 0.8}];
+  emit += dt;
+  while (emit > 1/8) {
+    for (const p of positions) {
+      const ax = p.x + (Math.random()-0.5)*20;
+      const ay = p.y + (Math.random()-0.5)*8;
+      ps.burst(ax, ay, {
+        shape: 'spark',
+        colors: ['#FFB400','#FF7A1F','#FFFFFF'],
+        count: 1,
+        speedMin: 20, speedMax: 60,
+        decay: 1.5,
+        gravity: -80,
+        shadowBlur: 6,
+      });
+    }
+    emit -= 1/8;
+  }
+  ps.update(dt); ps.draw(ctx);
+  for (const p of positions) {
+    A.drawFirePatch(ctx, p.x, p.y, { loopT, patchPhase: p.ph, lifeT: p.life });
+  }
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('RADIAL GRADIENT    r_outer 16 ±3    8 EMBERS/SEC    LIFETIME FADE', 350, 130);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

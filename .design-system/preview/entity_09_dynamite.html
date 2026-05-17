@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">09. DYNAMITE</div>
+  
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // 4 stages of fuse: 3, 2, 1, 0.3
+  const stages = [3.0, 2.0, 1.0, 0.3];
+  const labels = ['T-03', 'T-02', 'T-01', 'T-0.3'];
+  let x = 100;
+  for (let i = 0; i < stages.length; i++) {
+    A.drawDynamite(ctx, x, 100, { fuseT: stages[i], fuseTotal: 3, bobPhase: i, loopT });
+    ctx.fillStyle = '#39FF14';
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(labels[i], x, 160);
+    ctx.shadowBlur = 0;
+    x += 167;
+  }
+  ctx.fillStyle = '#196407';
+  ctx.textAlign = 'center';
+  ctx.fillText('COUNTDOWN ESCALATES: RED → AMBER → WHITE (FINAL 0.5s)', 350, 180);
+});
+
+</script>
+</body></html>

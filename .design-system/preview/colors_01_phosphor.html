@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:130px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PHOSPHOR — BRAND</div>
+  
+  <canvas id="c" width="700" height="130"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const swatches = [
+  ['PHOSPHOR',      '#39FF14'],
+  ['PHOSPHOR-DIM',  '#28B30E'],
+  ['PHOSPHOR-DEEP', '#196407'],
+  ['PHOSPHOR/8%',   'rgba(57,255,20,0.08)'],
+];
+A.runCard(c, (ctx,{loopT}) => {
+  let x = 22;
+  for (const [name, val] of swatches) {
+    // chip
+    ctx.fillStyle = val;
+    ctx.shadowColor = '#39FF14';
+    ctx.shadowBlur = 6;
+    ctx.fillRect(x, 30, 80, 50);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#39FF14';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x+0.5, 30.5, 80, 50);
+    // label
+    ctx.fillStyle = '#39FF14';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.shadowColor = '#39FF14';
+    ctx.shadowBlur = 3;
+    ctx.fillText(name, x, 96);
+    ctx.fillStyle = '#28B30E'; ctx.shadowBlur=0;
+    ctx.fillText(val.replace('rgba(57,255,20,',''), x, 110);
+    x += 165;
+  }
+}, { post: true });
+
+</script>
+</body></html>

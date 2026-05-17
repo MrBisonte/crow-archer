@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:170px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">GLOW — SHADOWBLUR LADDER</div>
+  
+  <canvas id="c" width="700" height="170"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  const blurs = [0, 4, 6, 8, 12, 16];
+  let x = 50;
+  for (const b of blurs) {
+    ctx.shadowColor = '#39FF14';
+    ctx.shadowBlur = b;
+    ctx.fillStyle = '#39FF14';
+    ctx.beginPath();
+    ctx.arc(x, 70, 8, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#39FF14';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('BLUR ' + b, x, 105);
+    x += 110;
+  }
+  // animated pulse demo
+  ctx.shadowColor = '#FF1F1F';
+  const pulse = 4 + 8*Math.abs(Math.sin(loopT*4));
+  ctx.shadowBlur = pulse;
+  ctx.fillStyle = '#FF1F1F';
+  ctx.beginPath();
+  ctx.arc(350, 140, 6, 0, Math.PI*2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#28B30E';
+  ctx.textAlign = 'left';
+  ctx.fillText('ANIMATED:  4 + 8 * |sin(loopT*4)|       LOW-HP PULSE', 30, 138);
+}, { post: true });
+
+</script>
+</body></html>

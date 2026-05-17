@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PARTICLES — EXPLOSION</div>
+  
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles(300);
+let next = 0, waveT = -1;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  next -= dt;
+  if (next <= 0) { waveT = 0; next = 2.4; }
+  if (waveT >= 0) {
+    if (waveT < dt) {
+      ps.burst(350, 100, {
+        shape: 'circle',
+        colors: ['#FFFFFF','#FFB400'],
+        count: 12,
+        speedMin: 200, speedMax: 360,
+        decay: 4.0,
+        sizeMin: 2, sizeMax: 5,
+        shadowBlur: 16,
+        shadowColor: '#FFFFFF',
+      });
+    }
+    if (waveT >= 0.03 && waveT < 0.03 + dt) {
+      ps.burst(350, 100, {
+        shape: 'circle',
+        colors: ['#FF7A1F','#FF1F1F','#FFB400','#8A1010'],
+        count: 36,
+        speedMin: 120, speedMax: 260,
+        decay: 1.2,
+        damping: 0.5,
+        sizeMin: 2.5, sizeMax: 5,
+        shadowBlur: 10,
+        shadowColor: '#FF7A1F',
+      });
+    }
+    if (waveT >= 0.12 && waveT < 0.12 + dt) {
+      ps.burst(350, 100, {
+        shape: 'circle',
+        colors: ['#3A3A3A','#1A1A1A','#5C5C5C'],
+        count: 12,
+        speedMin: 30, speedMax: 80,
+        decay: 0.5,
+        gravity: -10,
+        sizeMin: 4, sizeMax: 7,
+      });
+    }
+    waveT += dt;
+  }
+  ps.update(dt); ps.draw(ctx);
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('FLASH (12 WHITE)    FIREBALL (36 RED)    SMOKE (12 GREY, RISES)', 350, 180);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

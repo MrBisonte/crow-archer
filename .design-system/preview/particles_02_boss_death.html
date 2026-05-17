@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PARTICLES — BOSS DEATH (3 WAVES)</div>
+  
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles(300);
+let next = 0, waveT = -1;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  next -= dt;
+  if (next <= 0) {
+    waveT = 0; next = 2.2;
+  }
+  if (waveT >= 0) {
+    if (Math.abs(waveT) < dt*1.5 && waveT < dt) {
+      ps.burst(350, 100, {
+        shape: 'circle',
+        colors: ['#050505','#1A1A1A','#3A3A3A','#5A0808'],
+        count: 32,
+        speedMin: 60, speedMax: 200,
+        decay: 1.0,
+        gravity: 30,
+        damping: 0.4,
+        sizeMin: 2, sizeMax: 4,
+      });
+    }
+    if (waveT >= 0.08 && waveT < 0.08 + dt*1.5) {
+      ps.burst(350, 100, {
+        shape: 'spark',
+        colors: ['#FF1F1F','#8A1010','#FFB400'],
+        count: 18,
+        speedMin: 120, speedMax: 280,
+        decay: 1.4,
+        shadowBlur: 6,
+      });
+    }
+    if (waveT >= 0.16 && waveT < 0.16 + dt*1.5) {
+      ps.burst(350, 100, {
+        shape: 'circle',
+        colors: ['#FFB400','#FFFFFF','#FF7A1F'],
+        count: 8,
+        speedMin: 30, speedMax: 80,
+        decay: 0.9,
+        sizeMin: 3, sizeMax: 6,
+        shadowBlur: 12 + 6*Math.sin(loopT*20),
+        shadowColor: '#FFB400',
+      });
+    }
+    waveT += dt;
+  }
+  ps.update(dt); ps.draw(ctx);
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('A: 32 ASH (t=0)    B: 18 RED SPARK (t=+80ms)    C: 8 CORONA POP (t=+160ms)', 350, 180);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

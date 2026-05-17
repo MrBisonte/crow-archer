@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:130px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">07. ARROW (RICOCHET)</div>
+  
+  <canvas id="c" width="700" height="130"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+// fake a moving arrow with trail history
+let history = [];
+A.runCard(c, (ctx,{loopT,dt}) => {
+  const x = 100 + ((loopT*240) % 500);
+  const y = 60 + Math.sin(loopT*3)*8;
+  const ang = Math.atan2(Math.cos(loopT*3)*0.4, 1);
+  history.unshift({x, y, angle: ang});
+  if (history.length > 6) history.length = 6;
+  A.drawArrowRicochet(ctx, x, y, ang, { trailHistory: history.slice(1), bouncesLeft: 3 });
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('6-FRAME TRAIL    3 BOUNCE PIPS    CYAN GLOW BLUR 4 / 6', 350, 110);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

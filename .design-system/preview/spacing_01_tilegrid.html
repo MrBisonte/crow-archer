@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:200px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">TILE GRID — 32PX</div>
+  <div class="label right">25 x 16</div>
+  <canvas id="c" width="700" height="200"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // 4 tiles wide demonstration
+  const ox = 30, oy = 40;
+  for (let gx = 0; gx < 8; gx++) {
+    for (let gy = 0; gy < 4; gy++) {
+      A.drawGroundTile(ctx, ox + gx*32, oy + gy*32);
+    }
+  }
+  // mark grid
+  ctx.strokeStyle = 'rgba(57,255,20,0.25)';
+  ctx.lineWidth = 1;
+  for (let gx = 0; gx <= 8; gx++) {
+    ctx.beginPath();
+    ctx.moveTo(ox + gx*32 - 0.5, oy);
+    ctx.lineTo(ox + gx*32 - 0.5, oy + 128);
+    ctx.stroke();
+  }
+  for (let gy = 0; gy <= 4; gy++) {
+    ctx.beginPath();
+    ctx.moveTo(ox, oy + gy*32 - 0.5);
+    ctx.lineTo(ox + 256, oy + gy*32 - 0.5);
+    ctx.stroke();
+  }
+  // entity in tile
+  A.drawPlayer(ctx, ox + 16, oy + 32 + 16, { aimAngle: 0, bowCharge: 0, walkPhase: 0, moving: false });
+  A.drawCrow(ctx, ox + 16 + 64, oy + 32 + 16, { wingPhase: loopT*12, entityPhase: 0.3, loopT, facing: -1 });
+  // legend
+  ctx.fillStyle = '#39FF14';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText('1 TILE  = 32 x 32 PX', 320, 50);
+  ctx.fillText('SUB     = 8 PX (4 per tile)', 320, 68);
+  ctx.fillText('WORLD   = 25 x 16 TILES', 320, 86);
+  ctx.fillText('CANVAS  = 800 x 544 PX', 320, 104);
+  ctx.fillText('HUD     = 32 PX TOP STRIP', 320, 122);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

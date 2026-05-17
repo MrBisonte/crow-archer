@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:130px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">06. ARROW (NORMAL)</div>
+  
+  <canvas id="c" width="700" height="130"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // three arrows at different angles
+  A.drawArrow(ctx, 140, 60, 0);
+  A.drawArrow(ctx, 350, 60, -Math.PI*0.25);
+  A.drawArrow(ctx, 560, 60, Math.PI*0.15);
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SHAFT 21x1 px    HEAD blur 4    GOLD PALETTE', 350, 110);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:160px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">03. CROW (WHITE / BOSS PHASE)</div>
+  
+  <canvas id="c" width="700" height="160"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  const positions = [
+    {x: 130, y: 80, p: 0},
+    {x: 270, y: 90, p: 1.2},
+    {x: 430, y: 70, p: 2.4},
+    {x: 570, y: 95, p: 3.6},
+  ];
+  for (const c of positions) {
+    A.drawCrowWhite(ctx, c.x, c.y, { wingPhase: loopT*14 + c.p, entityPhase: c.p, loopT, facing: -1 });
+  }
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('WING FREQ 14/s    BODY BOB 1.2 PX    RED EYE + WHITE BLOOM', 350, 135);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

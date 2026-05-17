@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:130px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">POWER-UPS — CYAN + ORANGE</div>
+  
+  <canvas id="c" width="700" height="130"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const sw = [
+  ['CYAN-RIC',     '#39E0FF', '#39E0FF'],
+  ['CYAN-LIGHT',   '#7AF0FF', '#39E0FF'],
+  ['ORANGE-FIRE',  '#FF7A1F', '#FF7A1F'],
+  ['ORANGE-DEEP',  '#B23A00', '#FF7A1F'],
+];
+A.runCard(c, (ctx,{loopT}) => {
+  let x = 22;
+  for (const [n,v,glow] of sw) {
+    ctx.fillStyle = v;
+    ctx.shadowColor = glow; ctx.shadowBlur = 8;
+    ctx.fillRect(x, 30, 80, 50);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#39FF14';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x+0.5, 30.5, 80, 50);
+    ctx.fillStyle = '#39FF14';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur=3;
+    ctx.fillText(n, x, 96);
+    ctx.shadowBlur=0;
+    ctx.fillStyle = '#28B30E';
+    ctx.fillText(v, x, 110);
+    x += 165;
+  }
+}, { post: true });
+
+</script>
+</body></html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:180px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PARTICLES — PITCHFORK STRIKE</div>
+  
+  <canvas id="c" width="700" height="180"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles();
+let swingT = -0.5, fired = false;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  swingT += dt;
+  if (swingT > 0.7) { swingT = -0.3; fired = false; }
+  // fire sparks at start of STRIKE (t = 0.12)
+  if (!fired && swingT >= 0.12) {
+    for (const ty of [-5, 0, 5]) {
+      const tipX = 350 + Math.cos(0)*36;
+      const tipY = 80 + ty;
+      ps.burst(tipX, tipY, {
+        shape: 'spark',
+        colors: ['#FFFFFF','#39FF14','#D9D9D9'],
+        count: 4,
+        speedMin: 90, speedMax: 160,
+        decay: 3.0,
+        gravity: 60,
+        damping: 0.8,
+        angleBias: { angle: 0, spread: 0.8 },
+        shadowBlur: 6,
+      });
+    }
+    fired = true;
+  }
+  ps.update(dt); ps.draw(ctx);
+  A.drawPlayer(ctx, 350, 80, { aimAngle: 0, bowCharge: 0, walkPhase: 0, moving: false });
+  A.drawPitchfork(ctx, 350, 80, { swingT, swingAngle: 0, loopT });
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('12 SPARKS    4 PER TINE    FORWARD-BIASED    DECAY 3.0    GRAV 60', 350, 160);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

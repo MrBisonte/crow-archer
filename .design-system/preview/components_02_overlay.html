@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:220px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">OVERLAY — CORNER BRACKETS + SCAN SWEEP</div>
+  
+  <canvas id="c" width="700" height="220"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+A.runCard(c, (ctx,{loopT}) => {
+  // dim wash
+  ctx.fillStyle = 'rgba(10,15,10,0.78)';
+  ctx.fillRect(40, 30, 620, 170);
+  // corner brackets
+  ctx.strokeStyle = '#39FF14';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = 6;
+  const corner = (x,y, hx, hy) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y + 20*hy); ctx.lineTo(x, y); ctx.lineTo(x + 20*hx, y);
+    ctx.stroke();
+  };
+  corner(50, 40, 1, 1);
+  corner(650, 40, -1, 1);
+  corner(50, 190, 1, -1);
+  corner(650, 190, -1, -1);
+  ctx.shadowBlur = 4;
+  // heading
+  ctx.fillStyle = '#39FF14';
+  ctx.font = 'bold 24px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('P A U S E D', 350, 100);
+  ctx.font = '12px ui-monospace, monospace';
+  ctx.shadowBlur = 4;
+  ctx.fillText('PRESS  ESC  TO RESUME', 350, 140);
+  ctx.fillText('[ R ] RESTART     [ M ] MAIN MENU', 350, 165);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>

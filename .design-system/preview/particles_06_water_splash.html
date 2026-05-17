@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_card.css"/>
+</head><body>
+<div class="card" style="height:150px;">
+  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+  <div class="label">PARTICLES — WATER SPLASH</div>
+  
+  <canvas id="c" width="700" height="150"></canvas>
+  
+</div>
+<script src="_lib.js"></script>
+<script>
+
+const A = window.CrowArcher;
+const ps = new A.Particles();
+let next = 0;
+A.runCard(c, (ctx,{loopT,dt}) => {
+  // a small water tile background to ground it
+  for (let i = 0; i < 12; i++) A.drawWaterTile(ctx, 280 + i*0 -32 + 32, 70, loopT);
+  A.drawWaterTile(ctx, 318, 78, loopT);
+  A.drawWaterTile(ctx, 350, 78, loopT);
+  next -= dt;
+  if (next <= 0) {
+    ps.burst(350, 80, {
+      shapeMix: [['spark', 0.7], ['circle', 0.3]],
+      colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
+      count: 22,
+      speedMin: 120, speedMax: 260,
+      decay: 1.6,
+      gravity: 380,
+      shadowBlur: 4,
+    });
+    // bias velocity upward (post-hoc tweak: nudge vy negative)
+    for (const p of ps.list.slice(-22)) p.vy = -Math.abs(p.vy)*1.6;
+    next = 1.0;
+  }
+  ps.update(dt); ps.draw(ctx);
+  ctx.fillStyle = '#39FF14';
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('22 DROPLETS    GRAVITY 380    UPWARD-BIASED VELOCITY', 350, 130);
+  ctx.shadowBlur = 0;
+});
+
+</script>
+</body></html>
