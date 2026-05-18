@@ -61,6 +61,16 @@ const CONFIG = {
 
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
+  // Knight
+  knightSpearRange: 80, knightSpearCooldown: 0.9,
+  knightSpearDamage: 1, knightSpearBossDamage: 2, knightSpearSwingDuration: 0.28,
+  knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 8,
+  knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
+  knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
+  knightJavelinsPerPickup: 3, knightJavelinSpeed: 580, knightJavelinPierce: 2,
+  knightJavelinBossDamage: 1,
+  bossHPKnight: 12,               // knight has high DPS so boss needs more HP
+
   // Wizard
   wizBoltCooldown: 3.0, wizBoltSpeed: 360, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 2,
@@ -111,12 +121,16 @@ let winScore = 0, winKills = 0, winHP = 0;
 let sniperMode = false;
 
 // Character selection — persists for the session, reset only on new run
-let selectedChar = 'archer';   // 'archer' | 'wizard'
+let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight'
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
 let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
+
+// Knight combat state
+let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false;
+let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
 
 // Inventory — all resource counts live here, keyed by CONFIG.resources
 let inv    = {};   // { arrows: n, dynamites: n }
@@ -129,6 +143,7 @@ function resetInv() {
   for (const [k, r] of Object.entries(CONFIG.resources)) { inv[k] = r.max; iFlash[k] = 0; }
   inv.ricochetArrows = 0; inv.fireArrows = 0;
   inv.fireBolts = 0; inv.laserStreams = 0;
+  inv.knightJavelins = 0; inv.knightFireSwordTimer = 0;
   charge.on = false;
 }
 
@@ -204,6 +219,9 @@ const inGame = () => appState === 'playing' || appState === 'boss_fight';
 function startCharge() {
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
+  } else if (selectedChar === 'knight') {
+    if (knightWhirlwindCD <= 0 && knightWhirlwindTimer <= 0 && inGame()) startWhirlwind();
+    else if (knightWhirlwindCD > 0) playSound(sndEmpty);
   } else {
     if (inv.dynamites > 0 && !charge.on && inGame()) { charge.on = true; charge.t0 = performance.now(); }
   }
@@ -261,6 +279,8 @@ let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamite
 function initGame() {
   generateMap();
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
+  knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false;
+  knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; fires = []; floaters = [];
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; dropStreak = 0; playerShield = false;
@@ -365,10 +385,13 @@ function updatePlayer(dt) {
 
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
-  if (pfCooldown     > 0) pfCooldown     = Math.max(0, pfCooldown     - dt);
-  if (wizBoltCD      > 0) wizBoltCD      = Math.max(0, wizBoltCD      - dt);
-  if (stormCD        > 0) stormCD        = Math.max(0, stormCD        - dt);
-  if (_stormFlash    > 0) _stormFlash    = Math.max(0, _stormFlash    - dt);
+  if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
+  if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
+  if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
+  if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
+  if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
+  if (knightWhirlwindCD   > 0) knightWhirlwindCD  = Math.max(0, knightWhirlwindCD  - dt);
+  if (inv.knightFireSwordTimer > 0) inv.knightFireSwordTimer = Math.max(0, inv.knightFireSwordTimer - dt);
   if (pfSwing > 0) {
     pfSwing = Math.max(0, pfSwing - dt);
     const prog = pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : 1;
@@ -399,11 +422,99 @@ function updatePlayer(dt) {
     }
   }
 
+  // ── Knight spear swing hit-detection ────────────────────────────────────
+  if (selectedChar === 'knight' && knightSpearSwing > 0) {
+    knightSpearSwing = Math.max(0, knightSpearSwing - dt);
+    const prog = 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration;
+    if (prog >= 0.2 && prog < 0.72) {
+      const fsActive = inv.knightFireSwordTimer > 0;
+      const range = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
+      const dmg   = CONFIG.knightSpearDamage  * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
+      const r2    = range ** 2;
+      for (let j = crows.length - 1; j >= 0; j--) {
+        const c = crows[j];
+        const cdx = c.x - player.x, cdy = c.y - player.y;
+        if (cdx*cdx + cdy*cdy > r2) continue;
+        let da = Math.atan2(cdy, cdx) - player.aimAngle;
+        while (da >  Math.PI) da -= Math.PI*2;
+        while (da < -Math.PI) da += Math.PI*2;
+        if (Math.abs(da) > 0.52) continue; // ~30° half-cone
+        killCrow(j);
+        if (fsActive) spawnFire(c.x, c.y);
+        triggerShake(3, 120);
+        burst(c.x, c.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
+          speedMin: 40, speedMax: 100, decay: 3.0, shape: 'spark',
+          shadowBlur: fsActive ? 8 : 3,
+          shadowColor: fsActive ? '#FF7A1F' : '#C0C0C0' });
+      }
+      if (!knightSpearBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield) {
+        const bd  = Math.hypot(boss.x - player.x, boss.y - player.y);
+        let bda   = Math.atan2(boss.y - player.y, boss.x - player.x) - player.aimAngle;
+        while (bda >  Math.PI) bda -= Math.PI*2;
+        while (bda < -Math.PI) bda += Math.PI*2;
+        if (bd < range && Math.abs(bda) < 0.52) {
+          knightSpearBossHit = true;
+          boss.hp -= dmg; boss.hitFlash = 0.2;
+          playSound(sndBossHit); triggerShake(5, 200);
+          if (boss.hp <= 0) startBossDeath();
+        }
+      }
+    }
+  }
+
+  // ── Knight whirlwind continuous tick ─────────────────────────────────────
+  if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
+    knightWhirlwindTimer -= dt;
+    knightWhirlwindTick  -= dt;
+    if (knightWhirlwindTick <= 0) {
+      knightWhirlwindTick = CONFIG.knightWhirlwindTickRate;
+      const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
+      // Damage crows
+      for (let j = crows.length - 1; j >= 0; j--)
+        if (dist2(player.x, player.y, crows[j].x, crows[j].y) < wr2) killCrow(j);
+      // Damage boss
+      if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+          dist2(player.x, player.y, boss.x, boss.y) < wr2) {
+        boss.hp--; boss.hitFlash = 0.1; playSound(sndBossHit);
+        if (boss.hp <= 0) startBossDeath();
+      }
+      // Break tiles in radius
+      const tileR = Math.ceil(wr / CONFIG.tileSize);
+      const tc = Math.floor(player.x / CONFIG.tileSize);
+      const tr = Math.floor(player.y / CONFIG.tileSize);
+      for (let dr = -tileR; dr <= tileR; dr++) {
+        for (let dc = -tileR; dc <= tileR; dc++) {
+          const row = tr + dr, col = tc + dc;
+          if (row <= 0 || row >= CONFIG.rows - 1 || col <= 0) continue;
+          const wx = (col+0.5)*CONFIG.tileSize, wy = (row+0.5)*CONFIG.tileSize;
+          if (dist2(player.x, player.y, wx, wy) < wr2) {
+            if (tilemap[row][col] === TILE.TREE) tilemap[row][col] = TILE.ASH;
+            else if (tilemap[row][col] === TILE.ROCK) tilemap[row][col] = TILE.EMPTY;
+          }
+        }
+      }
+      // Spinning particle ring
+      burst(player.x, player.y, {
+        count: 6, colors: ['#C0C0D0','#8090B0','#ffffff'],
+        speedMin: wr * 0.5, speedMax: wr * 0.95, decay: 4.0, shape: 'spark',
+        shadowBlur: 4, shadowColor: '#9090B0'
+      });
+    }
+    if (knightWhirlwindTimer <= 0) {
+      knightWhirlwindTimer = 0;
+      burst(player.x, player.y, {
+        count: 14, colors: ['#888898','#B0B0C0','#ffffff'],
+        speedMin: 30, speedMax: 90, decay: 2.5, shape: 'spark', shadowBlur: 3, shadowColor: '#aaaacc'
+      });
+    }
+  }
+
   if (shootPressed) { shootPressed = false; tryShoot(); }
 }
 
 function tryShoot() {
   if (selectedChar === 'wizard') { tryWizardBolt(); return; }
+  if (selectedChar === 'knight') { tryKnightAttack(); return; }
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
   if (arrows.length >= CONFIG.maxArrowsInFlight) return;
@@ -453,6 +564,42 @@ function tryPitchfork() {
   pfHitFlash = false;
   playSound(sndPitchfork);
   triggerShake(3, 90);
+}
+
+function tryKnightAttack() {
+  // Javelin throw when stocked — ranged piercing projectile
+  if (inv.knightJavelins > 0) {
+    inv.knightJavelins--;
+    const spd = CONFIG.knightJavelinSpeed;
+    arrows.push({
+      x: player.x, y: player.y,
+      vx: Math.cos(player.aimAngle) * spd,
+      vy: Math.sin(player.aimAngle) * spd,
+      life: 2.2, type: 'javelin', bounces: 0, initSpeed: spd,
+      trailHistory: [], fireSeed: 0, trailTimer: 0,
+      pierceLeft: CONFIG.knightJavelinPierce
+    });
+    playSound(sndPitchfork); triggerShake(3, 80);
+    return;
+  }
+  // Melee spear thrust
+  if (knightSpearCD > 0) { playSound(sndEmpty); return; }
+  knightSpearCD       = CONFIG.knightSpearCooldown;
+  knightSpearSwing    = CONFIG.knightSpearSwingDuration;
+  knightSpearBossHit  = false;
+  playSound(sndPitchfork); triggerShake(2, 70);
+}
+
+function startWhirlwind() {
+  knightWhirlwindCD    = CONFIG.knightWhirlwindCooldown;
+  knightWhirlwindTimer = CONFIG.knightWhirlwindDuration;
+  knightWhirlwindTick  = 0;
+  playSound(sndExplosion); triggerShake(4, 250);
+  burst(player.x, player.y, {
+    count: 20, colors: ['#C0C0C0','#9090A0','#FFFFFF','#7080B0'],
+    speedMin: 50, speedMax: 130, decay: 2.8, shape: 'spark',
+    shadowBlur: 6, shadowColor: '#aaaacc'
+  });
 }
 
 
@@ -597,6 +744,35 @@ function updateArrows(dt) {
     if (a.life <= 0) {
       if (a.type === 'fire') spawnFire(a.x, a.y);
       arrows.splice(i, 1); continue;
+    }
+
+    // ── JAVELIN (knight ranged) ───────────────────────────────────────────
+    if (a.type === 'javelin') {
+      // Straight movement — stops at solid tiles, pierces enemies
+      const nx = a.x + a.vx * dt, ny = a.y + a.vy * dt;
+      const tileX = tileAt(nx, a.y), tileY = tileAt(a.x, ny);
+      if (tileX === TILE.ROCK || tileX === TILE.TREE || tileX === TILE.WATER) { arrows.splice(i,1); continue; }
+      if (tileY === TILE.ROCK || tileY === TILE.TREE || tileY === TILE.WATER) { arrows.splice(i,1); continue; }
+      a.x = nx; a.y = ny;
+      if (a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows*CONFIG.tileSize)
+        { arrows.splice(i,1); continue; }
+      // Boss hit (no pierce through boss)
+      if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+          dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
+        boss.hp -= CONFIG.knightJavelinBossDamage; boss.hitFlash = 0.15; playSound(sndBossHit);
+        arrows.splice(i,1); if (boss.hp <= 0) startBossDeath(); continue;
+      }
+      // Crow hits — pierces through up to pierceLeft enemies
+      for (let j = crows.length - 1; j >= 0; j--) {
+        if (dist2(a.x,a.y,crows[j].x,crows[j].y) < 14*14) {
+          killCrow(j);
+          a.pierceLeft--;
+          burst(a.x, a.y, { count: 6, colors: ['#C0C0C0','#ffffff'],
+            speedMin: 30, speedMax: 80, decay: 3.5, shape: 'spark', shadowBlur: 3, shadowColor: '#C0C0C0' });
+          if (a.pierceLeft <= 0) { arrows.splice(i,1); break; }
+        }
+      }
+      continue;
     }
 
     let removed = false;
@@ -896,18 +1072,20 @@ function checkPickupCollection() {
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
     if (dist2(player.x, player.y, p.x, p.y) >= 20*20) continue;
-    // Base ammo restore (archer only — wizard uses cooldown system)
+    // Base ammo restore (archer only — wizard/knight use different systems)
     if (selectedChar === 'archer') {
       for (const [k, r] of Object.entries(CONFIG.resources))
         if (inv[k] < r.max) inv[k] = Math.min(r.max, inv[k] + r.restore);
     }
     // Type-specific bonus — effect differs by character
     if (p.type === 'ricochet') {
-      if (selectedChar === 'wizard') inv.laserStreams += CONFIG.specialArrowPickupCount;
-      else                           inv.ricochetArrows += CONFIG.specialArrowPickupCount;
+      if      (selectedChar === 'wizard') inv.laserStreams  += CONFIG.specialArrowPickupCount;
+      else if (selectedChar === 'knight') inv.knightJavelins += CONFIG.knightJavelinsPerPickup;
+      else                                inv.ricochetArrows += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'fire') {
-      if (selectedChar === 'wizard') inv.fireBolts   += CONFIG.specialArrowPickupCount;
-      else                           inv.fireArrows   += CONFIG.specialArrowPickupCount;
+      if      (selectedChar === 'wizard') inv.fireBolts          += CONFIG.specialArrowPickupCount;
+      else if (selectedChar === 'knight') inv.knightFireSwordTimer += CONFIG.knightFireSwordDuration;
+      else                                inv.fireArrows           += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'shield') {
       playerShield = true;
     }
@@ -1005,7 +1183,9 @@ function updateBossEntrance(dt) {
 }
 
 function spawnBoss() {
-  const hpMax = selectedChar === 'wizard' ? CONFIG.bossHPWizard : CONFIG.bossHP;
+  const hpMax = selectedChar === 'wizard' ? CONFIG.bossHPWizard
+              : selectedChar === 'knight' ? CONFIG.bossHPKnight
+              : CONFIG.bossHP;
   boss = {
     x: CONFIG.canvasW + 40, y: (CONFIG.rows / 2) * CONFIG.tileSize,
     hp: hpMax, hpMax,
@@ -1954,6 +2134,7 @@ function drawWizard() {
 
 function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
+  if (selectedChar === 'knight') { drawKnight(); return; }
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
   // Aim line
@@ -2171,6 +2352,144 @@ function drawPlayer() {
   }
 }
 
+function drawKnight() {
+  const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
+  ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+
+  // ── Whirlwind visual (behind player) ────────────────────────────────────
+  if (knightWhirlwindTimer > 0) {
+    const wAlpha  = Math.min(1, knightWhirlwindTimer / 0.4);
+    const fsColor = inv.knightFireSwordTimer > 0;
+    for (let i = 0; i < 3; i++) {
+      const baseA = loopT * 9 + (i / 3) * Math.PI * 2;
+      ctx.save();
+      ctx.globalAlpha = wAlpha * (0.45 + 0.3 * Math.sin(loopT * 14 + i * 2.1));
+      ctx.strokeStyle = fsColor ? '#FF7A1F' : '#A0B8E8';
+      ctx.shadowColor  = fsColor ? '#FF5500' : '#6080C0';
+      ctx.shadowBlur   = 10;
+      ctx.lineWidth    = 3;
+      const r = CONFIG.knightWhirlwindRadius;
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.42, baseA,          baseA + 1.15); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.72, baseA + 0.38,   baseA + 1.55); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.93, baseA + 0.65,   baseA + 1.80); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Ground shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.38)';
+  ctx.beginPath(); ctx.ellipse(0, 14, 13, 4, 0, 0, Math.PI*2); ctx.fill();
+
+  const bob      = Math.sin(player.walkPhase || 0) * 1.2;
+  const fsActive = inv.knightFireSwordTimer > 0;
+  const swing    = knightSpearSwing > 0 ? 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration : -1;
+
+  // Legs — plate greaves
+  ctx.fillStyle = '#1e2030';
+  ctx.fillRect(-9, 7 + bob, 8, 10);
+  ctx.fillRect(1,  7 + bob, 8, 10);
+  ctx.fillStyle = '#2a2c3e';
+  ctx.fillRect(-8, 7 + bob, 3, 4);
+  ctx.fillRect(2,  7 + bob, 3, 4);
+
+  // Torso — plate breastplate
+  ctx.fillStyle = fsActive ? '#3a2010' : '#242436';
+  ctx.fillRect(-11, -13 + bob, 22, 20);
+  // Highlight stripe
+  ctx.fillStyle = fsActive ? '#5a3018' : '#34364e';
+  ctx.fillRect(-9, -12 + bob, 8, 7);
+  // Pauldrons
+  ctx.fillStyle = fsActive ? '#2a1808' : '#181826';
+  ctx.fillRect(-15, -13 + bob, 6, 8);
+  ctx.fillRect(9,   -13 + bob, 6, 8);
+  // Pauldron rivets
+  ctx.fillStyle = '#888';
+  ctx.beginPath(); ctx.arc(-12, -10 + bob, 1.2, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(12,  -10 + bob, 1.2, 0, Math.PI*2); ctx.fill();
+
+  // Helmet — great helm style
+  ctx.fillStyle = fsActive ? '#3a1a08' : '#1e2030';
+  ctx.fillRect(-8, -26 + bob, 16, 14);
+  ctx.beginPath(); ctx.arc(0, -26 + bob, 8, Math.PI, 0); ctx.fill();
+  // Visor slits (2 horizontal bars)
+  ctx.fillStyle = fsActive ? '#FF5500' : '#39FF14';
+  ctx.shadowColor = fsActive ? '#FF7A1F' : '#39FF14';
+  ctx.shadowBlur  = 5;
+  ctx.fillRect(-6, -22 + bob, 12, 2);
+  ctx.fillRect(-4, -18 + bob, 8,  2);
+  ctx.shadowBlur = 0;
+  // Helmet crest / plume
+  ctx.fillStyle = fsActive ? '#cc3300' : '#2244aa';
+  ctx.beginPath();
+  ctx.moveTo(-3, -26 + bob); ctx.lineTo(0, -34 + bob); ctx.lineTo(3, -26 + bob);
+  ctx.closePath(); ctx.fill();
+
+  // ── Weapon ───────────────────────────────────────────────────────────────
+  const spearAng = (player.aimAngle) * f;   // de-flip so angle is consistent
+  const thrustOffset = (swing >= 0.2 && swing < 0.7)
+    ? Math.sin((swing - 0.2) / 0.5 * Math.PI) * 14 : 0;
+
+  ctx.save();
+  ctx.translate(Math.cos(spearAng) * thrustOffset, Math.sin(spearAng) * thrustOffset);
+  ctx.rotate(spearAng);
+
+  if (fsActive) {
+    // Fire sword — broad blade, short, glowing
+    const sLen = CONFIG.knightSpearRange * CONFIG.knightFireSwordRangeMult * 0.55;
+    ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 14 + 5 * Math.sin(loopT * 10);
+    ctx.fillStyle = '#FF3300';
+    ctx.fillRect(4, -4, sLen, 8);                // blade
+    ctx.fillStyle = '#FFB400';
+    ctx.fillRect(4, -1.5, sLen * 0.85, 3);       // hot inner edge
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#888';
+    ctx.fillRect(0, -6, 5, 12);                  // crossguard
+    ctx.fillStyle = '#5a3a10';
+    ctx.fillRect(-10, -2, 12, 4);                // grip
+  } else {
+    // Spear — long shaft + leaf-tip
+    const sLen = CONFIG.knightSpearRange * 0.92;
+    ctx.strokeStyle = '#5a3a10'; ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(sLen, 0); ctx.stroke();
+    // Cross-binding wraps
+    ctx.strokeStyle = '#3a2008'; ctx.lineWidth = 1.5;
+    [-4, 4, 12].forEach(x => {
+      ctx.beginPath(); ctx.moveTo(x, -3); ctx.lineTo(x, 3); ctx.stroke();
+    });
+    // Tip — leaf spearhead
+    const tipGlow = swing >= 0.2 && swing < 0.72;
+    ctx.fillStyle = tipGlow ? '#FFFFFF' : '#D0D0D8';
+    if (tipGlow) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
+    ctx.beginPath();
+    ctx.moveTo(sLen - 2, -5);
+    ctx.lineTo(sLen + 16, 0);
+    ctx.lineTo(sLen - 2, 5);
+    ctx.closePath(); ctx.fill();
+    // Spear ferrule (butt end cap)
+    ctx.fillStyle = '#B0B0B8'; ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.moveTo(-10, -3); ctx.lineTo(-16, 0); ctx.lineTo(-10, 3);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+
+  // ── Cooldown/whirlwind ring ───────────────────────────────────────────────
+  if (knightWhirlwindCD > 0 && knightWhirlwindTimer <= 0) {
+    const fill = 1 - knightWhirlwindCD / CONFIG.knightWhirlwindCooldown;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#6080A0'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, bob, 15, -Math.PI/2, -Math.PI/2 + fill * Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  } else if (knightWhirlwindCD <= 0 && knightWhirlwindTimer <= 0) {
+    ctx.globalAlpha = 0.4 + 0.2 * Math.sin(loopT * 4);
+    ctx.strokeStyle = '#6080FF'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, bob, 15, 0, Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
+}
+
 function drawArrows() {
   const HH = CONFIG.hudHeight;
   for (const a of arrows) {
@@ -2237,6 +2556,28 @@ function drawArrows() {
       for (let pip = 0; pip < Math.min(3, bouncesLeft); pip++) {
         ctx.fillRect(2 + pip * 2, -3, 1, 1);
       }
+
+    } else if (a.type === 'javelin') {
+      // Long spear shaft with leaf tip — silver/steel
+      ctx.strokeStyle = '#5a3a10'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(-18, 0); ctx.lineTo(14, 0); ctx.stroke();
+      // Wrap bindings
+      ctx.strokeStyle = '#3a2008'; ctx.lineWidth = 1.5;
+      [-10, -3, 4].forEach(x => { ctx.beginPath(); ctx.moveTo(x, -3); ctx.lineTo(x, 3); ctx.stroke(); });
+      // Leaf spearhead
+      const pLeft = a.pierceLeft || 0;
+      ctx.fillStyle = pLeft > 1 ? '#FFFFFF' : '#A0A0B0';
+      if (pLeft > 1) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 6; }
+      ctx.beginPath();
+      ctx.moveTo(12, -5); ctx.lineTo(26, 0); ctx.lineTo(12, 5);
+      ctx.closePath(); ctx.fill();
+      ctx.shadowBlur = 0;
+      // Ferrule
+      ctx.fillStyle = '#888';
+      ctx.beginPath(); ctx.moveTo(-18,-3); ctx.lineTo(-24,0); ctx.lineTo(-18,3); ctx.closePath(); ctx.fill();
+      // Pierce pips (remaining pierces)
+      ctx.fillStyle = '#39FF14';
+      for (let p = 0; p < pLeft; p++) ctx.fillRect(3 + p * 3, -4, 2, 2);
 
     } else if (a.type === 'wiz_normal') {
       // Magic bolt — homing blue-purple orb
@@ -2846,12 +3187,33 @@ function drawHUD(t) {
     }
     if (inv.ricochetArrows > 0) { ctx.fillStyle='#44ddff'; ctx.fillText(`[R:${inv.ricochetArrows}]`,rx,16); rx+=52; }
     if (inv.fireArrows     > 0) { ctx.fillStyle='#ff7700'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
+  } else if (selectedChar === 'knight') {
+    // Knight — whirlwind cooldown bar + active buffs
+    const wrdRdy  = knightWhirlwindCD <= 0;
+    const wrdFrac = wrdRdy ? 1 : (CONFIG.knightWhirlwindCooldown - knightWhirlwindCD) / CONFIG.knightWhirlwindCooldown;
+    const wrdActive = knightWhirlwindTimer > 0;
+    ctx.fillStyle='#111120'; ctx.fillRect(rx, 4, 78, 11);
+    ctx.shadowColor='#6080FF'; ctx.shadowBlur = wrdActive ? 8 : (wrdRdy ? 4 : 0);
+    ctx.fillStyle = wrdActive ? '#88aaff' : (wrdRdy ? '#4060d0' : '#1a2060');
+    ctx.fillRect(rx, 4, 78*wrdFrac, 11);
+    ctx.shadowBlur=0;
+    ctx.strokeStyle='#4060C0'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
+    ctx.fillStyle = wrdActive ? '#ccddff' : (wrdRdy ? '#8899cc' : '#444466');
+    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
+    const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '🌀 READY' : `🌀 ${knightWhirlwindCD.toFixed(1)}s`);
+    ctx.fillText(wrdLabel, rx+39, 12);
+    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
+    if (inv.knightFireSwordTimer > 0) {
+      ctx.fillStyle='#FF7A1F';
+      ctx.fillText(`[FS:${inv.knightFireSwordTimer.toFixed(1)}s]`, rx, 16); rx+=70;
+    }
   } else {
     // Wizard — bolt cooldown bar
     const boltRdy  = wizBoltCD <= 0;
-    const boltFrac = boltRdy ? 1 : (3 - wizBoltCD) / 3;
+    const boltFrac = boltRdy ? 1 : (CONFIG.wizBoltCooldown - wizBoltCD) / CONFIG.wizBoltCooldown;
     const stormRdy  = stormCD <= 0;
-    const stormFrac = stormRdy ? 1 : (10 - stormCD) / 10;
+    const stormFrac = stormRdy ? 1 : (CONFIG.stormCooldown - stormCD) / CONFIG.stormCooldown;
     // Bolt bar
     ctx.fillStyle='#1a1a3a'; ctx.fillRect(rx, 4, 78, 11);
     ctx.shadowColor='#8888FF'; ctx.shadowBlur = boltRdy ? 6 : 0;
@@ -2957,7 +3319,7 @@ function _drawCharPreview(cx, cy, char, t) {
     ctx.strokeStyle='#39FF14'; ctx.lineWidth=0.8;
     ctx.beginPath(); ctx.moveTo(8,-7); ctx.lineTo(8,7); ctx.stroke();
     ctx.shadowBlur=0;
-  } else {
+  } else if (char === 'wizard') {
     // Robe
     const sw=1.2*Math.sin(t*1.8);
     ctx.fillStyle='#14143a';
@@ -2981,6 +3343,31 @@ function _drawCharPreview(cx, cy, char, t) {
     ctx.beginPath(); ctx.arc(12,-2+0.5*Math.sin(op2),4,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(11,-3,1.2,0,Math.PI*2); ctx.fill();
     ctx.shadowBlur=0;
+  } else {
+    // Knight — plate armour mini-preview
+    // Legs
+    ctx.fillStyle='#1e2030'; ctx.fillRect(-7,5,6,9); ctx.fillRect(1,5,6,9);
+    ctx.fillStyle='#2a2c3e'; ctx.fillRect(-6,5,2,4); ctx.fillRect(2,5,2,4);
+    // Torso
+    ctx.fillStyle='#242436'; ctx.fillRect(-8,-10,16,16);
+    ctx.fillStyle='#34364e'; ctx.fillRect(-7,-9,7,5);
+    ctx.fillStyle='#181826'; ctx.fillRect(-11,-10,4,7); ctx.fillRect(7,-10,4,7);
+    // Helmet
+    ctx.fillStyle='#1e2030'; ctx.fillRect(-6,-22,12,13);
+    ctx.beginPath(); ctx.arc(0,-22,6,Math.PI,0); ctx.fill();
+    ctx.fillStyle='#39FF14'; ctx.shadowColor='#39FF14'; ctx.shadowBlur=4;
+    ctx.fillRect(-5,-18,10,2); ctx.fillRect(-3,-15,6,2); ctx.shadowBlur=0;
+    // Helmet crest
+    ctx.fillStyle='#2244aa';
+    ctx.beginPath(); ctx.moveTo(-2,-22); ctx.lineTo(0,-29); ctx.lineTo(2,-22); ctx.closePath(); ctx.fill();
+    // Spear
+    const sa = -0.35 + 0.1*Math.sin(t*1.5);
+    ctx.save(); ctx.rotate(sa);
+    ctx.strokeStyle='#5a3a10'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(-6,0); ctx.lineTo(18,0); ctx.stroke();
+    ctx.fillStyle='#D0D0D8';
+    ctx.beginPath(); ctx.moveTo(16,-4); ctx.lineTo(24,0); ctx.lineTo(16,4); ctx.closePath(); ctx.fill();
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -2999,56 +3386,47 @@ function drawCharSelect(t) {
   ctx.font='12px "Courier New",monospace'; ctx.fillStyle='#1a7a08';
   ctx.fillText(`MODE: ${gameMode.toUpperCase()}`, CONFIG.canvasW/2, 100);
 
-  const panelW=330, panelH=390, gapX=44;
-  const leftX  = CONFIG.canvasW/2 - panelW - gapX/2;
-  const rightX = CONFIG.canvasW/2 + gapX/2;
-  const panelY = 128;
+  const panelW=296, panelH=390, gapX=18;
+  const totalW = panelW*3 + gapX*2;
+  const startX = CONFIG.canvasW/2 - totalW/2;
+  const panelY = 118;
+  const panels = [
+    { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+      lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
+             'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
+    { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+      lines:['Homing magic bolts  3s CD','Fire Bolt pickup: 2 dmg homing',
+             'Laser pickup: pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
+    { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+      lines:['Long spear  ·  melee range','Pickup: Iron Javelin (throws/pierces)',
+             'Pickup: Fire Sword (2× dmg/range)','Tool: Whirlwind (breaks tiles)','Frontline playstyle'] },
+  ];
 
-  // ── ARCHER panel ──────────────────────────────────────────────────────────
-  const archSel = selectedChar === 'archer';
-  ctx.fillStyle = archSel ? 'rgba(57,255,20,0.08)' : 'rgba(255,255,255,0.025)';
-  ctx.fillRect(leftX, panelY, panelW, panelH);
-  if (archSel) { ctx.shadowColor='#39FF14'; ctx.shadowBlur=16; }
-  ctx.strokeStyle = archSel ? '#39FF14' : '#1a7a08'; ctx.lineWidth=1.5;
-  ctx.strokeRect(leftX, panelY, panelW, panelH); ctx.shadowBlur=0;
-
-  ctx.fillStyle = archSel ? '#39FF14' : '#1a7a08';
-  ctx.font='20px "Courier New",monospace';
-  ctx.fillText('[A] ARCHER', leftX+panelW/2, panelY+32);
-
-  _drawCharPreview(leftX+panelW/2, panelY+114, 'archer', t);
-
-  ctx.font='11px "Courier New",monospace'; ctx.fillStyle = archSel ? '#2aaa18' : '#0a4a06';
-  ['Longbow  ·  Quiver system','Up to 3 arrows in flight',
-   'Special: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle']
-    .forEach((line, i) => ctx.fillText(line, leftX+panelW/2, panelY+210+i*30));
-
-  // ── WIZARD panel ──────────────────────────────────────────────────────────
-  const wizSel = selectedChar === 'wizard';
-  ctx.fillStyle = wizSel ? 'rgba(100,80,255,0.10)' : 'rgba(255,255,255,0.025)';
-  ctx.fillRect(rightX, panelY, panelW, panelH);
-  if (wizSel) { ctx.shadowColor='#8888FF'; ctx.shadowBlur=16; }
-  ctx.strokeStyle = wizSel ? '#8888FF' : '#1a1a6a'; ctx.lineWidth=1.5;
-  ctx.strokeRect(rightX, panelY, panelW, panelH); ctx.shadowBlur=0;
-
-  ctx.fillStyle = wizSel ? '#8888FF' : '#1a1a6a';
-  ctx.font='20px "Courier New",monospace';
-  ctx.fillText('[W] WIZARD', rightX+panelW/2, panelY+32);
-  // NEW badge
-  ctx.font='bold 10px "Courier New",monospace';
-  ctx.shadowColor='#FFB400'; ctx.shadowBlur=7;
-  ctx.fillStyle='#FFB400'; ctx.fillText('[ NEW ]', rightX+panelW/2, panelY+53);
-  ctx.shadowBlur=0;
-
-  _drawCharPreview(rightX+panelW/2, panelY+114, 'wizard', t);
-
-  ctx.font='11px "Courier New",monospace'; ctx.fillStyle = wizSel ? '#7777cc' : '#0a0a4a';
-  ['Homing magic bolts  ·  3s cooldown','Fire Bolt pickup: 2 dmg homing',
-   'Laser Stream pickup: pierces walls','Special: Lightning Storm (AoE)', 'AoE caster playstyle']
-    .forEach((line, i) => ctx.fillText(line, rightX+panelW/2, panelY+210+i*30));
+  panels.forEach((p, idx) => {
+    const px = startX + idx * (panelW + gapX);
+    const sel = selectedChar === p.char;
+    ctx.fillStyle = sel ? p.bg : p.dimBg;
+    ctx.fillRect(px, panelY, panelW, panelH);
+    if (sel) { ctx.shadowColor=p.color; ctx.shadowBlur=16; }
+    ctx.strokeStyle = sel ? p.color : p.dim; ctx.lineWidth=1.5;
+    ctx.strokeRect(px, panelY, panelW, panelH); ctx.shadowBlur=0;
+    ctx.fillStyle = sel ? p.color : p.dim;
+    ctx.font='19px "Courier New",monospace';
+    ctx.fillText(`[${p.key}] ${p.char.toUpperCase()}`, px+panelW/2, panelY+30);
+    if (p.newBadge) {
+      ctx.font='bold 10px "Courier New",monospace';
+      ctx.shadowColor='#FFB400'; ctx.shadowBlur=7;
+      ctx.fillStyle='#FFB400'; ctx.fillText('[ NEW ]', px+panelW/2, panelY+50);
+      ctx.shadowBlur=0;
+    }
+    _drawCharPreview(px+panelW/2, panelY+114, p.char, t);
+    ctx.font='10.5px "Courier New",monospace';
+    ctx.fillStyle = sel ? p.color.replace('FF','88') : p.dim;
+    p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+208+i*30));
+  });
 
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
-  ctx.fillText('← →  /  [A] [W]  SWITCH    ENTER  CONFIRM', CONFIG.canvasW/2, CONFIG.canvasH-22);
+  ctx.fillText('← →  /  [A] [W] [K]  SWITCH    ENTER  CONFIRM', CONFIG.canvasW/2, CONFIG.canvasH-22);
 }
 
 function drawMenu(t) {
@@ -3334,12 +3712,17 @@ function loop(ts) {
   switch (appState) {
     case 'menu':     handleMenuInput(); break;
 
-    case 'charselect':
-      if (keys['ArrowLeft']  || keys['a']||keys['A']) { selectedChar='archer'; keys['ArrowLeft']=keys['a']=keys['A']=false; }
-      if (keys['ArrowRight'] || keys['w']||keys['W']) { selectedChar='wizard'; keys['ArrowRight']=keys['w']=keys['W']=false; }
+    case 'charselect': {
+      const chars = ['archer','wizard','knight'];
+      const ci = chars.indexOf(selectedChar);
+      if (keys['ArrowLeft'])  { selectedChar = chars[(ci+2)%3]; keys['ArrowLeft']=false; }
+      if (keys['ArrowRight']) { selectedChar = chars[(ci+1)%3]; keys['ArrowRight']=false; }
+      if (keys['a']||keys['A']) { selectedChar='archer'; keys['a']=keys['A']=false; }
+      if (keys['w']||keys['W']) { selectedChar='wizard'; keys['w']=keys['W']=false; }
+      if (keys['k']||keys['K']) { selectedChar='knight'; keys['k']=keys['K']=false; }
       if (keys['Enter']) { transitionTo('playing'); keys['Enter']=false; }
       if (keys['Escape']) { transitionTo('menu'); keys['Escape']=false; }
-      break;
+      break; }
 
     case 'controls':
       if (remapTarget === null && (keys['b']||keys['B'])) {
