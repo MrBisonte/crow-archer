@@ -62,8 +62,8 @@ const CONFIG = {
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
   // Knight
-  knightSpearRange: 80, knightSpearCooldown: 0.9,
-  knightSpearDamage: 1, knightSpearBossDamage: 2, knightSpearSwingDuration: 0.28,
+  knightSpearRange: 80, knightSpearCooldown: 1.5,
+  knightSpearDamage: 1, knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
   knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 8,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
@@ -79,6 +79,11 @@ const CONFIG = {
   stormBlastRadius: 450,          // = dynamiteBlastRadius * 5
   stormBossDamage: 3,
   stormFlashDuration: 0.35,       // seconds of blue screen-flash after storm
+
+  // Hit detection radii
+  arrowHitRadius: 14,             // arrow / javelin vs crow
+  firePatchRadius: 20,            // fire patch vs crow
+  pickupRadius: 20,               // player pickup collection distance
 
   // Boss hit detection & damage
   bossRadius: 28,                 // collision radius (contact damage)
@@ -100,6 +105,10 @@ const CONFIG = {
     menuStart: 's', menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift'
   }
 };
+
+// ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
+
+const BOSS_ENTRY_TEXT = '⚠  THE MURDER HAS SUMMONED THEIR KING  ⚠';
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
@@ -165,7 +174,7 @@ function transitionTo(next) {
 
 // ── TILEMAP ───────────────────────────────────────────────────────────────────
 
-const TILE = { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4 };
+const TILE = { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4, HUT: 5 };
 let tilemap = [], waterPhase = false, waterLastTs = 0;
 
 function generateMap() {
@@ -185,10 +194,39 @@ function generateMap() {
       // Crow corridor — always passable
       if (c >= CONFIG.cols - 2) continue;
       const rng = Math.random();
-      if      (rng < 0.10) tilemap[r][c] = TILE.ROCK;
-      else if (rng < 0.18) tilemap[r][c] = TILE.WATER;
-      else if (rng < 0.25) tilemap[r][c] = TILE.TREE;
+      if      (rng < 0.07) tilemap[r][c] = TILE.ROCK;   // was 0.10 (-30%)
+      else if (rng < 0.15) tilemap[r][c] = TILE.WATER;  // water band stays 8%
+      else if (rng < 0.20) tilemap[r][c] = TILE.TREE;   // was 0.25 (-30%)
     }
+  }
+  // ── Place 1–2 destructible huts (2×2 blocks) ─────────────────────────────
+  const midRow = Math.floor(CONFIG.rows / 2);
+  const numHuts = Math.random() < 0.6 ? 2 : 1;
+  let placed = 0, tries = 0;
+  while (placed < numHuts && tries < 60) {
+    tries++;
+    const hc = 5 + Math.floor(Math.random() * 15);   // cols 5–19
+    const hr = 1 + Math.floor(Math.random() * (CONFIG.rows - 4)); // rows 1–12
+    // Skip spawn zone and crow corridor
+    if (hc <= 4 && hr >= midRow - 3 && hr <= midRow + 3) continue;
+    if (hc >= CONFIG.cols - 3) continue;
+    // Need a 2×2 footprint of EMPTY tiles, plus at least a 1-tile gap around it
+    let ok = true;
+    for (let dr = -1; dr <= 2 && ok; dr++)
+      for (let dc = -1; dc <= 2 && ok; dc++) {
+        const nr = hr + dr, nc = hc + dc;
+        if (nr < 0 || nr >= CONFIG.rows || nc < 0 || nc >= CONFIG.cols) continue;
+        if (dr >= 0 && dr < 2 && dc >= 0 && dc < 2) {
+          if (tilemap[nr][nc] !== TILE.EMPTY) ok = false; // footprint must be empty
+        } else {
+          if (tilemap[nr][nc] === TILE.HUT) ok = false;   // no adjacent huts
+        }
+      }
+    if (!ok) continue;
+    for (let dr = 0; dr < 2; dr++)
+      for (let dc = 0; dc < 2; dc++)
+        tilemap[hr + dr][hc + dc] = TILE.HUT;
+    placed++;
   }
 }
 
@@ -369,14 +407,19 @@ function updatePlayer(dt) {
     const len = Math.hypot(vx, vy);
     if (len > 0) { vx = (vx/len)*FEATHERS.speed()*dt; vy = (vy/len)*FEATHERS.speed()*dt; player.walkPhase += 8 * dt; }
     const r = CONFIG.playerRadius;
+    // Clamp bounds keep the player's collision corners (±r) inside the first passable
+    // row/col (index 1) so they never straddle the solid border tiles and get stuck.
+    const ts = CONFIG.tileSize;
+    const minX = ts + r, maxX = CONFIG.canvasW - r;
+    const minY = ts + r, maxY = (CONFIG.rows - 1) * ts - r;
     const nx = player.x + vx;
     if (tilePassable(tileAt(nx-r, player.y-r)) && tilePassable(tileAt(nx+r, player.y-r)) &&
         tilePassable(tileAt(nx-r, player.y+r)) && tilePassable(tileAt(nx+r, player.y+r)))
-      player.x = Math.max(r, Math.min(CONFIG.canvasW - r, nx));
+      player.x = Math.max(minX, Math.min(maxX, nx));
     const ny = player.y + vy;
     if (tilePassable(tileAt(player.x-r, ny-r)) && tilePassable(tileAt(player.x+r, ny-r)) &&
         tilePassable(tileAt(player.x-r, ny+r)) && tilePassable(tileAt(player.x+r, ny+r)))
-      player.y = Math.max(r, Math.min(CONFIG.rows * CONFIG.tileSize - r, ny));
+      player.y = Math.max(minY, Math.min(maxY, ny));
   }
 
   const mwy = mouse.y - CONFIG.hudHeight;
@@ -423,16 +466,25 @@ function updatePlayer(dt) {
   }
 
   // ── Knight spear swing hit-detection ────────────────────────────────────
-  // Plain circle check from player centre — same approach as pitchfork, no angle filter.
-  // The tip is at range px away; anything within that radius dies, full stop.
+  // Use the actual spear-tip position in world space (aimAngle is always world-space).
+  // Check both the tip and a mid-point so a crow can't slip through the shaft.
   if (selectedChar === 'knight' && knightSpearSwing > 0) {
     knightSpearSwing = Math.max(0, knightSpearSwing - dt);
-    const fsActive = inv.knightFireSwordTimer > 0;
-    const range = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
-    const r2    = range * range;
+    const fsActive   = inv.knightFireSwordTimer > 0;
+    const baseRange  = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
+    const swingProg  = 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration;
+    const thrustReach = Math.sin(Math.min(swingProg, 1) * Math.PI) * 22;
+    const tipDist    = baseRange + thrustReach;
+    const ang        = player.aimAngle;             // always world-space, no flip needed
+    const tipX  = player.x + Math.cos(ang) * tipDist;
+    const tipY  = player.y + Math.sin(ang) * tipDist;
+    const midX  = player.x + Math.cos(ang) * tipDist * 0.6;
+    const midY  = player.y + Math.sin(ang) * tipDist * 0.6;
+    const hitR2 = 22 * 22;
+
     for (let j = crows.length - 1; j >= 0; j--) {
       const c = crows[j];
-      if (dist2(player.x, player.y, c.x, c.y) < r2) {
+      if (dist2(tipX, tipY, c.x, c.y) < hitR2 || dist2(midX, midY, c.x, c.y) < hitR2) {
         if (fsActive) spawnFire(c.x, c.y);
         killCrow(j);
         triggerShake(3, 120);
@@ -443,7 +495,8 @@ function updatePlayer(dt) {
       }
     }
     if (!knightSpearBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
-        dist2(player.x, player.y, boss.x, boss.y) < r2) {
+        (dist2(tipX, tipY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2 ||
+         dist2(midX, midY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2)) {
       knightSpearBossHit = true;
       const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
       boss.hp -= dmg; boss.hitFlash = 0.2;
@@ -479,7 +532,7 @@ function updatePlayer(dt) {
           const wx = (col+0.5)*CONFIG.tileSize, wy = (row+0.5)*CONFIG.tileSize;
           if (dist2(player.x, player.y, wx, wy) < wr2) {
             if (tilemap[row][col] === TILE.TREE) tilemap[row][col] = TILE.ASH;
-            else if (tilemap[row][col] === TILE.ROCK) tilemap[row][col] = TILE.EMPTY;
+            else if (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.HUT) tilemap[row][col] = TILE.EMPTY;
           }
         }
       }
@@ -648,7 +701,7 @@ function fireLightningStorm() {
       const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
       if (dist2(player.x, player.y, wx, wy) < r2) {
         if (tilemap[row][col] === TILE.TREE) tilemap[row][col] = TILE.ASH;
-        else if (tilemap[row][col] === TILE.ROCK) tilemap[row][col] = TILE.EMPTY;
+        else if (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.HUT) tilemap[row][col] = TILE.EMPTY;
       }
     }
   }
@@ -705,7 +758,7 @@ function updateArrows(dt) {
       // Crow hits — all wiz bolts stop on first crow hit (laser doesn't pierce enemies)
       let wizHitCrow = false;
       for (let j = crows.length-1; j >= 0; j--) {
-        if (dist2(a.x,a.y,crows[j].x,crows[j].y) < 14*14) {
+        if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
           killCrow(j);
           arrows.splice(i,1);
           wizHitCrow = true;
@@ -741,8 +794,8 @@ function updateArrows(dt) {
       // Straight movement — stops at solid tiles, pierces enemies
       const nx = a.x + a.vx * dt, ny = a.y + a.vy * dt;
       const tileX = tileAt(nx, a.y), tileY = tileAt(a.x, ny);
-      if (tileX === TILE.ROCK || tileX === TILE.TREE || tileX === TILE.WATER) { arrows.splice(i,1); continue; }
-      if (tileY === TILE.ROCK || tileY === TILE.TREE || tileY === TILE.WATER) { arrows.splice(i,1); continue; }
+      if (tileX === TILE.ROCK || tileX === TILE.TREE || tileX === TILE.WATER || tileX === TILE.HUT) { arrows.splice(i,1); continue; }
+      if (tileY === TILE.ROCK || tileY === TILE.TREE || tileY === TILE.WATER || tileY === TILE.HUT) { arrows.splice(i,1); continue; }
       a.x = nx; a.y = ny;
       if (a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows*CONFIG.tileSize)
         { arrows.splice(i,1); continue; }
@@ -754,7 +807,7 @@ function updateArrows(dt) {
       }
       // Crow hits — pierces through up to pierceLeft enemies
       for (let j = crows.length - 1; j >= 0; j--) {
-        if (dist2(a.x,a.y,crows[j].x,crows[j].y) < 14*14) {
+        if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
           killCrow(j);
           a.pierceLeft--;
           burst(a.x, a.y, { count: 6, colors: ['#C0C0C0','#ffffff'],
@@ -770,13 +823,13 @@ function updateArrows(dt) {
       // Axis-separated movement so we know which wall was hit
       let bounced = false;
       const nx = a.x + a.vx * dt, tx = tileAt(nx, a.y);
-      if      (tx === TILE.WATER)                   { arrows.splice(i, 1); removed = true; }
-      else if (tx === TILE.ROCK || tx === TILE.TREE) { a.vx = -a.vx; a.bounces++; bounced = true; }
+      if      (tx === TILE.WATER)                                    { arrows.splice(i, 1); removed = true; }
+      else if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) { a.vx = -a.vx; a.bounces++; bounced = true; }
       else a.x = nx;
       if (!removed) {
         const ny = a.y + a.vy * dt, ty = tileAt(a.x, ny);
-        if      (ty === TILE.WATER)                   { arrows.splice(i, 1); removed = true; }
-        else if (ty === TILE.ROCK || ty === TILE.TREE) { a.vy = -a.vy; a.bounces++; bounced = true; }
+        if      (ty === TILE.WATER)                                    { arrows.splice(i, 1); removed = true; }
+        else if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) { a.vy = -a.vy; a.bounces++; bounced = true; }
         else a.y = ny;
       }
       // Speed boost on each bounce — gains 55% per bounce, capped at 5× initial speed
@@ -815,6 +868,16 @@ function updateArrows(dt) {
             onArrowMiss();
           }
           arrows.splice(i, 1); removed = true;
+        } else if (tile === TILE.HUT) {
+          const htc = Math.floor(a.x / CONFIG.tileSize), htr = Math.floor(a.y / CONFIG.tileSize);
+          if (a.type === 'fire') {
+            // Fire arrow chars the hut to ash
+            if (htr >= 0 && htr < CONFIG.rows && htc >= 0 && htc < CONFIG.cols) tilemap[htr][htc] = TILE.ASH;
+            spawnFire(a.x, a.y);
+          } else {
+            onArrowMiss();
+          }
+          arrows.splice(i, 1); removed = true;
         } else if (tile === TILE.WATER && a.type === 'fire') {
           arrows.splice(i, 1); removed = true;
         }
@@ -833,7 +896,7 @@ function updateArrows(dt) {
     // Crow hit
     let hit = false;
     for (let j = crows.length - 1; j >= 0; j--) {
-      if (dist2(a.x, a.y, crows[j].x, crows[j].y) < 14*14) {
+      if (dist2(a.x, a.y, crows[j].x, crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
         killCrow(j); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
@@ -870,7 +933,7 @@ function updateFires(dt) {
     if (f.damageTimer <= 0) {
       f.damageTimer = CONFIG.fireArrowDamageInterval;
       for (let j = crows.length - 1; j >= 0; j--)
-        if (dist2(f.x, f.y, crows[j].x, crows[j].y) < 20*20) killCrow(j);
+        if (dist2(f.x, f.y, crows[j].x, crows[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) killCrow(j);
     }
   }
 }
@@ -895,7 +958,7 @@ function killCrow(j) {
   floaters.push({ x: c.x, y: c.y, alpha: 1.0, vy: -42 });
   // Feather drop floater
   const earned = FEATHERS.onCrowKill(c.white);
-  floaters.push({ x: c.x + 12, y: c.y - 6, alpha: 1.0, vy: -36, text: `+${earned}✦`, color: '#FFB400' });
+  floaters.push({ x: c.x + 12, y: c.y - 6, alpha: 1.0, vy: -36, text: `+${earned}◆`, color: '#FFB400' });
   // Notify gamification modules
   FORESHADOW.onKill(killCount);
   STREAK.onKill();
@@ -921,14 +984,14 @@ function updateDynamites(dt) {
     const nx = d.x + d.vx * dt;
     const tx = tileAt(nx, d.y);
     if      (tx === TILE.WATER)              splashed = true;
-    else if (tx === TILE.ROCK || tx === TILE.TREE) d.vx *= -0.65;
+    else if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) d.vx *= -0.65;
     else d.x = Math.max(0, Math.min(CONFIG.canvasW - 1, nx));
 
     if (!splashed) {
       const ny = d.y + d.vy * dt;
       const ty = tileAt(d.x, ny);
       if      (ty === TILE.WATER)              splashed = true;
-      else if (ty === TILE.ROCK || ty === TILE.TREE) d.vy *= -0.65;
+      else if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) d.vy *= -0.65;
       else d.y = Math.max(0, Math.min(CONFIG.rows * CONFIG.tileSize - 1, ny));
     }
 
@@ -975,7 +1038,7 @@ function explodeDynamite(d) {
       const row = tr + dr, col = tc + dc;
       if (row < 0 || row >= CONFIG.rows || col < 0 || col >= CONFIG.cols) continue;
       const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
-      if (dist2(d.x, d.y, wx, wy) < r2 && (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.TREE))
+      if (dist2(d.x, d.y, wx, wy) < r2 && (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.TREE || tilemap[row][col] === TILE.HUT))
         tilemap[row][col] = TILE.EMPTY;
     }
   }
@@ -1061,7 +1124,7 @@ function updateFloaters(dt) {
 function checkPickupCollection() {
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
-    if (dist2(player.x, player.y, p.x, p.y) >= 20*20) continue;
+    if (dist2(player.x, player.y, p.x, p.y) >= CONFIG.pickupRadius*CONFIG.pickupRadius) continue;
     // Base ammo restore (archer only — wizard/knight use different systems)
     if (selectedChar === 'archer') {
       for (const [k, r] of Object.entries(CONFIG.resources))
@@ -1093,10 +1156,6 @@ function checkPickupCollection() {
       burst(p.x, p.y, { count: 14, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
         speedMin: 40, speedMax: 140, decay: 2.0, shape: 'circle',
         sizeMin: 2, sizeMax: 5, shadowBlur: 10, shadowColor: '#FFB400' });
-    } else {
-      burst(p.x, p.y, { count: 8, colors: ['#39FF14','#aaffaa','#ffffff'],
-        speedMin: 50, speedMax: 100, decay: 3.0, shape: 'spark',
-        shadowBlur: 6, shadowColor: '#39FF14' });
     }
     pickups.splice(i, 1);
   }
@@ -1140,7 +1199,7 @@ function updateBossEntrance(dt) {
   if (!e.flash2 && t >= 0.08) { e.flash2 = true; playSound(sndEntranceFlash); }
   if (t >= 0.2 && !e.fadeOut) e.overlayAlpha = Math.min(0.8, e.overlayAlpha + dt * 5);
   if (t >= 0.3) {
-    const BOSS_TEXT = '⚠  THE MURDER HAS SUMMONED THEIR KING  ⚠';
+    const BOSS_TEXT = BOSS_ENTRY_TEXT;
     e.textProgress = Math.min(BOSS_TEXT.length, (t - 0.3) * 30);
   }
   if (!e.screchPlayed && t >= 1.3) { e.screchPlayed = true; playSound(sndBossScreech); }
@@ -1772,7 +1831,7 @@ const FEATHERS = (() => {
     ctx.font = '14px "Courier New", monospace';
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6;
     ctx.fillStyle = '#FFB400';
-    ctx.fillText(`✦ ${_feathers}  FEATHERS  (persists across runs)`, CONFIG.canvasW / 2, 96);
+    ctx.fillText(`◆ ${_feathers}  FEATHERS  (persists across runs)`, CONFIG.canvasW / 2, 96);
     ctx.shadowBlur = 0;
 
     // Upgrade rows
@@ -1812,10 +1871,10 @@ const FEATHERS = (() => {
       ctx.textAlign = 'right';
       if (maxed) {
         ctx.fillStyle = '#FFB400';
-        ctx.fillText('✦ MAXED', barR, oy + 12);
+        ctx.fillText('◆ MAXED', barR, oy + 12);
       } else {
         ctx.fillStyle = _feathers >= cost ? '#FFB400' : '#5a3a00';
-        ctx.fillText(`✦ ${cost}`, barR, oy + 12);
+        ctx.fillText(`◆ ${cost}`, barR, oy + 12);
       }
       ctx.shadowBlur = 0;
     });
@@ -1905,7 +1964,7 @@ const BOUNTIES = (() => {
         ctx.save();
         ctx.fillStyle = 'rgba(0,0,0,0.50)'; ctx.fillRect(4, oy - 7, 194, 16);
         ctx.fillStyle = '#185a10';
-        ctx.fillText(`⬡ ${b.desc}`, 9, oy + 2);
+        ctx.fillText(`▸ ${b.desc}`, 9, oy + 2);
         ctx.restore();
       });
     }
@@ -2007,6 +2066,62 @@ function drawTiles() {
         ctx.fillStyle = `rgba(160,60,0,${emb.toFixed(2)})`;
         ctx.fillRect(x+(seed%20)+4, y+(seed%18)+5, 2, 2);
         ctx.strokeStyle = '#0e0e0a'; ctx.lineWidth = 0.5; ctx.strokeRect(x+.5, y+.5, ts-1, ts-1);
+      } else if (tile === TILE.HUT) {
+        // Ground beneath
+        ctx.fillStyle = '#1a2a1a'; ctx.fillRect(x, y, ts, ts);
+        // Detect neighbours to draw a cohesive 2×2 building
+        const hutAbove = r > 0 && tilemap[r-1]?.[c] === TILE.HUT;
+        const hutLeft  = c > 0 && tilemap[r]?.[c-1] === TILE.HUT;
+        // Outer wall — clay / stone
+        ctx.fillStyle = '#b89060';
+        ctx.fillRect(x+1, y+1, ts-2, ts-2);
+        // Stone brick rows (3 mortar lines)
+        ctx.strokeStyle = '#7a5c38'; ctx.lineWidth = 1;
+        for (let my = 0; my < 3; my++) {
+          const ly = y + 7 + my * 8;
+          ctx.beginPath(); ctx.moveTo(x+1, ly); ctx.lineTo(x+ts-1, ly); ctx.stroke();
+        }
+        // Offset vertical mortar per row for a brick pattern
+        for (let my = 0; my < 4; my++) {
+          const lx = x + (my % 2 === 0 ? 9 : 17);
+          const ly0 = y + 1 + my * 8;
+          ctx.beginPath(); ctx.moveTo(lx, ly0); ctx.lineTo(lx, ly0 + 8); ctx.stroke();
+        }
+        // Roof: only on top row of hut cluster — dark terracotta peak
+        if (!hutAbove) {
+          ctx.fillStyle = '#7a3010';
+          ctx.beginPath();
+          ctx.moveTo(x, y+7); ctx.lineTo(x+ts/2, y); ctx.lineTo(x+ts, y+7);
+          ctx.closePath(); ctx.fill();
+          // Ridge highlight
+          ctx.strokeStyle = '#c06030'; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(x+3, y+6); ctx.lineTo(x+ts/2, y+1); ctx.lineTo(x+ts-3, y+6); ctx.stroke();
+        }
+        // Door: only on bottom-left tile of cluster, centred
+        if (!hutLeft && hutAbove) {
+          ctx.fillStyle = '#3a1f08';
+          ctx.fillRect(x+10, y+14, 12, 18);   // door frame
+          ctx.fillStyle = '#5c3215';
+          ctx.fillRect(x+11, y+15, 10, 16);   // door fill
+          // Door knob
+          ctx.fillStyle = '#c8a030';
+          ctx.beginPath(); ctx.arc(x+19, y+23, 1.5, 0, Math.PI*2); ctx.fill();
+        }
+        // Small window on other tiles
+        if (hutAbove && hutLeft) {
+          ctx.fillStyle = '#3a1f08';
+          ctx.fillRect(x+8, y+10, 16, 12);
+          ctx.fillStyle = '#7ab8d8';
+          ctx.fillRect(x+9, y+11, 14, 10);
+          // Cross pane
+          ctx.strokeStyle = '#3a1f08'; ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x+16, y+11); ctx.lineTo(x+16, y+21);
+          ctx.moveTo(x+9,  y+16); ctx.lineTo(x+23, y+16);
+          ctx.stroke();
+        }
+        // Border
+        ctx.strokeStyle = '#5a3a18'; ctx.lineWidth = 1; ctx.strokeRect(x+.5, y+.5, ts-1, ts-1);
       }
     }
   }
@@ -2117,7 +2232,7 @@ function drawWizard() {
   } else {
     ctx.save(); ctx.globalAlpha=0.55+0.25*Math.sin(loopT*3);
     ctx.font='10px "Courier New",monospace'; ctx.textAlign='center';
-    ctx.fillStyle='#8888FF'; ctx.fillText('⚡',px,py-35);
+    ctx.fillStyle='#8888FF'; ctx.fillText('STORM',px,py-35);
     ctx.restore();
   }
 }
@@ -2214,13 +2329,12 @@ function drawPlayer() {
     ctx.strokeStyle = '#8A6028'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(gx, gy, 7, localAngle - Math.PI/2, localAngle + Math.PI/2); ctx.stroke();
 
-    // 8. Bowstring (bowCharge = 0; reserve for future charging mechanic)
-    const bowCharge = 0;
+    // 8. Bowstring
     const bowTop = { x: gx + Math.cos(localAngle - Math.PI/2)*7, y: gy + Math.sin(localAngle - Math.PI/2)*7 };
     const bowBot = { x: gx + Math.cos(localAngle + Math.PI/2)*7, y: gy + Math.sin(localAngle + Math.PI/2)*7 };
-    const nxOff  = gx + (-Math.cos(localAngle)) * (3 + 2*bowCharge);
-    const nyOff  = gy + (-Math.sin(localAngle)) * (3 + 2*bowCharge);
-    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4 + 8 * bowCharge;
+    const nxOff  = gx + (-Math.cos(localAngle)) * 3;
+    const nyOff  = gy + (-Math.sin(localAngle)) * 3;
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4;
     ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(bowTop.x, bowTop.y); ctx.lineTo(nxOff, nyOff); ctx.lineTo(bowBot.x, bowBot.y); ctx.stroke();
     ctx.shadowBlur = 0;
@@ -2415,7 +2529,7 @@ function drawKnight() {
   ctx.closePath(); ctx.fill();
 
   // ── Weapon ───────────────────────────────────────────────────────────────
-  const spearAng = (player.aimAngle) * f;   // de-flip so angle is consistent
+  const spearAng = Math.atan2(Math.sin(player.aimAngle), f * Math.cos(player.aimAngle)); // world-space angle mapped into flipped canvas
   // Thrust extension: peak offset = 22px forward, covers the full swing duration
   const thrustOffset = swing >= 0
     ? Math.sin(Math.min(swing, 1) * Math.PI) * 22 : 0;
@@ -2903,13 +3017,6 @@ function drawPickups() {
       ctx.fillStyle = '#FF7A1F';
       ctx.beginPath(); ctx.moveTo(0,-3); ctx.lineTo(4,0); ctx.lineTo(0,3); ctx.lineTo(-4,0); ctx.closePath(); ctx.fill();
 
-    } else {
-      // Legacy normal pickup
-      ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 10;
-      ctx.fillStyle = '#39FF14';
-      ctx.fillRect(-8, -0.5, 15, 1);
-      ctx.beginPath(); ctx.moveTo(7,0); ctx.lineTo(3,-3); ctx.lineTo(3,3); ctx.closePath(); ctx.fill();
-      ctx.shadowBlur = 0;
     }
     ctx.restore();
   }
@@ -3103,10 +3210,12 @@ function drawBossEntrance() {
   if (flashA > 0) { ctx.fillStyle = `rgba(255,255,255,${flashA})`; ctx.fillRect(0,0,CONFIG.canvasW,CONFIG.canvasH); }
   if (e.overlayAlpha > 0) { ctx.fillStyle = `rgba(0,0,0,${e.overlayAlpha})`; ctx.fillRect(0,0,CONFIG.canvasW,CONFIG.canvasH); }
   if (e.textProgress > 0) {
-    const BOSS_TEXT = '⚠  THE MURDER HAS SUMMONED THEIR KING  ⚠';
-    ctx.font = '18px "Courier New", monospace'; ctx.fillStyle = '#39FF14';
+    const BOSS_TEXT = BOSS_ENTRY_TEXT;
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4 + 4 * Math.sin(loopT * 4);
+    ctx.fillStyle = '#39FF14'; ctx.font = '24px monospace';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(BOSS_TEXT.slice(0, Math.floor(e.textProgress)), CONFIG.canvasW/2, CONFIG.canvasH/2);
+    ctx.shadowBlur = 0;
   }
 }
 
@@ -3191,7 +3300,7 @@ function drawHUD(t) {
     ctx.strokeStyle='#4060C0'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
     ctx.fillStyle = wrdActive ? '#ccddff' : (wrdRdy ? '#8899cc' : '#444466');
     ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '🌀 READY' : `🌀 ${knightWhirlwindCD.toFixed(1)}s`);
+    const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '◎ READY' : `◎ ${knightWhirlwindCD.toFixed(1)}s`);
     ctx.fillText(wrdLabel, rx+39, 12);
     rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
@@ -3222,7 +3331,7 @@ function drawHUD(t) {
     ctx.shadowBlur=0;
     ctx.strokeStyle='#4444ff'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
     ctx.fillStyle = stormRdy ? '#aaaaff' : '#444488';
-    ctx.fillText(stormRdy ? '⚡ READY' : `⚡ ${stormCD.toFixed(1)}s`, rx+39, 12);
+    ctx.fillText(stormRdy ? 'STORM RDY' : `STORM ${stormCD.toFixed(1)}s`, rx+39, 12);
     rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     // Special ammo
     if (inv.laserStreams > 0) { ctx.fillStyle='#39E0FF'; ctx.fillText(`[L:${inv.laserStreams}]`,rx,16); rx+=50; }
@@ -3237,7 +3346,7 @@ function drawHUD(t) {
   // Feather wallet — dim amber, always visible
   ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
   ctx.fillStyle = '#5a3a00';
-  ctx.fillText(`✦${FEATHERS.wallet()}`, rx, 16);
+  ctx.fillText(`◆${FEATHERS.wallet()}`, rx, 16);
   ctx.font = 'bold 12px "Courier New", monospace';
 
   // Mode badge (always visible, dim)
@@ -3260,8 +3369,8 @@ function drawHUD(t) {
   // HUD separator — glows on low HP
   ctx.shadowColor = lowHP ? '#ff2222' : '#39FF14';
   ctx.shadowBlur  = lowHP ? 6 + 3*Math.sin(t*8) : 3;
-  ctx.strokeStyle = lowHP ? '#ff4444' : '#39FF14'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, CONFIG.hudHeight-0.5); ctx.lineTo(CONFIG.canvasW, CONFIG.hudHeight-0.5); ctx.stroke();
+  ctx.strokeStyle = lowHP ? '#ff4444' : '#39FF14'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, CONFIG.hudHeight-1); ctx.lineTo(CONFIG.canvasW, CONFIG.hudHeight-1); ctx.stroke();
   ctx.shadowBlur = 0;
 }
 
@@ -3486,13 +3595,13 @@ function drawMenu(t) {
 }
 
 const CTRL_ACTIONS = [
-  { label: 'Move Up',    key: 'up'    },
-  { label: 'Move Down',  key: 'down'  },
-  { label: 'Move Left',  key: 'left'  },
-  { label: 'Move Right', key: 'right' },
-  { label: 'Shoot',      key: 'shoot' },
-  { label: 'Snipe Mode', key: 'snipe' },
-  { label: 'Pause',      key: 'pause' }
+  { label: 'MOVE UP',    key: 'up'    },
+  { label: 'MOVE DOWN',  key: 'down'  },
+  { label: 'MOVE LEFT',  key: 'left'  },
+  { label: 'MOVE RIGHT', key: 'right' },
+  { label: 'SHOOT',      key: 'shoot' },
+  { label: 'SNIPE MODE', key: 'snipe' },
+  { label: 'PAUSE',      key: 'pause' }
 ];
 
 function drawControls(t) {
@@ -3507,7 +3616,7 @@ function drawControls(t) {
   ctx.fillText('── CONTROLS ──', CONFIG.canvasW/2, 60);
   ctx.shadowBlur = 0;
   ctx.font = '13px "Courier New", monospace'; ctx.fillStyle = '#1a7a08';
-  ctx.fillText('Click an action row to remap it, then press the new key', CONFIG.canvasW/2, 100);
+  ctx.fillText('CLICK ROW TO REMAP  ·  THEN PRESS NEW KEY', CONFIG.canvasW/2, 100);
   ctx.font = '17px "Courier New", monospace';
 
   CTRL_ACTIONS.forEach((action, i) => {
@@ -3516,7 +3625,7 @@ function drawControls(t) {
       ctx.fillStyle = 'rgba(255,255,50,0.09)'; ctx.fillRect(CONFIG.canvasW/2-210, ry-18, 420, 36);
       ctx.shadowColor = '#ffff33'; ctx.shadowBlur = 14;
       ctx.fillStyle = Math.floor(t*4)%2===0 ? '#ffff33' : '#888800';
-      ctx.fillText(`▶ ${action.label.padEnd(12)}  [ press key... ]`, CONFIG.canvasW/2, ry);
+      ctx.fillText(`▶ ${action.label.padEnd(12)}  [ PRESS KEY ]`, CONFIG.canvasW/2, ry);
     } else {
       if (isSel) {
         ctx.fillStyle = 'rgba(57,255,20,0.06)'; ctx.fillRect(CONFIG.canvasW/2-210, ry-18, 420, 36);
@@ -3549,7 +3658,7 @@ function drawPause() {
   ctx.font = '16px "Courier New", monospace'; ctx.fillStyle = '#1a7a08';
   ctx.fillText('[ESC] RESUME     [C] CONTROLS     [M] MENU', CONFIG.canvasW/2, CONFIG.canvasH/2+16);
   ctx.fillStyle = '#FFB400'; ctx.font = '14px "Courier New", monospace';
-  ctx.fillText(`[I] UPGRADES  ✦${FEATHERS.wallet()} feathers`, CONFIG.canvasW/2, CONFIG.canvasH/2+44);
+  ctx.fillText(`[I] UPGRADES  [◆${FEATHERS.wallet()} FTH]`, CONFIG.canvasW/2, CONFIG.canvasH/2+44);
 }
 
 function drawGameOver(t) {
@@ -3648,9 +3757,11 @@ function render(t) {
       ctx.save(); ctx.globalAlpha = bannerA;
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
       ctx.fillRect(0, CONFIG.canvasH/2 - 24, CONFIG.canvasW, 48);
+      ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4 + 4 * Math.sin(loopT * 4);
       ctx.fillStyle = '#39FF14'; ctx.font = 'bold 22px "Courier New", monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(`── WAVE ${wave} ──`, CONFIG.canvasW/2, CONFIG.canvasH/2);
+      ctx.shadowBlur = 0;
       ctx.restore();
     }
     drawHUD(t);
