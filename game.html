@@ -423,42 +423,32 @@ function updatePlayer(dt) {
   }
 
   // ── Knight spear swing hit-detection ────────────────────────────────────
+  // Plain circle check from player centre — same approach as pitchfork, no angle filter.
+  // The tip is at range px away; anything within that radius dies, full stop.
   if (selectedChar === 'knight' && knightSpearSwing > 0) {
     knightSpearSwing = Math.max(0, knightSpearSwing - dt);
-    const prog = 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration;
-    if (prog >= 0.2 && prog < 0.72) {
-      const fsActive = inv.knightFireSwordTimer > 0;
-      const range = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
-      const dmg   = CONFIG.knightSpearDamage  * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
-      const r2    = range ** 2;
-      for (let j = crows.length - 1; j >= 0; j--) {
-        const c = crows[j];
-        const cdx = c.x - player.x, cdy = c.y - player.y;
-        if (cdx*cdx + cdy*cdy > r2) continue;
-        let da = Math.atan2(cdy, cdx) - player.aimAngle;
-        while (da >  Math.PI) da -= Math.PI*2;
-        while (da < -Math.PI) da += Math.PI*2;
-        if (Math.abs(da) > 0.52) continue; // ~30° half-cone
-        killCrow(j);
+    const fsActive = inv.knightFireSwordTimer > 0;
+    const range = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
+    const r2    = range * range;
+    for (let j = crows.length - 1; j >= 0; j--) {
+      const c = crows[j];
+      if (dist2(player.x, player.y, c.x, c.y) < r2) {
         if (fsActive) spawnFire(c.x, c.y);
+        killCrow(j);
         triggerShake(3, 120);
         burst(c.x, c.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
-          speedMin: 40, speedMax: 100, decay: 3.0, shape: 'spark',
+          speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
           shadowBlur: fsActive ? 8 : 3,
           shadowColor: fsActive ? '#FF7A1F' : '#C0C0C0' });
       }
-      if (!knightSpearBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield) {
-        const bd  = Math.hypot(boss.x - player.x, boss.y - player.y);
-        let bda   = Math.atan2(boss.y - player.y, boss.x - player.x) - player.aimAngle;
-        while (bda >  Math.PI) bda -= Math.PI*2;
-        while (bda < -Math.PI) bda += Math.PI*2;
-        if (bd < range && Math.abs(bda) < 0.52) {
-          knightSpearBossHit = true;
-          boss.hp -= dmg; boss.hitFlash = 0.2;
-          playSound(sndBossHit); triggerShake(5, 200);
-          if (boss.hp <= 0) startBossDeath();
-        }
-      }
+    }
+    if (!knightSpearBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+        dist2(player.x, player.y, boss.x, boss.y) < r2) {
+      knightSpearBossHit = true;
+      const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
+      boss.hp -= dmg; boss.hitFlash = 0.2;
+      playSound(sndBossHit); triggerShake(5, 200);
+      if (boss.hp <= 0) startBossDeath();
     }
   }
 
@@ -2426,8 +2416,9 @@ function drawKnight() {
 
   // ── Weapon ───────────────────────────────────────────────────────────────
   const spearAng = (player.aimAngle) * f;   // de-flip so angle is consistent
-  const thrustOffset = (swing >= 0.2 && swing < 0.7)
-    ? Math.sin((swing - 0.2) / 0.5 * Math.PI) * 14 : 0;
+  // Thrust extension: peak offset = 22px forward, covers the full swing duration
+  const thrustOffset = swing >= 0
+    ? Math.sin(Math.min(swing, 1) * Math.PI) * 22 : 0;
 
   ctx.save();
   ctx.translate(Math.cos(spearAng) * thrustOffset, Math.sin(spearAng) * thrustOffset);
