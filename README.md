@@ -82,11 +82,23 @@ All keys are remappable from the Controls screen.
 
 All sound is synthesized via Web Audio API (no audio files). Sounds initialize on first user gesture.
 
+## Dependencies
+
+Three CDN-loaded libraries are referenced in `game.html`. An internet connection is required to load them; no npm install or build step is needed.
+
+| Library | Version | Purpose | License |
+|---------|---------|---------|---------|
+| [ZzFX](https://github.com/KilledByAPixel/ZzFX) | 1.3.2 | Procedural sound-effect synthesizer — replaces all hand-rolled Web Audio API synth functions with compact parameter arrays | [MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE) |
+| [simplex-noise](https://github.com/jwagner/simplex-noise) | 3.0.1 | Coherent 2-D noise for procedural terrain — rocks, water, and forest each get an independent noise layer, producing natural clusters instead of scattered random tiles | [MIT](https://github.com/jwagner/simplex-noise/blob/master/LICENSE) |
+| [rot.js](https://github.com/ondras/rot.js) | 2.2.1 | Roguelike toolkit: `ROT.FOV.PreciseShadowcasting` for crow line-of-sight checks; `ROT.Path.AStar` so aggro crows path-find around obstacles instead of beelining through walls | [BSD-2-Clause](https://github.com/ondras/rot.js/blob/master/LICENSE) |
+
 ## Technical Notes
 
-- Pure vanilla JS — no frameworks, no bundler
+- No build step — open `game.html` directly in any modern browser
+- Three CDN script tags (ZzFX · simplex-noise · rot.js) are the only external references
 - Single `<canvas>` element; all UI drawn via Canvas 2D API
 - CRT scanline aesthetic via CSS + vignette overlay
 - Particle system capped at 120 active particles (oldest dropped first)
 - Delta-time game loop via `requestAnimationFrame`
 - All tunable values centralized in the `CONFIG` object at the top of `game.html`
+- rot.js FOV cache invalidates only when the player moves to a new tile (performance)
