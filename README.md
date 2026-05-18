@@ -24,11 +24,17 @@ Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Special:** Dynamite — hold to charge, release to throw; blast radius clears tiles and damages boss
 - **Pickups:** Ricochet arrows (bounce off walls with speed boost) · Fire arrows (leave burning patches)
 
-### Wizard *(NEW)*
+### Wizard
 Teleguided magic with area control.
 - **Primary:** Magic bolts — 3 s cooldown, automatically home toward nearest enemy, disappear on contact
 - **Special:** Lightning Storm — massive 450 px AoE around the player; destroys ROCK and TREE tiles, damages all enemies
 - **Pickups:** Fire bolt (2× damage) · Laser stream (passes through walls, stops on first enemy)
+
+### Knight *(NEW)*
+Frontline melee fighter with a long spear.
+- **Primary:** Spear thrust — 80 px directional cone, 0.9 s cooldown, 2 damage to boss
+- **Special:** Whirlwind — 3-second spinning AoE (72 px radius); continuously damages enemies and destroys ROCK/TREE tiles; 8 s cooldown
+- **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup) · Fire Sword (2× damage + 2× range for 8 s, leaves burning patches)
 
 ## Controls
 
