@@ -88,8 +88,8 @@ Three CDN-loaded libraries are referenced in `game.html`. An internet connection
 
 | Library | Version | Purpose | License |
 |---------|---------|---------|---------|
-| [ZzFX](https://github.com/KilledByAPixel/ZzFX) | 1.3.2 | Procedural sound-effect synthesizer — replaces all hand-rolled Web Audio API synth functions with compact parameter arrays | [MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE) |
-| [simplex-noise](https://github.com/jwagner/simplex-noise) | 3.0.1 | Coherent 2-D noise for procedural terrain — rocks, water, and forest each get an independent noise layer, producing natural clusters instead of scattered random tiles | [MIT](https://github.com/jwagner/simplex-noise/blob/master/LICENSE) |
+| [ZzFX](https://github.com/KilledByAPixel/ZzFX) | latest | Procedural sound-effect synthesizer — replaces all hand-rolled Web Audio API synth functions with compact parameter arrays | [MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE) |
+| [simplex-noise](https://github.com/jwagner/simplex-noise) | 2.4.0 | Coherent 2-D noise for procedural terrain — rocks, water, and forest each get an independent noise layer, producing natural clusters instead of scattered random tiles. v2.4.0 is the last release with a browser-compatible UMD/global build | [MIT](https://github.com/jwagner/simplex-noise/blob/master/LICENSE) |
 | [rot.js](https://github.com/ondras/rot.js) | 2.2.1 | Roguelike toolkit: `ROT.FOV.PreciseShadowcasting` for crow line-of-sight checks; `ROT.Path.AStar` so aggro crows path-find around obstacles instead of beelining through walls | [BSD-2-Clause](https://github.com/ondras/rot.js/blob/master/LICENSE) |
 
 ## Technical Notes
