@@ -8,7 +8,7 @@ A visual-language guide and developer spec for the browser game **CROW ARCHER**:
 
 ## Sources
 
-There is **no codebase or Figma file** for this project — the design brief is the source of truth. All entities, palettes and animation curves below are derived from the constraints in the brief:
+This system was written from the design brief, before integration into `game.html`. The brief is the source of truth, and all entities, palettes and animation curves below derive from its constraints:
 
 - Canvas: 800×544px, HUD 32px, world 800×512px, tile grid 25×16 @ 32px
 - Tiles already exist: `EMPTY`, `ROCK`, `WATER`, `TREE` (do not redesign)
@@ -23,7 +23,6 @@ There is **no codebase or Figma file** for this project — the design brief is 
 | --- | --- |
 | `README.md` | This document — context, content fundamentals, visual foundations |
 | `colors_and_type.css` | CSS variables for color + type (use anywhere the game's chrome is HTML — overlays, dev tools, this doc set) |
-| `SKILL.md` | Cross-compatible Agent Skill manifest |
 | `specs/entities.md` | Full draw specs for all 13 game entities |
 | `specs/particles.md` | All 7 particle events — colors, counts, decay |
 | `specs/animations.md` | Animation formulas, state variables, easing |
@@ -159,6 +158,6 @@ If a future feature truly needs an icon (e.g. settings gear), draw it with the s
 
 ## Caveats
 
-- This is a green-field design system: there was no codebase, Figma file, or prior visual artifact to reverse-engineer. All decisions are downstream of the brief's hard constraints. If something feels off when the developer wires it up, that's a sign to revisit the spec — not a sign to fight the constraints.
+- This system predates the game code, so all decisions are downstream of the brief's hard constraints, not reverse-engineered from a build. If something feels off when wired up, revisit the spec, don't fight the constraints.
 - All animation timings were chosen by feel from the brief, not measured against a working prototype. Expect to tweak `freq` and `amplitude` constants by ±20% after first integration.
 - The system monospace stack will render slightly differently on Mac vs. Windows vs. Linux. The brief constrains us to monospace, so we accept the platform variance.
