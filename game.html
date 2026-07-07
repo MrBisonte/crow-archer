@@ -247,10 +247,33 @@ function transitionTo(next) {
 // ── TILEMAP ───────────────────────────────────────────────────────────────────
 
 const TILE = { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4, HUT: 5 };
-let tilemap = [], waterPhase = false, waterLastTs = 0;
+
+// Owns the tile grid and is the only mutation path for it. Renderers subscribe
+// to change/reset events so per-tile repaints know exactly what to redraw.
+class TileMap {
+  constructor(rows, cols) {
+    this.rows = rows; this.cols = cols;
+    this.grid = Array.from({ length: rows }, () => new Array(cols).fill(TILE.EMPTY));
+    this._changeFns = []; this._resetFns = [];
+  }
+  get(r, c) { return this.grid[r]?.[c]; }
+  set(r, c, tile) {
+    if (r < 0 || r >= this.rows || c < 0 || c >= this.cols) return;
+    const old = this.grid[r][c];
+    if (old === tile) return;
+    this.grid[r][c] = tile;
+    for (const fn of this._changeFns) fn(r, c, old, tile);
+  }
+  reset(grid) { this.grid = grid; for (const fn of this._resetFns) fn(); }
+  onChange(fn) { this._changeFns.push(fn); }
+  onReset(fn)  { this._resetFns.push(fn); }
+}
+
+const tileMap = new TileMap(CONFIG.rows, CONFIG.cols);
+let waterPhase = false, waterLastTs = 0;
 
 function generateMap() {
-  tilemap = [];
+  const grid = [];
   // ── simplex-noise terrain ─────────────────────────────────────────────────
   // Each tile type gets its own noise layer at a different frequency and world
   // offset so rocks, water, and forest cluster independently.
@@ -266,12 +289,12 @@ function generateMap() {
     : () => Math.random();
 
   for (let r = 0; r < CONFIG.rows; r++) {
-    tilemap[r] = new Array(CONFIG.cols).fill(TILE.EMPTY);
+    grid[r] = new Array(CONFIG.cols).fill(TILE.EMPTY);
     for (let c = 0; c < CONFIG.cols; c++) {
       // Hard border walls: top row, bottom row, left col — crow corridor (cols 23-24) stays open
       const isBorder = (r === 0 || r === CONFIG.rows - 1 || c === 0) && c < CONFIG.cols - 2;
       if (isBorder) {
-        tilemap[r][c] = Math.random() < 0.6 ? TILE.ROCK : TILE.TREE;
+        grid[r][c] = Math.random() < 0.6 ? TILE.ROCK : TILE.TREE;
         continue;
       }
       // Player spawn clear zone (cols 1-4, rows centered on mid-row)
@@ -287,9 +310,9 @@ function generateMap() {
       const nT = n2d(c, r, 0.15,  83,  61);   // tree   — medium scale
       // Thresholds tuned so total coverage matches the original percentages.
       // Priority: water > rock > tree (water wins ties so ponds stay contiguous)
-      if      (nW > 0.76) tilemap[r][c] = TILE.WATER;  // ≈ 8%
-      else if (nR > 0.77) tilemap[r][c] = TILE.ROCK;   // ≈ 7%
-      else if (nT > 0.76) tilemap[r][c] = TILE.TREE;   // ≈ 8%
+      if      (nW > 0.76) grid[r][c] = TILE.WATER;  // ≈ 8%
+      else if (nR > 0.77) grid[r][c] = TILE.ROCK;   // ≈ 7%
+      else if (nT > 0.76) grid[r][c] = TILE.TREE;   // ≈ 8%
     }
   }
   // ── Place 1–2 destructible huts (2×2 blocks) ─────────────────────────────
@@ -310,33 +333,42 @@ function generateMap() {
         const nr = hr + dr, nc = hc + dc;
         if (nr < 0 || nr >= CONFIG.rows || nc < 0 || nc >= CONFIG.cols) continue;
         if (dr >= 0 && dr < 2 && dc >= 0 && dc < 2) {
-          if (tilemap[nr][nc] !== TILE.EMPTY) ok = false; // footprint must be empty
+          if (grid[nr][nc] !== TILE.EMPTY) ok = false; // footprint must be empty
         } else {
-          if (tilemap[nr][nc] === TILE.HUT) ok = false;   // no adjacent huts
+          if (grid[nr][nc] === TILE.HUT) ok = false;   // no adjacent huts
         }
       }
     if (!ok) continue;
     for (let dr = 0; dr < 2; dr++)
       for (let dc = 0; dc < 2; dc++)
-        tilemap[hr + dr][hc + dc] = TILE.HUT;
+        grid[hr + dr][hc + dc] = TILE.HUT;
     placed++;
   }
+  tileMap.reset(grid);
 }
 
 function tileAt(wx, wy) {
   const c = Math.floor(wx / CONFIG.tileSize), r = Math.floor(wy / CONFIG.tileSize);
   if (c < 0 || c >= CONFIG.cols || r < 0 || r >= CONFIG.rows) return TILE.ROCK;
-  return tilemap[r][c];
+  return tileMap.get(r, c);
 }
 
 const tilePassable = t => t === TILE.EMPTY || t === TILE.ASH;
 
+// Storm and whirlwind level terrain the same way: trees char to ash,
+// rocks and huts are cleared outright.
+function smashTile(row, col) {
+  const t = tileMap.get(row, col);
+  if (t === TILE.TREE) tileMap.set(row, col, TILE.ASH);
+  else if (t === TILE.ROCK || t === TILE.HUT) tileMap.set(row, col, TILE.EMPTY);
+}
+
 // ── ROT.JS — FOV & A* ─────────────────────────────────────────────────────────
 // Passability callback shared by both FOV and pathfinding.
-// The closure reads `tilemap` at call time, so it auto-adapts when tiles change.
+// The closure reads the tile map at call time, so it auto-adapts when tiles change.
 const _rotPassable = (x, y) => {
   if (x < 0 || x >= CONFIG.cols || y < 0 || y >= CONFIG.rows) return false;
-  return tilePassable(tilemap[y]?.[x] ?? TILE.ROCK);
+  return tilePassable(tileMap.get(y, x) ?? TILE.ROCK);
 };
 
 // FOV: PreciseShadowcasting, computed once per player-tile move and cached.
@@ -488,7 +520,7 @@ function spawnPickup(wx, wy) {
   const type = rnd < 0.33 ? 'ricochet' : rnd < 0.66 ? 'fire' : 'shield';
   const tryPlace = (col, row) => {
     if (col < 0 || col >= CONFIG.cols || row < 0 || row >= CONFIG.rows) return false;
-    if (!tilePassable(tilemap[row][col])) return false;
+    if (!tilePassable(tileMap.get(row, col))) return false;
     pickups.push({ x: col * CONFIG.tileSize + 16, y: row * CONFIG.tileSize + 16,
                    pulsePhase: 0, bobPhase: Math.random() * Math.PI * 2, type });
     return true;
@@ -669,10 +701,7 @@ function updatePlayer(dt) {
           const row = tr + dr, col = tc + dc;
           if (row <= 0 || row >= CONFIG.rows - 1 || col <= 0) continue;
           const wx = (col+0.5)*CONFIG.tileSize, wy = (row+0.5)*CONFIG.tileSize;
-          if (dist2(player.x, player.y, wx, wy) < wr2) {
-            if (tilemap[row][col] === TILE.TREE) tilemap[row][col] = TILE.ASH;
-            else if (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.HUT) tilemap[row][col] = TILE.EMPTY;
-          }
+          if (dist2(player.x, player.y, wx, wy) < wr2) smashTile(row, col);
         }
       }
       // Spinning particle ring
@@ -838,10 +867,7 @@ function fireLightningStorm() {
       const isBorder = row === 0 || row === CONFIG.rows - 1 || col === 0;
       if (isBorder) continue;
       const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
-      if (dist2(player.x, player.y, wx, wy) < r2) {
-        if (tilemap[row][col] === TILE.TREE) tilemap[row][col] = TILE.ASH;
-        else if (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.HUT) tilemap[row][col] = TILE.EMPTY;
-      }
+      if (dist2(player.x, player.y, wx, wy) < r2) smashTile(row, col);
     }
   }
 }
@@ -1001,7 +1027,7 @@ function updateArrows(dt) {
           if (a.type === 'fire') {
             // Burn the tree — convert tile to ash, spawn fire patch
             const tc = Math.floor(a.x / CONFIG.tileSize), tr = Math.floor(a.y / CONFIG.tileSize);
-            if (tr >= 0 && tr < CONFIG.rows && tc >= 0 && tc < CONFIG.cols) tilemap[tr][tc] = TILE.ASH;
+            tileMap.set(tr, tc, TILE.ASH);
             spawnFire(a.x, a.y);
           } else {
             onArrowMiss();
@@ -1011,7 +1037,7 @@ function updateArrows(dt) {
           const htc = Math.floor(a.x / CONFIG.tileSize), htr = Math.floor(a.y / CONFIG.tileSize);
           if (a.type === 'fire') {
             // Fire arrow chars the hut to ash
-            if (htr >= 0 && htr < CONFIG.rows && htc >= 0 && htc < CONFIG.cols) tilemap[htr][htc] = TILE.ASH;
+            tileMap.set(htr, htc, TILE.ASH);
             spawnFire(a.x, a.y);
           } else {
             onArrowMiss();
@@ -1177,8 +1203,9 @@ function explodeDynamite(d) {
       const row = tr + dr, col = tc + dc;
       if (row < 0 || row >= CONFIG.rows || col < 0 || col >= CONFIG.cols) continue;
       const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
-      if (dist2(d.x, d.y, wx, wy) < r2 && (tilemap[row][col] === TILE.ROCK || tilemap[row][col] === TILE.TREE || tilemap[row][col] === TILE.HUT))
-        tilemap[row][col] = TILE.EMPTY;
+      const t = tileMap.get(row, col);
+      if (dist2(d.x, d.y, wx, wy) < r2 && (t === TILE.ROCK || t === TILE.TREE || t === TILE.HUT))
+        tileMap.set(row, col, TILE.EMPTY);
     }
   }
 
@@ -1368,7 +1395,7 @@ function updateBossEntrance(dt) {
     e.treesBurned = true;
     for (let r = 0; r < CONFIG.rows; r++)
       for (let c = 0; c < CONFIG.cols; c++)
-        if (tilemap[r][c] === TILE.TREE) tilemap[r][c] = TILE.ASH;
+        if (tileMap.get(r, c) === TILE.TREE) tileMap.set(r, c, TILE.ASH);
     // A few dramatic fire bursts across the arena
     for (let k = 0; k < 8; k++) {
       const bx = (2 + Math.random()*(CONFIG.cols-4)) * CONFIG.tileSize;
@@ -2028,7 +2055,7 @@ function drawTiles() {
   const ts = CONFIG.tileSize, HH = CONFIG.hudHeight;
   for (let r = 0; r < CONFIG.rows; r++) {
     for (let c = 0; c < CONFIG.cols; c++) {
-      const x = c*ts, y = r*ts + HH, tile = tilemap[r][c], seed = r*97+c*31;
+      const x = c*ts, y = r*ts + HH, tile = tileMap.get(r, c), seed = r*97+c*31;
       if (tile === TILE.EMPTY) {
         ctx.fillStyle = '#1a2a1a'; ctx.fillRect(x, y, ts, ts);
         // Subtle ground texture: deterministic micro-spots per tile
@@ -2082,8 +2109,8 @@ function drawTiles() {
         // Ground beneath
         ctx.fillStyle = '#1a2a1a'; ctx.fillRect(x, y, ts, ts);
         // Detect neighbours to draw a cohesive 2×2 building
-        const hutAbove = r > 0 && tilemap[r-1]?.[c] === TILE.HUT;
-        const hutLeft  = c > 0 && tilemap[r]?.[c-1] === TILE.HUT;
+        const hutAbove = r > 0 && tileMap.get(r-1, c) === TILE.HUT;
+        const hutLeft  = c > 0 && tileMap.get(r, c-1) === TILE.HUT;
         // Outer wall — clay / stone
         ctx.fillStyle = '#b89060';
         ctx.fillRect(x+1, y+1, ts-2, ts-2);
