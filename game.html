@@ -3797,6 +3797,29 @@ function render(t) {
 
 // ── LOOP ──────────────────────────────────────────────────────────────────────
 
+// Frame-time probe, dev only. Enable with game.html?perf=1.
+// Tracks update and render cost separately over the last 120 frames.
+const PERF = new URLSearchParams(location.search).has('perf') ? {
+  upd: new Float32Array(120), ren: new Float32Array(120), i: 0, n: 0,
+  push(u, r) {
+    this.upd[this.i] = u; this.ren[this.i] = r;
+    this.i = (this.i + 1) % 120; if (this.n < 120) this.n++;
+  },
+  stats(buf) {
+    let sum = 0, max = 0;
+    for (let k = 0; k < this.n; k++) { sum += buf[k]; if (buf[k] > max) max = buf[k]; }
+    return [sum / this.n, max];
+  },
+  draw() {
+    if (!this.n) return;
+    const [ua, um] = this.stats(this.upd), [ra, rm] = this.stats(this.ren);
+    ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillStyle = '#39FF14';
+    ctx.fillText(`UPD AVG ${ua.toFixed(2)} MAX ${um.toFixed(2)}`, 4, CONFIG.canvasH - 24);
+    ctx.fillText(`REN AVG ${ra.toFixed(2)} MAX ${rm.toFixed(2)}`, 4, CONFIG.canvasH - 13);
+  }
+} : null;
+
 let lastTs = 0, loopT = 0;
 
 function handleMenuInput() {
@@ -3823,6 +3846,7 @@ function loop(ts) {
   if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
   updateShake(dt);
 
+  const _pt0 = PERF ? performance.now() : 0;
   switch (appState) {
     case 'menu':     handleMenuInput(); break;
 
@@ -3890,7 +3914,14 @@ function loop(ts) {
       break;
   }
 
-  render(loopT);
+  if (PERF) {
+    const _pt1 = performance.now();
+    render(loopT);
+    PERF.push(_pt1 - _pt0, performance.now() - _pt1);
+    PERF.draw();
+  } else {
+    render(loopT);
+  }
   requestAnimationFrame(loop);
 }
 
