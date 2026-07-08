@@ -406,6 +406,40 @@ function computeAStarPath(fromPx, fromPy, toPx, toPy) {
   return path.slice(1); // drop the starting tile (crow is already there)
 }
 
+// Caps how many A* solves run per frame and staggers each crow's recompute
+// phase, so a mass-aggro event spreads its pathfinding across frames instead
+// of stalling one. compute() is injected so the budgeting logic is testable
+// without rot.js.
+class PathScheduler {
+  constructor(compute, { budget = 3, interval = 0.4 } = {}) {
+    this._compute = compute;
+    this.budget = budget; this.interval = interval;
+    this._queue = [];
+  }
+  // Random first-recompute phase so identical crows don't solve in lockstep.
+  initialPhase() { return Math.random() * this.interval; }
+  // Idempotent per crow: a crow already waiting is not enqueued twice.
+  request(crow) {
+    if (!crow._pathQueued) { crow._pathQueued = true; this._queue.push(crow); }
+  }
+  // Serve up to `budget` waiting crows (FIFO, so no crow starves) toward
+  // (tx, ty). Crows that stopped being aggro while queued are dropped.
+  serve(tx, ty) {
+    let served = 0;
+    while (served < this.budget && this._queue.length) {
+      const crow = this._queue.shift();
+      crow._pathQueued = false;
+      if (crow.state !== 'aggro') continue;
+      crow.path = this._compute(crow.x, crow.y, tx, ty);
+      crow.pathTimer = this.interval;
+      served++;
+    }
+  }
+  clear() { for (const c of this._queue) c._pathQueued = false; this._queue.length = 0; }
+}
+
+const pathScheduler = new PathScheduler(computeAStarPath);
+
 // ── INPUT ─────────────────────────────────────────────────────────────────────
 
 const keys  = {};
@@ -1223,6 +1257,8 @@ function explodeDynamite(d) {
 
 function updateCrows(dt) {
   if (bossDeathSeq) return;
+  // Serve last frame's queued path requests before crows move this frame.
+  pathScheduler.serve(player.x, player.y);
   for (let i = crows.length - 1; i >= 0; i--) {
     const c = crows[i];
     if (c.frozen) continue;
@@ -1242,12 +1278,11 @@ function updateCrows(dt) {
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
       const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod();
-      // A* pathfinding: recompute every 0.4 s or when the cached path runs out
+      // Request a recompute when the cached path expires or runs out; the
+      // scheduler serves it within a few frames. The crow keeps following its
+      // stale path (or beelines when empty) until then.
       c.pathTimer -= dt;
-      if (!c.path || c.path.length === 0 || c.pathTimer <= 0) {
-        c.path      = computeAStarPath(c.x, c.y, player.x, player.y);
-        c.pathTimer = 0.4;
-      }
+      if (!c.path || c.path.length === 0 || c.pathTimer <= 0) pathScheduler.request(c);
       if (c.path && c.path.length > 0) {
         const wp = c.path[0];
         const wdx = wp.x - c.x, wdy = wp.y - c.y, wdist = Math.hypot(wdx, wdy);
@@ -1274,7 +1309,8 @@ function aggroCrows(count) {
   let n = 0;
   for (const c of passive) {
     if (n >= count) break;
-    c.state = 'aggro'; c.aggroTimer = CONFIG.crowAggroTimeout; n++;
+    c.state = 'aggro'; c.aggroTimer = CONFIG.crowAggroTimeout;
+    c.path = null; c.pathTimer = pathScheduler.initialPhase(); n++;
   }
   if (n > 0) { playSound(sndAggro); triggerShake(6, 300); }
 }
