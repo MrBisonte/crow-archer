@@ -2245,6 +2245,21 @@ class AnimatedTileOverlay {
 const tileLayer   = new StaticTileLayer(tileMap);
 const tileOverlay = new AnimatedTileOverlay(tileMap);
 
+// The vignette gradient never changes for a fixed-size canvas, so bake it once.
+// Full-size canvas with only the below-HUD region filled, so geometry and blit
+// offset match the original inline gradient exactly.
+const vignetteCanvas = (() => {
+  const cv = document.createElement('canvas');
+  cv.width = CONFIG.canvasW; cv.height = CONFIG.canvasH;
+  const g = cv.getContext('2d');
+  const vg = g.createRadialGradient(
+    CONFIG.canvasW/2, CONFIG.canvasH/2, CONFIG.canvasH*0.35,
+    CONFIG.canvasW/2, CONFIG.canvasH/2, CONFIG.canvasH*0.80);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.52)');
+  g.fillStyle = vg; g.fillRect(0, CONFIG.hudHeight, CONFIG.canvasW, CONFIG.canvasH - CONFIG.hudHeight);
+  return cv;
+})();
+
 function drawTiles() {
   tileLayer.draw(ctx);
   tileOverlay.draw(ctx, loopT, waterPhase);
@@ -3914,9 +3929,7 @@ function render(t) {
     drawArrows(); drawDynamites(); drawPlayer(); drawBoss(); drawFloaters();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
-    { const vg = ctx.createRadialGradient(CONFIG.canvasW/2, CONFIG.canvasH/2, CONFIG.canvasH*0.35, CONFIG.canvasW/2, CONFIG.canvasH/2, CONFIG.canvasH*0.80);
-      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.52)');
-      ctx.fillStyle = vg; ctx.fillRect(0, CONFIG.hudHeight, CONFIG.canvasW, CONFIG.canvasH - CONFIG.hudHeight); }
+    ctx.drawImage(vignetteCanvas, 0, 0);
     if (bossDeathSeq) {
       const ft = bossDeathSeq.timer;
       if ((ft >= 0.3 && ft < 0.42) || (ft >= 0.55 && ft < 0.67))
