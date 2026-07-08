@@ -3022,18 +3022,18 @@ function drawCrow(c) {
   ctx.moveTo(-9, bobY - 0.5); ctx.lineTo(-13, bobY); ctx.lineTo(-9, bobY + 1.5);
   ctx.closePath(); ctx.fill();
 
-  // 7. Eye
-  ctx.shadowColor = eyeCol; ctx.shadowBlur = eyeBlur;
-  ctx.fillStyle = eyeCol;
-  ctx.beginPath(); ctx.arc(-6, bobY - 1.5, 1.2, 0, Math.PI*2); ctx.fill();
-  ctx.shadowBlur = 0;
+  // 7. Eye — stamped glow, one per (color, blur step) across the whole flock
+  const eyeStamp = glowDotStamp(eyeCol, 1.2, eyeBlur);
+  ctx.drawImage(eyeStamp, -6 - eyeStamp.width / 2, bobY - 1.5 - eyeStamp.height / 2);
 
   // 8. Eye glint (2×2 when aggro, 1×1 otherwise)
-  const glintSz = isAggro ? 2 : 1;
-  if (isAggro) { ctx.shadowColor = '#FF1F1F'; ctx.shadowBlur = 5; }
-  ctx.fillStyle = isAggro ? '#FF1F1F' : glintCol;
-  ctx.fillRect(-6, bobY - 1.5, glintSz, glintSz);
-  ctx.shadowBlur = 0;
+  if (isAggro) {
+    const gs = glowRectStamp('#FF1F1F', 2, 2, 5);
+    ctx.drawImage(gs, -5 - gs.width / 2, bobY - 0.5 - gs.height / 2);
+  } else {
+    ctx.fillStyle = glintCol;
+    ctx.fillRect(-6, bobY - 1.5, 1, 1);
+  }
 
   // Aggro pulse ring — layered on top
   if (isAggro) {
@@ -3145,37 +3145,89 @@ function drawPickups() {
   }
 }
 
+// Pre-rendered sprites for glowing primitives. Painting happens once per key;
+// runtime cost is a drawImage instead of a shadowBlur raster pass per draw.
+class StampCache {
+  constructor() { this.map = new Map(); }
+  get(key, w, h, painter) {
+    let s = this.map.get(key);
+    if (!s) {
+      s = document.createElement('canvas');
+      s.width = Math.ceil(w); s.height = Math.ceil(h);
+      painter(s.getContext('2d'), s.width, s.height);
+      this.map.set(key, s);
+    }
+    return s;
+  }
+}
+const stamps = new StampCache();
+
+// Radius quantized to 0.25 px and blur to 1 px so the cache stays bounded
+// while shrinking particles reuse stamps.
+function glowDotStamp(color, r, blur) {
+  const rq = Math.max(0.25, Math.round(r * 4) / 4);
+  const bq = Math.max(1, Math.round(blur));
+  const size = (rq + bq * 2 + 2) * 2;
+  return stamps.get(`dot|${color}|${rq}|${bq}`, size, size, (g, w, h) => {
+    g.shadowColor = color; g.shadowBlur = bq;
+    g.fillStyle = color;
+    g.beginPath(); g.arc(w / 2, h / 2, rq, 0, Math.PI * 2); g.fill();
+  });
+}
+
+function glowRectStamp(color, rw, rh, blur) {
+  const bq = Math.max(1, Math.round(blur)), pad = bq * 2 + 2;
+  return stamps.get(`rect|${color}|${rw}x${rh}|${bq}`, rw + pad * 2, rh + pad * 2, (g, w, h) => {
+    g.shadowColor = color; g.shadowBlur = bq;
+    g.fillStyle = color;
+    g.fillRect((w - rw) / 2, (h - rh) / 2, rw, rh);
+  });
+}
+
 function drawParticles() {
   for (const p of particles) {
-    ctx.save(); ctx.globalAlpha = Math.max(0, p.alpha);
+    const a = Math.max(0, Math.min(1, p.alpha));
     const py = p.y + CONFIG.hudHeight;
-    if (p.shadowBlur) { ctx.shadowBlur = p.shadowBlur; ctx.shadowColor = p.shadowColor || p.color; }
     if (p.shape === 'spark') {
       const spd = Math.hypot(p.vx, p.vy) || 1;
       const len = Math.min(9, spd * 0.045 + 2);
       const nx = p.vx / spd, ny = p.vy / spd;
+      // Glow is a wide soft understroke; a real shadowBlur here would cost a
+      // raster pass per particle.
+      if (p.shadowBlur) {
+        ctx.globalAlpha = a * 0.35;
+        ctx.strokeStyle = p.shadowColor || p.color; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(p.x - nx*len, py - ny*len); ctx.lineTo(p.x + nx*len, py + ny*len);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = a;
       ctx.strokeStyle = p.color; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(p.x - nx*len, py - ny*len); ctx.lineTo(p.x + nx*len, py + ny*len);
       ctx.stroke();
     } else {
-      ctx.fillStyle = p.color;
-      const r = p.r || 2.5;
-      ctx.beginPath(); ctx.arc(p.x, py, Math.max(0.1, r), 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = a;
+      const r = Math.max(0.1, p.r || 2.5);
+      if (p.shadowBlur) {
+        const s = glowDotStamp(p.color, r, p.shadowBlur);
+        ctx.drawImage(s, p.x - s.width / 2, py - s.height / 2);
+      } else {
+        ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(p.x, py, r, 0, Math.PI*2); ctx.fill();
+      }
     }
-    ctx.shadowBlur = 0;
-    ctx.restore();
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawFloaters() {
   ctx.font = 'bold 13px "Courier New", monospace';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const f of floaters) {
-    ctx.save(); ctx.globalAlpha = Math.max(0, f.alpha);
+    ctx.globalAlpha = Math.max(0, Math.min(1, f.alpha));
     ctx.fillStyle = f.color || '#39FF14';
     ctx.fillText(f.text || '+1', f.x, f.y + CONFIG.hudHeight);
-    ctx.restore();
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawBoss() {
