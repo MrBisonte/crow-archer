@@ -371,23 +371,39 @@ const _rotPassable = (x, y) => {
   return tilePassable(tileMap.get(y, x) ?? TILE.ROCK);
 };
 
-// FOV: PreciseShadowcasting, computed once per player-tile move and cached.
-const _fov            = new ROT.FOV.PreciseShadowcasting(_rotPassable);
-let   _fovCache       = new Set();   // "col,row" strings of visible tiles
-let   _fovPlayerTile  = [-1, -1];    // last tile at which FOV was computed
+// Visible-tile cache backed by a flat Uint8Array indexed by row*cols+col, so
+// the per-crow visibility check is an array read with no string building.
+// Recomputes only when the player moves to a new tile. compute() is injected
+// for testability.
+class FovMap {
+  constructor(rows, cols, compute) {
+    this.rows = rows; this.cols = cols; this._compute = compute;
+    this.vis = new Uint8Array(rows * cols);
+    this.tile = [-1, -1];
+  }
+  update(col, row) {
+    if (col === this.tile[0] && row === this.tile[1]) return;
+    this.tile[0] = col; this.tile[1] = row;
+    this.vis.fill(0);
+    this._compute(col, row, (x, y) => { this.vis[y * this.cols + x] = 1; });
+  }
+  isVisible(col, row) {
+    if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return false;
+    return this.vis[row * this.cols + col] === 1;
+  }
+  invalidate() { this.vis.fill(0); this.tile[0] = -1; this.tile[1] = -1; }
+}
 
-// Recompute FOV only when the player moves to a new tile (cheap cache).
+const _fov   = new ROT.FOV.PreciseShadowcasting(_rotPassable);
+const fovMap  = new FovMap(CONFIG.rows, CONFIG.cols,
+  (col, row, mark) => _fov.compute(col, row, 14, mark));
+
 function updateFOV() {
-  const pc = Math.floor(player.x / CONFIG.tileSize);
-  const pr = Math.floor(player.y / CONFIG.tileSize);
-  if (pc === _fovPlayerTile[0] && pr === _fovPlayerTile[1]) return;
-  _fovPlayerTile = [pc, pr];
-  _fovCache.clear();
-  _fov.compute(pc, pr, 14, (x, y) => _fovCache.add(`${x},${y}`));
+  fovMap.update(Math.floor(player.x / CONFIG.tileSize), Math.floor(player.y / CONFIG.tileSize));
 }
 
 // Returns true if grid cell (col, row) is currently in the player's line-of-sight.
-function tileVisible(col, row) { return _fovCache.has(`${col},${row}`); }
+function tileVisible(col, row) { return fovMap.isVisible(col, row); }
 
 // A* path from pixel position (fromPx,fromPy) to (toPx,toPy).
 // Returns an array of {x,y} pixel waypoints (tile centers), NOT including start.
@@ -527,7 +543,7 @@ function initGame() {
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null;
-  _fovCache.clear(); _fovPlayerTile = [-1, -1]; // invalidate rot.js FOV cache
+  fovMap.invalidate(); // force FOV recompute on next player move
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
@@ -3954,8 +3970,10 @@ function drawWin(t) {
   ctx.fillText(`[R] PLAY AGAIN${Math.floor(t*2)%2===0 ? '_' : ' '}   [M] MENU`, CONFIG.canvasW/2, 400);
 }
 
+const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
+
 function render(t) {
-  const gameVisible = ['playing','paused','boss_entrance','boss_fight'].includes(appState);
+  const gameVisible = GAME_VISIBLE_STATES.has(appState);
   if (gameVisible) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
