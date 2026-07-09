@@ -4157,6 +4157,9 @@ function loop(ts) {
 
 FEATHERS.init();
 requestAnimationFrame(loop);
+
+// Pure classes exposed for the test harness in tests.html.
+window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
 </script>
 </body>
 </html>
