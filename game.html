@@ -112,7 +112,7 @@ const CONFIG = {
   crowStartCount: 5, crowMax: 12, crowEscalationInterval: 12,
   whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 320,
 
-  pickupSpawnInterval: 15, maxPickupsOnMap: 3,
+  maxPickupsOnMap: 3,
   waterShimmerMs: 800,
 
   bossHP: 5, bossHPWizard: 14, bossOrbitRadius: 180, bossOrbitSpeed: 80, bossOrbitDuration: 3,
@@ -127,7 +127,6 @@ const CONFIG = {
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
-  dynamiteChargeMax: 1.0,
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
 
@@ -135,7 +134,7 @@ const CONFIG = {
 
   // Knight
   knightSpearRange: 80, knightSpearCooldown: 1.5,
-  knightSpearDamage: 1, knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
+  knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
   knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 8,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
@@ -174,7 +173,7 @@ const CONFIG = {
   keys: {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
-    menuStart: 's', menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift'
+    menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift'
   }
 };
 
@@ -193,7 +192,7 @@ let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
 let waveAnnounce = 0;            // countdown timer for wave banner display
 let menuSelection = 0;
-const menuOptions = ['BRAWL', 'WAVES', 'CONTROLS', 'EXIT'];
+const menuOptions = ['BRAWL', 'WAVES', 'CONTROLS'];
 let controlsSelection = 0, remapTarget = null;
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
@@ -3797,7 +3796,6 @@ function drawMenu(t) {
   ];
   const UTIL = [
     { key: 'C', label: 'CONTROLS' },
-    { key: 'X', label: 'EXIT'     },
   ];
 
   // MODE items at 305 / 365
@@ -4059,14 +4057,12 @@ function handleMenuInput() {
     if (menuSelection === 0) { gameMode = 'brawl'; transitionTo('charselect'); }
     if (menuSelection === 1) { gameMode = 'waves'; transitionTo('charselect'); }
     if (menuSelection === 2) transitionTo('controls');
-    if (menuSelection === 3) window.close();
     keys['Enter'] = false;
   }
   // Hotkeys shown in brackets next to each option
   if (keys['b']||keys['B']) { gameMode='brawl'; transitionTo('charselect'); keys['b']=keys['B']=false; }
   if (keys['w']||keys['W']) { gameMode='waves'; transitionTo('charselect'); keys['w']=keys['W']=false; }
   if (keys['c']||keys['C']) { transitionTo('controls'); keys['c']=keys['C']=false; }
-  if (keys['x']||keys['X']) { window.close(); }
 }
 
 function loop(ts) {
