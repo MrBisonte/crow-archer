@@ -28,7 +28,7 @@ Survive the flock, kill the Crow King. A single-file browser game: vanilla JS, H
 
 ## Play
 
-Open `game.html` in any modern browser. No server required. An internet connection is needed once, to load three CDN scripts (see [Dependencies](#dependencies)).
+Open `game.html` in any modern browser. No server required. An internet connection is needed once, to load two CDN scripts (see [Dependencies](#dependencies)).
 
 ## Controls
 
@@ -117,7 +117,7 @@ All sound is synthesized at runtime, no audio files. Sounds initialize on first 
 
 ## Dependencies
 
-Three CDN-loaded libraries, referenced from `game.html`. No npm install, no build step.
+Two CDN-loaded libraries, referenced from `game.html`; ZzFX is inlined. No npm install, no build step.
 
 | Library | Version | Purpose | License |
 |---------|---------|---------|---------|
