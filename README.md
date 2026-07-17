@@ -12,7 +12,7 @@
 
 Survive the flock, kill the Crow King. A single-file browser game: vanilla JS, HTML5 Canvas, Web Audio API. No build step, no install. Open `game.html` and play.
 
-![Gameplay](.design-system/screenshots/kit_v3.png)
+![Gameplay: arrow kills, boss entrance cinematic, boss fight](media/gameplay.gif)
 
 - [Play](#play)
 - [Controls](#controls)
