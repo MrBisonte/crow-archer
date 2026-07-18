@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CROW ARCHER</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; overflow: hidden;
+  }
+  body::after {
+    content: ''; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      to bottom, transparent 0px, transparent 3px,
+      rgba(0,0,0,0.13) 3px, rgba(0,0,0,0.13) 4px
+    );
+    pointer-events: none; z-index: 100;
+  }
+  #game { display: block; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/simplex-noise@2.4.0/simplex-noise.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/rot-js@2.2.1/dist/rot.js"></script>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
