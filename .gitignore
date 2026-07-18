@@ -1,6 +1,10 @@
 # local tooling
 .claude/
 
+# build
+node_modules/
+dist/
+
 # OS artifacts
 Thumbs.db
 .DS_Store
