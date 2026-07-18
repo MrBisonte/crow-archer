@@ -1,6 +1,11 @@
 // Legacy monolith, being dismantled into sim/ and render/ modules.
 // ZzFX synth first (same scope as the game code, as in game.html).
 
+import { TILE, TileMap, tilePassable } from '../sim/tilemap';
+import { mulberry32 } from '../sim/rng';
+import { generateGrid } from '../sim/mapgen';
+import { PathScheduler, FovMap } from '../sim/pathfinding';
+
 // ZzFX-compatible standalone synth — MIT License
 // API matches https://github.com/KilledByAPixel/ZzFX parameter layout exactly.
 // Parameters (all optional, positional): volume, randomness, frequency, attack,
@@ -205,105 +210,20 @@ function transitionTo(next) {
 
 // ── TILEMAP ───────────────────────────────────────────────────────────────────
 
-const TILE = { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4, HUT: 5 };
-
-// Owns the tile grid and is the only mutation path for it. Renderers subscribe
-// to change/reset events so per-tile repaints know exactly what to redraw.
-class TileMap {
-  constructor(rows, cols) {
-    this.rows = rows; this.cols = cols;
-    this.grid = Array.from({ length: rows }, () => new Array(cols).fill(TILE.EMPTY));
-    this._changeFns = []; this._resetFns = [];
-  }
-  get(r, c) { return this.grid[r]?.[c]; }
-  set(r, c, tile) {
-    if (r < 0 || r >= this.rows || c < 0 || c >= this.cols) return;
-    const old = this.grid[r][c];
-    if (old === tile) return;
-    this.grid[r][c] = tile;
-    for (const fn of this._changeFns) fn(r, c, old, tile);
-  }
-  reset(grid) { this.grid = grid; for (const fn of this._resetFns) fn(); }
-  onChange(fn) { this._changeFns.push(fn); }
-  onReset(fn)  { this._resetFns.push(fn); }
-}
-
 const tileMap = new TileMap(CONFIG.rows, CONFIG.cols);
 let waterPhase = false, waterLastTs = 0;
 
-function generateMap() {
-  const grid = [];
-  // ── simplex-noise terrain ─────────────────────────────────────────────────
-  // Each tile type gets its own noise layer at a different frequency and world
-  // offset so rocks, water, and forest cluster independently.
-  // Using separate offsets ensures the three biome layers are decorrelated.
-  // Graceful fallback: if the CDN failed to load SimplexNoise, use Math.random()
-  // so the game still runs (scattered tiles instead of clustered terrain).
-  const _sn = typeof SimplexNoise !== 'undefined' ? new SimplexNoise() : null;
-  const sx = Math.random() * 200;          // per-game world offset X
-  const sy = Math.random() * 200;          // per-game world offset Y
-  // n2d: returns value in [0, 1] — coherent when _sn loaded, random otherwise
-  const n2d = _sn
-    ? (c, r, scale, ox, oy) => (_sn.noise2D(c * scale + ox + sx, r * scale + oy + sy) + 1) / 2
-    : () => Math.random();
+let mapSeed = 0;
 
-  for (let r = 0; r < CONFIG.rows; r++) {
-    grid[r] = new Array(CONFIG.cols).fill(TILE.EMPTY);
-    for (let c = 0; c < CONFIG.cols; c++) {
-      // Hard border walls: top row, bottom row, left col — crow corridor (cols 23-24) stays open
-      const isBorder = (r === 0 || r === CONFIG.rows - 1 || c === 0) && c < CONFIG.cols - 2;
-      if (isBorder) {
-        grid[r][c] = Math.random() < 0.6 ? TILE.ROCK : TILE.TREE;
-        continue;
-      }
-      // Player spawn clear zone (cols 1-4, rows centered on mid-row)
-      const midRow = Math.floor(CONFIG.rows / 2);
-      if (c >= 1 && c <= 4 && r >= midRow - 3 && r <= midRow + 3) continue;
-      // Crow corridor — always passable
-      if (c >= CONFIG.cols - 2) continue;
-      // Coherent terrain: each biome has its own noise layer at its own scale.
-      // Scale 0.10 → large water bodies/rivers; 0.18 → medium rock outcrops;
-      // 0.15 → forest patches. Offsets decorrelate the three layers.
-      const nW = n2d(c, r, 0.10,   0,   0);   // water  — large scale
-      const nR = n2d(c, r, 0.18,  47,  19);   // rock   — medium scale
-      const nT = n2d(c, r, 0.15,  83,  61);   // tree   — medium scale
-      // Thresholds tuned so total coverage matches the original percentages.
-      // Priority: water > rock > tree (water wins ties so ponds stay contiguous)
-      if      (nW > 0.76) grid[r][c] = TILE.WATER;  // ≈ 8%
-      else if (nR > 0.77) grid[r][c] = TILE.ROCK;   // ≈ 7%
-      else if (nT > 0.76) grid[r][c] = TILE.TREE;   // ≈ 8%
-    }
-  }
-  // ── Place 1–2 destructible huts (2×2 blocks) ─────────────────────────────
-  const midRow = Math.floor(CONFIG.rows / 2);
-  const numHuts = Math.random() < 0.6 ? 2 : 1;
-  let placed = 0, tries = 0;
-  while (placed < numHuts && tries < 60) {
-    tries++;
-    const hc = 5 + Math.floor(Math.random() * 15);   // cols 5–19
-    const hr = 1 + Math.floor(Math.random() * (CONFIG.rows - 4)); // rows 1–12
-    // Skip spawn zone and crow corridor
-    if (hc <= 4 && hr >= midRow - 3 && hr <= midRow + 3) continue;
-    if (hc >= CONFIG.cols - 3) continue;
-    // Need a 2×2 footprint of EMPTY tiles, plus at least a 1-tile gap around it
-    let ok = true;
-    for (let dr = -1; dr <= 2 && ok; dr++)
-      for (let dc = -1; dc <= 2 && ok; dc++) {
-        const nr = hr + dr, nc = hc + dc;
-        if (nr < 0 || nr >= CONFIG.rows || nc < 0 || nc >= CONFIG.cols) continue;
-        if (dr >= 0 && dr < 2 && dc >= 0 && dc < 2) {
-          if (grid[nr][nc] !== TILE.EMPTY) ok = false; // footprint must be empty
-        } else {
-          if (grid[nr][nc] === TILE.HUT) ok = false;   // no adjacent huts
-        }
-      }
-    if (!ok) continue;
-    for (let dr = 0; dr < 2; dr++)
-      for (let dc = 0; dc < 2; dc++)
-        grid[hr + dr][hc + dc] = TILE.HUT;
-    placed++;
-  }
-  tileMap.reset(grid);
+function generateMap() {
+  mapSeed = (Math.random() * 2 ** 32) >>> 0;
+  const rng = mulberry32(mapSeed);
+  // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
+  // Fallback when the CDN missed: generateGrid scatters tiles from rng alone.
+  const noise = typeof SimplexNoise !== 'undefined'
+    ? (sn => (x, y) => sn.noise2D(x, y))(new SimplexNoise(rng))
+    : null;
+  tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng, noise));
 }
 
 function tileAt(wx, wy) {
@@ -311,8 +231,6 @@ function tileAt(wx, wy) {
   if (c < 0 || c >= CONFIG.cols || r < 0 || r >= CONFIG.rows) return TILE.ROCK;
   return tileMap.get(r, c);
 }
-
-const tilePassable = t => t === TILE.EMPTY || t === TILE.ASH;
 
 // Storm and whirlwind level terrain the same way: trees char to ash,
 // rocks and huts are cleared outright.
@@ -329,29 +247,6 @@ const _rotPassable = (x, y) => {
   if (x < 0 || x >= CONFIG.cols || y < 0 || y >= CONFIG.rows) return false;
   return tilePassable(tileMap.get(y, x) ?? TILE.ROCK);
 };
-
-// Visible-tile cache backed by a flat Uint8Array indexed by row*cols+col, so
-// the per-crow visibility check is an array read with no string building.
-// Recomputes only when the player moves to a new tile. compute() is injected
-// for testability.
-class FovMap {
-  constructor(rows, cols, compute) {
-    this.rows = rows; this.cols = cols; this._compute = compute;
-    this.vis = new Uint8Array(rows * cols);
-    this.tile = [-1, -1];
-  }
-  update(col, row) {
-    if (col === this.tile[0] && row === this.tile[1]) return;
-    this.tile[0] = col; this.tile[1] = row;
-    this.vis.fill(0);
-    this._compute(col, row, (x, y) => { this.vis[y * this.cols + x] = 1; });
-  }
-  isVisible(col, row) {
-    if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return false;
-    return this.vis[row * this.cols + col] === 1;
-  }
-  invalidate() { this.vis.fill(0); this.tile[0] = -1; this.tile[1] = -1; }
-}
 
 const _fov   = new ROT.FOV.PreciseShadowcasting(_rotPassable);
 const fovMap  = new FovMap(CONFIG.rows, CONFIG.cols,
@@ -379,38 +274,6 @@ function computeAStarPath(fromPx, fromPy, toPx, toPy) {
     y: y * CONFIG.tileSize + CONFIG.tileSize / 2
   }));
   return path.slice(1); // drop the starting tile (crow is already there)
-}
-
-// Caps how many A* solves run per frame and staggers each crow's recompute
-// phase, so a mass-aggro event spreads its pathfinding across frames instead
-// of stalling one. compute() is injected so the budgeting logic is testable
-// without rot.js.
-class PathScheduler {
-  constructor(compute, { budget = 3, interval = 0.4 } = {}) {
-    this._compute = compute;
-    this.budget = budget; this.interval = interval;
-    this._queue = [];
-  }
-  // Random first-recompute phase so identical crows don't solve in lockstep.
-  initialPhase() { return Math.random() * this.interval; }
-  // Idempotent per crow: a crow already waiting is not enqueued twice.
-  request(crow) {
-    if (!crow._pathQueued) { crow._pathQueued = true; this._queue.push(crow); }
-  }
-  // Serve up to `budget` waiting crows (FIFO, so no crow starves) toward
-  // (tx, ty). Crows that stopped being aggro while queued are dropped.
-  serve(tx, ty) {
-    let served = 0;
-    while (served < this.budget && this._queue.length) {
-      const crow = this._queue.shift();
-      crow._pathQueued = false;
-      if (crow.state !== 'aggro') continue;
-      crow.path = this._compute(crow.x, crow.y, tx, ty);
-      crow.pathTimer = this.interval;
-      served++;
-    }
-  }
-  clear() { for (const c of this._queue) c._pathQueued = false; this._queue.length = 0; }
 }
 
 const pathScheduler = new PathScheduler(computeAStarPath);
@@ -4116,3 +3979,20 @@ requestAnimationFrame(loop);
 
 // Pure classes exposed for the test harness in tests.html.
 window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
+
+// Dev hook: steps the loop with fixed timestamps and exposes read access to
+// module state, so headless verification works while the tab is backgrounded.
+let __devTs = 0;
+window.__game = {
+  step(n = 1) {
+    if (__devTs === 0) __devTs = performance.now();
+    for (let i = 0; i < n; i++) { __devTs += 16.7; loop(__devTs); }
+  },
+  key(k) {
+    const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
+    window.dispatchEvent(e); document.dispatchEvent(e);
+  },
+  state: () => appState,
+  tiles: () => tileMap,
+  counts: () => ({ crows: crows.length, particles: particles.length, hp: playerHP }),
+};
