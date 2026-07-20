@@ -5,6 +5,8 @@ import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
 import { generateGrid } from '../sim/mapgen';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
+import { LocalInput, Button, hasButton } from '../sim/input';
+import { Team, canDamage } from '../sim/team';
 
 // ZzFX-compatible standalone synth — MIT License
 // API matches https://github.com/KilledByAPixel/ZzFX parameter layout exactly.
@@ -316,12 +318,13 @@ canvas.addEventListener('mousemove', e => {
   mouse.x = (e.clientX - r.left) * (CONFIG.canvasW / r.width);
   mouse.y = (e.clientY - r.top)  * (CONFIG.canvasH / r.height);
 });
+let mouseRightHeld = false;
 canvas.addEventListener('mousedown', e => {
   initAudio();
   if (e.button === 0 && inGame()) shootPressed = true;
-  if (e.button === 2) startCharge();
+  if (e.button === 2) { mouseRightHeld = true; startCharge(); }
 });
-canvas.addEventListener('mouseup',    e => { if (e.button === 2) releaseCharge(); });
+canvas.addEventListener('mouseup',    e => { if (e.button === 2) { mouseRightHeld = false; releaseCharge(); } });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 document.addEventListener('keydown', e => {
@@ -355,6 +358,23 @@ canvas.addEventListener('click', e => {
 
 let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamites = [];
 
+// Local player input. Produces one InputCommand per tick from keyboard + mouse.
+// The command shape matches the network input packet, so phase 2 sends the same
+// type without reworking this seam.
+const playerInput = new LocalInput(() => {
+  const held = code => keys[code];
+  return {
+    up:    held(CONFIG.keys.up)    || keys['w'] || keys['W'],
+    down:  held(CONFIG.keys.down)  || keys['s'] || keys['S'],
+    left:  held(CONFIG.keys.left)  || keys['a'] || keys['A'],
+    right: held(CONFIG.keys.right) || keys['d'] || keys['D'],
+    fire:    !!keys[CONFIG.keys.shoot],
+    special: !!mouseRightHeld,
+    snipe:   !!keys[CONFIG.keys.snipe],
+    aimAngle: Math.atan2((mouse.y - CONFIG.hudHeight) - player.y, mouse.x - player.x),
+  };
+});
+
 function initGame() {
   generateMap();
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
@@ -369,7 +389,7 @@ function initGame() {
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
-  player = { x: 2.5 * CONFIG.tileSize, y: (CONFIG.rows / 2) * CONFIG.tileSize, facing: 1, aimAngle: 0, walkPhase: 0 };
+  player = { x: 2.5 * CONFIG.tileSize, y: (CONFIG.rows / 2) * CONFIG.tileSize, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
   for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
 }
@@ -378,7 +398,7 @@ function spawnCrow() {
   const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
   crows.push({
     x: CONFIG.canvasW + 20 + Math.random() * 80, y: baseY, baseY,
-    state: 'passive', aggroTimer: 0,
+    state: 'passive', aggroTimer: 0, team: Team.ENEMY,
     wingPhase: Math.random() * Math.PI * 2, phaseOff: Math.random() * Math.PI * 2,
     entityPhase: Math.random() * Math.PI * 2,
     white: false, frozen: false,
@@ -439,14 +459,15 @@ function dist2(ax, ay, bx, by) { return (ax-bx)**2 + (ay-by)**2; }
 function updatePlayer(dt) {
   if (appState === 'boss_entrance') return;
 
-  sniperMode = !!keys[CONFIG.keys.snipe];
+  const cmd = playerInput.sample();
+  sniperMode = hasButton(cmd, Button.SNIPE);
 
   if (!sniperMode) {
     let vx = 0, vy = 0;
-    if (keys[CONFIG.keys.up]    || keys['w'] || keys['W']) vy -= 1;
-    if (keys[CONFIG.keys.down]  || keys['s'] || keys['S']) vy += 1;
-    if (keys[CONFIG.keys.left]  || keys['a'] || keys['A']) vx -= 1;
-    if (keys[CONFIG.keys.right] || keys['d'] || keys['D']) vx += 1;
+    if (hasButton(cmd, Button.UP))    vy -= 1;
+    if (hasButton(cmd, Button.DOWN))  vy += 1;
+    if (hasButton(cmd, Button.LEFT))  vx -= 1;
+    if (hasButton(cmd, Button.RIGHT)) vx += 1;
     const len = Math.hypot(vx, vy);
     if (len > 0) { vx = (vx/len)*FEATHERS.speed()*dt; vy = (vy/len)*FEATHERS.speed()*dt; player.walkPhase += 8 * dt; }
     const r = CONFIG.playerRadius;
@@ -465,9 +486,8 @@ function updatePlayer(dt) {
       player.y = Math.max(minY, Math.min(maxY, ny));
   }
 
-  const mwy = mouse.y - CONFIG.hudHeight;
-  player.aimAngle = Math.atan2(mwy - player.y, mouse.x - player.x);
-  player.facing   = mouse.x >= player.x ? 1 : -1;
+  player.aimAngle = cmd.aimAngle;
+  player.facing   = Math.cos(cmd.aimAngle) >= 0 ? 1 : -1;
 
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
@@ -1236,6 +1256,11 @@ function updateEscalation(dt) {
 // ── DAMAGE / BOSS ─────────────────────────────────────────────────────────────
 
 function damagePlayer(amount, crowIndex = -1) {
+  // Team gate: an attacker never hurts its own team. In single-player the
+  // source is always an enemy, so this passes; it enforces the rule once
+  // co-op puts two players on team A.
+  const attacker = crowIndex >= 0 && crowIndex < crows.length ? crows[crowIndex].team : Team.ENEMY;
+  if (!canDamage(attacker, player.team)) return;
   if (playerHitFlash > 0) return;
   if (playerShield) {
     playerShield = false;
@@ -1400,7 +1425,7 @@ function spawnBossBats() {
       x: boss.x + (Math.random() - 0.5) * 24,
       y: boss.y + (Math.random() - 0.5) * 24,
       baseY: boss.y,
-      state: 'aggro', aggroTimer: 8,
+      state: 'aggro', aggroTimer: 8, team: Team.ENEMY,
       wingPhase: Math.random() * Math.PI * 2,
       phaseOff: Math.random() * Math.PI * 2,
       entityPhase: Math.random() * Math.PI * 2,
@@ -3994,5 +4019,8 @@ window.__game = {
   },
   state: () => appState,
   tiles: () => tileMap,
+  player: () => player,
+  crows: () => crows,
+  mouse: () => mouse,
   counts: () => ({ crows: crows.length, particles: particles.length, hp: playerHP }),
 };
