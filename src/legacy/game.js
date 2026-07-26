@@ -3913,14 +3913,12 @@ function handleMenuInput() {
   if (keys['c']||keys['C']) { transitionTo('controls'); keys['c']=keys['C']=false; }
 }
 
-function loop(ts) {
-  const dt = Math.min((ts - lastTs) / 1000, 0.05);
-  lastTs = ts; loopT = ts / 1000;
+const FIXED_DT = 1 / 60;   // sim advances in fixed 60 Hz steps
+const MAX_STEPS = 8;       // cap sim work per frame (~133ms) to avoid a spiral after a stall
+let accumulator = 0;
 
-  if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
-  updateShake(dt);
-
-  const _pt0 = PERF ? performance.now() : 0;
+// One fixed simulation step. Same body as before; dt is always FIXED_DT now.
+function stepGame(dt) {
   switch (appState) {
     case 'menu':     handleMenuInput(); break;
 
@@ -3988,14 +3986,30 @@ function loop(ts) {
       break;
   }
 
-  if (PERF) {
-    const _pt1 = performance.now();
-    render(loopT);
-    PERF.push(_pt1 - _pt0, performance.now() - _pt1);
-    PERF.draw();
-  } else {
-    render(loopT);
+}
+
+function loop(ts) {
+  let frameTime = (ts - lastTs) / 1000;
+  lastTs = ts; loopT = ts / 1000;
+  if (frameTime > 0.25) frameTime = 0.25;   // drop a huge gap (e.g. backgrounded tab)
+
+  if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
+
+  const _pt0 = PERF ? performance.now() : 0;
+  accumulator += frameTime;
+  let steps = 0;
+  while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
+    updateShake(FIXED_DT);
+    stepGame(FIXED_DT);
+    accumulator -= FIXED_DT;
+    steps++;
   }
+  if (steps === MAX_STEPS) accumulator = 0;   // discard backlog after the cap
+  const _updMs = PERF ? performance.now() - _pt0 : 0;
+
+  const _pt1 = PERF ? performance.now() : 0;
+  render(loopT);
+  if (PERF) { PERF.push(_updMs, performance.now() - _pt1); PERF.draw(); }
   requestAnimationFrame(loop);
 }
 
@@ -4011,7 +4025,13 @@ let __devTs = 0;
 window.__game = {
   step(n = 1) {
     if (__devTs === 0) __devTs = performance.now();
-    for (let i = 0; i < n; i++) { __devTs += 16.7; loop(__devTs); }
+    // Advance by exactly one fixed step per call, so step(n) runs n sim steps.
+    for (let i = 0; i < n; i++) { __devTs += FIXED_DT * 1000; loop(__devTs); }
+  },
+  // One frame with a raw millisecond gap, to test accumulator multi-stepping.
+  frame(ms) {
+    if (__devTs === 0) __devTs = performance.now();
+    __devTs += ms; loop(__devTs);
   },
   key(k) {
     const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
