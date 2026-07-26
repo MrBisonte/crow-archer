@@ -7,6 +7,7 @@ import { generateGrid } from '../sim/mapgen';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
+import { EventBus } from '../sim/events';
 
 // ZzFX-compatible standalone synth — MIT License
 // API matches https://github.com/KilledByAPixel/ZzFX parameter layout exactly.
@@ -373,6 +374,46 @@ const playerInput = new LocalInput(() => {
     snipe:   !!keys[CONFIG.keys.snipe],
     aimAngle: Math.atan2((mouse.y - CONFIG.hudHeight) - player.y, mouse.x - player.x),
   };
+});
+
+// Sim emits gameplay events; the client turns them into particles and sound.
+// The server will run the same sim and ignore these (or forward the
+// network-relevant ones), so cosmetics never touch the simulation.
+const events = new EventBus();
+events.on(e => {
+  switch (e.type) {
+    case 'CROW_KILLED':
+      playSound(sndHitCrow);
+      burst(e.x, e.y, {
+        count: 14, colors: ['#0A0A0A','#1F1F1F','#3A3A3A','#FFB400'],
+        speedMin: 40, speedMax: 120, decay: 1.8,
+        shapeMix: [['circle', 0.8], ['spark', 0.2]],
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#FFB400',
+        forceColor: '#FFB400'
+      });
+      floaters.push({ x: e.x, y: e.y, alpha: 1.0, vy: -42 });
+      floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
+      break;
+    case 'EXPLOSION':
+      playSound(sndExplosion); triggerShake(10, 450);
+      if (e.onWater) {
+        burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
+          speedMin: 80, speedMax: 200, decay: 1.6,
+          shapeMix: [['spark', 0.7], ['circle', 0.3]],
+          sizeMin: 1.5, sizeMax: 3, gravity: 380, shadowColor: '#FFFFFF' });
+      } else {
+        burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#FFB400'],
+          speedMin: 200, speedMax: 360, decay: 4.0,
+          shape: 'circle', sizeMin: 2, sizeMax: 5, shadowBlur: 16, shadowColor: '#FFB400' });
+        burst(e.x, e.y, { count: 36, colors: ['#FF7A1F','#FF1F1F','#FFB400','#8A1010'],
+          speedMin: 120, speedMax: 260, decay: 1.2,
+          shape: 'circle', sizeMin: 2.5, sizeMax: 5, damping: 0.5, shadowBlur: 10, shadowColor: '#FF7A1F' });
+        burst(e.x, e.y, { count: 12, colors: ['#3A3A3A','#1A1A1A','#5C5C5C'],
+          speedMin: 30, speedMax: 80, decay: 0.5,
+          shape: 'circle', sizeMin: 4, sizeMax: 7, gravity: -10, shrink: true });
+      }
+      break;
+  }
 });
 
 function initGame() {
@@ -1003,22 +1044,12 @@ function onArrowMiss() {
 function killCrow(j) {
   const c = crows[j];
   score++; killCount++;
-  playSound(sndHitCrow);
-  burst(c.x, c.y, {
-    count: 14, colors: ['#0A0A0A','#1F1F1F','#3A3A3A','#FFB400'],
-    speedMin: 40, speedMax: 120, decay: 1.8,
-    shapeMix: [['circle', 0.8], ['spark', 0.2]],
-    sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#FFB400',
-    forceColor: '#FFB400'
-  });
-  // Score floater (+1)
-  floaters.push({ x: c.x, y: c.y, alpha: 1.0, vy: -42 });
-  // Feather drop floater
+  // Gameplay result first, so the event can carry the feather count.
   const earned = FEATHERS.onCrowKill(c.white);
-  floaters.push({ x: c.x + 12, y: c.y - 6, alpha: 1.0, vy: -36, text: `+${earned}◆`, color: '#FFB400' });
-  // Notify gamification modules
   FORESHADOW.onKill(killCount);
   STREAK.onKill();
+  // Cosmetics (sound, death burst, score/feather floaters) run in the handler.
+  events.emit({ type: 'CROW_KILLED', x: c.x, y: c.y, white: c.white, earned });
   // Guaranteed drop every 3rd kill; random ~25% otherwise; HANDICAP can boost drop rate
   const dropChance = 0.25 + HANDICAP.dropBoost();
   dropStreak++;
@@ -1067,24 +1098,9 @@ function updateDynamites(dt) {
 }
 
 function explodeDynamite(d) {
-  playSound(sndExplosion); triggerShake(10, 450);
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
-  if (onWater) {
-    burst(d.x, d.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
-      speedMin: 80, speedMax: 200, decay: 1.6,
-      shapeMix: [['spark', 0.7], ['circle', 0.3]],
-      sizeMin: 1.5, sizeMax: 3, gravity: 380, shadowColor: '#FFFFFF' });
-  } else {
-    burst(d.x, d.y, { count: 12, colors: ['#FFFFFF','#FFB400'],
-      speedMin: 200, speedMax: 360, decay: 4.0,
-      shape: 'circle', sizeMin: 2, sizeMax: 5, shadowBlur: 16, shadowColor: '#FFB400' });
-    burst(d.x, d.y, { count: 36, colors: ['#FF7A1F','#FF1F1F','#FFB400','#8A1010'],
-      speedMin: 120, speedMax: 260, decay: 1.2,
-      shape: 'circle', sizeMin: 2.5, sizeMax: 5, damping: 0.5, shadowBlur: 10, shadowColor: '#FF7A1F' });
-    burst(d.x, d.y, { count: 12, colors: ['#3A3A3A','#1A1A1A','#5C5C5C'],
-      speedMin: 30, speedMax: 80, decay: 0.5,
-      shape: 'circle', sizeMin: 4, sizeMax: 7, gravity: -10, shrink: true });
-  }
+  // Sound, shake, and the blast burst run in the render/audio handler.
+  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater });
   const r2 = CONFIG.dynamiteBlastRadius ** 2;
 
   // Destroy ROCK and TREE tiles within blast radius
@@ -4033,6 +4049,10 @@ window.__game = {
     if (__devTs === 0) __devTs = performance.now();
     __devTs += ms; loop(__devTs);
   },
+  // Dev triggers that drive real sim paths, for headless event-bus checks.
+  kill(i = 0) { if (i >= 0 && i < crows.length) killCrow(i); },
+  blast(x, y) { explodeDynamite({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }); },
+  floaters: () => floaters,
   key(k) {
     const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
     window.dispatchEvent(e); document.dispatchEvent(e);
