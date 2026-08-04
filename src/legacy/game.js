@@ -208,7 +208,7 @@ function transitionTo(next) {
   };
   if (next === 'boss_fight' && prev !== 'paused') { boss.screchCD = CONFIG.bossScreechInterval; bossDeathSeq = null; }
   if (next === 'win')      { winScore = score; winKills = killCount; winHP = playerHP; }
-  if (next === 'gameover') { triggerShake(12, 600); playSound(sndGameover); }
+  if (next === 'gameover') events.emit({ type: 'GAME_OVER' });
 }
 
 // ── TILEMAP ───────────────────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ function startCharge() {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
   } else if (selectedChar === 'knight') {
     if (knightWhirlwindCD <= 0 && knightWhirlwindTimer <= 0 && inGame()) startWhirlwind();
-    else if (knightWhirlwindCD > 0) playSound(sndEmpty);
+    else if (knightWhirlwindCD > 0) events.emit({ type: 'ACTION_BLOCKED' });
   } else {
     if (inv.dynamites > 0 && !charge.on && inGame()) { charge.on = true; charge.t0 = performance.now(); }
   }
@@ -380,6 +380,22 @@ const playerInput = new LocalInput(() => {
 // The server will run the same sim and ignore these (or forward the
 // network-relevant ones), so cosmetics never touch the simulation.
 const events = new EventBus();
+
+// Sound and shake per boss-hit source. The sim states what landed; the table
+// decides how it sounds.
+const BOSS_HIT_FX = {
+  pitchfork: [6, 200], spear: [5, 200],
+  arrow: null, javelin: null, whirlwind: null, storm: null, dynamite: null,
+};
+// Sound and shake per attack the player starts.
+const WEAPON_FX = {
+  arrow:     { sound: () => sndShoot,     shake: null },
+  bolt:      { sound: () => sndWizBolt,   shake: null },
+  pitchfork: { sound: () => sndPitchfork, shake: [3, 90] },
+  spear:     { sound: () => sndPitchfork, shake: [2, 70] },
+  javelin:   { sound: () => sndPitchfork, shake: [3, 80] },
+};
+
 events.on(e => {
   switch (e.type) {
     case 'CROW_KILLED':
@@ -394,6 +410,37 @@ events.on(e => {
       floaters.push({ x: e.x, y: e.y, alpha: 1.0, vy: -42 });
       floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
       break;
+
+    case 'MELEE_HIT':
+      if (e.kind === 'pitchfork') {
+        triggerShake(6, 200);
+        burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
+          speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
+          gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14' });
+      } else {
+        triggerShake(3, 120);
+        burst(e.x, e.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
+          speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
+          shadowBlur: e.fire ? 8 : 3,
+          shadowColor: e.fire ? '#FF7A1F' : '#C0C0C0' });
+      }
+      break;
+
+    case 'BOSS_HIT': {
+      playSound(sndBossHit);
+      const shake = BOSS_HIT_FX[e.source];
+      if (shake) triggerShake(shake[0], shake[1]);
+      break; }
+
+    case 'ARROW_MISS':
+      playSound(sndMiss); triggerShake(3, 200);
+      break;
+
+    case 'JAVELIN_BOUNCE':
+      burst(e.x, e.y, { count: 6, colors: ['#C0C0C0','#ffffff'],
+        speedMin: 30, speedMax: 80, decay: 3.5, shape: 'spark', shadowBlur: 3, shadowColor: '#C0C0C0' });
+      break;
+
     case 'EXPLOSION':
       playSound(sndExplosion); triggerShake(10, 450);
       if (e.onWater) {
@@ -412,6 +459,150 @@ events.on(e => {
           speedMin: 30, speedMax: 80, decay: 0.5,
           shape: 'circle', sizeMin: 4, sizeMax: 7, gravity: -10, shrink: true });
       }
+      break;
+
+    case 'DYNAMITE_SPLASH':
+      burst(e.x, e.y, { count: 10, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
+        speedMin: 40, speedMax: 120, decay: 2.5,
+        shapeMix: [['spark', 0.7], ['circle', 0.3]],
+        sizeMin: 1.5, sizeMax: 3, gravity: 200 });
+      break;
+
+    case 'WEAPON_FIRED': {
+      const fx = WEAPON_FX[e.kind];
+      playSound(fx.sound());
+      if (fx.shake) triggerShake(fx.shake[0], fx.shake[1]);
+      break; }
+
+    case 'ACTION_BLOCKED':
+      playSound(sndEmpty);
+      break;
+
+    case 'WHIRLWIND_START':
+      playSound(sndExplosion); triggerShake(4, 250);
+      burst(e.x, e.y, {
+        count: 20, colors: ['#C0C0C0','#9090A0','#FFFFFF','#7080B0'],
+        speedMin: 50, speedMax: 130, decay: 2.8, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#aaaacc'
+      });
+      break;
+
+    case 'WHIRLWIND_TICK': {
+      const wr = CONFIG.knightWhirlwindRadius;
+      burst(e.x, e.y, {
+        count: 6, colors: ['#C0C0D0','#8090B0','#ffffff'],
+        speedMin: wr * 0.5, speedMax: wr * 0.95, decay: 4.0, shape: 'spark',
+        shadowBlur: 4, shadowColor: '#9090B0'
+      });
+      break; }
+
+    case 'WHIRLWIND_END':
+      burst(e.x, e.y, {
+        count: 14, colors: ['#888898','#B0B0C0','#ffffff'],
+        speedMin: 30, speedMax: 90, decay: 2.5, shape: 'spark', shadowBlur: 3, shadowColor: '#aaaacc'
+      });
+      break;
+
+    case 'STORM_CAST':
+      playSound(sndLightning); triggerShake(14, 600);
+      burst(e.x, e.y, { count: 32, colors: ['#FFFFFF','#AAAAFF','#8888FF','#FFB400'],
+        speedMin: 60, speedMax: 360, decay: 2.5, shape: 'spark',
+        shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
+      for (let k = 0; k < 8; k++) {
+        const ang = Math.random() * Math.PI * 2;
+        const dst = 60 + Math.random() * CONFIG.stormBlastRadius * 0.85;
+        burst(e.x + Math.cos(ang)*dst, e.y + Math.sin(ang)*dst, {
+          count: 5, colors: ['#FFFFFF','#8888FF'],
+          speedMin: 20, speedMax: 60, decay: 4.0, shape: 'spark',
+          shadowBlur: 8, shadowColor: '#8888FF' });
+      }
+      break;
+
+    case 'PLAYER_HIT':
+      triggerShake(4, 200);
+      break;
+
+    case 'SHIELD_BLOCKED':
+      triggerShake(3, 150);
+      burst(e.x, e.y, { count: 10, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
+        speedMin: 60, speedMax: 200, decay: 2.5, shape: 'spark',
+        shadowBlur: 10, shadowColor: '#FFB400' });
+      break;
+
+    case 'PICKUP_TAKEN':
+      playSound(sndPickup);
+      if (e.kind === 'ricochet') {
+        burst(e.x, e.y, { count: 12, colors: ['#39E0FF','#7AF0FF','#FFFFFF'],
+          speedMin: 80, speedMax: 160, decay: 2.2, shape: 'spark',
+          shadowBlur: 6, shadowColor: '#39E0FF' });
+      } else if (e.kind === 'fire') {
+        burst(e.x, e.y, { count: 16, colors: ['#FFB400','#FF7A1F','#FFFFFF','#B23A00'],
+          speedMin: 50, speedMax: 140, decay: 1.6,
+          shapeMix: [['circle', 0.6], ['spark', 0.4]],
+          sizeMin: 1.5, sizeMax: 3, gravity: -20, shadowBlur: 8, shadowColor: '#FF7A1F' });
+      } else {
+        burst(e.x, e.y, { count: 14, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
+          speedMin: 40, speedMax: 140, decay: 2.0, shape: 'circle',
+          sizeMin: 2, sizeMax: 5, shadowBlur: 10, shadowColor: '#FFB400' });
+      }
+      break;
+
+    case 'GAME_OVER':
+      triggerShake(12, 600); playSound(sndGameover);
+      break;
+
+    case 'CROWS_AGGRO':
+      playSound(sndAggro); triggerShake(6, 300);
+      break;
+
+    case 'BOSS_CONTACT':
+      triggerShake(6, 250);
+      break;
+
+    case 'BOSS_BATS':
+      burst(e.x, e.y, { count: 10, colors: ['#FF1F1F','#8A1010','#0A0A0A'],
+        speedMin: 30, speedMax: 130, decay: 2.0, shape: 'circle',
+        sizeMin: 2, sizeMax: 5, shadowBlur: 8, shadowColor: '#FF1F1F' });
+      playSound(sndAggro);
+      break;
+
+    case 'BOSS_CHARGE':
+      playSound(sndChargeWhoosh);
+      break;
+
+    case 'BOSS_SCREECH':
+      playSound(sndBossScreech);
+      break;
+
+    case 'BOSS_DEATH_START':
+      playSound(sndBossDeath); triggerShake(14, 500);
+      break;
+
+    // Staggered 3-wave death burst: a=0ms, b=+80ms, c=+160ms
+    case 'BOSS_DEATH_BURST':
+      if (e.phase === 'a') {
+        burst(e.x, e.y, { count: 32, colors: ['#050505','#1A1A1A','#3A3A3A','#5A0808'],
+          speedMin: 60, speedMax: 200, decay: 1.0, shape: 'circle',
+          sizeMin: 2, sizeMax: 4, gravity: 30, damping: 0.4 });
+      } else if (e.phase === 'b') {
+        burst(e.x, e.y, { count: 18, colors: ['#FF1F1F','#8A1010','#FFB400'],
+          speedMin: 120, speedMax: 280, decay: 1.4, shape: 'spark',
+          shadowBlur: 6, shadowColor: '#FF1F1F' });
+      } else {
+        burst(e.x, e.y, { count: 8, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
+          speedMin: 30, speedMax: 80, decay: 0.9, shape: 'circle',
+          sizeMin: 3, sizeMax: 6, shadowBlur: 12, shadowColor: '#FFB400', shrink: true });
+      }
+      break;
+
+    case 'BOSS_ENTRANCE_FLASH':
+      playSound(sndEntranceFlash);
+      break;
+
+    case 'BOSS_ENTRANCE_FIRE':
+      burst(e.x, e.y, { count: 7, colors: ['#FF7A1F','#FFB400','#FFFFFF'],
+        speedMin: 30, speedMax: 80, decay: 1.0, shape: 'spark',
+        gravity: -50, shadowBlur: 6, shadowColor: '#FF7A1F' });
       break;
   }
 });
@@ -550,12 +741,9 @@ function updatePlayer(dt) {
           killCrow(j);
           if (!pfHitFlash) {
             pfHitFlash = true;
-            triggerShake(6, 200);
             const tipX = player.x + Math.cos(player.aimAngle) * 44;
             const tipY = player.y + Math.sin(player.aimAngle) * 44;
-            burst(tipX, tipY, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
-              speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
-              gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14' });
+            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: 'pitchfork', fire: false });
           }
         }
       }
@@ -563,7 +751,7 @@ function updatePlayer(dt) {
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
         pfBossHit = true;
         boss.hp -= CONFIG.pitchforkBossDamage; boss.hitFlash = 0.25;
-        playSound(sndBossHit); triggerShake(6, 200);
+        events.emit({ type: 'BOSS_HIT', source: 'pitchfork' });
         if (boss.hp <= 0) startBossDeath();
       }
     }
@@ -591,11 +779,7 @@ function updatePlayer(dt) {
       if (dist2(tipX, tipY, c.x, c.y) < hitR2 || dist2(midX, midY, c.x, c.y) < hitR2) {
         if (fsActive) spawnFire(c.x, c.y);
         killCrow(j);
-        triggerShake(3, 120);
-        burst(c.x, c.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
-          speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
-          shadowBlur: fsActive ? 8 : 3,
-          shadowColor: fsActive ? '#FF7A1F' : '#C0C0C0' });
+        events.emit({ type: 'MELEE_HIT', x: c.x, y: c.y, kind: 'spear', fire: fsActive });
       }
     }
     if (!knightSpearBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
@@ -604,7 +788,7 @@ function updatePlayer(dt) {
       knightSpearBossHit = true;
       const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
       boss.hp -= dmg; boss.hitFlash = 0.2;
-      playSound(sndBossHit); triggerShake(5, 200);
+      events.emit({ type: 'BOSS_HIT', source: 'spear' });
       if (boss.hp <= 0) startBossDeath();
     }
   }
@@ -622,7 +806,7 @@ function updatePlayer(dt) {
       // Damage boss
       if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < wr2) {
-        boss.hp--; boss.hitFlash = 0.1; playSound(sndBossHit);
+        boss.hp--; boss.hitFlash = 0.1; events.emit({ type: 'BOSS_HIT', source: 'whirlwind' });
         if (boss.hp <= 0) startBossDeath();
       }
       // Break tiles in radius
@@ -637,19 +821,11 @@ function updatePlayer(dt) {
           if (dist2(player.x, player.y, wx, wy) < wr2) smashTile(row, col);
         }
       }
-      // Spinning particle ring
-      burst(player.x, player.y, {
-        count: 6, colors: ['#C0C0D0','#8090B0','#ffffff'],
-        speedMin: wr * 0.5, speedMax: wr * 0.95, decay: 4.0, shape: 'spark',
-        shadowBlur: 4, shadowColor: '#9090B0'
-      });
+      events.emit({ type: 'WHIRLWIND_TICK', x: player.x, y: player.y });
     }
     if (knightWhirlwindTimer <= 0) {
       knightWhirlwindTimer = 0;
-      burst(player.x, player.y, {
-        count: 14, colors: ['#888898','#B0B0C0','#ffffff'],
-        speedMin: 30, speedMax: 90, decay: 2.5, shape: 'spark', shadowBlur: 3, shadowColor: '#aaaacc'
-      });
+      events.emit({ type: 'WHIRLWIND_END', x: player.x, y: player.y });
     }
   }
 
@@ -672,11 +848,11 @@ function tryShoot() {
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: CONFIG.arrowSpeed,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0 });
-  playSound(sndShoot);
+  events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
 }
 
 function tryWizardBolt() {
-  if (wizBoltCD > 0) { playSound(sndEmpty); return; }
+  if (wizBoltCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   if (arrows.length >= CONFIG.maxArrowsInFlight) return;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
@@ -697,17 +873,16 @@ function tryWizardBolt() {
     dmg,
     hitSet: new WeakSet()
   });
-  playSound(sndWizBolt);
+  events.emit({ type: 'WEAPON_FIRED', kind: 'bolt' });
 }
 
 function tryPitchfork() {
-  if (pfCooldown > 0) { playSound(sndEmpty); return; }
+  if (pfCooldown > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   pfCooldown = CONFIG.pitchforkCooldown;
   pfSwing    = CONFIG.pitchforkSwingDuration;
   pfBossHit  = false;
   pfHitFlash = false;
-  playSound(sndPitchfork);
-  triggerShake(3, 90);
+  events.emit({ type: 'WEAPON_FIRED', kind: 'pitchfork' });
 }
 
 function tryKnightAttack() {
@@ -723,27 +898,22 @@ function tryKnightAttack() {
       trailHistory: [], fireSeed: 0, trailTimer: 0,
       pierceLeft: CONFIG.knightJavelinPierce
     });
-    playSound(sndPitchfork); triggerShake(3, 80);
+    events.emit({ type: 'WEAPON_FIRED', kind: 'javelin' });
     return;
   }
   // Melee spear thrust
-  if (knightSpearCD > 0) { playSound(sndEmpty); return; }
+  if (knightSpearCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   knightSpearCD       = CONFIG.knightSpearCooldown;
   knightSpearSwing    = CONFIG.knightSpearSwingDuration;
   knightSpearBossHit  = false;
-  playSound(sndPitchfork); triggerShake(2, 70);
+  events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
 }
 
 function startWhirlwind() {
   knightWhirlwindCD    = CONFIG.knightWhirlwindCooldown;
   knightWhirlwindTimer = CONFIG.knightWhirlwindDuration;
   knightWhirlwindTick  = 0;
-  playSound(sndExplosion); triggerShake(4, 250);
-  burst(player.x, player.y, {
-    count: 20, colors: ['#C0C0C0','#9090A0','#FFFFFF','#7080B0'],
-    speedMin: 50, speedMax: 130, decay: 2.8, shape: 'spark',
-    shadowBlur: 6, shadowColor: '#aaaacc'
-  });
+  events.emit({ type: 'WHIRLWIND_START', x: player.x, y: player.y });
 }
 
 
@@ -763,22 +933,8 @@ function throwDynamite(chargeFrac) {
 function fireLightningStorm() {
   const STORM_R = CONFIG.stormBlastRadius;
   stormCD = CONFIG.stormCooldown;
-  playSound(sndLightning);
-  triggerShake(14, 600);
   _stormFlash = CONFIG.stormFlashDuration;
-  // Central burst
-  burst(player.x, player.y, { count: 32, colors: ['#FFFFFF','#AAAAFF','#8888FF','#FFB400'],
-    speedMin: 60, speedMax: 360, decay: 2.5, shape: 'spark',
-    shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
-  // Secondary bolts scattered in radius
-  for (let k = 0; k < 8; k++) {
-    const ang = Math.random() * Math.PI * 2;
-    const dst = 60 + Math.random() * STORM_R * 0.85;
-    burst(player.x + Math.cos(ang)*dst, player.y + Math.sin(ang)*dst, {
-      count: 5, colors: ['#FFFFFF','#8888FF'],
-      speedMin: 20, speedMax: 60, decay: 4.0, shape: 'spark',
-      shadowBlur: 8, shadowColor: '#8888FF' });
-  }
+  events.emit({ type: 'STORM_CAST', x: player.x, y: player.y });
   // Damage enemies
   const r2 = STORM_R ** 2;
   for (let j = crows.length - 1; j >= 0; j--)
@@ -786,7 +942,7 @@ function fireLightningStorm() {
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(player.x, player.y, boss.x, boss.y) < r2) {
     boss.hp -= CONFIG.stormBossDamage; boss.hitFlash = CONFIG.stormFlashDuration;
-    playSound(sndBossHit);
+    events.emit({ type: 'BOSS_HIT', source: 'storm' });
     if (boss.hp <= 0) startBossDeath();
   }
   // Destroy ROCK and TREE tiles within storm radius (protect border walls)
@@ -848,7 +1004,7 @@ function updateArrows(dt) {
       // Boss hit — all wiz bolts stop on boss (laser doesn't pierce enemies)
       if (boss && appState==='boss_fight' && boss.bstate!=='dead' && !boss.shield &&
           dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-        boss.hp -= a.dmg; boss.hitFlash = 0.15; playSound(sndBossHit);
+        boss.hp -= a.dmg; boss.hitFlash = 0.15; events.emit({ type: 'BOSS_HIT', source: 'arrow' });
         arrows.splice(i,1);
         if (boss.hp <= 0) startBossDeath();
         continue;
@@ -900,7 +1056,7 @@ function updateArrows(dt) {
       // Boss hit (no pierce through boss)
       if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-        boss.hp -= CONFIG.knightJavelinBossDamage; boss.hitFlash = 0.15; playSound(sndBossHit);
+        boss.hp -= CONFIG.knightJavelinBossDamage; boss.hitFlash = 0.15; events.emit({ type: 'BOSS_HIT', source: 'javelin' });
         arrows.splice(i,1); if (boss.hp <= 0) startBossDeath(); continue;
       }
       // Crow hits — pierces through up to pierceLeft enemies
@@ -908,8 +1064,7 @@ function updateArrows(dt) {
         if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
           killCrow(j);
           a.pierceLeft--;
-          burst(a.x, a.y, { count: 6, colors: ['#C0C0C0','#ffffff'],
-            speedMin: 30, speedMax: 80, decay: 3.5, shape: 'spark', shadowBlur: 3, shadowColor: '#C0C0C0' });
+          events.emit({ type: 'JAVELIN_BOUNCE', x: a.x, y: a.y });
           if (a.pierceLeft <= 0) { arrows.splice(i,1); break; }
         }
       }
@@ -986,7 +1141,7 @@ function updateArrows(dt) {
     // Boss hit
     if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
         dist2(a.x, a.y, boss.x, boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-      boss.hp -= CONFIG.arrowBossDamage; boss.hitFlash = 0.15; playSound(sndBossHit);
+      boss.hp -= CONFIG.arrowBossDamage; boss.hitFlash = 0.15; events.emit({ type: 'BOSS_HIT', source: 'arrow' });
       if (a.type === 'fire') spawnFire(a.x, a.y);
       arrows.splice(i, 1); if (boss.hp <= 0) startBossDeath(); continue;
     }
@@ -1037,7 +1192,7 @@ function updateFires(dt) {
 }
 
 function onArrowMiss() {
-  playSound(sndMiss); triggerShake(3, 200); aggroCrows(Math.random() < 0.5 ? 1 : 2);
+  events.emit({ type: 'ARROW_MISS' }); aggroCrows(Math.random() < 0.5 ? 1 : 2);
   if (boss && appState === 'boss_fight' && boss.bstate === 'orbit') startBossCharge();
 }
 
@@ -1084,10 +1239,7 @@ function updateDynamites(dt) {
     }
 
     if (splashed) {
-      burst(d.x, d.y, { count: 10, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
-        speedMin: 40, speedMax: 120, decay: 2.5,
-        shapeMix: [['spark', 0.7], ['circle', 0.3]],
-        sizeMin: 1.5, sizeMax: 3, gravity: 200 });
+      events.emit({ type: 'DYNAMITE_SPLASH', x: d.x, y: d.y });
       dynamites.splice(i, 1); continue;
     }
 
@@ -1122,7 +1274,7 @@ function explodeDynamite(d) {
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     boss.hp -= CONFIG.dynamiteBossDamage; boss.hitFlash = 0.25;
-    playSound(sndBossHit);
+    events.emit({ type: 'BOSS_HIT', source: 'dynamite' });
     if (boss.hp <= 0) startBossDeath();
   }
 }
@@ -1186,7 +1338,7 @@ function aggroCrows(count) {
     c.state = 'aggro'; c.aggroTimer = CONFIG.crowAggroTimeout;
     c.path = null; c.pathTimer = pathScheduler.initialPhase(); n++;
   }
-  if (n > 0) { playSound(sndAggro); triggerShake(6, 300); }
+  if (n > 0) events.emit({ type: 'CROWS_AGGRO' });
 }
 
 function aggroAllWhiteCrows() {
@@ -1239,21 +1391,7 @@ function checkPickupCollection() {
     } else if (p.type === 'shield') {
       playerShield = true;
     }
-    playSound(sndPickup);
-    if (p.type === 'ricochet') {
-      burst(p.x, p.y, { count: 12, colors: ['#39E0FF','#7AF0FF','#FFFFFF'],
-        speedMin: 80, speedMax: 160, decay: 2.2, shape: 'spark',
-        shadowBlur: 6, shadowColor: '#39E0FF' });
-    } else if (p.type === 'fire') {
-      burst(p.x, p.y, { count: 16, colors: ['#FFB400','#FF7A1F','#FFFFFF','#B23A00'],
-        speedMin: 50, speedMax: 140, decay: 1.6,
-        shapeMix: [['circle', 0.6], ['spark', 0.4]],
-        sizeMin: 1.5, sizeMax: 3, gravity: -20, shadowBlur: 8, shadowColor: '#FF7A1F' });
-    } else if (p.type === 'shield') {
-      burst(p.x, p.y, { count: 14, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
-        speedMin: 40, speedMax: 140, decay: 2.0, shape: 'circle',
-        sizeMin: 2, sizeMax: 5, shadowBlur: 10, shadowColor: '#FFB400' });
-    }
+    events.emit({ type: 'PICKUP_TAKEN', x: p.x, y: p.y, kind: p.type });
     pickups.splice(i, 1);
   }
 }
@@ -1281,30 +1419,27 @@ function damagePlayer(amount, crowIndex = -1) {
   if (playerShield) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
-    triggerShake(3, 150);
+    events.emit({ type: 'SHIELD_BLOCKED', x: player.x, y: player.y });
     // Shield kills non-boss attackers
     if (crowIndex >= 0 && crowIndex < crows.length) killCrow(crowIndex);
-    burst(player.x, player.y, { count: 10, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
-      speedMin: 60, speedMax: 200, decay: 2.5, shape: 'spark',
-      shadowBlur: 10, shadowColor: '#FFB400' });
     return;
   }
   playerHP -= amount; playerHitFlash = CONFIG.playerHitFlashSecs;
-  triggerShake(4, 200);
+  events.emit({ type: 'PLAYER_HIT' });
   STREAK.onDamage();
   if (playerHP <= 0) { playerHP = 0; transitionTo('gameover'); }
 }
 
 function updateBossEntrance(dt) {
   const e = entrance; e.timer += dt; const t = e.timer;
-  if (!e.flash1) { e.flash1 = true; playSound(sndEntranceFlash); }
-  if (!e.flash2 && t >= 0.08) { e.flash2 = true; playSound(sndEntranceFlash); }
+  if (!e.flash1) { e.flash1 = true; events.emit({ type: 'BOSS_ENTRANCE_FLASH' }); }
+  if (!e.flash2 && t >= 0.08) { e.flash2 = true; events.emit({ type: 'BOSS_ENTRANCE_FLASH' }); }
   if (t >= 0.2 && !e.fadeOut) e.overlayAlpha = Math.min(0.8, e.overlayAlpha + dt * 5);
   if (t >= 0.3) {
     const BOSS_TEXT = BOSS_ENTRY_TEXT;
     e.textProgress = Math.min(BOSS_TEXT.length, (t - 0.3) * 30);
   }
-  if (!e.screchPlayed && t >= 1.3) { e.screchPlayed = true; playSound(sndBossScreech); }
+  if (!e.screchPlayed && t >= 1.3) { e.screchPlayed = true; events.emit({ type: 'BOSS_SCREECH' }); }
   // Burn every tree to ash — clears the arena for the boss fight
   if (!e.treesBurned && t >= 0.8) {
     e.treesBurned = true;
@@ -1315,9 +1450,7 @@ function updateBossEntrance(dt) {
     for (let k = 0; k < 8; k++) {
       const bx = (2 + Math.random()*(CONFIG.cols-4)) * CONFIG.tileSize;
       const by = (1 + Math.random()*(CONFIG.rows-2)) * CONFIG.tileSize;
-      burst(bx, by, { count: 7, colors: ['#FF7A1F','#FFB400','#FFFFFF'],
-        speedMin: 30, speedMax: 80, decay: 1.0, shape: 'spark',
-        gravity: -50, shadowBlur: 6, shadowColor: '#FF7A1F' });
+      events.emit({ type: 'BOSS_ENTRANCE_FIRE', x: bx, y: by });
     }
   }
   if (!e.crowsWhite && t >= 1.8) {
@@ -1400,7 +1533,7 @@ function updateBoss(dt) {
     if (boss.screchCD <= 0) {
       boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
       boss.stateTimer = CONFIG.bossScreechHalt;
-      playSound(sndBossScreech); aggroAllWhiteCrows();
+      events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
       if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
     }
   }
@@ -1411,7 +1544,7 @@ function updateBoss(dt) {
     boss.orbitAngle += angSpd * dt;
     boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * CONFIG.bossOrbitRadius));
     boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * CONFIG.bossOrbitRadius));
-    if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(CONFIG.bossContactDamage); triggerShake(6, 250); }
+    if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(CONFIG.bossContactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
     if (boss.stateTimer >= CONFIG.bossOrbitDuration) startBossCharge();
 
   } else if (boss.bstate === 'charge') {
@@ -1424,7 +1557,7 @@ function updateBoss(dt) {
       const spd = CONFIG.bossChargeSpeed * dt;
       boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
       if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
-        damagePlayer(CONFIG.bossContactDamage); triggerShake(6, 250);
+        damagePlayer(CONFIG.bossContactDamage); events.emit({ type: 'BOSS_CONTACT' });
         boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
       }
     }
@@ -1448,22 +1581,19 @@ function spawnBossBats() {
       white: true, frozen: false
     });
   }
-  burst(boss.x, boss.y, { count: 10, colors: ['#FF1F1F','#8A1010','#0A0A0A'],
-    speedMin: 30, speedMax: 130, decay: 2.0, shape: 'circle',
-    sizeMin: 2, sizeMax: 5, shadowBlur: 8, shadowColor: '#FF1F1F' });
-  playSound(sndAggro);
+  events.emit({ type: 'BOSS_BATS', x: boss.x, y: boss.y });
 }
 
 function startBossCharge() {
   const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
   boss.chargeTarget = { x: player.x + Math.cos(angle)*60, y: player.y + Math.sin(angle)*60 };
   boss.bstate = 'charge'; boss.stateTimer = 0;
-  playSound(sndChargeWhoosh);
+  events.emit({ type: 'BOSS_CHARGE' });
 }
 
 function startBossDeath() {
   boss.bstate = 'dead'; boss.hp = 0;
-  playSound(sndBossDeath); triggerShake(14, 500);
+  events.emit({ type: 'BOSS_DEATH_START' });
   for (const c of crows) c.frozen = true;
   const frags = [];
   for (let i = 0; i < 6; i++) {
@@ -1480,18 +1610,9 @@ function updateBossDeath(dt) {
   if (!bossDeathSeq) return;
   const s = bossDeathSeq; s.timer += dt;
   // Staggered 3-wave burst: A=0ms, B=+80ms, C=+160ms
-  if (!s.burstA) { s.burstA = true;
-    burst(s.bx, s.by, { count: 32, colors: ['#050505','#1A1A1A','#3A3A3A','#5A0808'],
-      speedMin: 60, speedMax: 200, decay: 1.0, shape: 'circle',
-      sizeMin: 2, sizeMax: 4, gravity: 30, damping: 0.4 }); }
-  if (!s.burstB && s.timer >= 0.08) { s.burstB = true;
-    burst(s.bx, s.by, { count: 18, colors: ['#FF1F1F','#8A1010','#FFB400'],
-      speedMin: 120, speedMax: 280, decay: 1.4, shape: 'spark',
-      shadowBlur: 6, shadowColor: '#FF1F1F' }); }
-  if (!s.burstC && s.timer >= 0.16) { s.burstC = true;
-    burst(s.bx, s.by, { count: 8, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
-      speedMin: 30, speedMax: 80, decay: 0.9, shape: 'circle',
-      sizeMin: 3, sizeMax: 6, shadowBlur: 12, shadowColor: '#FFB400', shrink: true }); }
+  if (!s.burstA) { s.burstA = true; events.emit({ type: 'BOSS_DEATH_BURST', x: s.bx, y: s.by, phase: 'a' }); }
+  if (!s.burstB && s.timer >= 0.08) { s.burstB = true; events.emit({ type: 'BOSS_DEATH_BURST', x: s.bx, y: s.by, phase: 'b' }); }
+  if (!s.burstC && s.timer >= 0.16) { s.burstC = true; events.emit({ type: 'BOSS_DEATH_BURST', x: s.bx, y: s.by, phase: 'c' }); }
   for (const f of s.fragments) { f.x += f.vx*dt; f.y += f.vy*dt; f.alpha -= dt * 1.67; }
   if (s.timer >= 0.7) s.frozenAlpha = Math.max(0, s.frozenAlpha - dt * 3.33);
   if (s.timer >= 1.2) { bossDeathSeq = null; boss = null; crows = []; transitionTo('win'); }
@@ -4053,6 +4174,15 @@ window.__game = {
   kill(i = 0) { if (i >= 0 && i < crows.length) killCrow(i); },
   blast(x, y) { explodeDynamite({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }); },
   floaters: () => floaters,
+  arrows: () => arrows,
+  pickups: () => pickups,
+  boss: () => boss,
+  // Tap the event bus, for verifying which gameplay events fire.
+  onEvent: fn => events.on(fn),
+  // Drive a real state transition, and pick a character, for scripted runs.
+  go(s) { transitionTo(s); },
+  pick(c) { selectedChar = c; },
+  spawnCrow() { spawnCrow(); },
   key(k) {
     const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
     window.dispatchEvent(e); document.dispatchEvent(e);

@@ -4,12 +4,57 @@
  * ignores these events, or forwards the network-relevant ones in snapshots,
  * while a client turns them into bursts and sounds locally.
  *
- * The union grows one variant per routed effect. Cosmetics are never gameplay:
- * an event carries the facts the cosmetic layer needs, nothing more.
+ * Each variant states a gameplay fact, not a visual. It carries what the
+ * cosmetic layer needs to place the effect, never particle counts or colors:
+ * those belong to the handler, which is render-side.
  */
+
+/** What landed a hit on the boss. The handler picks the sound and shake. */
+export type HitSource =
+  | 'arrow'
+  | 'javelin'
+  | 'pitchfork'
+  | 'spear'
+  | 'whirlwind'
+  | 'storm'
+  | 'dynamite';
+
+/** Which attack a player started. */
+export type WeaponKind = 'arrow' | 'bolt' | 'pitchfork' | 'spear' | 'javelin';
+
+export type PickupKind = 'ricochet' | 'fire' | 'shield';
+
 export type GameEvent =
+  // Combat results
   | { type: 'CROW_KILLED'; x: number; y: number; white: boolean; earned: number }
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean };
+  | { type: 'MELEE_HIT'; x: number; y: number; kind: 'pitchfork' | 'spear'; fire: boolean }
+  | { type: 'BOSS_HIT'; source: HitSource }
+  | { type: 'ARROW_MISS' }
+  | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean }
+  | { type: 'DYNAMITE_SPLASH'; x: number; y: number }
+  // Player actions
+  | { type: 'WEAPON_FIRED'; kind: WeaponKind }
+  | { type: 'ACTION_BLOCKED' }
+  | { type: 'WHIRLWIND_START'; x: number; y: number }
+  | { type: 'WHIRLWIND_TICK'; x: number; y: number }
+  | { type: 'WHIRLWIND_END'; x: number; y: number }
+  | { type: 'STORM_CAST'; x: number; y: number }
+  // Player state
+  | { type: 'PLAYER_HIT' }
+  | { type: 'SHIELD_BLOCKED'; x: number; y: number }
+  | { type: 'PICKUP_TAKEN'; x: number; y: number; kind: PickupKind }
+  | { type: 'GAME_OVER' }
+  // Crows and boss
+  | { type: 'CROWS_AGGRO' }
+  | { type: 'BOSS_CONTACT' }
+  | { type: 'BOSS_BATS'; x: number; y: number }
+  | { type: 'BOSS_CHARGE' }
+  | { type: 'BOSS_SCREECH' }
+  | { type: 'BOSS_DEATH_START' }
+  | { type: 'BOSS_DEATH_BURST'; x: number; y: number; phase: 'a' | 'b' | 'c' }
+  | { type: 'BOSS_ENTRANCE_FLASH' }
+  | { type: 'BOSS_ENTRANCE_FIRE'; x: number; y: number };
 
 export type GameEventType = GameEvent['type'];
 export type EventHandler = (e: GameEvent) => void;
