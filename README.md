@@ -37,12 +37,12 @@ Open `game.html` in any modern browser. No server required. An internet connecti
 | Move | Arrow keys |
 | Aim | Mouse |
 | Shoot / Cast | Space |
-| Charge special | Right-click hold (Archer) / Right-click (Wizard) |
+| Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) |
 | Sniper mode | Shift |
 | Pause | Escape |
 | Inventory | I (while paused) |
 
-All keys are remappable from the Controls screen.
+Move, Shoot, Sniper mode and Pause are remappable from the Controls screen.
 
 ## Characters
 
@@ -55,13 +55,13 @@ Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 ### Wizard
 Teleguided magic with area control.
 - **Primary:** Magic bolts, 3 s cooldown, home toward the nearest enemy, disappear on contact
-- **Special:** Lightning Storm, 450 px AoE around the player, destroys ROCK and TREE tiles, damages all enemies
+- **Special:** Lightning Storm, 450 px AoE around the player, destroys ROCK, TREE and HUT tiles, damages all enemies
 - **Pickups:** Fire bolt (2x damage), laser stream (passes through walls, stops on the first enemy)
 
 ### Knight
 Frontline melee with a long spear.
-- **Primary:** Spear thrust, 80 px directional cone, 0.9 s cooldown, 2 damage to boss
-- **Special:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK and TREE tiles, 8 s cooldown
+- **Primary:** Spear thrust, 80 px reach along the aim line, 1.5 s cooldown, 1 damage to boss
+- **Special:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 8 s cooldown
 - **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup), Fire Sword (2x damage and range for 8 s, leaves burning patches)
 
 ## Game loop
@@ -97,10 +97,10 @@ Boss shield phases:
 
 ## Map
 
-- 25 x 16 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH)
+- 33 x 21 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT)
 - Player spawns in a guaranteed clear zone, crows enter from the right corridor
 - Trees burn to ash on boss arrival, opening the arena
-- Dynamite, Lightning Storm and Whirlwind destroy ROCK and TREE tiles permanently
+- Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles permanently
 
 ## Audio
 
