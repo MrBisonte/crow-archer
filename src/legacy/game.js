@@ -83,7 +83,7 @@ const CONFIG = {
   // set by the pace preset below, so edit PACE_PRESETS, not these.
   crowPassiveSpeed: 60, crowAggroSpeed: 200, crowAggroTimeout: 4,
   crowStartCount: 5, crowMax: 12, crowEscalationInterval: 12,
-  whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 320,
+  whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 300,
 
   // Which preset to run. Override at runtime with ?pace=nightmare.
   pace: 'fast',
@@ -100,6 +100,8 @@ const CONFIG = {
   bossShieldChance: 0.65,         // probability of re-shielding after each open window
   bossShieldMaxPerWindow: 3,      // hard cap on shields per 30-second rolling window
   bossShieldWindowDuration: 30,
+  bossKnockback: 30,              // px the boss is shoved per hit, away from the source
+  bossKnockbackDecay: 0.18,       // seconds for that shove to fade to 1/e
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
@@ -801,9 +803,7 @@ function updatePlayer(dt) {
       if (!pfBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
         pfBossHit = true;
-        boss.hp -= CONFIG.pitchforkBossDamage; boss.hitFlash = 0.25;
-        events.emit({ type: 'BOSS_HIT', source: 'pitchfork' });
-        if (boss.hp <= 0) startBossDeath();
+        damageBoss(CONFIG.pitchforkBossDamage, player.x, player.y, 'pitchfork', 0.25);
       }
     }
   }
@@ -838,9 +838,7 @@ function updatePlayer(dt) {
          dist2(midX, midY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2)) {
       knightSpearBossHit = true;
       const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
-      boss.hp -= dmg; boss.hitFlash = 0.2;
-      events.emit({ type: 'BOSS_HIT', source: 'spear' });
-      if (boss.hp <= 0) startBossDeath();
+      damageBoss(dmg, player.x, player.y, 'spear', 0.2);
     }
   }
 
@@ -857,8 +855,7 @@ function updatePlayer(dt) {
       // Damage boss
       if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < wr2) {
-        boss.hp--; boss.hitFlash = 0.1; events.emit({ type: 'BOSS_HIT', source: 'whirlwind' });
-        if (boss.hp <= 0) startBossDeath();
+        damageBoss(1, player.x, player.y, 'whirlwind', 0.1);
       }
       // Break tiles in radius
       const tileR = Math.ceil(wr / CONFIG.tileSize);
@@ -992,9 +989,7 @@ function fireLightningStorm() {
     if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) killCrow(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(player.x, player.y, boss.x, boss.y) < r2) {
-    boss.hp -= CONFIG.stormBossDamage; boss.hitFlash = CONFIG.stormFlashDuration;
-    events.emit({ type: 'BOSS_HIT', source: 'storm' });
-    if (boss.hp <= 0) startBossDeath();
+    damageBoss(CONFIG.stormBossDamage, player.x, player.y, 'storm', CONFIG.stormFlashDuration);
   }
   // Destroy ROCK and TREE tiles within storm radius (protect border walls)
   const tileR = Math.ceil(STORM_R / CONFIG.tileSize);
@@ -1055,7 +1050,7 @@ function updateArrows(dt) {
       // Boss hit — all wiz bolts stop on boss (laser doesn't pierce enemies)
       if (boss && appState==='boss_fight' && boss.bstate!=='dead' && !boss.shield &&
           dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-        boss.hp -= a.dmg; boss.hitFlash = 0.15; events.emit({ type: 'BOSS_HIT', source: 'arrow' });
+        damageBoss(a.dmg, a.x, a.y, 'arrow');
         arrows.splice(i,1);
         if (boss.hp <= 0) startBossDeath();
         continue;
@@ -1107,7 +1102,7 @@ function updateArrows(dt) {
       // Boss hit (no pierce through boss)
       if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-        boss.hp -= CONFIG.knightJavelinBossDamage; boss.hitFlash = 0.15; events.emit({ type: 'BOSS_HIT', source: 'javelin' });
+        damageBoss(CONFIG.knightJavelinBossDamage, a.x, a.y, 'javelin');
         arrows.splice(i,1); if (boss.hp <= 0) startBossDeath(); continue;
       }
       // Crow hits — pierces through up to pierceLeft enemies
@@ -1192,7 +1187,7 @@ function updateArrows(dt) {
     // Boss hit
     if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
         dist2(a.x, a.y, boss.x, boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-      boss.hp -= CONFIG.arrowBossDamage; boss.hitFlash = 0.15; events.emit({ type: 'BOSS_HIT', source: 'arrow' });
+      damageBoss(CONFIG.arrowBossDamage, a.x, a.y, 'arrow');
       if (a.type === 'fire') spawnFire(a.x, a.y);
       arrows.splice(i, 1); if (boss.hp <= 0) startBossDeath(); continue;
     }
@@ -1324,8 +1319,7 @@ function explodeDynamite(d) {
     if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) killCrow(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
-    boss.hp -= CONFIG.dynamiteBossDamage; boss.hitFlash = 0.25;
-    events.emit({ type: 'BOSS_HIT', source: 'dynamite' });
+    damageBoss(CONFIG.dynamiteBossDamage, d.x, d.y, 'dynamite', 0.25);
     if (boss.hp <= 0) startBossDeath();
   }
 }
@@ -1528,6 +1522,7 @@ function spawnBoss() {
     orbitAngle: 0, chargeTarget: null,
     wingPhase: 0, hitFlash: 0, screchCD: CONFIG.bossScreechInterval,
     batCD: CONFIG.bossBatCD, facing: 1,
+    knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
     // Shield state machine
     shield: true,
     shieldPhase: 'initial',           // 'initial' | 'open' | 'shielded'
@@ -1535,6 +1530,42 @@ function spawnBoss() {
     shieldCount: 0,                   // random re-shields used this window
     shieldWindowTimer: CONFIG.bossShieldWindowDuration,
   };
+}
+
+/**
+ * Applies damage to the boss and shoves him away from the hit. Every weapon
+ * routes through here, so hit flash, the BOSS_HIT event, knockback, and the
+ * death trigger stay in one place.
+ *
+ * Callers do their own hit detection and shield check first, so a shielded
+ * boss still swallows nothing and projectiles behave as before.
+ */
+function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
+  boss.hp -= amount;
+  boss.hitFlash = flash;
+  const dx = boss.x - fromX, dy = boss.y - fromY;
+  const d = Math.hypot(dx, dy) || 1;
+  boss.knockX += (dx / d) * CONFIG.bossKnockback;
+  boss.knockY += (dy / d) * CONFIG.bossKnockback;
+  events.emit({ type: 'BOSS_HIT', source });
+  if (boss.hp <= 0) startBossDeath();
+}
+
+/**
+ * Adds the knockback offset on top of whatever the state machine decided, then
+ * decays it. It has to be applied after positioning: the orbit state assigns
+ * boss.x and boss.y outright, so a shove written straight to those is gone on
+ * the next frame.
+ */
+function applyBossKnockback(dt) {
+  if (boss.knockX === 0 && boss.knockY === 0) return;
+  const r = CONFIG.bossRadius;
+  boss.x = Math.max(r, Math.min(CONFIG.canvasW - r, boss.x + boss.knockX));
+  boss.y = Math.max(r, Math.min(CONFIG.rows * CONFIG.tileSize - r, boss.y + boss.knockY));
+  const decay = Math.exp(-dt / CONFIG.bossKnockbackDecay);
+  boss.knockX *= decay;
+  boss.knockY *= decay;
+  if (Math.hypot(boss.knockX, boss.knockY) < 0.5) { boss.knockX = 0; boss.knockY = 0; }
 }
 
 function updateBoss(dt) {
@@ -1616,6 +1647,8 @@ function updateBoss(dt) {
     boss.stateTimer -= dt;
     if (boss.stateTimer <= 0) { boss.bstate = 'orbit'; boss.stateTimer = 0; }
   }
+
+  applyBossKnockback(dt);
 }
 
 function spawnBossBats() {
