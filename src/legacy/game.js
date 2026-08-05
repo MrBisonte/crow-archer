@@ -150,7 +150,7 @@ const CONFIG = {
 
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
-const BOSS_ENTRY_TEXT = '⚠  THE MURDER HAS SUMMONED THEIR KING  ⚠';
+const BOSS_ENTRY_TEXT = '⚠  THE CROWS SUMMONED THEIR KING  ⚠';
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
