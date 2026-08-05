@@ -79,9 +79,14 @@ const CONFIG = {
 
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
+  // Crow density and the player's ability to answer it. Every value here is
+  // set by the pace preset below, so edit PACE_PRESETS, not these.
   crowPassiveSpeed: 60, crowAggroSpeed: 200, crowAggroTimeout: 4,
   crowStartCount: 5, crowMax: 12, crowEscalationInterval: 12,
   whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 320,
+
+  // Which preset to run. Override at runtime with ?pace=nightmare.
+  pace: 'fast',
 
   maxPickupsOnMap: 3,
   waterShimmerMs: 800,
@@ -148,9 +153,52 @@ const CONFIG = {
   }
 };
 
+// ── PACE ──────────────────────────────────────────────────────────────────────
+
+/**
+ * How busy the field gets, and what the player has to answer it. The two move
+ * together: raising crow density without raising arrows in flight and starting
+ * ammo makes the game unwinnable rather than faster.
+ *
+ * baseArrows and baseDynamites are the starting count and the cap. Drop rates
+ * are untouched, since more crows already means more drops.
+ */
+const PACE_PRESETS = {
+  calm:      { crowStartCount:  5, crowEscalationInterval: 12, crowMax: 12, crowAggroTimeout:  4, crowPassiveSpeed:  60, maxArrowsInFlight: 3, baseArrows: 10, baseDynamites: 3 },
+  fast:      { crowStartCount:  9, crowEscalationInterval:  6, crowMax: 16, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4 },
+  nightmare: { crowStartCount: 12, crowEscalationInterval:  3, crowMax: 20, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 24, baseDynamites: 5 },
+};
+
+/**
+ * Copies a preset into CONFIG. Call before the first game starts, and again
+ * whenever the pace changes. FEATHERS.applyToGame() re-derives arrow capacity
+ * from CONFIG.baseArrows, so upgrades stack on top of the preset instead of
+ * overwriting it.
+ */
+function applyPace(name) {
+  const preset = PACE_PRESETS[name] ?? PACE_PRESETS.fast;
+  CONFIG.pace = preset === PACE_PRESETS[name] ? name : 'fast';
+  CONFIG.crowStartCount        = preset.crowStartCount;
+  CONFIG.crowEscalationInterval = preset.crowEscalationInterval;
+  CONFIG.crowMax               = preset.crowMax;
+  CONFIG.crowAggroTimeout      = preset.crowAggroTimeout;
+  CONFIG.crowPassiveSpeed      = preset.crowPassiveSpeed;
+  CONFIG.maxArrowsInFlight     = preset.maxArrowsInFlight;
+  CONFIG.baseArrows            = preset.baseArrows;
+  CONFIG.baseDynamites         = preset.baseDynamites;
+  CONFIG.resources.arrows.max    = preset.baseArrows;
+  CONFIG.resources.dynamites.max = preset.baseDynamites;
+}
+
+applyPace(new URLSearchParams(location.search).get('pace') ?? CONFIG.pace);
+
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
 const BOSS_ENTRY_TEXT = '⚠  THE CROWS SUMMONED THEIR KING  ⚠';
+
+// Above this capacity the HUD shows a count instead of one icon per unit.
+// 12 icons at 13 px still fit beside the boss HP bar; more do not.
+const HUD_ICON_LIMIT = 12;
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
@@ -1873,8 +1921,9 @@ const FEATHERS = (() => {
   function wallet()  { return _feathers; }
 
   function applyToGame() {
-    // Arrow capacity from upgrade level must be refreshed at game start
-    CONFIG.resources.arrows.max = 10 + (_levels.arrows || 0) * 2;
+    // Arrow capacity from upgrade level must be refreshed at game start.
+    // The base comes from the pace preset, so upgrades stack on it.
+    CONFIG.resources.arrows.max = CONFIG.baseArrows + (_levels.arrows || 0) * 2;
   }
 
   function moveCursor(dir) {
@@ -3258,12 +3307,21 @@ function drawHUD(t) {
   ctx.textAlign = 'left';
   if (selectedChar === 'archer') {
     for (const [k, r] of Object.entries(CONFIG.resources)) {
-      for (let i = 0; i < r.max; i++) {
-        const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
-        ctx.fillStyle = i < inv[k] ? (flash ? '#ff4444' : r.color) : r.dim;
-        ctx.fillText(r.icon, rx + i * r.spacing, 16);
+      const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
+      // One icon per unit reads well up to a point. Past it the row would run
+      // off the HUD, so show a single icon and a count instead.
+      if (r.max > HUD_ICON_LIMIT) {
+        ctx.fillStyle = flash ? '#ff4444' : (inv[k] > 0 ? r.color : r.dim);
+        const label = `${r.icon}${String(inv[k]).padStart(2,'0')}/${r.max}`;
+        ctx.fillText(label, rx, 16);
+        rx += label.length * 6 + 10;
+      } else {
+        for (let i = 0; i < r.max; i++) {
+          ctx.fillStyle = i < inv[k] ? (flash ? '#ff4444' : r.color) : r.dim;
+          ctx.fillText(r.icon, rx + i * r.spacing, 16);
+        }
+        rx += r.max * r.spacing + 8;
       }
-      rx += r.max * r.spacing + 8;
     }
     if (inv.ricochetArrows > 0) { ctx.fillStyle='#44ddff'; ctx.fillText(`[R:${inv.ricochetArrows}]`,rx,16); rx+=52; }
     if (inv.fireArrows     > 0) { ctx.fillStyle='#ff7700'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
