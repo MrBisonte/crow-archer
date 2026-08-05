@@ -54,7 +54,9 @@ export type GameEvent =
   | { type: 'BOSS_DEATH_START' }
   | { type: 'BOSS_DEATH_BURST'; x: number; y: number; phase: 'a' | 'b' | 'c' }
   | { type: 'BOSS_ENTRANCE_FLASH' }
-  | { type: 'BOSS_ENTRANCE_FIRE'; x: number; y: number };
+  | { type: 'BOSS_ENTRANCE_FIRE'; x: number; y: number }
+  | { type: 'BOSS_SHIELD_BLOCKED'; x: number; y: number }
+  | { type: 'BOSS_BURNING'; x: number; y: number };
 
 export type GameEventType = GameEvent['type'];
 export type EventHandler = (e: GameEvent) => void;

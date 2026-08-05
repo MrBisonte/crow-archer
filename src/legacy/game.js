@@ -100,8 +100,11 @@ const CONFIG = {
   bossShieldChance: 0.65,         // probability of re-shielding after each open window
   bossShieldMaxPerWindow: 3,      // hard cap on shields per 30-second rolling window
   bossShieldWindowDuration: 30,
-  bossKnockback: 30,              // px the boss is shoved per hit, away from the source
-  bossKnockbackDecay: 0.18,       // seconds for that shove to fade to 1/e
+  bossKnockback: 62,              // px the boss is shoved per hit, away from the source
+  bossKnockbackDecay: 0.30,       // seconds for that shove to fade to 1/e
+  bossBurnDuration: 4,            // seconds a fire arrow keeps the boss alight
+  bossBurnSlowdown: 0.3,          // fraction of speed removed while he burns
+  bossBurnEmberInterval: 0.12,    // seconds between ember puffs while burning
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
@@ -657,6 +660,19 @@ events.on(e => {
         speedMin: 30, speedMax: 80, decay: 1.0, shape: 'spark',
         gravity: -50, shadowBlur: 6, shadowColor: '#FF7A1F' });
       break;
+
+    case 'BOSS_SHIELD_BLOCKED':
+      playSound(sndEmpty);
+      burst(e.x, e.y, { count: 8, colors: ['#6EC6FF','#BFE4FF','#FFFFFF'],
+        speedMin: 60, speedMax: 150, decay: 3.0, shape: 'spark',
+        shadowBlur: 8, shadowColor: '#6EC6FF' });
+      break;
+
+    case 'BOSS_BURNING':
+      burst(e.x, e.y, { count: 3, colors: ['#FF7A1F','#FFB400','#FFFFFF'],
+        speedMin: 10, speedMax: 45, decay: 1.6, shape: 'spark',
+        gravity: -70, shadowBlur: 6, shadowColor: '#FF7A1F' });
+      break;
   }
 });
 
@@ -1047,14 +1063,9 @@ function updateArrows(dt) {
       if (a.x<0||a.x>=CONFIG.canvasW||a.y<0||a.y>=CONFIG.rows*CONFIG.tileSize) {
         arrows.splice(i,1); continue;
       }
-      // Boss hit — all wiz bolts stop on boss (laser doesn't pierce enemies)
-      if (boss && appState==='boss_fight' && boss.bstate!=='dead' && !boss.shield &&
-          dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-        damageBoss(a.dmg, a.x, a.y, 'arrow');
-        arrows.splice(i,1);
-        if (boss.hp <= 0) startBossDeath();
-        continue;
-      }
+      // Boss hit. Every bolt stops on the boss, shielded or not.
+      const bolt = resolveBossHit(a, a.dmg, 'arrow');
+      if (bolt !== BossHit.MISS) { arrows.splice(i,1); continue; }
       // Crow hits — all wiz bolts stop on first crow hit (laser doesn't pierce enemies)
       let wizHitCrow = false;
       for (let j = crows.length-1; j >= 0; j--) {
@@ -1099,12 +1110,9 @@ function updateArrows(dt) {
       a.x = nx; a.y = ny;
       if (a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows*CONFIG.tileSize)
         { arrows.splice(i,1); continue; }
-      // Boss hit (no pierce through boss)
-      if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
-          dist2(a.x,a.y,boss.x,boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-        damageBoss(CONFIG.knightJavelinBossDamage, a.x, a.y, 'javelin');
-        arrows.splice(i,1); if (boss.hp <= 0) startBossDeath(); continue;
-      }
+      // Boss hit. The javelin never pierces the boss, shielded or not.
+      const jav = resolveBossHit(a, CONFIG.knightJavelinBossDamage, 'javelin');
+      if (jav !== BossHit.MISS) { arrows.splice(i,1); continue; }
       // Crow hits — pierces through up to pierceLeft enemies
       for (let j = crows.length - 1; j >= 0; j--) {
         if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
@@ -1184,13 +1192,15 @@ function updateArrows(dt) {
     }
     if (removed) continue;
 
-    // Boss hit
-    if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
-        dist2(a.x, a.y, boss.x, boss.y) < CONFIG.bossHitRadius*CONFIG.bossHitRadius) {
-      damageBoss(CONFIG.arrowBossDamage, a.x, a.y, 'arrow');
+    // Boss hit. Ricochet arrows bounce and stay alive; everything else stops,
+    // including on the shield, so no arrow passes through him.
+    const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage, 'arrow');
+    if (arrowHit === BossHit.DAMAGED) {
       if (a.type === 'fire') spawnFire(a.x, a.y);
-      arrows.splice(i, 1); if (boss.hp <= 0) startBossDeath(); continue;
+      arrows.splice(i, 1); continue;
     }
+    if (arrowHit === BossHit.ABSORBED) { arrows.splice(i, 1); continue; }
+    if (arrowHit === BossHit.REFLECTED) continue;
 
     // Crow hit
     let hit = false;
@@ -1320,7 +1330,6 @@ function explodeDynamite(d) {
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     damageBoss(CONFIG.dynamiteBossDamage, d.x, d.y, 'dynamite', 0.25);
-    if (boss.hp <= 0) startBossDeath();
   }
 }
 
@@ -1523,6 +1532,7 @@ function spawnBoss() {
     wingPhase: 0, hitFlash: 0, screchCD: CONFIG.bossScreechInterval,
     batCD: CONFIG.bossBatCD, facing: 1,
     knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
+    burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him while it lasts
     // Shield state machine
     shield: true,
     shieldPhase: 'initial',           // 'initial' | 'open' | 'shielded'
@@ -1551,6 +1561,85 @@ function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
   if (boss.hp <= 0) startBossDeath();
 }
 
+/** Outcome of one projectile reaching the boss. */
+const BossHit = {
+  MISS:      'miss',      // nothing touched, keep flying
+  REFLECTED: 'reflected', // ricochet bounced off, keep flying on a new heading
+  ABSORBED:  'absorbed',  // the shield stopped it, remove the projectile
+  DAMAGED:   'damaged',   // it landed, remove the projectile
+};
+
+/**
+ * Resolves one projectile against the boss. Every projectile type routes
+ * through here, so shield behaviour, ricochet reflection, fire, and damage
+ * stay in one place instead of being repeated per weapon.
+ *
+ * The caller owns the projectile array, so this never splices. It reports what
+ * happened and the caller removes the projectile on ABSORBED or DAMAGED.
+ */
+function resolveBossHit(a, damage, source) {
+  if (!boss || appState !== 'boss_fight' || boss.bstate === 'dead') return BossHit.MISS;
+  if (dist2(a.x, a.y, boss.x, boss.y) >= CONFIG.bossHitRadius * CONFIG.bossHitRadius)
+    return BossHit.MISS;
+
+  // Ricochet arrows bounce off the boss and off his shield, as they do off rock
+  if (a.type === 'ricochet') { reflectOffBoss(a); return BossHit.REFLECTED; }
+
+  // The shield stops everything else outright, so nothing passes through him
+  if (boss.shield) {
+    events.emit({ type: 'BOSS_SHIELD_BLOCKED', x: a.x, y: a.y });
+    return BossHit.ABSORBED;
+  }
+
+  if (a.type === 'fire') igniteBoss();
+  damageBoss(damage, a.x, a.y, source);
+  return BossHit.DAMAGED;
+}
+
+/**
+ * Mirrors a ricochet arrow about the boss's surface normal, which is the same
+ * bounce a circle gives in any direction, then lifts it clear of the hit circle
+ * so the next frame does not read a second collision.
+ */
+function reflectOffBoss(a) {
+  const dx = a.x - boss.x, dy = a.y - boss.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const nx = dx / d, ny = dy / d;
+  const dot = a.vx * nx + a.vy * ny;
+  a.vx -= 2 * dot * nx;
+  a.vy -= 2 * dot * ny;
+  a.x = boss.x + nx * (CONFIG.bossHitRadius + 2);
+  a.y = boss.y + ny * (CONFIG.bossHitRadius + 2);
+  a.bounces++;
+  // Same speed gain a wall bounce gives, so boss bounces are not a dead end
+  const curSpd = Math.hypot(a.vx, a.vy) || 1;
+  const maxSpd = (a.initSpeed || CONFIG.arrowSpeed) * 5;
+  const s = Math.min(1.55, maxSpd / curSpd);
+  a.vx *= s; a.vy *= s;
+  a.life = Math.max(a.life, CONFIG.arrowLifetime * 0.8);
+}
+
+/** Sets the boss alight. Refreshes the timer if he is already burning. */
+function igniteBoss() {
+  boss.burnTimer = CONFIG.bossBurnDuration;
+}
+
+/** Speed multiplier for boss movement. Burning slows him. */
+function bossSpeedMod() {
+  return boss.burnTimer > 0 ? 1 - CONFIG.bossBurnSlowdown : 1;
+}
+
+/** Counts the burn down and puffs embers while it lasts. */
+function updateBossBurn(dt) {
+  if (boss.burnTimer <= 0) return;
+  boss.burnTimer = Math.max(0, boss.burnTimer - dt);
+  boss.emberTimer = (boss.emberTimer || 0) - dt;
+  if (boss.emberTimer <= 0) {
+    boss.emberTimer = CONFIG.bossBurnEmberInterval;
+    events.emit({ type: 'BOSS_BURNING', x: boss.x, y: boss.y });
+  }
+}
+
 /**
  * Adds the knockback offset on top of whatever the state machine decided, then
  * decays it. It has to be applied after positioning: the orbit state assigns
@@ -1571,6 +1660,7 @@ function applyBossKnockback(dt) {
 function updateBoss(dt) {
   if (!boss || boss.bstate === 'dead') return;
   boss.wingPhase += dt * 8;
+  updateBossBurn(dt);
   if (boss.hitFlash > 0) boss.hitFlash = Math.max(0, boss.hitFlash - dt);
   // Update facing toward player
   boss.facing = player.x > boss.x ? -1 : 1;
@@ -1622,7 +1712,7 @@ function updateBoss(dt) {
 
   if (boss.bstate === 'orbit') {
     boss.stateTimer += dt;
-    const angSpd = CONFIG.bossOrbitSpeed / CONFIG.bossOrbitRadius;
+    const angSpd = CONFIG.bossOrbitSpeed * bossSpeedMod() / CONFIG.bossOrbitRadius;
     boss.orbitAngle += angSpd * dt;
     boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * CONFIG.bossOrbitRadius));
     boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * CONFIG.bossOrbitRadius));
@@ -1636,7 +1726,7 @@ function updateBoss(dt) {
     if (dist < 12) {
       boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
     } else {
-      const spd = CONFIG.bossChargeSpeed * dt;
+      const spd = CONFIG.bossChargeSpeed * bossSpeedMod() * dt;
       boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
       if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
         damagePlayer(CONFIG.bossContactDamage); events.emit({ type: 'BOSS_CONTACT' });
