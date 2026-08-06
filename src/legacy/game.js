@@ -104,6 +104,7 @@ const CONFIG = {
   bossKnockbackDecay: 0.30,       // seconds for that shove to fade to 1/e
   bossBurnDuration: 4,            // seconds a fire arrow keeps the boss alight
   bossBurnSlowdown: 0.3,          // fraction of speed removed while he burns
+  bossBurnDamage: 0.5,            // extra damage the burn deals, as a fraction of the igniting hit
   bossBurnEmberInterval: 0.12,    // seconds between ember puffs while burning
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
@@ -1532,7 +1533,8 @@ function spawnBoss() {
     wingPhase: 0, hitFlash: 0, screchCD: CONFIG.bossScreechInterval,
     batCD: CONFIG.bossBatCD, facing: 1,
     knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
-    burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him while it lasts
+    burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him and drains HP
+    burnDps: 0,                     // damage per second for the burn now running
     // Shield state machine
     shield: true,
     shieldPhase: 'initial',           // 'initial' | 'open' | 'shielded'
@@ -1543,28 +1545,37 @@ function spawnBoss() {
 }
 
 /**
+ * The one place boss HP is lowered, so the death trigger has a single home.
+ * Burn damage takes this path directly: it has no impact point, so it gets no
+ * flash, no shove, and no hit sound.
+ */
+function applyBossDamage(amount) {
+  boss.hp -= amount;
+  if (boss.hp <= 0) startBossDeath();
+}
+
+/**
  * Applies damage to the boss and shoves him away from the hit. Every weapon
- * routes through here, so hit flash, the BOSS_HIT event, knockback, and the
- * death trigger stay in one place.
+ * routes through here, so hit flash, the BOSS_HIT event, and knockback stay in
+ * one place.
  *
  * Callers do their own hit detection and shield check first, so a shielded
  * boss still swallows nothing and projectiles behave as before.
  */
 function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
-  boss.hp -= amount;
   boss.hitFlash = flash;
   const dx = boss.x - fromX, dy = boss.y - fromY;
   const d = Math.hypot(dx, dy) || 1;
   boss.knockX += (dx / d) * CONFIG.bossKnockback;
   boss.knockY += (dy / d) * CONFIG.bossKnockback;
   events.emit({ type: 'BOSS_HIT', source });
-  if (boss.hp <= 0) startBossDeath();
+  applyBossDamage(amount);
 }
 
 /** Outcome of one projectile reaching the boss. */
 const BossHit = {
   MISS:      'miss',      // nothing touched, keep flying
-  REFLECTED: 'reflected', // ricochet bounced off, keep flying on a new heading
+  REFLECTED: 'reflected', // bounced off on a new heading, keep it alive
   ABSORBED:  'absorbed',  // the shield stopped it, remove the projectile
   DAMAGED:   'damaged',   // it landed, remove the projectile
 };
@@ -1582,18 +1593,20 @@ function resolveBossHit(a, damage, source) {
   if (dist2(a.x, a.y, boss.x, boss.y) >= CONFIG.bossHitRadius * CONFIG.bossHitRadius)
     return BossHit.MISS;
 
-  // Ricochet arrows bounce off the boss and off his shield, as they do off rock
-  if (a.type === 'ricochet') { reflectOffBoss(a); return BossHit.REFLECTED; }
+  // Read once, before the damage below can start the death sequence
+  const blocked = boss.shield;
 
-  // The shield stops everything else outright, so nothing passes through him
-  if (boss.shield) {
+  if (blocked) {
     events.emit({ type: 'BOSS_SHIELD_BLOCKED', x: a.x, y: a.y });
-    return BossHit.ABSORBED;
+  } else {
+    if (a.type === 'fire') igniteBoss(damage);
+    // Before the bounce, so knockback is measured from the real impact point
+    damageBoss(damage, a.x, a.y, source);
   }
 
-  if (a.type === 'fire') igniteBoss();
-  damageBoss(damage, a.x, a.y, source);
-  return BossHit.DAMAGED;
+  // Ricochet arrows bounce off the boss and off his shield, as they do off rock
+  if (a.type === 'ricochet') { reflectOffBoss(a); return BossHit.REFLECTED; }
+  return blocked ? BossHit.ABSORBED : BossHit.DAMAGED;
 }
 
 /**
@@ -1619,9 +1632,14 @@ function reflectOffBoss(a) {
   a.life = Math.max(a.life, CONFIG.arrowLifetime * 0.8);
 }
 
-/** Sets the boss alight. Refreshes the timer if he is already burning. */
-function igniteBoss() {
+/**
+ * Sets the boss alight. The burn deals bossBurnDamage of the igniting hit again
+ * over its full duration, so a fire arrow costs him half a point more than a
+ * plain one. A second fire arrow refreshes the burn rather than stacking it.
+ */
+function igniteBoss(damage) {
   boss.burnTimer = CONFIG.bossBurnDuration;
+  boss.burnDps = damage * CONFIG.bossBurnDamage / CONFIG.bossBurnDuration;
 }
 
 /** Speed multiplier for boss movement. Burning slows him. */
@@ -1629,15 +1647,18 @@ function bossSpeedMod() {
   return boss.burnTimer > 0 ? 1 - CONFIG.bossBurnSlowdown : 1;
 }
 
-/** Counts the burn down and puffs embers while it lasts. */
+/** Counts the burn down, drains HP with it, and puffs embers while it lasts. */
 function updateBossBurn(dt) {
   if (boss.burnTimer <= 0) return;
-  boss.burnTimer = Math.max(0, boss.burnTimer - dt);
-  boss.emberTimer = (boss.emberTimer || 0) - dt;
+  // Clamped to what is left, so the burn deals its exact total and no more
+  const tick = Math.min(dt, boss.burnTimer);
+  boss.burnTimer -= tick;
+  boss.emberTimer -= tick;
   if (boss.emberTimer <= 0) {
     boss.emberTimer = CONFIG.bossBurnEmberInterval;
     events.emit({ type: 'BOSS_BURNING', x: boss.x, y: boss.y });
   }
+  applyBossDamage(boss.burnDps * tick);
 }
 
 /**
@@ -1660,7 +1681,10 @@ function applyBossKnockback(dt) {
 function updateBoss(dt) {
   if (!boss || boss.bstate === 'dead') return;
   boss.wingPhase += dt * 8;
+  // The burn is the only thing that can kill him from inside this function, so
+  // the rest of the frame is skipped rather than run against a dead boss.
   updateBossBurn(dt);
+  if (boss.bstate === 'dead') return;
   if (boss.hitFlash > 0) boss.hitFlash = Math.max(0, boss.hitFlash - dt);
   // Update facing toward player
   boss.facing = player.x > boss.x ? -1 : 1;
@@ -3408,7 +3432,10 @@ function drawHUD(t) {
     ctx.textAlign='right'; ctx.font='bold 11px "Courier New",monospace';
     ctx.fillStyle='#cc0000'; ctx.fillText('BOSS HP', bBarX-5, 16);
     ctx.fillStyle='#ff8888'; ctx.font='bold 10px "Courier New",monospace';
-    ctx.fillText(`${boss.hp}/${bHpMax}`, bBarX+bBarW-4, 16);
+    // Burn damage makes hp fractional, so the readout shows the point he is
+    // still on while the bar behind it drains smoothly. The epsilon keeps
+    // float dust from rounding a whole point back up.
+    ctx.fillText(`${Math.ceil(boss.hp - 1e-6)}/${bHpMax}`, bBarX+bBarW-4, 16);
     ctx.font='bold 12px "Courier New",monospace';
   }
 
