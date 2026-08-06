@@ -214,11 +214,25 @@ describe('RoomStore', () => {
   });
 
   describe('membership', () => {
-    it('lists the connections to broadcast to', () => {
+    it('pairs each connection with the slot it holds', () => {
       ok(store.create(10, 'alex'));
       ok(store.join(11, 'AAAA', 'sam'));
-      expect(store.membersOf('AAAA')).toEqual([10, 11]);
-      expect(store.membersOf('ZZZZ')).toEqual([]);
+      expect(store.seatsOf('AAAA')).toEqual([
+        { conn: 10, slot: 0 },
+        { conn: 11, slot: 1 },
+      ]);
+      expect(store.seatsOf('ZZZZ')).toEqual([]);
+    });
+
+    it('keeps slots with connections after a seat is vacated', () => {
+      ok(store.create(10, 'alex'));
+      ok(store.join(11, 'AAAA', 'sam'));
+      ok(store.join(12, 'AAAA', 'kim'));
+      store.leave(11);
+      expect(store.seatsOf('AAAA')).toEqual([
+        { conn: 10, slot: 0 },
+        { conn: 12, slot: 2 },
+      ]);
     });
 
     it('finds the room a connection sits in', () => {

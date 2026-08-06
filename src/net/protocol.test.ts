@@ -18,7 +18,7 @@ const input: ClientMessage = {
   cmd: { seq: 42, buttons: Button.UP | Button.FIRE, aimAngle: 1.25 },
 };
 
-const welcome: ServerMessage = { type: 'WELCOME', v: PROTOCOL_VERSION, id: 0 };
+const welcome: ServerMessage = { type: 'WELCOME', v: PROTOCOL_VERSION };
 
 const snapshot: ServerMessage = {
   type: 'SNAPSHOT',
@@ -56,9 +56,13 @@ describe('parseClientMessage', () => {
     for (const m of msgs) expect(parseClientMessage(m)).toEqual(m);
   });
 
-  it('rejects a HELLO on the wrong version', () => {
-    expect(parseClientMessage({ ...hello, v: PROTOCOL_VERSION + 1 })).toBeNull();
-    expect(parseClientMessage({ ...hello, v: PROTOCOL_VERSION - 1 })).toBeNull();
+  it('keeps a wrong HELLO version for the server to judge', () => {
+    // A wrong version still parses, so the server can answer VERSION_MISMATCH
+    // rather than drop the socket without a word. Only a non-integer is malformed.
+    expect(parseClientMessage({ ...hello, v: PROTOCOL_VERSION + 1 }))
+      .toEqual({ ...hello, v: PROTOCOL_VERSION + 1 });
+    expect(parseClientMessage({ ...hello, v: 'three' })).toBeNull();
+    expect(parseClientMessage({ ...hello, v: 1.5 })).toBeNull();
   });
 
   it('rejects a HELLO with no version', () => {
@@ -124,6 +128,7 @@ describe('parseServerMessage', () => {
         mode: 'coop',
         host: 0,
         slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.A }],
+        you: 0,
       },
       {
         type: 'MATCH_START',
@@ -157,8 +162,18 @@ describe('parseServerMessage', () => {
   });
 
   it('rejects a player id outside the room', () => {
-    expect(parseServerMessage({ ...welcome, id: 4 })).toBeNull();
-    expect(parseServerMessage({ ...welcome, id: -1 })).toBeNull();
+    const room = {
+      type: 'ROOM_STATE',
+      code: 'QRTZ',
+      mode: 'coop',
+      host: 0,
+      slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.A }],
+      you: 0,
+    };
+    expect(parseServerMessage({ ...room, host: 4 })).toBeNull();
+    expect(parseServerMessage({ ...room, host: -1 })).toBeNull();
+    expect(parseServerMessage({ ...room, you: 4 })).toBeNull();
+    expect(parseServerMessage({ ...room, you: -1 })).toBeNull();
   });
 
   it('rejects a slot on the enemy team', () => {
@@ -168,6 +183,7 @@ describe('parseServerMessage', () => {
       mode: 'coop',
       host: 0,
       slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.ENEMY }],
+      you: 0,
     };
     expect(parseServerMessage(msg)).toBeNull();
   });

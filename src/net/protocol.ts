@@ -25,7 +25,7 @@ import { Team } from '../sim/team';
  * message repeats it. This keeps the version out of SNAPSHOT, which is sent
  * 20 times a second.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Players in one room. Fixed at 4: 4-player co-op or 2v2 deathmatch. */
 export const MAX_PLAYERS = 4;
@@ -166,8 +166,16 @@ export type ErrorCode =
  * parseClientMessage before touching room state.
  */
 export type ClientMessage =
-  // Handshake, first message on the socket
-  | { type: 'HELLO'; v: typeof PROTOCOL_VERSION; name: string }
+  /**
+   * Handshake, first message on the socket.
+   *
+   * `v` is any number, not the current literal, so a client on the wrong
+   * version still parses and the server can answer VERSION_MISMATCH instead of
+   * dropping it silently. WELCOME stays strict in the other direction: the
+   * server owes a mismatched client an explanation, a mismatched server owes
+   * the client nothing it can act on.
+   */
+  | { type: 'HELLO'; v: number; name: string }
   // Lobby
   | { type: 'CREATE_ROOM' }
   | { type: 'JOIN_ROOM'; code: RoomCode }
@@ -186,10 +194,28 @@ export type ClientMessage =
  * a server on a newer protocol cannot drive it into an unknown state.
  */
 export type ServerMessage =
-  // Handshake reply. `id` is this client's slot for the whole session.
-  | { type: 'WELCOME'; v: typeof PROTOCOL_VERSION; id: PlayerId }
-  // Full lobby state. Sent on every change, never as a delta.
-  | { type: 'ROOM_STATE'; code: RoomCode; mode: GameMode; host: PlayerId; slots: PlayerSlot[] }
+  /**
+   * Handshake reply. It carries no identity: a player has no id until they hold
+   * a seat, and a seat belongs to a room. ROOM_STATE.you supplies it from then
+   * on. Reconnect, which is what a durable session id would serve, is phase 4.
+   */
+  | { type: 'WELCOME'; v: typeof PROTOCOL_VERSION }
+  /**
+   * Full lobby state. Sent on every change, never as a delta.
+   *
+   * `you` is the recipient's own slot, so this message is built per recipient
+   * rather than broadcast verbatim. Without it a client cannot pick itself out
+   * of `slots`, since nothing else on the wire ties a seat to a connection.
+   * Lobby changes are rare, so the extra copies cost nothing.
+   */
+  | {
+      type: 'ROOM_STATE';
+      code: RoomCode;
+      mode: GameMode;
+      host: PlayerId;
+      slots: PlayerSlot[];
+      you: PlayerId;
+    }
   | { type: 'ERROR'; code: ErrorCode; message: string }
   /**
    * Match begins. `seed` is the uint32 every client feeds to mapgen, which is
@@ -339,9 +365,10 @@ type ServerReaders = { [K in ServerMessage['type']]: Reader<ServerMessage, K> };
 
 const clientReaders: ClientReaders = {
   HELLO: (m) => {
+    const v = m['v'];
     const name = m['name'];
-    if (m['v'] !== PROTOCOL_VERSION || !isName(name)) return null;
-    return { type: 'HELLO', v: PROTOCOL_VERSION, name };
+    if (!isInt(v) || !isName(name)) return null;
+    return { type: 'HELLO', v, name };
   },
   CREATE_ROOM: () => ({ type: 'CREATE_ROOM' }),
   JOIN_ROOM: (m) => {
@@ -373,19 +400,17 @@ const clientReaders: ClientReaders = {
 };
 
 const serverReaders: ServerReaders = {
-  WELCOME: (m) => {
-    const id = m['id'];
-    if (m['v'] !== PROTOCOL_VERSION || !isPlayerId(id)) return null;
-    return { type: 'WELCOME', v: PROTOCOL_VERSION, id };
-  },
+  WELCOME: (m) =>
+    m['v'] === PROTOCOL_VERSION ? { type: 'WELCOME', v: PROTOCOL_VERSION } : null,
   ROOM_STATE: (m) => {
     const code = m['code'];
     const mode = m['mode'];
     const host = m['host'];
     const slots = m['slots'];
-    if (!isRoomCode(code) || !isMode(mode) || !isPlayerId(host)) return null;
+    const you = m['you'];
+    if (!isRoomCode(code) || !isMode(mode) || !isPlayerId(host) || !isPlayerId(you)) return null;
     if (!isArrayOf(slots, isPlayerSlot) || slots.length > MAX_PLAYERS) return null;
-    return { type: 'ROOM_STATE', code, mode, host, slots };
+    return { type: 'ROOM_STATE', code, mode, host, slots, you };
   },
   ERROR: (m) => {
     const code = m['code'];

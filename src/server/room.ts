@@ -224,11 +224,19 @@ export class RoomStore {
     return occupied.length > 0 && occupied.every((s) => s!.readiness === Readiness.READY);
   }
 
-  /** The connections to broadcast a room's state to. */
-  membersOf(code: RoomCode): ConnectionId[] {
+  /**
+   * Who to send a room's state to, paired with the slot each one holds. The
+   * slot travels with the connection because ROOM_STATE carries the recipient's
+   * own id, so the server builds one message per seat rather than broadcasting.
+   */
+  seatsOf(code: RoomCode): { conn: ConnectionId; slot: PlayerId }[] {
     const room = this.#rooms.get(code);
     if (!room) return [];
-    return room.seats.filter((s) => s !== undefined).map((s) => s!.conn);
+    const seated: { conn: ConnectionId; slot: PlayerId }[] = [];
+    room.seats.forEach((seat, slot) => {
+      if (seat) seated.push({ conn: seat.conn, slot });
+    });
+    return seated;
   }
 
   /** The room a connection sits in, or null when it holds no seat. */
