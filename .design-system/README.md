@@ -8,7 +8,7 @@ A visual-language guide and developer spec for the browser game **CROW ARCHER**:
 
 ## Sources
 
-This system was written from the design brief, before integration into `game.html`. The brief is the source of truth, and all entities, palettes and animation curves below derive from its constraints:
+This system was written from the design brief, before integration into the game. The brief is the source of truth, and all entities, palettes and animation curves below derive from its constraints:
 
 - Canvas: 800×544px, HUD 32px, world 800×512px, tile grid 25×16 @ 32px
 - Tiles already exist: `EMPTY`, `ROCK`, `WATER`, `TREE` (do not redesign)

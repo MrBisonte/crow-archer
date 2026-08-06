@@ -16,5 +16,9 @@
     "vite": "^8.1.5",
     "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "rot-js": "^2.2.1",
+    "simplex-noise": "^2.4.0"
   }
 }

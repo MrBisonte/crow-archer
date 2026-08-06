@@ -10,7 +10,7 @@
         A R C H E R
 ```
 
-Survive the flock, kill the Crow King. A single-file browser game: vanilla JS, HTML5 Canvas, Web Audio API. No build step, no install. Open `game.html` and play.
+Survive the flock, kill the Crow King. A browser game on HTML5 Canvas and the Web Audio API, built to one self-contained HTML file. Download [`dist/index.html`](dist/index.html) and play, offline, no install.
 
 ![Gameplay: arrow kills, boss entrance cinematic, boss fight](media/gameplay.gif)
 
@@ -28,7 +28,16 @@ Survive the flock, kill the Crow King. A single-file browser game: vanilla JS, H
 
 ## Play
 
-Open `game.html` in any modern browser. No server required. An internet connection is needed once, to load two CDN scripts (see [Dependencies](#dependencies)).
+Download [`dist/index.html`](dist/index.html) and open it in any modern browser. Every dependency is inlined, so it needs no server and no internet connection.
+
+To run from source:
+
+```
+npm install
+npm run dev
+```
+
+`npm run build` regenerates `dist/index.html`. The committed copy is built from the current `master`.
 
 ## Controls
 
@@ -108,22 +117,26 @@ All sound is synthesized at runtime, no audio files. Sounds initialize on first 
 
 ## Tech
 
-- Single `game.html`, single `<canvas>`, all UI drawn with the Canvas 2D API
+- TypeScript and Vite. `vite-plugin-singlefile` inlines the bundle, so the build stays one HTML file
+- Single `<canvas>`, all UI drawn with the Canvas 2D API
 - CRT scanline aesthetic via CSS plus a vignette overlay
-- Delta-time game loop on `requestAnimationFrame`
+- Fixed 60 Hz timestep with an accumulator, capped at 8 catch-up steps per frame
+- Simulation and rendering are separating into `src/sim/` and `src/render/`, joined by an event bus: the sim states what happened, rendering decides how it looks and sounds
 - Particle system capped at 120 active particles, oldest dropped first
-- All tunable values centralized in the `CONFIG` object at the top of `game.html`
+- All tunable values centralized in the `CONFIG` object at the top of `src/legacy/game.js`
 - rot.js FOV cache invalidates only when the player moves to a new tile
+- `vitest` covers the extracted sim modules; `npm test` and `npm run typecheck` gate changes
 
 ## Dependencies
 
-Two CDN-loaded libraries, referenced from `game.html`; ZzFX is inlined. No npm install, no build step.
+Two npm packages, bundled into the build. The ZzFX-compatible synth is written into the source rather than installed.
 
 | Library | Version | Purpose | License |
 |---------|---------|---------|---------|
-| [ZzFX](https://github.com/KilledByAPixel/ZzFX) | inlined | Procedural sound-effect synthesizer, compact parameter arrays instead of hand-rolled synth functions | [MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE) |
-| [simplex-noise](https://github.com/jwagner/simplex-noise) | 2.4.0 | Coherent 2-D noise for terrain, independent layers for rocks, water and forest so tiles cluster naturally. v2.4.0 is the last release with a browser-global build | [MIT](https://github.com/jwagner/simplex-noise/blob/master/LICENSE) |
-| [rot.js](https://github.com/ondras/rot.js) | 2.2.1 | `ROT.FOV.PreciseShadowcasting` for crow line-of-sight, `ROT.Path.AStar` so aggro crows path around obstacles | [BSD-2-Clause](https://github.com/ondras/rot.js/blob/master/LICENSE) |
+| [simplex-noise](https://github.com/jwagner/simplex-noise) | 2.4.0 | Coherent 2-D noise for terrain, independent layers for rocks, water and forest so tiles cluster naturally | [MIT](https://github.com/jwagner/simplex-noise/blob/master/LICENSE) |
+| [rot.js](https://github.com/ondras/rot.js) | 2.2.1 | `FOV.PreciseShadowcasting` for crow line-of-sight, `Path.AStar` so aggro crows path around obstacles | [BSD-2-Clause](https://github.com/ondras/rot.js/blob/master/LICENSE) |
+
+Sound comes from a small synth in `src/legacy/game.js` that reads [ZzFX](https://github.com/KilledByAPixel/ZzFX)-style positional parameter arrays. It is a partial reimplementation rather than the upstream library ([MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE)): the envelope has no decay stage, shapes 4 and 5 are noise instead of ZzFX's waveforms, and seven parameters are accepted but ignored. Every sound was tuned against this implementation, so arrays copied from the ZzFX designer will not sound the same.
 
 ## Design system
 

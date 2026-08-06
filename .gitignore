@@ -3,7 +3,10 @@
 
 # build
 node_modules/
-dist/
+# The built single file is committed so the game stays one download away.
+# Everything else vite emits is not.
+dist/*
+!dist/index.html
 
 # OS artifacts
 Thumbs.db

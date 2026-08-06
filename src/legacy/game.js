@@ -1,5 +1,8 @@
 // Legacy monolith, being dismantled into sim/ and render/ modules.
-// ZzFX synth first (same scope as the game code, as in game.html).
+// The synth comes first, so it shares scope with the sound arrays below.
+
+import SimplexNoise from 'simplex-noise';
+import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
@@ -12,13 +15,23 @@ import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 
-// ZzFX-compatible standalone synth — MIT License
-// API matches https://github.com/KilledByAPixel/ZzFX parameter layout exactly.
+// Standalone synth reading ZzFX-style parameter arrays.
+// https://github.com/KilledByAPixel/ZzFX — MIT License
+//
+// Partial reimplementation, not a drop-in replacement. It takes the same
+// positional layout, but: slide is applied in Hz/s rather than ZzFX's scaled
+// rate, so sweeps are far gentler; shapes 4 and 5 are noise rather than
+// sin(phase**3) and a pulse wave; there is no decay stage between attack and
+// sustain; the 0.3 master volume is not applied; and repeatTime, modulation,
+// bitCrush, delay, decay, tremolo and filter are accepted but ignored.
+// Every sound in this file was tuned by ear against this implementation, so
+// changing it to match upstream would retune the whole game.
+//
 // Parameters (all optional, positional): volume, randomness, frequency, attack,
 //   sustain, release, shape, shapeCurve, slide, deltaSlide, pitchJump,
 //   pitchJumpTime, repeatTime, noise, modulation, bitCrush, delay,
 //   sustainVolume, decay, tremolo, filter
-// shape: 0=sine 1=triangle 2=sawtooth 3=tangent 4=bit-noise 5=lowpass-noise
+// shape: 0=sine 1=triangle 2=sawtooth 3=tangent 4=bit-noise 5=white-noise
 var zzfxX;
 try { zzfxX = new (window.AudioContext || window.webkitAudioContext); } catch(_) {}
 
@@ -279,11 +292,9 @@ function generateMap() {
   mapSeed = (Math.random() * 2 ** 32) >>> 0;
   const rng = mulberry32(mapSeed);
   // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
-  // Fallback when the CDN missed: generateGrid scatters tiles from rng alone.
-  const noise = typeof SimplexNoise !== 'undefined'
-    ? (sn => (x, y) => sn.noise2D(x, y))(new SimplexNoise(rng))
-    : null;
-  tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng, noise));
+  const sn = new SimplexNoise(rng);
+  tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
+    (x, y) => sn.noise2D(x, y)));
 }
 
 function tileAt(wx, wy) {
@@ -308,7 +319,7 @@ const _rotPassable = (x, y) => {
   return tilePassable(tileMap.get(y, x) ?? TILE.ROCK);
 };
 
-const _fov   = new ROT.FOV.PreciseShadowcasting(_rotPassable);
+const _fov   = new FOV.PreciseShadowcasting(_rotPassable);
 const fovMap  = new FovMap(CONFIG.rows, CONFIG.cols,
   (col, row, mark) => _fov.compute(col, row, 14, mark));
 
@@ -328,7 +339,7 @@ function computeAStarPath(fromPx, fromPy, toPx, toPy) {
   const tr = Math.floor(toPy  / CONFIG.tileSize);
   if (fc === tc && fr === tr) return [];
   const path  = [];
-  const astar = new ROT.Path.AStar(tc, tr, _rotPassable, { topology: 8 });
+  const astar = new Path.AStar(tc, tr, _rotPassable, { topology: 8 });
   astar.compute(fc, fr, (x, y) => path.push({
     x: x * CONFIG.tileSize + CONFIG.tileSize / 2,
     y: y * CONFIG.tileSize + CONFIG.tileSize / 2
@@ -1816,10 +1827,10 @@ function updateBossDeath(dt) {
   if (s.timer >= 1.2) { bossDeathSeq = null; boss = null; crows = []; transitionTo('win'); }
 }
 
-// ── AUDIO (ZzFX) ──────────────────────────────────────────────────────────────
-// All sounds defined as ZzFX parameter arrays.
-// Shape values: 0=sine 1=triangle 2=sawtooth 3=tangent 4=bit-crush-noise 5=lowpass-noise
-// playSound() accepts either a ZzFX array or a function (for multi-voice sounds).
+// ── AUDIO ─────────────────────────────────────────────────────────────────────
+// All sounds defined as parameter arrays for the synth at the top of this file,
+// which documents the layout and where it departs from upstream ZzFX.
+// playSound() accepts either an array or a function (for multi-voice sounds).
 
 function playSound(s) {
   if (!CONFIG.audio) return;
@@ -3972,7 +3983,7 @@ function render(t) {
 
 // ── LOOP ──────────────────────────────────────────────────────────────────────
 
-// Frame-time probe, dev only. Enable with game.html?perf=1.
+// Frame-time probe, dev only. Enable with ?perf=1.
 // Tracks update and render cost separately over the last 120 frames.
 const PERF = new URLSearchParams(location.search).has('perf') ? {
   upd: new Float32Array(120), ren: new Float32Array(120), i: 0, n: 0,
