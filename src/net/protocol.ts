@@ -25,7 +25,7 @@ import { Team } from '../sim/team';
  * message repeats it. This keeps the version out of SNAPSHOT, which is sent
  * 20 times a second.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Players in one room. Fixed at 4: 4-player co-op or 2v2 deathmatch. */
 export const MAX_PLAYERS = 4;
@@ -150,7 +150,11 @@ export type ErrorCode =
   | 'ROOM_FULL'
   | 'ROOM_IN_MATCH'
   | 'NOT_IN_ROOM'
-  | 'NOT_HOST';
+  | 'NOT_HOST'
+  // No free room code turned up, or the server is at its room cap
+  | 'SERVER_FULL'
+  // Create or join arrived from a connection that already holds a seat
+  | 'ALREADY_IN_ROOM';
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -238,6 +242,8 @@ const ERROR_CODES: readonly ErrorCode[] = [
   'ROOM_IN_MATCH',
   'NOT_IN_ROOM',
   'NOT_HOST',
+  'SERVER_FULL',
+  'ALREADY_IN_ROOM',
 ];
 
 const ENTITY_KINDS: readonly EntityKind[] = Object.values(EntityKind);
