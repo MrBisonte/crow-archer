@@ -128,8 +128,8 @@ const CONFIG = {
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
   // Knight
-  knightSpearRange: 80, knightSpearCooldown: 1.5,
-  knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
+  knightSpearRange: 80, knightSpearCooldown: 1.0,
+  knightSpearBossDamage: 2, knightSpearSwingDuration: 0.35,
   knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 8,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
@@ -138,8 +138,8 @@ const CONFIG = {
   bossHPKnight: 12,               // knight has high DPS so boss needs more HP
 
   // Wizard
-  wizBoltCooldown: 3.0, wizBoltSpeed: 360, wizBoltLifetime: 3.5,
-  wizBoltDamage: 1, wizFireBoltDamage: 2,
+  wizBoltCooldown: 2.0, wizBoltSpeed: 360, wizBoltLifetime: 3.5,
+  wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
   stormCooldown: 10,
   stormBlastRadius: 450,          // = dynamiteBlastRadius * 5
@@ -184,8 +184,8 @@ const CONFIG = {
  */
 const PACE_PRESETS = {
   calm:      { crowStartCount:  5, crowEscalationInterval: 12, crowMax: 12, crowAggroTimeout:  4, crowPassiveSpeed:  60, maxArrowsInFlight: 3, baseArrows: 10, baseDynamites: 3 },
-  fast:      { crowStartCount:  9, crowEscalationInterval:  6, crowMax: 16, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4 },
-  nightmare: { crowStartCount: 12, crowEscalationInterval:  3, crowMax: 20, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 24, baseDynamites: 5 },
+  fast:      { crowStartCount:  9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4 },
+  nightmare: { crowStartCount: 12, crowEscalationInterval:  2.5, crowMax: 22, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 24, baseDynamites: 5 },
 };
 
 /**
