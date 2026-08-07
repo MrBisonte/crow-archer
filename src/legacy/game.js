@@ -138,7 +138,7 @@ const CONFIG = {
   bossHPKnight: 12,               // knight has high DPS so boss needs more HP
 
   // Wizard
-  wizBoltCooldown: 2.0, wizBoltSpeed: 360, wizBoltLifetime: 3.5,
+  wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
   stormCooldown: 10,
@@ -247,7 +247,7 @@ let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 
 // Knight combat state
-let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false;
+let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false, knightSpearPhase2Hit = false;
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
 
 // Inventory — all resource counts live here, keyed by CONFIG.resources
@@ -691,7 +691,7 @@ events.on(e => {
 function initGame() {
   generateMap();
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
-  knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false;
+  knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; fires = []; floaters = [];
@@ -837,13 +837,14 @@ function updatePlayer(dt) {
   }
 
   // ── Knight spear swing hit-detection ────────────────────────────────────
-  // Use the actual spear-tip position in world space (aimAngle is always world-space).
+  // Double-strike spear swing: two quick hits, one in each half of the animation.
   // Check both the tip and a mid-point so a crow can't slip through the shaft.
   if (selectedChar === 'knight' && knightSpearSwing > 0) {
     knightSpearSwing = Math.max(0, knightSpearSwing - dt);
     const fsActive   = inv.knightFireSwordTimer > 0;
     const baseRange  = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
     const swingProg  = 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration;
+    const phase2     = swingProg >= 0.5;  // second half of swing triggers phase 2
     const thrustReach = Math.sin(Math.min(swingProg, 1) * Math.PI) * 22;
     const tipDist    = baseRange + thrustReach;
     const ang        = player.aimAngle;             // always world-space, no flip needed
@@ -861,9 +862,16 @@ function updatePlayer(dt) {
         events.emit({ type: 'MELEE_HIT', x: c.x, y: c.y, kind: 'spear', fire: fsActive });
       }
     }
-    if (!knightSpearBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+    // Boss: hit once in first half (phase 1), reset and hit again in second half (phase 2)
+    const canHitBoss = boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
         (dist2(tipX, tipY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2 ||
-         dist2(midX, midY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2)) {
+         dist2(midX, midY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2);
+
+    if (phase2 && knightSpearPhase2Hit === false && canHitBoss) {
+      knightSpearPhase2Hit = true;
+      const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
+      damageBoss(dmg, player.x, player.y, 'spear', 0.15);
+    } else if (!phase2 && !knightSpearBossHit && canHitBoss) {
       knightSpearBossHit = true;
       const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
       damageBoss(dmg, player.x, player.y, 'spear', 0.2);
