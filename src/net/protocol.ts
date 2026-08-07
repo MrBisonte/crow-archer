@@ -71,6 +71,15 @@ export interface PlayerSlot {
   team: PlayerTeam;
 }
 
+/** The current room's state as seen by the player. */
+export interface RoomView {
+  code: RoomCode;
+  mode: GameMode;
+  host: PlayerId;
+  slots: PlayerSlot[];
+  you: PlayerId;  // which slot this client holds
+}
+
 // ---------------------------------------------------------------------------
 // Match
 // ---------------------------------------------------------------------------
