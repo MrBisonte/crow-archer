@@ -1,0 +1,156 @@
+/**
+ * Pure state machine for the lobby. Input: current state + an action. Output:
+ * new state + messages to send to the server. No I/O, no clock, no randomness.
+ */
+
+import type { CharacterKind, GameMode, RoomCode, RoomView } from '../net/protocol';
+import type { ClientMessage } from '../net/protocol';
+
+/** Which screen the lobby is showing. */
+export type LobbyScreen = 'multiplayer' | 'host_join' | 'lobby';
+
+/** The user's readiness on this device. Not sent until the screen confirms it. */
+export type UserReadiness = 'not_ready' | 'pending_ready' | 'ready';
+
+/** Client-side lobby state. All transitions are pure; server state rides along. */
+export interface LobbyState {
+  screen: LobbyScreen;
+  roomCode: RoomCode | null;
+  userSlot: number | null;          // which slot (0-3) this client occupies
+  userCharacter: CharacterKind;     // current pick (archer|wizard|knight)
+  userReadiness: UserReadiness;
+  roomView: RoomView | null;        // current server state (null until join/create succeeds)
+  error: string | null;             // user-facing error message
+}
+
+/** Actions the user can take. */
+export type LobbyAction =
+  | { type: 'CLICK_HOST' }
+  | { type: 'CLICK_JOIN' }
+  | { type: 'ENTER_CODE'; code: RoomCode }
+  | { type: 'PICK_CHARACTER'; char: CharacterKind }
+  | { type: 'TOGGLE_READY' }
+  | { type: 'SET_MODE'; mode: GameMode }
+  | { type: 'LEAVE_ROOM' }
+  | { type: 'RECV_ROOM_STATE'; view: RoomView }
+  | { type: 'RECV_ERROR'; code: string; message: string };
+
+/** What to send to the server. */
+export type LobbyOutbound =
+  | { type: 'CREATE_ROOM' }
+  | { type: 'JOIN_ROOM'; code: RoomCode }
+  | { type: 'SET_CHARACTER'; character: CharacterKind }
+  | { type: 'SET_READY'; ready: boolean }
+  | { type: 'SET_MODE'; mode: GameMode }
+  | { type: 'LEAVE_ROOM' };
+
+/** Initial state: at the main menu. */
+export function initialLobbyState(): LobbyState {
+  return {
+    screen: 'multiplayer',
+    roomCode: null,
+    userSlot: null,
+    userCharacter: 'archer',
+    userReadiness: 'not_ready',
+    roomView: null,
+    error: null,
+  };
+}
+
+/**
+ * Pure state transition. Returns the new state and any messages that should be
+ * sent to the server.
+ */
+export function transitionLobby(
+  state: LobbyState,
+  action: LobbyAction,
+): { state: LobbyState; send: LobbyOutbound[] } {
+  const send: LobbyOutbound[] = [];
+
+  switch (action.type) {
+    case 'CLICK_HOST':
+      return {
+        state: { ...state, screen: 'lobby', roomCode: 'PENDING' as RoomCode },
+        send: [{ type: 'CREATE_ROOM' }],
+      };
+
+    case 'CLICK_JOIN':
+      return { state: { ...state, screen: 'host_join' }, send: [] };
+
+    case 'ENTER_CODE': {
+      const code = action.code.toUpperCase();
+      return {
+        state: { ...state, roomCode: code },
+        send: [{ type: 'JOIN_ROOM', code }],
+      };
+    }
+
+    case 'PICK_CHARACTER': {
+      if (state.screen !== 'lobby' || !state.roomView) return { state, send: [] };
+      return {
+        state: { ...state, userCharacter: action.char },
+        send: [{ type: 'SET_CHARACTER', character: action.char }],
+      };
+    }
+
+    case 'TOGGLE_READY': {
+      if (state.screen !== 'lobby' || !state.roomView) return { state, send: [] };
+      // Toggle between ready and not_ready. Cycle through pending_ready in between.
+      const nextReady =
+        state.userReadiness === 'not_ready' ? 'pending_ready' : 'not_ready';
+      const shouldReady = nextReady === 'pending_ready';
+      return {
+        state: { ...state, userReadiness: nextReady },
+        send: [{ type: 'SET_READY', ready: shouldReady }],
+      };
+    }
+
+    case 'SET_MODE': {
+      if (state.screen !== 'lobby' || !state.roomView) return { state, send: [] };
+      // Only host can change mode; others ignore
+      if (state.userSlot !== state.roomView.host) return { state, send: [] };
+      return {
+        state,
+        send: [{ type: 'SET_MODE', mode: action.mode }],
+      };
+    }
+
+    case 'LEAVE_ROOM':
+      return {
+        state: { ...initialLobbyState() },
+        send: state.screen === 'lobby' ? [{ type: 'LEAVE_ROOM' }] : [],
+      };
+
+    case 'RECV_ROOM_STATE': {
+      const view = action.view;
+      // `you` from the server tells us which slot we are
+      const userSlot = view.you;
+      const mySlot = view.slots[userSlot] || null;
+      return {
+        state: {
+          ...state,
+          screen: 'lobby',
+          roomCode: view.code,
+          userSlot,
+          userCharacter: mySlot?.character ?? state.userCharacter,
+          userReadiness: mySlot?.ready ? 'ready' : 'not_ready',
+          roomView: view,
+          error: null,
+        },
+        send: [],
+      };
+    }
+
+    case 'RECV_ERROR': {
+      const errorText = action.message || action.code;
+      // Some errors kick you back to the main menu
+      if (['ROOM_NOT_FOUND', 'ROOM_FULL', 'SERVER_FULL'].includes(action.code)) {
+        return {
+          state: { ...initialLobbyState(), error: errorText },
+          send: [],
+        };
+      }
+      return { state: { ...state, error: errorText }, send: [] };
+    }
+  }
+}
