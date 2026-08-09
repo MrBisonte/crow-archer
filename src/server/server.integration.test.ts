@@ -11,11 +11,12 @@ import { Team } from '../sim/team';
 import {
   MAX_PLAYERS,
   PROTOCOL_VERSION,
+  WS_PATH,
   parseServerMessage,
   type ClientMessage,
   type ServerMessage,
 } from '../net/protocol';
-import { startServer, type RunningServer } from './index';
+import { HEALTH_PATH, startServer, type RunningServer } from './index';
 
 /** A test client that queues what arrives, so a test can await the next message. */
 class Client {
@@ -34,7 +35,7 @@ class Client {
   }
 
   static connect(port: number): Promise<Client> {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${WS_PATH}`);
     const client = new Client(socket);
     return new Promise((resolve, reject) => {
       socket.on('open', () => resolve(client));
@@ -337,5 +338,73 @@ describe('lobby server over websockets', () => {
     expect(afterDrop.host).toBe(1);
     expect(afterDrop.you).toBe(1);
     expect(afterDrop.slots).toHaveLength(1);
+  });
+});
+
+describe('serving the client', () => {
+  const PAGE = '<!doctype html><title>crow archer</title>';
+  let server: RunningServer;
+
+  const get = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${server.port}${path}`);
+    return {
+      status: res.status,
+      contentType: res.headers.get('content-type') ?? '',
+      body: await res.text(),
+    };
+  };
+
+  beforeEach(async () => {
+    server = await startServer({ port: 0, clientPage: { read: async () => PAGE } });
+  });
+
+  afterEach(async () => { await server.close(); });
+
+  it('serves the page at the root, so one URL is the whole deployment', async () => {
+    const res = await get('/');
+    expect(res.status).toBe(200);
+    expect(res.contentType).toContain('text/html');
+    expect(res.body).toBe(PAGE);
+  });
+
+  it('serves the page at /index.html, which is what a copied link often has', async () => {
+    expect(await get('/index.html')).toMatchObject({ status: 200, body: PAGE });
+  });
+
+  it('ignores a query string, since ?server= and ?name= arrive on the page URL', async () => {
+    expect(await get('/?name=alex')).toMatchObject({ status: 200, body: PAGE });
+  });
+
+  it('answers the health check a host polls to decide the process is up', async () => {
+    expect(await get(HEALTH_PATH)).toMatchObject({ status: 200, body: 'ok' });
+  });
+
+  it('has nothing at any other path', async () => {
+    expect((await get('/etc/passwd')).status).toBe(404);
+  });
+
+  it('serves sockets even with no build to hand out', async () => {
+    const bare = await startServer({ port: 0, clientPage: { read: async () => null } });
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/`);
+      expect(res.status).toBe(503);
+      const socket = new WebSocket(`ws://127.0.0.1:${bare.port}${WS_PATH}`);
+      await new Promise<void>((resolve, reject) => {
+        socket.on('open', () => resolve());
+        socket.on('error', reject);
+      });
+      socket.close();
+    } finally {
+      await bare.close();
+    }
+  });
+
+  it('offers no upgrade off the socket path, so the page route stays a page route', async () => {
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/`);
+    const failure = await new Promise<Error>((resolve) => {
+      socket.on('error', resolve);
+      socket.on('open', () => resolve(new Error('the server upgraded a page request')));
+    });
+    expect(failure.message).not.toContain('upgraded');
   });
 });

@@ -11,12 +11,10 @@
  */
 
 import type { PlayerStart } from '../net/protocol';
+import { defaultServerUrl } from '../net/server-url';
 import { WsTransport } from '../net/ws-transport';
 import { LobbyController } from './lobby-controller';
 import { MatchView } from './match-view';
-
-/** Where the lobby server lives when the page does not say otherwise. */
-const DEFAULT_SERVER = 'ws://127.0.0.1:8082';
 
 /** Remembered display name. Per-profile naming is a later phase. */
 const NAME_KEY = 'crowArcher.playerName';
@@ -79,7 +77,7 @@ export class MultiplayerSession {
   /** Opens the socket. Safe to call once per entry to the screen. */
   async open(): Promise<void> {
     const params = new URLSearchParams(location.search);
-    const url = params.get('server') ?? DEFAULT_SERVER;
+    const url = params.get('server') ?? defaultServerUrl(location);
     const name =
       params.get('name') ?? localStorage.getItem(NAME_KEY) ?? 'PLAYER';
     localStorage.setItem(NAME_KEY, name);

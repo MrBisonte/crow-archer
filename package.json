@@ -7,6 +7,8 @@
     "dev": "vite",
     "server": "tsx src/server/index.ts",
     "build": "vite build",
+    "build:server": "vite build --config vite.config.server.ts",
+    "start": "node dist-server/index.js",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

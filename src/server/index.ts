@@ -3,19 +3,26 @@
  * socket is: it assigns each one a connection id, hands frames to Lobby, and
  * writes back whatever Lobby says to send.
  *
+ * It also serves the built client, on the same origin as the socket. One
+ * process on one URL is the whole deployment, and it is what lets the client
+ * derive the server's address from the page it was loaded from instead of
+ * having one baked into the bundle at build time.
+ *
  * All lobby behaviour lives in lobby.ts and room.ts, which have no I/O and are
  * covered by unit tests. Keep this file thin enough that there is nothing here
  * worth testing through a real port.
  */
 
+import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { PlayerId } from '../net/protocol';
+import { WS_PATH, type PlayerId } from '../net/protocol';
 import type { InputCommand } from '../sim/input';
 import { MovementWorld } from '../sim/movement-world';
 import type { WorldFactory } from '../sim/world';
+import { FileClientPage, type ClientPage } from './client-page';
 import { Lobby, randomRoomCode, type Outbound } from './lobby';
 import { RoomStore, type ConnectionId } from './room';
 import { Match } from './match';
@@ -35,7 +42,15 @@ export interface ServerOptions {
    * new implementation rather than an edit in here.
    */
   makeWorld?: WorldFactory;
+  /**
+   * The built client to serve. Injected for the same reason as the world: a
+   * test can hand over a page without a build on disk to point at.
+   */
+  clientPage?: ClientPage;
 }
+
+/** The path a load balancer polls to decide the process is alive. */
+export const HEALTH_PATH = '/healthz';
 
 /**
  * Narrows a decoded frame to an INPUT before the lobby sees it. Full validation
@@ -85,7 +100,34 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     newSeed: () => (Math.random() * 0x100000000) >>> 0,
   });
 
-  const wss = new WebSocketServer({ port: options.port, maxPayload: MAX_FRAME_BYTES });
+  const clientPage = options.clientPage ?? new FileClientPage();
+
+  // Three routes, so they are read here rather than routed through a table
+  // that would have one entry per line and a lookup between them.
+  const http = createServer((req, res) => {
+    const path = (req.url ?? '/').split('?')[0];
+    if (path === HEALTH_PATH) {
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
+      return;
+    }
+    if (path !== '/' && path !== '/index.html') {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
+      return;
+    }
+    void clientPage.read().then((html) => {
+      if (html === null) {
+        // Sockets still work. Saying so beats a bare 404 for the one person
+        // who will ever see this, who is running a server with no build.
+        res.writeHead(503, { 'content-type': 'text/plain' }).end('no client build to serve');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);
+    });
+  });
+
+  // Mounted on the HTTP server and on one path, so the same origin carries the
+  // page and the socket. A request to any other path is not offered an upgrade.
+  const wss = new WebSocketServer({ server: http, path: WS_PATH, maxPayload: MAX_FRAME_BYTES });
   const sockets = new Map<ConnectionId, WebSocket>();
   let nextId: ConnectionId = 0;
 
@@ -198,12 +240,15 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
       matches.clear();
       for (const socket of sockets.values()) socket.terminate();
       sockets.clear();
-      wss.close(() => resolve());
+      // The HTTP server owns the port now, so it is the one that has to give it
+      // back. Closing only the socket server would leave the listener open and
+      // the next test run would find the port taken.
+      wss.close(() => http.close(() => resolve()));
     });
 
   return new Promise((resolve) => {
-    wss.on('listening', () => {
-      const bound = wss.address();
+    http.listen(options.port, () => {
+      const bound = http.address();
       resolve({
         port: typeof bound === 'object' && bound ? bound.port : options.port,
         activeMatches: () => matches.size,
@@ -217,8 +262,10 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
 // pathToFileURL rather than string building: a Windows path becomes
 // file:///C:/... with three slashes, which no hand-rolled template gets right.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // PORT is what every host this deploys to assigns, so it is read and not
+  // configured. 8082 is the local default the client falls back to.
   const port = Number(process.env['PORT'] ?? 8082);
   void startServer({ port }).then((server) => {
-    process.stdout.write(`crow-archer lobby listening on ${server.port}\n`);
+    process.stdout.write(`crow-archer on http://localhost:${server.port} (socket ${WS_PATH})\n`);
   });
 }

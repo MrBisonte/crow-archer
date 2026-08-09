@@ -36,6 +36,15 @@ export const MAX_NAME_LENGTH = 16;
 /** Room codes are 4 uppercase letters, short enough to read aloud. */
 export const ROOM_CODE_PATTERN = /^[A-Z]{4}$/;
 
+/**
+ * Path the socket lives on, so the same origin can also serve the page.
+ *
+ * It is here rather than in the server because three places must agree on it:
+ * the server mounts it, the client derives its URL from it, and the dev proxy
+ * forwards it from the Vite port to the server port.
+ */
+export const WS_PATH = '/ws';
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------

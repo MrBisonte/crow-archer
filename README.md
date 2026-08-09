@@ -39,6 +39,34 @@ npm run dev
 
 `npm run build` regenerates `dist/index.html`. The committed copy is built from the current `master`.
 
+## Multiplayer
+
+Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
+
+Running it locally takes both halves:
+
+```
+npm run server
+npm run dev
+```
+
+The dev server proxies the socket through to the game server, so `http://localhost:8081` reaches both.
+
+The client talks to whichever origin served the page, so nothing is configured at build time. A page opened straight from disk has no origin and falls back to `ws://127.0.0.1:8082/ws`. `?server=wss://host/ws` overrides either.
+
+### Deploying
+
+One image builds the client and the server and serves both from one port:
+
+```
+docker build -t crow-archer .
+docker run -p 8082:8082 crow-archer
+```
+
+It reads `PORT` and answers `/healthz`, which is all any host taking a Dockerfile asks for. Without Docker, `npm run build && npm run build:server && npm start` does the same thing.
+
+Run a single instance. Rooms live in the process's memory, so a second instance would hold rooms the first one cannot see and a player would join a code their friend is not in.
+
 ## Controls
 
 | Action | Default |
@@ -129,7 +157,7 @@ All sound is synthesized at runtime, no audio files. Sounds initialize on first 
 
 ## Dependencies
 
-Two npm packages, bundled into the build. The ZzFX-compatible synth is written into the source rather than installed.
+Two npm packages, bundled into the build. The ZzFX-compatible synth is written into the source rather than installed. The server adds [`ws`](https://github.com/websockets/ws) ([MIT](https://github.com/websockets/ws/blob/master/LICENSE)), which the client build does not include.
 
 | Library | Version | Purpose | License |
 |---------|---------|---------|---------|

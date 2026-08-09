@@ -1,0 +1,10 @@
+# Both build outputs are produced inside the image, so a stale local copy must
+# not be shipped in place of one built from the source being deployed.
+dist
+dist-server
+node_modules
+
+.git
+.claude
+.design-system
+media
