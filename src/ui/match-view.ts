@@ -50,8 +50,16 @@ const TICK_MS = 1000 * DT;
  */
 const MAX_FRAME_MS = 100;
 
-/** How far behind the newest snapshot remote bodies are drawn. */
-const INTERP_DELAY_MS = 100;
+/**
+ * How far behind the newest snapshot remote bodies are drawn.
+ *
+ * Two snapshot intervals would be 100 ms, and that is the usual answer, but the
+ * server does not emit them 50 ms apart: measured, the gaps ran to 63 ms,
+ * because Windows wakes a timer on a 15.6 ms granularity and the snapshot
+ * inherits it. This is that plus a margin, and it measured no stall in an
+ * arrow's flight where 100 ms occasionally did.
+ */
+const INTERP_DELAY_MS = 125;
 
 /** Team colours, so two sides read apart at a glance. */
 const TEAM_FILL = ['#39FF14', '#39E0FF'] as const;
@@ -110,7 +118,12 @@ export class MatchView {
       self: options.you,
       dt: DT,
     });
-    this.#interpolator = new Interpolator({ delayMs: INTERP_DELAY_MS });
+    this.#interpolator = new Interpolator({
+      delayMs: INTERP_DELAY_MS,
+      // The same tick length the server steps by, so a snapshot's tick lands on
+      // the timeline at the moment the server actually simulated it.
+      msPerTick: TICK_MS,
+    });
   }
 
   /** The most recent snapshot applied, for the dev hook. */
@@ -126,6 +139,25 @@ export class MatchView {
   /** Where this client draws itself, and where its simulation says it is. */
   get predicted() {
     return { drawn: this.#predictor.self(), settled: this.#predictor.settled() };
+  }
+
+  /**
+   * Everything remote as it is being drawn this instant, interpolated.
+   *
+   * The snapshot positions are already readable, and they are not what is on
+   * screen. Smoothness is a property of these, so it cannot be measured without
+   * them.
+   */
+  get interpolated() {
+    return this.#interpolator.at(this.#now());
+  }
+
+  /**
+   * How far behind remote bodies are currently drawn. It moves with the
+   * connection, so it is the one number that says how jittery this link is.
+   */
+  get interpDelayMs(): number {
+    return this.#interpolator.delayMs();
   }
 
   /** Takes a snapshot off the wire, correcting the prediction against it. */

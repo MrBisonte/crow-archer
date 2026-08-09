@@ -76,6 +76,10 @@ export class MultiplayerSession {
       // number that showed the client and server were running at different
       // rates, so it is worth being able to read without a debugger.
       predicted: this.#match?.predicted ?? null,
+      // What is actually on screen for everyone else, as opposed to what the
+      // last snapshot said. Smoothness lives here.
+      interpolated: this.#match?.interpolated ?? null,
+      interpDelayMs: this.#match?.interpDelayMs ?? null,
     };
   }
 
