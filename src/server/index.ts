@@ -14,6 +14,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import type { PlayerId } from '../net/protocol';
 import type { InputCommand } from '../sim/input';
+import { MovementWorld } from '../sim/movement-world';
+import type { WorldFactory } from '../sim/world';
 import { Lobby, randomRoomCode, type Outbound } from './lobby';
 import { RoomStore, type ConnectionId } from './room';
 import { Match } from './match';
@@ -27,6 +29,12 @@ const MAX_FRAME_BYTES = 8 * 1024;
 export interface ServerOptions {
   port: number;
   maxRooms?: number;
+  /**
+   * Builds the simulation for a starting match. Injected so a test can run the
+   * server against a world it controls, and so replacing the world later is a
+   * new implementation rather than an edit in here.
+   */
+  makeWorld?: WorldFactory;
 }
 
 /**
@@ -65,6 +73,9 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     newCode: () => randomRoomCode(),
     maxRooms: options.maxRooms ?? MAX_ROOMS,
   });
+  // Only players move so far; crows, the boss and tiles are later slices
+  const makeWorld: WorldFactory = options.makeWorld ?? ((_seed, starts) => new MovementWorld(starts));
+
   const lobby = new Lobby({
     rooms,
     now: () => Date.now(),
@@ -92,10 +103,13 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
       const socket = sockets.get(to);
       if (socket?.readyState === socket?.OPEN) socket?.send(JSON.stringify(message));
 
+      // The message carries the seed and the spawn list, which is exactly what
+      // a world is built from, so the match is created from what was sent
+      // rather than from a second lookup that could disagree with it.
       if (message.type === 'MATCH_START') {
         const view = rooms.viewFor(to);
         if (view && !matches.has(view.code)) {
-          matches.set(view.code, new Match(view));
+          matches.set(view.code, new Match(view, makeWorld(message.seed, message.starts)));
           startTickLoop();
         }
       }

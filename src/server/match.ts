@@ -6,12 +6,14 @@
  * The entry point owns the interval and calls step() at 60 Hz, which keeps the
  * tick rate testable without waiting in real time.
  *
- * The simulation itself is not here yet. Extracting world state out of the
- * legacy monolith is the next slice; until then a snapshot carries the tick and
- * the input acks, which is enough to prove the loop and the wire format.
+ * The simulation arrives as a World, which Match is handed rather than reaches
+ * into. That is what lets the netcode be exercised against a world small enough
+ * to reason about, and what lets the real one replace it without touching this
+ * file.
  */
 
 import type { InputCommand } from '../sim/input';
+import type { World } from '../sim/world';
 import type { InputAck, PlayerId, RoomView, Snapshot } from '../net/protocol';
 
 /** Server ticks per second. The client predicts against the same rate. */
@@ -23,14 +25,19 @@ export const TICK_HZ = 60;
  */
 export const TICKS_PER_SNAPSHOT = 3;
 
+/** Seconds per tick, the fixed step every world is advanced by. */
+export const FIXED_DT = 1 / TICK_HZ;
+
 export class Match {
   readonly #room: RoomView;
+  readonly #world: World;
   readonly #latestInput = new Map<PlayerId, InputCommand>();
   #tick = 0;
   #ticksSinceSnapshot = 0;
 
-  constructor(room: RoomView) {
+  constructor(room: RoomView, world: World) {
     this.#room = room;
+    this.#world = world;
   }
 
   get code() {
@@ -56,14 +63,19 @@ export class Match {
   /**
    * Advances one tick. Returns a snapshot on the ticks that are due to
    * broadcast, and null on the ticks in between.
+   *
+   * A seat with nothing pending is stepped with its last command still held.
+   * Holding a key sends one command, not one per tick, so dropping to no input
+   * between packets would stutter every player who is simply walking.
    */
   step(): Snapshot | null {
+    this.#world.step(FIXED_DT, this.#latestInput);
     this.#tick++;
     this.#ticksSinceSnapshot++;
     if (this.#ticksSinceSnapshot < TICKS_PER_SNAPSHOT) return null;
 
     this.#ticksSinceSnapshot = 0;
-    return { tick: this.#tick, entities: [], acks: this.#acks() };
+    return { tick: this.#tick, entities: this.#world.snapshot(), acks: this.#acks() };
   }
 
   /** Phase 2 has no end condition yet; the room plays until everyone leaves. */

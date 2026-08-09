@@ -10,8 +10,10 @@
  * It owns the socket, so leaving the screen closes it.
  */
 
+import type { PlayerStart } from '../net/protocol';
 import { WsTransport } from '../net/ws-transport';
 import { LobbyController } from './lobby-controller';
+import { MatchView } from './match-view';
 
 /** Where the lobby server lives when the page does not say otherwise. */
 const DEFAULT_SERVER = 'ws://127.0.0.1:8082';
@@ -26,6 +28,7 @@ export class MultiplayerSession {
   readonly #canvas: HTMLCanvasElement;
   #transport: WsTransport | null = null;
   #controller: LobbyController | null = null;
+  #match: MatchView | null = null;
   #phase: SessionPhase = 'connecting';
   #failure = '';
   /** Keys held on the previous frame, so a hold is not read as a new press. */
@@ -59,6 +62,7 @@ export class MultiplayerSession {
       failure: this.#failure,
       screen: lobby?.screen ?? null,
       code: lobby?.roomCode ?? null,
+      typed: this.#controller?.typedCode ?? '',
       slot: lobby?.userSlot ?? null,
       character: lobby?.userCharacter ?? null,
       readiness: lobby?.userReadiness ?? null,
@@ -66,6 +70,8 @@ export class MultiplayerSession {
       players: lobby?.roomView?.slots.length ?? 0,
       error: lobby?.error ?? null,
       match: this.matchStart(),
+      tick: this.#match?.latest?.tick ?? null,
+      entities: this.#match?.latest?.entities ?? null,
     };
   }
 
@@ -113,6 +119,18 @@ export class MultiplayerSession {
     }
     if (!this.#controller) return;
 
+    // The controller keeps polling the socket once a match is running, because
+    // that is where snapshots arrive; only drawing and input move to the view.
+    const started = this.#controller.matchStart();
+    if (started && !this.#match) this.#openMatch(started);
+
+    if (this.#match) {
+      this.#controller.poll();                   // socket only; the view draws
+      for (const snap of this.#controller.takeSnapshots()) this.#match.apply(snap);
+      this.#match.frame(keys);
+      return;
+    }
+
     for (const key of Object.keys(keys)) {
       if (!keys[key]) { this.#wasDown.delete(key); continue; }
       if (this.#wasDown.has(key)) continue;      // still held from last frame
@@ -123,11 +141,26 @@ export class MultiplayerSession {
     this.#controller.frame();
   }
 
+  /** Swaps the lobby screens for the match view once the server says play began. */
+  #openMatch(started: { starts: readonly PlayerStart[] }): void {
+    const ctx = this.#canvas.getContext('2d');
+    if (!ctx || !this.#transport) return;
+    this.#match = new MatchView({
+      ctx,
+      canvasW: this.#canvas.width,
+      canvasH: this.#canvas.height,
+      transport: this.#transport,
+      starts: started.starts,
+      you: this.#controller?.state.userSlot ?? 0,
+    });
+  }
+
   /** Closes the socket. Called when the screen is left, however it is left. */
   close(): void {
     this.#transport?.close();
     this.#transport = null;
     this.#controller = null;
+    this.#match = null;
     this.#wasDown.clear();
   }
 

@@ -4,8 +4,7 @@
  * (pure) and the Transport.
  */
 
-import type { CharacterKind } from '../net/protocol';
-import type { ServerMessage } from '../net/protocol';
+import type { CharacterKind, ServerMessage, Snapshot } from '../net/protocol';
 import type { Transport } from '../net/transport';
 import {
   initialLobbyState,
@@ -34,11 +33,18 @@ export class LobbyController {
     this.#canvasH = options.canvas.height;
   }
 
-  /**
-   * Run one frame: poll Transport for messages, render the current screen.
-   * Input is handled separately via handleClick/handleKey.
-   */
+  /** Polls the socket and draws. The lobby's own frame, when it owns the screen. */
   frame(): void {
+    this.poll();
+    this.#render();
+  }
+
+  /**
+   * Drains the socket without drawing. Once a match is running the view owns
+   * the canvas, but snapshots still arrive here, so polling has to continue
+   * independently of rendering.
+   */
+  poll(): void {
     // Process all queued messages from the server
     let msg: ServerMessage | undefined;
     while ((msg = this.#transport.recv())) {
@@ -61,10 +67,12 @@ export class LobbyController {
         }
       } else if (msg.type === 'MATCH_START') {
         this.#matchStart = { seed: msg.seed, mode: msg.mode, starts: msg.starts };
+      } else if (msg.type === 'SNAPSHOT') {
+        // Held for the session to drain: the match view owns drawing them, and
+        // the first snapshots can arrive before it has been built.
+        this.#snapshots.push(msg.snap);
       }
     }
-
-    this.#render();
   }
 
   /**
@@ -167,6 +175,11 @@ export class LobbyController {
     return this.#state;
   }
 
+  /** Room code typed so far on the join screen, before it is submitted. */
+  get typedCode(): string {
+    return this.#codeBuffer;
+  }
+
   /**
    * Has the game started? Once MATCH_START arrives, the harness should hand
    * off to the game. Returns null until then.
@@ -176,6 +189,12 @@ export class LobbyController {
   }
 
   #matchStart: { seed: number; mode: any; starts: any[] } | null = null;
+  readonly #snapshots: Snapshot[] = [];
+
+  /** Snapshots received since the last call, oldest first. Drains the buffer. */
+  takeSnapshots(): Snapshot[] {
+    return this.#snapshots.splice(0, this.#snapshots.length);
+  }
 
   /**
    * Is the lobby still active? Returns false once all activity ceases or if
@@ -208,13 +227,6 @@ export class LobbyController {
     this.#ctx.fillStyle = '#0a0f0a';
     this.#ctx.fillRect(0, 0, this.#canvasW, this.#canvasH);
 
-    // A started match outranks the lobby screens: the room is no longer the
-    // thing on screen once the server has said play has begun.
-    if (this.#matchStart) {
-      this.#renderMatchStartScreen();
-      return;
-    }
-
     if (this.#state.screen === 'multiplayer') {
       this.#renderMultiplayerScreen();
     } else if (this.#state.screen === 'host_join') {
@@ -238,46 +250,6 @@ export class LobbyController {
       x,
       y,
     );
-  }
-
-  /**
-   * What the server dealt out at match start. There is no networked simulation
-   * behind it yet, so this screen reports the deal rather than pretending to
-   * play it: showing the legacy single-player game here would look like working
-   * multiplayer while every client ran its own private world.
-   */
-  #renderMatchStartScreen(): void {
-    const start = this.#matchStart;
-    if (!start) return;
-    const x = this.#canvasW / 2;
-    let y = 120;
-
-    this.#ctx.fillStyle = '#39ff14';
-    this.#ctx.textAlign = 'center';
-    this.#ctx.font = '24px monospace';
-    this.#ctx.fillText('MATCH START', x, y);
-
-    y += 50;
-    this.#ctx.font = '16px monospace';
-    this.#ctx.fillText(`MODE  ${String(start.mode).toUpperCase()}`, x, y);
-    y += 26;
-    // The seed is the whole map: every client builds the same terrain from it
-    this.#ctx.fillText(`SEED  ${(start.seed >>> 0).toString(16).toUpperCase()}`, x, y);
-
-    y += 46;
-    for (const p of start.starts) {
-      this.#ctx.fillText(
-        `P${p.id}  ${String(p.character).toUpperCase().padEnd(8)} TEAM ${p.team}  @ ${p.x},${p.y}`,
-        x,
-        y,
-      );
-      y += 24;
-    }
-
-    y += 40;
-    this.#ctx.fillStyle = '#1a7a08';
-    this.#ctx.font = '12px monospace';
-    this.#ctx.fillText('NETWORKED SIMULATION LANDS IN THE NEXT SLICE', x, y);
   }
 
   #renderMultiplayerScreen(): void {

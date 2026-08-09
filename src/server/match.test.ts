@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { Team } from '../sim/team';
-import type { RoomView } from '../net/protocol';
+import { Button } from '../sim/input';
+import { MovementWorld } from '../sim/movement-world';
+import type { PlayerStart, RoomView } from '../net/protocol';
 import { Match, TICKS_PER_SNAPSHOT } from './match';
 
 const room: RoomView = {
@@ -13,6 +15,13 @@ const room: RoomView = {
     { id: 1, name: 'sam', character: 'wizard', ready: true, team: Team.A },
   ],
 };
+
+const starts: PlayerStart[] = [
+  { id: 0, character: 'archer', team: Team.A, x: 200, y: 200 },
+  { id: 1, character: 'wizard', team: Team.A, x: 400, y: 300 },
+];
+
+const newMatch = () => new Match(room, new MovementWorld(starts));
 
 /** Steps until a snapshot comes back, failing rather than looping forever. */
 function stepToSnapshot(match: Match) {
@@ -26,7 +35,7 @@ function stepToSnapshot(match: Match) {
 describe('Match', () => {
   let match: Match;
 
-  beforeEach(() => { match = new Match(room); });
+  beforeEach(() => { match = newMatch(); });
 
   describe('ticking', () => {
     it('starts at tick zero', () => {
@@ -45,6 +54,37 @@ describe('Match', () => {
     it('counts every tick, not only the broadcast ones', () => {
       for (let i = 0; i < 10; i++) match.step();
       expect(match.tick).toBe(10);
+    });
+  });
+
+  describe('the world reaches the wire', () => {
+    it('puts the world entities in the snapshot', () => {
+      expect(stepToSnapshot(match).entities).toEqual([
+        { id: 0, kind: 0, x: 200, y: 200, hp: 10, state: 0 },
+        { id: 1, kind: 0, x: 400, y: 300, hp: 10, state: 0 },
+      ]);
+    });
+
+    it('moves a player the input asked to move', () => {
+      match.recordInput(0, { seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      const snap = stepToSnapshot(match);
+      expect(snap.entities[0]!.x).toBeGreaterThan(200);
+      expect(snap.entities[1]!.x).toBe(400);          // the other seat sat still
+    });
+
+    it('keeps moving on a held command without a packet per tick', () => {
+      match.recordInput(0, { seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      const first = stepToSnapshot(match).entities[0]!.x;
+      const second = stepToSnapshot(match).entities[0]!.x;
+      expect(second).toBeGreaterThan(first);
+    });
+
+    it('stops when a command with no buttons arrives', () => {
+      match.recordInput(0, { seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      stepToSnapshot(match);
+      match.recordInput(0, { seq: 2, buttons: 0, aimAngle: 0 });
+      const stopped = stepToSnapshot(match).entities[0]!.x;
+      expect(stepToSnapshot(match).entities[0]!.x).toBe(stopped);
     });
   });
 
