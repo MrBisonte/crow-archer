@@ -59,6 +59,8 @@ export class LobbyController {
         if (this.#state.screen === 'host_join') {
           this.#codeBuffer = '';
         }
+      } else if (msg.type === 'MATCH_START') {
+        this.#matchStart = { seed: msg.seed, mode: msg.mode, starts: msg.starts };
       }
     }
 
@@ -161,13 +163,24 @@ export class LobbyController {
   }
 
   /**
+   * Has the game started? Once MATCH_START arrives, the harness should hand
+   * off to the game. Returns null until then.
+   */
+  matchStart(): { seed: number; mode: any; starts: any[] } | null {
+    return this.#matchStart;
+  }
+
+  #matchStart: { seed: number; mode: any; starts: any[] } | null = null;
+
+  /**
    * Is the lobby still active? Returns false once all activity ceases or if
    * the Transport errors.
    */
   isActive(): boolean {
     return (
       this.#transport.state === 'connected' &&
-      (this.#state.screen === 'host_join' || this.#state.screen === 'lobby')
+      (this.#state.screen === 'host_join' || this.#state.screen === 'lobby') &&
+      !this.#matchStart
     );
   }
 
