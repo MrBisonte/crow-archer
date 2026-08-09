@@ -5,8 +5,14 @@
 
 import type { CharacterKind, GameMode, PlayerId, RoomCode, RoomView } from '../net/protocol';
 
-/** Which screen the lobby is showing. */
-export type LobbyScreen = 'multiplayer' | 'host_join' | 'lobby';
+/**
+ * Which screen the lobby is showing.
+ *
+ * 'joining' covers the round trip for both create and join. It exists so the
+ * client never claims to be in a room before the server has put it in one:
+ * you hold a seat when ROOM_STATE says you do, not when you pressed a key.
+ */
+export type LobbyScreen = 'multiplayer' | 'host_join' | 'joining' | 'lobby';
 
 /** The user's readiness on this device. Not sent until the screen confirms it. */
 export type UserReadiness = 'not_ready' | 'pending_ready' | 'ready';
@@ -70,8 +76,10 @@ export function transitionLobby(
 
   switch (action.type) {
     case 'CLICK_HOST':
+      // No room code is invented here. The server picks it, and RECV_ROOM_STATE
+      // is what moves this client onto the lobby screen.
       return {
-        state: { ...state, screen: 'lobby', roomCode: 'PENDING' as RoomCode },
+        state: { ...state, screen: 'joining', roomCode: null, error: null },
         send: [{ type: 'CREATE_ROOM' }],
       };
 
@@ -81,7 +89,7 @@ export function transitionLobby(
     case 'ENTER_CODE': {
       const code = action.code.toUpperCase();
       return {
-        state: { ...state, roomCode: code },
+        state: { ...state, screen: 'joining', roomCode: code, error: null },
         send: [{ type: 'JOIN_ROOM', code }],
       };
     }
@@ -144,12 +152,12 @@ export function transitionLobby(
 
     case 'RECV_ERROR': {
       const errorText = action.message || action.code;
-      // Some errors kick you back to the main menu
-      if (['ROOM_NOT_FOUND', 'ROOM_FULL', 'SERVER_FULL'].includes(action.code)) {
-        return {
-          state: { ...initialLobbyState(), error: errorText },
-          send: [],
-        };
+      // A failed create or join has nowhere to stand, so any error during the
+      // round trip returns to the menu. One rule rather than a list of codes:
+      // ROOM_FULL, ROOM_IN_MATCH and ALREADY_IN_ROOM would all strand the
+      // player on a screen for a seat they never got.
+      if (state.screen === 'joining') {
+        return { state: { ...initialLobbyState(), error: errorText }, send: [] };
       }
       return { state: { ...state, error: errorText }, send: [] };
     }

@@ -18,9 +18,9 @@ describe('Phase 1 E2E: lobby state flow', () => {
     // Step 1: At main menu
     expect(state.screen).toBe('multiplayer');
 
-    // Step 2: Click host
+    // Step 2: Click host. The seat is not ours until the server says so.
     ({ state, send } = transitionLobby(state, { type: 'CLICK_HOST' }));
-    expect(state.screen).toBe('lobby');
+    expect(state.screen).toBe('joining');
     expect(send).toContainEqual({ type: 'CREATE_ROOM' });
 
     // Step 3: Server sends room state (room QRTZ created, this player is host in slot 0)

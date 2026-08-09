@@ -16,11 +16,41 @@ describe('Lobby state machine', () => {
       expect(state.error).toBeNull();
     });
 
-    it('transitions to lobby on click host, sends CREATE_ROOM', () => {
+    it('waits on the server after click host rather than claiming a room', () => {
       const state = initialLobbyState();
       const { state: next, send } = transitionLobby(state, { type: 'CLICK_HOST' });
-      expect(next.screen).toBe('lobby');
+      expect(next.screen).toBe('joining');
+      expect(next.roomCode).toBeNull();     // the server names the room, not us
       expect(send).toEqual([{ type: 'CREATE_ROOM' }]);
+    });
+
+    it('reaches the lobby only when the server sends a seat', () => {
+      let { state } = transitionLobby(initialLobbyState(), { type: 'CLICK_HOST' });
+      ({ state } = transitionLobby(state, {
+        type: 'RECV_ROOM_STATE',
+        view: {
+          code: 'QRTZ',
+          mode: 'coop',
+          host: 0,
+          you: 0,
+          slots: [{ id: 0, name: 'alex', character: 'archer', ready: false, team: Team.A }],
+        },
+      }));
+      expect(state.screen).toBe('lobby');
+      expect(state.roomCode).toBe('QRTZ');
+    });
+
+    it('returns to the menu when a join fails, whatever the code', () => {
+      for (const code of ['ROOM_NOT_FOUND', 'ROOM_FULL', 'ROOM_IN_MATCH', 'ALREADY_IN_ROOM']) {
+        let { state } = transitionLobby(initialLobbyState(), {
+          type: 'ENTER_CODE',
+          code: 'QRTZ',
+        });
+        expect(state.screen).toBe('joining');
+        ({ state } = transitionLobby(state, { type: 'RECV_ERROR', code, message: `nope: ${code}` }));
+        expect(state.screen).toBe('multiplayer');
+        expect(state.error).toBe(`nope: ${code}`);
+      }
     });
 
     it('transitions to host_join on click join', () => {

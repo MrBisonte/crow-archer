@@ -162,6 +162,11 @@ export class LobbyController {
     return false;
   }
 
+  /** Read-only view of the lobby, for the dev hook and for tests. */
+  get state(): Readonly<LobbyState> {
+    return this.#state;
+  }
+
   /**
    * Has the game started? Once MATCH_START arrives, the harness should hand
    * off to the game. Returns null until then.
@@ -203,14 +208,76 @@ export class LobbyController {
     this.#ctx.fillStyle = '#0a0f0a';
     this.#ctx.fillRect(0, 0, this.#canvasW, this.#canvasH);
 
-    // Draw based on screen
+    // A started match outranks the lobby screens: the room is no longer the
+    // thing on screen once the server has said play has begun.
+    if (this.#matchStart) {
+      this.#renderMatchStartScreen();
+      return;
+    }
+
     if (this.#state.screen === 'multiplayer') {
       this.#renderMultiplayerScreen();
     } else if (this.#state.screen === 'host_join') {
       this.#renderHostJoinScreen();
+    } else if (this.#state.screen === 'joining') {
+      this.#renderJoiningScreen();
     } else if (this.#state.screen === 'lobby') {
       this.#renderLobbyScreen();
     }
+  }
+
+  /** Waiting on the server to hand out a seat. */
+  #renderJoiningScreen(): void {
+    const x = this.#canvasW / 2;
+    const y = this.#canvasH / 2;
+    this.#ctx.fillStyle = '#39ff14';
+    this.#ctx.font = '20px monospace';
+    this.#ctx.textAlign = 'center';
+    this.#ctx.fillText(
+      this.#state.roomCode ? `JOINING ${this.#state.roomCode}` : 'CREATING ROOM',
+      x,
+      y,
+    );
+  }
+
+  /**
+   * What the server dealt out at match start. There is no networked simulation
+   * behind it yet, so this screen reports the deal rather than pretending to
+   * play it: showing the legacy single-player game here would look like working
+   * multiplayer while every client ran its own private world.
+   */
+  #renderMatchStartScreen(): void {
+    const start = this.#matchStart;
+    if (!start) return;
+    const x = this.#canvasW / 2;
+    let y = 120;
+
+    this.#ctx.fillStyle = '#39ff14';
+    this.#ctx.textAlign = 'center';
+    this.#ctx.font = '24px monospace';
+    this.#ctx.fillText('MATCH START', x, y);
+
+    y += 50;
+    this.#ctx.font = '16px monospace';
+    this.#ctx.fillText(`MODE  ${String(start.mode).toUpperCase()}`, x, y);
+    y += 26;
+    // The seed is the whole map: every client builds the same terrain from it
+    this.#ctx.fillText(`SEED  ${(start.seed >>> 0).toString(16).toUpperCase()}`, x, y);
+
+    y += 46;
+    for (const p of start.starts) {
+      this.#ctx.fillText(
+        `P${p.id}  ${String(p.character).toUpperCase().padEnd(8)} TEAM ${p.team}  @ ${p.x},${p.y}`,
+        x,
+        y,
+      );
+      y += 24;
+    }
+
+    y += 40;
+    this.#ctx.fillStyle = '#1a7a08';
+    this.#ctx.font = '12px monospace';
+    this.#ctx.fillText('NETWORKED SIMULATION LANDS IN THE NEXT SLICE', x, y);
   }
 
   #renderMultiplayerScreen(): void {
@@ -223,6 +290,13 @@ export class LobbyController {
     this.#ctx.font = '16px monospace';
     this.#ctx.fillText('[H] HOST', x, y);
     this.#ctx.fillText('[J] JOIN', x, y + 40);
+
+    // A failed create or join lands back here, so this is where it is reported
+    if (this.#state.error) {
+      this.#ctx.fillStyle = '#ff1f1f';
+      this.#ctx.font = '12px monospace';
+      this.#ctx.fillText(this.#state.error.toUpperCase(), x, y + 90);
+    }
   }
 
   #renderHostJoinScreen(): void {

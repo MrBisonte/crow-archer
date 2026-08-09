@@ -14,6 +14,7 @@ import { EventBus } from '../sim/events';
 import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
+import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
 // https://github.com/KilledByAPixel/ZzFX — MIT License
@@ -221,7 +222,7 @@ const HUD_ICON_LIMIT = 12;
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
-// appState: menu | controls | playing | paused | boss_entrance | boss_fight | win | gameover
+// appState: menu | multiplayer | controls | playing | paused | boss_entrance | boss_fight | win | gameover
 let appState = 'menu', controlsFrom = 'menu', pausedFrom = 'playing';
 
 let gameMode = 'brawl'; // 'brawl' | 'waves'  — persists across restarts
@@ -230,7 +231,29 @@ let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
 let waveAnnounce = 0;            // countdown timer for wave banner display
 let menuSelection = 0;
-const menuOptions = ['BRAWL', 'WAVES', 'CONTROLS'];
+
+/**
+ * The title-screen menu, in one place. Order here is the order on screen, the
+ * order the arrow keys walk, and the index menuSelection holds; the renderer
+ * and the input handler both read this table, so adding an entry is one row
+ * rather than an edit in four places that have to agree on an index.
+ *
+ * `section` splits the list either side of the separator rule: 'mode' entries
+ * start a game, 'util' entries do not.
+ */
+const MENU_ENTRIES = [
+  { key: 'B', label: 'BRAWL', section: 'mode',
+    sub: 'hunt 10 crows  ·  boss fight  ·  scarce drops',
+    run: () => { gameMode = 'brawl'; transitionTo('charselect'); } },
+  { key: 'W', label: 'WAVES', section: 'mode',
+    sub: 'survive escalating swarms  ·  endless run',
+    run: () => { gameMode = 'waves'; transitionTo('charselect'); } },
+  { key: 'M', label: 'MULTIPLAYER', section: 'mode',
+    sub: 'up to 4 players  ·  co-op or 2v2  ·  needs a server',
+    run: () => transitionTo('multiplayer') },
+  { key: 'C', label: 'CONTROLS', section: 'util',
+    run: () => transitionTo('controls') },
+];
 let controlsSelection = 0, remapTarget = null;
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
@@ -269,6 +292,11 @@ function transitionTo(next) {
   if (next === 'controls') controlsFrom = appState;
   const prev = appState;
   appState = next;
+  // The multiplayer screen owns a socket, so entering opens one and leaving
+  // closes it. Handled here rather than at each call site, because every route
+  // out of the screen (back, error, match start) must not leak the connection.
+  if (next === 'multiplayer' && prev !== 'multiplayer') openMultiplayer();
+  if (prev === 'multiplayer' && next !== 'multiplayer') closeMultiplayer();
   if (next === 'playing' && prev !== 'paused' && prev !== 'controls' && prev !== 'inventory') initGame();
   if (next === 'boss_entrance') entrance = {
     timer: 0, textProgress: 0, overlayAlpha: 0,
@@ -3755,18 +3783,15 @@ function drawMenu(t) {
    '', '         A  R  C  H  E  R'].forEach((line, i) => ctx.fillText(line, CONFIG.canvasW/2, 80+i*21));
   ctx.shadowBlur = 0;
 
-  // Mode options — BRAWL and WAVES with descriptions
-  const MODES = [
-    { key: 'B', label: 'BRAWL', sub: 'hunt 10 crows  ·  boss fight  ·  scarce drops',  mode: 'brawl' },
-    { key: 'W', label: 'WAVES', sub: 'survive escalating swarms  ·  endless run',       mode: 'waves' },
-  ];
-  const UTIL = [
-    { key: 'C', label: 'CONTROLS' },
-  ];
+  // Both lists come from MENU_ENTRIES, so an added row lands on screen and in
+  // the key handler at once. Index i is menuSelection, which is why the util
+  // loop offsets by the number of modes rather than by a written-in constant.
+  const modes = MENU_ENTRIES.filter((e) => e.section === 'mode');
+  const utils = MENU_ENTRIES.filter((e) => e.section === 'util');
 
-  // MODE items at 305 / 365
-  MODES.forEach(({ key, label, sub, mode }, i) => {
-    const oy = 303 + i * 60, sel = menuSelection === i;
+  const MODE_TOP = 303, MODE_STEP = 60;
+  modes.forEach(({ key, label, sub }, i) => {
+    const oy = MODE_TOP + i * MODE_STEP, sel = menuSelection === i;
     if (sel) {
       ctx.fillStyle = 'rgba(57,255,20,0.07)';
       ctx.fillRect(CONFIG.canvasW/2 - 210, oy - 16, 420, 38);
@@ -3782,13 +3807,14 @@ function drawMenu(t) {
     ctx.fillText(sub, CONFIG.canvasW/2, oy + 16);
   });
 
-  // Separator line
+  // Separator sits below the last mode's sub-text, so the rule keeps its
+  // spacing whatever the list length.
+  const sepY = MODE_TOP + (modes.length - 1) * MODE_STEP + 69;
   ctx.strokeStyle = '#0d3a04'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(CONFIG.canvasW/2 - 140, 432); ctx.lineTo(CONFIG.canvasW/2 + 140, 432); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(CONFIG.canvasW/2 - 140, sepY); ctx.lineTo(CONFIG.canvasW/2 + 140, sepY); ctx.stroke();
 
-  // UTIL items at 450 / 482
-  UTIL.forEach(({ key, label }, i) => {
-    const oy = 450 + i * 34, sel = menuSelection === i + 2;
+  utils.forEach(({ key, label }, i) => {
+    const oy = sepY + 18 + i * 34, sel = menuSelection === modes.length + i;
     ctx.font = '16px "Courier New", monospace';
     ctx.fillStyle = sel ? '#39FF14' : '#1a7a08';
     if (sel) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 10; }
@@ -3981,6 +4007,7 @@ function render(t) {
     }
     if (appState === 'paused')        drawPause();
     if (appState === 'boss_entrance') drawBossEntrance();
+  } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys);
   } else if (appState === 'menu')       { drawMenu(t);
   } else if (appState === 'charselect') { drawCharSelect(t);
   } else if (appState === 'controls')   { drawControls(t);
@@ -4016,19 +4043,62 @@ const PERF = new URLSearchParams(location.search).has('perf') ? {
 
 let lastTs = 0, loopT = 0;
 
-function handleMenuInput() {
-  if (keys['ArrowUp'])   { menuSelection = (menuSelection-1+menuOptions.length)%menuOptions.length; keys['ArrowUp']   = false; }
-  if (keys['ArrowDown']) { menuSelection = (menuSelection+1)%menuOptions.length;                    keys['ArrowDown'] = false; }
-  if (keys['Enter']) {
-    if (menuSelection === 0) { gameMode = 'brawl'; transitionTo('charselect'); }
-    if (menuSelection === 1) { gameMode = 'waves'; transitionTo('charselect'); }
-    if (menuSelection === 2) transitionTo('controls');
-    keys['Enter'] = false;
+// ── MULTIPLAYER SCREEN ────────────────────────────────────────────────────────
+
+/**
+ * The lobby lives in src/ui and is driven from this loop, so there is one
+ * canvas, one clock, and one keydown listener for the whole game.
+ */
+let multiplayerSession = null;
+
+function openMultiplayer() {
+  multiplayerSession = new MultiplayerSession(canvas);
+  // Connecting is async; the screen draws its own connecting and failure states
+  void multiplayerSession.open();
+}
+
+function closeMultiplayer() {
+  multiplayerSession?.close();
+  multiplayerSession = null;
+}
+
+/**
+ * Escape leaves the screen. Every other key belongs to the lobby, which reads
+ * them in its own frame call so a held key is not read as a repeated press.
+ */
+function handleMultiplayerInput() {
+  if (keys['Escape']) {
+    keys['Escape'] = false;
+    transitionTo('menu');
+    return;
   }
-  // Hotkeys shown in brackets next to each option
-  if (keys['b']||keys['B']) { gameMode='brawl'; transitionTo('charselect'); keys['b']=keys['B']=false; }
-  if (keys['w']||keys['W']) { gameMode='waves'; transitionTo('charselect'); keys['w']=keys['W']=false; }
-  if (keys['c']||keys['C']) { transitionTo('controls'); keys['c']=keys['C']=false; }
+  // A started match is the server's decision, not a keystroke, so it is checked
+  // here rather than waiting for input
+  const started = multiplayerSession?.matchStart();
+  if (started) matchStarted = started;
+}
+
+/** The deal from the last MATCH_START, kept for the slice that renders it. */
+let matchStarted = null;
+
+function handleMenuInput() {
+  const n = MENU_ENTRIES.length;
+  if (keys['ArrowUp'])   { menuSelection = (menuSelection - 1 + n) % n; keys['ArrowUp']   = false; }
+  if (keys['ArrowDown']) { menuSelection = (menuSelection + 1) % n;     keys['ArrowDown'] = false; }
+  if (keys['Enter']) {
+    keys['Enter'] = false;
+    MENU_ENTRIES[menuSelection].run();
+    return;                       // the entry may have changed appState
+  }
+  // Hotkeys, the bracketed letter beside each label
+  for (const entry of MENU_ENTRIES) {
+    const lower = entry.key.toLowerCase();
+    if (keys[lower] || keys[entry.key]) {
+      keys[lower] = keys[entry.key] = false;
+      entry.run();
+      return;
+    }
+  }
 }
 
 const FIXED_DT = 1 / 60;   // sim advances in fixed 60 Hz steps
@@ -4038,7 +4108,8 @@ let accumulator = 0;
 // One fixed simulation step. Same body as before; dt is always FIXED_DT now.
 function stepGame(dt) {
   switch (appState) {
-    case 'menu':     handleMenuInput(); break;
+    case 'menu':        handleMenuInput(); break;
+    case 'multiplayer': handleMultiplayerInput(); break;
 
     case 'charselect': {
       const chars = ['archer','wizard','knight'];
@@ -4169,6 +4240,7 @@ window.__game = {
     window.dispatchEvent(e); document.dispatchEvent(e);
   },
   state: () => appState,
+  multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
   player: () => player,
   crows: () => crows,
