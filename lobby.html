@@ -24,7 +24,8 @@
     console.log(`Connecting to lobby server: ${serverUrl}`);
 
     async function main() {
-      const transport = new WsTransport({ url: serverUrl, handshakeTimeoutMs: 10000 });
+      const name = params.get('name') || 'player';
+      const transport = new WsTransport({ url: serverUrl, name, handshakeTimeoutMs: 10000 });
       const controller = new LobbyController({ transport, canvas });
 
       try {

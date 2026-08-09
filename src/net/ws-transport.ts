@@ -4,7 +4,12 @@
  * pull on its own time.
  */
 
-import { parseServerMessage, type ClientMessage, type ServerMessage } from './protocol';
+import {
+  PROTOCOL_VERSION,
+  parseServerMessage,
+  type ClientMessage,
+  type ServerMessage,
+} from './protocol';
 import type { Transport, TransportError, TransportState } from './transport';
 
 export interface WsTransportOptions {
@@ -12,10 +17,13 @@ export interface WsTransportOptions {
   url: string;
   /** How many milliseconds to wait for the server to say WELCOME before giving up. */
   handshakeTimeoutMs?: number;
+  /** Display name sent on HELLO. 1 to MAX_NAME_LENGTH characters. */
+  name: string;
 }
 
 export class WsTransport implements Transport {
   #url: string;
+  #name: string;
   #handshakeTimeoutMs: number;
   #socket: WebSocket | null = null;
   #queue: ServerMessage[] = [];
@@ -24,6 +32,7 @@ export class WsTransport implements Transport {
 
   constructor(options: WsTransportOptions) {
     this.#url = options.url;
+    this.#name = options.name;
     this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5000;
   }
 
@@ -51,7 +60,12 @@ export class WsTransport implements Transport {
 
       socket.onopen = () => {
         // Send HELLO, wait for WELCOME
-        socket.send(JSON.stringify({ type: 'HELLO', v: 3, name: 'player' }));
+        const hello: ClientMessage = {
+          type: 'HELLO',
+          v: PROTOCOL_VERSION,
+          name: this.#name,
+        };
+        socket.send(JSON.stringify(hello));
       };
 
       socket.onmessage = (event) => {
