@@ -71,6 +71,11 @@ export class MultiplayerSession {
       tick: this.#match?.latest?.tick ?? null,
       entities: this.#match?.latest?.entities ?? null,
       pending: this.#match?.pending ?? null,
+      // Where this client thinks it is, against where the snapshot puts it.
+      // The gap between the two is the health of prediction, and it is the
+      // number that showed the client and server were running at different
+      // rates, so it is worth being able to read without a debugger.
+      predicted: this.#match?.predicted ?? null,
     };
   }
 

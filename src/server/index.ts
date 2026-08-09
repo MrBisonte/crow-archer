@@ -18,17 +18,30 @@ import { pathToFileURL } from 'node:url';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { WS_PATH, type PlayerId } from '../net/protocol';
+import { WS_PATH, type PlayerId, type Snapshot } from '../net/protocol';
 import type { InputCommand } from '../sim/input';
 import { ArenaWorld } from '../sim/arena-world';
 import type { WorldFactory } from '../sim/world';
 import { FileClientPage, type ClientPage } from './client-page';
 import { Lobby, randomRoomCode, type Outbound } from './lobby';
 import { RoomStore, type ConnectionId } from './room';
-import { Match } from './match';
+import { Match, TICK_HZ } from './match';
 
 /** Rooms one process will hold. Past this, CREATE_ROOM answers SERVER_FULL. */
 const MAX_ROOMS = 500;
+
+/** Milliseconds of simulated time in one tick. */
+const TICK_MS = 1000 / TICK_HZ;
+
+/**
+ * How often the timer wakes to see whether a tick is due. Well under a tick, so
+ * the accumulator is never more than a few milliseconds behind, and the cost is
+ * a comparison on the wakeups where nothing is owed.
+ */
+const TIMER_MS = 4;
+
+/** Most ticks one wakeup will run, so a stall cannot become a longer stall. */
+const MAX_CATCHUP_TICKS = 5;
 
 /** Frames larger than this are refused before they are parsed. */
 const MAX_FRAME_BYTES = 8 * 1024;
@@ -210,28 +223,59 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     return rooms.seatsOf(view.code).find((s) => s.conn === conn)?.slot ?? null;
   };
 
-  /** Steps all running matches at 60 Hz and broadcasts snapshots. */
+  /** Sends one snapshot to every seat in a room. */
+  const broadcast = (code: string, snapshot: Snapshot) => {
+    const frame = JSON.stringify({ type: 'SNAPSHOT', snap: snapshot });
+    for (const { conn } of rooms.seatsOf(code)) {
+      const socket = sockets.get(conn);
+      if (socket?.readyState === socket?.OPEN) socket?.send(frame);
+    }
+  };
+
+  /**
+   * Steps all running matches at 60 Hz and broadcasts snapshots.
+   *
+   * The number of steps comes from the clock, not from the number of times the
+   * timer fired. `setInterval(1000/60)` is not a 60 Hz clock: on Windows it
+   * fires around every 26 ms under load, and stepping once per fire ran the
+   * whole world at 38 Hz in slow motion while every client predicted at full
+   * speed. Reading the elapsed time instead makes the rate right however badly
+   * the timer behaves, and the timer only has to be faster than a tick.
+   */
   const startTickLoop = () => {
     if (tickInterval) return;
+    let previous = Date.now();
+    let owedMs = 0;
     tickInterval = setInterval(() => {
-      for (const [code, match] of matches) {
-        const snapshot = match.step();
-        if (snapshot) {
-          // Broadcast to all seats in this room
-          for (const { conn } of rooms.seatsOf(code)) {
-            const socket = sockets.get(conn);
-            if (socket?.readyState === socket?.OPEN) {
-              socket?.send(JSON.stringify({ type: 'SNAPSHOT', snap: snapshot }));
-            }
-          }
-        }
-        if (match.isFinished()) matches.delete(code);
+      const now = Date.now();
+      owedMs += now - previous;
+      previous = now;
+
+      let steps = Math.floor(owedMs / TICK_MS);
+      if (steps <= 0) return;
+      if (steps > MAX_CATCHUP_TICKS) {
+        // A long stall is dropped rather than replayed. Catching up on a
+        // second of missed time would stall the process further and teleport
+        // everyone, which is worse than losing that second.
+        steps = MAX_CATCHUP_TICKS;
+        owedMs = 0;
+      } else {
+        owedMs -= steps * TICK_MS;
       }
+
+      for (let i = 0; i < steps; i++) {
+        for (const [code, match] of matches) {
+          const snapshot = match.step();
+          if (snapshot) broadcast(code, snapshot);
+        }
+      }
+
+      for (const [code, match] of matches) if (match.isFinished()) matches.delete(code);
       if (matches.size === 0 && tickInterval) {
         clearInterval(tickInterval);
         tickInterval = null;
       }
-    }, 1000 / 60);
+    }, TIMER_MS);
   };
 
   const close = () =>

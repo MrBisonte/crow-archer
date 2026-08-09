@@ -21,23 +21,24 @@ export interface ClientPage {
 }
 
 /**
- * Reads the page from disk once and remembers it. The file cannot change while
- * the process runs, so re-reading it per request would buy nothing and cost a
- * syscall on a path that is otherwise pure memory.
+ * Reads the page from disk on each request.
+ *
+ * This was cached for the life of the process on the grounds that the file
+ * cannot change while the server runs. It can: rebuilding the client during
+ * development does exactly that, and the cache then served the previous build
+ * with no way to tell from the outside. A read happens once per page load, not
+ * once per frame, so there was nothing to save.
  */
 export class FileClientPage implements ClientPage {
   readonly #path: string;
-  #cached: string | null = null;
 
   constructor(dir: string = DEFAULT_CLIENT_DIR) {
     this.#path = resolve(dir, 'index.html');
   }
 
   async read(): Promise<string | null> {
-    if (this.#cached !== null) return this.#cached;
     try {
-      this.#cached = await readFile(this.#path, 'utf8');
-      return this.#cached;
+      return await readFile(this.#path, 'utf8');
     } catch {
       // A server with no build still serves sockets. Someone running only the
       // server, with the client opened from disk, is a supported way to play.

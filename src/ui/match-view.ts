@@ -40,6 +40,16 @@ const HUD_HEIGHT = 32;
 /** Fixed step, matching the server's, or replayed inputs would drift. */
 const DT = 1 / 60;
 
+/** The same step in milliseconds, which is what a frame is measured in. */
+const TICK_MS = 1000 * DT;
+
+/**
+ * Longest gap one frame may owe. A tab that was hidden, or a machine that
+ * stalled, comes back owing seconds; replaying them would fire off hundreds of
+ * inputs at once and throw the body across the arena.
+ */
+const MAX_FRAME_MS = 100;
+
 /** How far behind the newest snapshot remote bodies are drawn. */
 const INTERP_DELAY_MS = 100;
 
@@ -81,6 +91,10 @@ export class MatchView {
   readonly #interpolator: Interpolator;
   #raw: RawInput = blankInput();
   #latest: Snapshot | null = null;
+  /** When the last frame ran, so ticks are owed against the clock. */
+  #lastFrameAt: number | null = null;
+  /** Simulated time owed but not yet stepped, carried between frames. */
+  #owedMs = 0;
 
   constructor(options: MatchViewOptions) {
     this.#ctx = options.ctx;
@@ -109,6 +123,11 @@ export class MatchView {
     return this.#predictor.pending();
   }
 
+  /** Where this client draws itself, and where its simulation says it is. */
+  get predicted() {
+    return { drawn: this.#predictor.self(), settled: this.#predictor.settled() };
+  }
+
   /** Takes a snapshot off the wire, correcting the prediction against it. */
   apply(snap: Snapshot): void {
     if (this.#latest && snap.tick <= this.#latest.tick) return;
@@ -126,6 +145,31 @@ export class MatchView {
    * replayed forever, walking the local body away from the server's.
    */
   frame(keys: Record<string, boolean>, aim: AimInput = blankAim()): void {
+    const now = this.#now();
+    // The first frame has no previous one to measure against, and a match that
+    // has been on a hidden tab must not owe a thousand ticks on its return.
+    const elapsed = this.#lastFrameAt === null ? TICK_MS : Math.min(now - this.#lastFrameAt, MAX_FRAME_MS);
+    this.#lastFrameAt = now;
+    this.#owedMs += elapsed;
+
+    while (this.#owedMs >= TICK_MS) {
+      this.#owedMs -= TICK_MS;
+      this.#tick(keys, aim);
+    }
+
+    this.#draw();
+  }
+
+  /**
+   * One simulated tick: read the input, send it, and predict with it.
+   *
+   * This is driven by the clock rather than by the frame, because the step it
+   * predicts is a fixed sixtieth of a second. Running it once per rendered
+   * frame made the local body move at the monitor's rate — half speed on a
+   * struggling tab, more than double on a fast screen — and every snapshot then
+   * dragged it back to where the server actually had it.
+   */
+  #tick(keys: Record<string, boolean>, aim: AimInput): void {
     // A dead player is ignored by the server, so holding a key while waiting to
     // respawn would predict a walk that every snapshot then takes back.
     const dead = this.#ownState() === PlayerState.DEAD;
@@ -145,10 +189,8 @@ export class MatchView {
       this.#transport.send({ type: 'INPUT', cmd });
       this.#predictor.predict(cmd);
     } catch {
-      // A closed socket is the session's business, not every frame's
+      // A closed socket is the session's business, not every tick's
     }
-
-    this.#draw();
   }
 
   /** This client's own entity as the server last described it. */
@@ -205,12 +247,9 @@ export class MatchView {
     // A projectile carries the firing team in `state`, so it reads as theirs.
     const fill = TEAM_FILL[e.state] ?? TEAM_FILL[0];
     ctx.fillStyle = fill;
-    ctx.shadowColor = fill;
-    ctx.shadowBlur = 4;
     ctx.beginPath();
     ctx.arc(e.x, e.y + HUD_HEIGHT, ARROW_RADIUS, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowBlur = 0;
   }
 
   #drawPlayer(e: EntitySnapshot): void {
@@ -230,13 +269,13 @@ export class MatchView {
       return;
     }
 
+    // No shadowBlur here. It is the most expensive thing Canvas 2D offers, and
+    // twenty of them a frame cost enough frame rate on a shared machine to
+    // starve the prediction clock that draws them.
     ctx.fillStyle = fill;
-    ctx.shadowColor = fill;
-    ctx.shadowBlur = 6;
     ctx.beginPath();
     ctx.arc(e.x, y, PLAYER_RADIUS, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowBlur = 0;
 
     this.#drawHealthBar(e, y, fill);
 

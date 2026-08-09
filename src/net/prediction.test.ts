@@ -40,6 +40,44 @@ describe('Predictor', () => {
     expect(me()).toMatchObject({ x: 200, y: 200 });
   });
 
+  describe('easing corrections rather than snapping them', () => {
+    const idle = { seq: 99, buttons: 0, aimAngle: 0 };
+
+    it('draws exactly where the simulation is when the two agree', () => {
+      predictor.predict({ seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      expect(me()).toEqual(predictor.settled());
+    });
+
+    it('does not jump the body the instant a snapshot disagrees', () => {
+      predictor.predict({ seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      const drawnBefore = me()!.x;
+      predictor.reconcile(serverSays(215, 200, 1));
+      // The server says 215; the body must not appear there this frame.
+      expect(me()!.x).toBeCloseTo(drawnBefore, 1);
+      expect(predictor.settled()!.x).toBe(215);
+    });
+
+    it('closes the gap over the next few ticks', () => {
+      predictor.predict({ seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      predictor.reconcile(serverSays(215, 200, 1));
+      const gapAt = () => Math.abs(me()!.x - predictor.settled()!.x);
+
+      const start = gapAt();
+      predictor.predict(idle);
+      const afterOne = gapAt();
+      for (let i = 0; i < 20; i++) predictor.predict(idle);
+
+      expect(afterOne).toBeLessThan(start);
+      expect(gapAt()).toBe(0);                 // arrived, not approached forever
+    });
+
+    it('shows a jump far too big to be a disagreement at once', () => {
+      predictor.predict({ seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      predictor.reconcile(serverSays(600, 600, 1));    // a respawn, not drift
+      expect(me()).toMatchObject({ x: 600, y: 600 });
+    });
+  });
+
   describe('moving ahead of the server', () => {
     it('moves immediately, without waiting for a round trip', () => {
       predictor.predict({ seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
@@ -88,9 +126,11 @@ describe('Predictor', () => {
       predictor.reconcile(serverSays(210, 200, 1));
       expect(predictor.pending()).toBe(0);
 
-      // A second snapshot with no new input must not move us again
+      // A second snapshot with no new input must not move us again. The
+      // simulated position is what that is about; the drawn one is still
+      // easing across the correction and is covered on its own below.
       predictor.reconcile(serverSays(210, 200, 1, 2));
-      expect(me()).toMatchObject({ x: 210, y: 200 });
+      expect(predictor.settled()).toMatchObject({ x: 210, y: 200 });
     });
 
     it('ignores a snapshot older than one already applied', () => {
