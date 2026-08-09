@@ -50,6 +50,21 @@ export class MovementWorld implements World {
     }
   }
 
+  remove(id: number): void {
+    const i = this.#bodies.findIndex((b) => b.id === id);
+    if (i >= 0) this.#bodies.splice(i, 1);
+  }
+
+  restore(entities: readonly EntitySnapshot[]): void {
+    for (const e of entities) {
+      const body = this.#bodies.find((b) => b.id === e.id);
+      if (!body) continue;          // a seat this world does not hold
+      body.x = e.x;
+      body.y = e.y;
+      body.hp = e.hp;
+    }
+  }
+
   snapshot(): EntitySnapshot[] {
     return this.#bodies.map((b) => ({
       id: b.id,

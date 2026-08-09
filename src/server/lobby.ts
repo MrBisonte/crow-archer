@@ -155,6 +155,9 @@ export class Lobby {
     const view = result.value;
     const out = this.#roomState(view);
     if (!this.#rooms.allReady(view.code)) return out;
+    // Co-op alone is just single player, which is a fair thing to want.
+    // Deathmatch alone has nobody to fight, so it waits for a second seat.
+    if (view.mode === 'deathmatch' && view.slots.length < 2) return out;
 
     this.#rooms.beginMatch(view.code);
     const starts: PlayerStart[] = view.slots.map((slot) => ({

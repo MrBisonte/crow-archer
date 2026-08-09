@@ -60,6 +60,8 @@ function isInputFrame(raw: unknown): raw is { type: 'INPUT'; cmd: InputCommand }
 /** A running server. `port` is the bound one, which matters when asking for 0. */
 export interface RunningServer {
   port: number;
+  /** Matches currently ticking. Zero once every player has left one. */
+  activeMatches: () => number;
   close: () => Promise<void>;
 }
 
@@ -141,6 +143,11 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
 
     const drop = () => {
       if (!sockets.delete(conn)) return;   // close and error can both fire
+      // Told before the seat is freed: afterwards the room no longer knows
+      // which slot this connection held, so the match could not be informed.
+      const match = matchFor(conn);
+      const seat = seatOf(conn);
+      if (match && seat !== null) match.dropSeat(seat);
       send(lobby.close(conn));
     };
     socket.on('close', drop);
@@ -197,7 +204,11 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
   return new Promise((resolve) => {
     wss.on('listening', () => {
       const bound = wss.address();
-      resolve({ port: typeof bound === 'object' && bound ? bound.port : options.port, close });
+      resolve({
+        port: typeof bound === 'object' && bound ? bound.port : options.port,
+        activeMatches: () => matches.size,
+        close,
+      });
     });
   });
 }

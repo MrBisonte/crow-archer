@@ -72,6 +72,7 @@ export class MultiplayerSession {
       match: this.matchStart(),
       tick: this.#match?.latest?.tick ?? null,
       entities: this.#match?.latest?.entities ?? null,
+      pending: this.#match?.pending ?? null,
     };
   }
 

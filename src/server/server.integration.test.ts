@@ -254,6 +254,73 @@ describe('lobby server over websockets', () => {
     expect(acked).toBe(7);
   });
 
+  it('refuses to start a deathmatch with nobody to fight', async () => {
+    const solo = await connect();
+    await solo.hello('alex');
+    await solo.ask({ type: 'CREATE_ROOM' });
+    solo.send({ type: 'SET_MODE', mode: 'deathmatch' });
+    await solo.next();
+
+    solo.send({ type: 'SET_READY', ready: true });
+    expect(await solo.next()).toMatchObject({ type: 'ROOM_STATE' });
+
+    // The same room in coop would be playing by now
+    await new Promise((r) => setTimeout(r, 150));
+    expect(server.activeMatches()).toBe(0);
+  });
+
+  it('starts a solo coop match, which is just single player', async () => {
+    const solo = await connect();
+    await solo.hello('alex');
+    await solo.ask({ type: 'CREATE_ROOM' });
+    solo.send({ type: 'SET_READY', ready: true });
+    await solo.next();
+    expect(await solo.next()).toMatchObject({ type: 'MATCH_START', mode: 'coop' });
+  });
+
+  it('stops ticking a match once everyone has gone', async () => {
+    const solo = await connect();
+    await solo.hello('alex');
+    await solo.ask({ type: 'CREATE_ROOM' });
+    solo.send({ type: 'SET_READY', ready: true });
+    await solo.next();                                    // ROOM_STATE
+    await solo.next();                                    // MATCH_START
+    expect(await solo.next()).toMatchObject({ type: 'SNAPSHOT' });
+
+    // Dropping the only player ends the match; without this the interval and
+    // the Match object would live for the life of the process.
+    solo.close();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(server.activeMatches()).toBe(0);
+  });
+
+  it('leaves a dropped body standing for the others', async () => {
+    const host = await connect();
+    const guest = await connect();
+    await host.hello('alex');
+    await guest.hello('sam');
+    const created = roomState(await host.ask({ type: 'CREATE_ROOM' }));
+    guest.send({ type: 'JOIN_ROOM', code: created.code });
+    await host.next();
+    await guest.next();
+
+    host.send({ type: 'SET_READY', ready: true });
+    await host.next();
+    await guest.next();
+    guest.send({ type: 'SET_READY', ready: true });
+    for (const p of [host, guest]) { await p.next(); await p.next(); }
+
+    guest.close();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // The match is still running for the host, and the body is still there
+    expect(server.activeMatches()).toBe(1);
+    let seen: ServerMessage = await host.next();
+    while (seen.type !== 'SNAPSHOT') seen = await host.next();
+    const entities = (seen as Extract<ServerMessage, { type: 'SNAPSHOT' }>).snap.entities;
+    expect(entities.map((e) => e.id).sort()).toEqual([0, 1]);
+  });
+
   it('frees the seat and moves the host when a socket drops', async () => {
     const host = await connect();
     const guest = await connect();

@@ -27,6 +27,24 @@ export interface World {
    * an integer and the snapshot budget is counted in bytes.
    */
   snapshot(): EntitySnapshot[];
+
+  /**
+   * Overwrites state with the server's. Prediction rewinds to the last
+   * authoritative snapshot and replays the inputs the server has not yet
+   * acknowledged, so a world has to be able to accept a position it did not
+   * arrive at itself.
+   *
+   * Entities absent from the list are left alone: a snapshot describes what the
+   * server knows, not what the client may drop.
+   */
+  restore(entities: readonly EntitySnapshot[]): void;
+
+  /**
+   * Takes an entity out of the world for good. A player who disconnects stands
+   * idle for a grace window and is then removed, so their body stops being
+   * broadcast to everyone still playing.
+   */
+  remove(id: number): void;
 }
 
 /** How a world is built at match start. Keeps construction out of Match. */

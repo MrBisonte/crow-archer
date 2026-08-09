@@ -4,7 +4,7 @@ import { Team } from '../sim/team';
 import { Button } from '../sim/input';
 import { MovementWorld } from '../sim/movement-world';
 import type { PlayerStart, RoomView } from '../net/protocol';
-import { Match, TICKS_PER_SNAPSHOT } from './match';
+import { GRACE_TICKS, Match, TICKS_PER_SNAPSHOT } from './match';
 
 const room: RoomView = {
   code: 'AAAA',
@@ -85,6 +85,46 @@ describe('Match', () => {
       match.recordInput(0, { seq: 2, buttons: 0, aimAngle: 0 });
       const stopped = stepToSnapshot(match).entities[0]!.x;
       expect(stepToSnapshot(match).entities[0]!.x).toBe(stopped);
+    });
+  });
+
+  describe('players leaving', () => {
+    it('is not finished while anyone is still connected', () => {
+      match.dropSeat(0);
+      expect(match.isFinished()).toBe(false);
+    });
+
+    it('is finished once the last seat drops, so the tick loop can stop', () => {
+      match.dropSeat(0);
+      match.dropSeat(1);
+      expect(match.isFinished()).toBe(true);
+    });
+
+    it('ignores a seat dropping twice', () => {
+      match.dropSeat(0);
+      match.dropSeat(0);
+      expect(match.isFinished()).toBe(false);   // seat 1 is still playing
+    });
+
+    it('stops replaying a held input from a seat that dropped', () => {
+      match.recordInput(0, { seq: 1, buttons: Button.RIGHT, aimAngle: 0 });
+      const moving = stepToSnapshot(match).entities[0]!.x;
+      match.dropSeat(0);
+      const afterDrop = stepToSnapshot(match).entities[0]!.x;
+      expect(afterDrop).toBe(moving);           // body stands still, not sliding
+    });
+
+    it('leaves the body standing during the grace window', () => {
+      match.dropSeat(0);
+      for (let i = 0; i < GRACE_TICKS - 1; i++) match.step();
+      expect(match.entities().some((e) => e.id === 0)).toBe(true);
+    });
+
+    it('removes the body once the grace window passes', () => {
+      match.dropSeat(0);
+      for (let i = 0; i <= GRACE_TICKS; i++) match.step();
+      expect(match.entities().some((e) => e.id === 0)).toBe(false);
+      expect(match.entities().some((e) => e.id === 1)).toBe(true);
     });
   });
 
