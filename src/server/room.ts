@@ -18,7 +18,10 @@ import {
   type PlayerSlot,
   type PlayerTeam,
   type RoomCode,
+  type RoomView,
 } from '../net/protocol';
+
+export type { RoomView };
 
 /**
  * Identifies one client connection. The server maps its own sockets onto these
@@ -44,14 +47,6 @@ export type RoomPhase = (typeof RoomPhase)[keyof typeof RoomPhase];
 
 /** Success carries the room to broadcast; failure carries the code to send back. */
 export type RoomResult<T> = { ok: true; value: T } | { ok: false; error: ErrorCode };
-
-/** What a room looks like on the wire. Matches the ROOM_STATE payload. */
-export interface RoomView {
-  code: RoomCode;
-  mode: GameMode;
-  host: PlayerId;
-  slots: PlayerSlot[];
-}
 
 /**
  * The three ways leaving can end. Modelled as a union rather than a nullable

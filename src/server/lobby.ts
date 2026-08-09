@@ -14,6 +14,7 @@ import {
   parseClientMessage,
   type ClientMessage,
   type ErrorCode,
+  type PlayerStart,
   type RoomCode,
   type ServerMessage,
 } from '../net/protocol';
@@ -35,7 +36,24 @@ export interface LobbyOptions {
   rooms: RoomStore;
   /** Server clock in milliseconds, injected so PONG is testable. */
   now: () => number;
+  /**
+   * Map seed for the next match, injected for the same reason as the room code
+   * generator: the store stays pure and a test can force a known map.
+   */
+  newSeed: () => number;
 }
+
+/**
+ * Where each seat starts. Spread around the arena so nobody spawns on top of
+ * anyone else. Phase 2 will take these from level data instead; four fixed
+ * points are enough while the sim still lives in the legacy monolith.
+ */
+const SPAWN_POINTS = [
+  { x: 160, y: 160 },
+  { x: 160, y: 544 },
+  { x: 480, y: 160 },
+  { x: 480, y: 544 },
+] as const;
 
 /** What the server knows about a connection once it has said hello. */
 interface Session {
@@ -59,11 +77,13 @@ const ERROR_TEXT: Record<ErrorCode, string> = {
 export class Lobby {
   readonly #rooms: RoomStore;
   readonly #now: () => number;
+  readonly #newSeed: () => number;
   readonly #sessions = new Map<ConnectionId, Session>();
 
   constructor(options: LobbyOptions) {
     this.#rooms = options.rooms;
     this.#now = options.now;
+    this.#newSeed = options.newSeed;
   }
 
   /**
@@ -111,10 +131,7 @@ export class Lobby {
       case 'SET_CHARACTER':
         return this.#answer(conn, this.#rooms.setCharacter(conn, msg.character));
       case 'SET_READY':
-        return this.#answer(
-          conn,
-          this.#rooms.setReady(conn, msg.ready ? Readiness.READY : Readiness.NOT_READY),
-        );
+        return this.#ready(conn, msg.ready ? Readiness.READY : Readiness.NOT_READY);
       case 'SET_MODE':
         return this.#answer(conn, this.#rooms.setMode(conn, msg.mode));
       case 'PING':
@@ -123,6 +140,39 @@ export class Lobby {
         // Matches arrive in phase 2. A lobby has nothing to do with an input.
         return [];
     }
+  }
+
+  /**
+   * Sets readiness, then starts the match if that was the last seat to ready.
+   * MATCH_START is appended to the same batch: the server watches for it to
+   * know a Match object is now owed, so the intent rides on the message rather
+   * than a second return channel.
+   */
+  #ready(conn: ConnectionId, readiness: Readiness): Outbound[] {
+    const result = this.#rooms.setReady(conn, readiness);
+    if (!result.ok) return [this.#error(conn, result.error)];
+
+    const view = result.value;
+    const out = this.#roomState(view);
+    if (!this.#rooms.allReady(view.code)) return out;
+
+    this.#rooms.beginMatch(view.code);
+    const starts: PlayerStart[] = view.slots.map((slot) => ({
+      id: slot.id,
+      character: slot.character,
+      team: slot.team,
+      ...SPAWN_POINTS[slot.id % SPAWN_POINTS.length]!,
+    }));
+    const start: ServerMessage = {
+      type: 'MATCH_START',
+      seed: this.#newSeed(),
+      mode: view.mode,
+      starts,
+    };
+    for (const { conn: seat } of this.#rooms.seatsOf(view.code)) {
+      out.push({ to: seat, message: start });
+    }
+    return out;
   }
 
   #leave(conn: ConnectionId): Outbound[] {

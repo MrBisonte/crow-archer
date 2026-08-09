@@ -41,6 +41,7 @@ describe('Lobby', () => {
     lobby = new Lobby({
       rooms: new RoomStore({ newCode: codesFrom('AAAA', 'BBBB') }),
       now: () => 1234,
+      newSeed: () => 0xdeadbeef,
     });
   });
 
@@ -159,6 +160,84 @@ describe('Lobby', () => {
       const out = lobby.receive(2, { type: 'SET_MODE', mode: 'deathmatch' });
       expect(only(out, 2)).toMatchObject({ type: 'ERROR', code: 'NOT_HOST' });
       expect(to(out, 1)).toEqual([]);
+    });
+  });
+
+  describe('match start', () => {
+    beforeEach(() => {
+      greet(1, 'alex'); greet(2, 'sam');
+      lobby.receive(1, { type: 'CREATE_ROOM' });
+      lobby.receive(2, { type: 'JOIN_ROOM', code: 'AAAA' });
+    });
+
+    it('stays quiet while one seat is still not ready', () => {
+      const out = lobby.receive(1, { type: 'SET_READY', ready: true });
+      expect(out.map((o) => o.message.type)).toEqual(['ROOM_STATE', 'ROOM_STATE']);
+    });
+
+    it('starts the match once the last seat readies', () => {
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      const out = lobby.receive(2, { type: 'SET_READY', ready: true });
+
+      for (const conn of [1, 2]) {
+        const types = to(out, conn).map((m) => m.type);
+        expect(types).toEqual(['ROOM_STATE', 'MATCH_START']);
+      }
+    });
+
+    it('gives every seat the same seed, mode, and spawn list', () => {
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      const out = lobby.receive(2, { type: 'SET_READY', ready: true });
+
+      const starts = out
+        .map((o) => o.message)
+        .filter((m) => m.type === 'MATCH_START');
+      expect(starts).toHaveLength(2);
+      expect(starts[0]).toEqual(starts[1]);          // one message, two recipients
+      expect(starts[0]).toMatchObject({
+        seed: 0xdeadbeef,
+        mode: 'coop',
+        starts: [
+          { id: 0, character: 'archer', team: Team.A },
+          { id: 1, character: 'archer', team: Team.A },
+        ],
+      });
+    });
+
+    it('spawns the two seats apart', () => {
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      const out = lobby.receive(2, { type: 'SET_READY', ready: true });
+      const start = out.map((o) => o.message).find((m) => m.type === 'MATCH_START');
+
+      const [a, b] = (start as Extract<ServerMessage, { type: 'MATCH_START' }>).starts;
+      expect([a!.x, a!.y]).not.toEqual([b!.x, b!.y]);
+    });
+
+    it('carries the deathmatch teams into the spawn list', () => {
+      lobby.receive(1, { type: 'SET_MODE', mode: 'deathmatch' });
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      const out = lobby.receive(2, { type: 'SET_READY', ready: true });
+      const start = out.map((o) => o.message).find((m) => m.type === 'MATCH_START');
+
+      expect(start).toMatchObject({
+        mode: 'deathmatch',
+        starts: [{ id: 0, team: Team.A }, { id: 1, team: Team.B }],
+      });
+    });
+
+    it('turns a late joiner away once the match is running', () => {
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      lobby.receive(2, { type: 'SET_READY', ready: true });
+
+      greet(3, 'kim');
+      expect(only(lobby.receive(3, { type: 'JOIN_ROOM', code: 'AAAA' }), 3))
+        .toMatchObject({ type: 'ERROR', code: 'ROOM_IN_MATCH' });
+    });
+
+    it('does not start on a solo unready seat readying then unreadying', () => {
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      const out = lobby.receive(1, { type: 'SET_READY', ready: false });
+      expect(out.every((o) => o.message.type === 'ROOM_STATE')).toBe(true);
     });
   });
 

@@ -184,6 +184,76 @@ describe('lobby server over websockets', () => {
       .toMatchObject({ type: 'ERROR', code: 'ROOM_FULL' });
   });
 
+  it('starts a match and streams snapshots once both seats ready', async () => {
+    const host = await connect();
+    const guest = await connect();
+    await host.hello('alex');
+    await guest.hello('sam');
+
+    const created = roomState(await host.ask({ type: 'CREATE_ROOM' }));
+    guest.send({ type: 'JOIN_ROOM', code: created.code });
+    await host.next();
+    await guest.next();
+
+    host.send({ type: 'SET_READY', ready: true });
+    await host.next();
+    await guest.next();
+
+    // The last seat to ready tips the room into a match
+    guest.send({ type: 'SET_READY', ready: true });
+    for (const p of [host, guest]) {
+      expect(await p.next()).toMatchObject({ type: 'ROOM_STATE' });
+      const start = await p.next();
+      expect(start).toMatchObject({ type: 'MATCH_START', mode: 'coop' });
+      expect((start as Extract<ServerMessage, { type: 'MATCH_START' }>).starts).toHaveLength(2);
+    }
+
+    // The tick loop is now running, so snapshots arrive without being asked for
+    for (const p of [host, guest]) {
+      expect(await p.next()).toMatchObject({ type: 'SNAPSHOT' });
+    }
+  });
+
+  it('advances the snapshot tick over time', async () => {
+    const solo = await connect();
+    await solo.hello('alex');
+    const created = roomState(await solo.ask({ type: 'CREATE_ROOM' }));
+    expect(created.slots).toHaveLength(1);
+
+    solo.send({ type: 'SET_READY', ready: true });
+    await solo.next();                                    // ROOM_STATE
+    await solo.next();                                    // MATCH_START
+
+    const first = await solo.next();
+    const second = await solo.next();
+    expect(first).toMatchObject({ type: 'SNAPSHOT' });
+    expect(second).toMatchObject({ type: 'SNAPSHOT' });
+
+    const tickOf = (m: ServerMessage) =>
+      (m as Extract<ServerMessage, { type: 'SNAPSHOT' }>).snap.tick;
+    expect(tickOf(second)).toBeGreaterThan(tickOf(first));
+  });
+
+  it('acks an input in a later snapshot', async () => {
+    const solo = await connect();
+    await solo.hello('alex');
+    await solo.ask({ type: 'CREATE_ROOM' });
+    solo.send({ type: 'SET_READY', ready: true });
+    await solo.next();                                    // ROOM_STATE
+    await solo.next();                                    // MATCH_START
+
+    const ackOf = (m: ServerMessage) =>
+      (m as Extract<ServerMessage, { type: 'SNAPSHOT' }>).snap.acks[0]!.seq;
+
+    expect(ackOf(await solo.next())).toBe(0);             // nothing sent yet
+    solo.send({ type: 'INPUT', cmd: { seq: 7, buttons: 0, aimAngle: 0 } });
+
+    // The ack shows up on whichever snapshot lands after the input does
+    let acked = 0;
+    for (let i = 0; i < 5 && acked === 0; i++) acked = ackOf(await solo.next());
+    expect(acked).toBe(7);
+  });
+
   it('frees the seat and moves the host when a socket drops', async () => {
     const host = await connect();
     const guest = await connect();

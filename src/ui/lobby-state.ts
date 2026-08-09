@@ -3,8 +3,7 @@
  * new state + messages to send to the server. No I/O, no clock, no randomness.
  */
 
-import type { CharacterKind, GameMode, RoomCode, RoomView } from '../net/protocol';
-import type { ClientMessage } from '../net/protocol';
+import type { CharacterKind, GameMode, PlayerId, RoomCode, RoomView } from '../net/protocol';
 
 /** Which screen the lobby is showing. */
 export type LobbyScreen = 'multiplayer' | 'host_join' | 'lobby';
@@ -32,7 +31,9 @@ export type LobbyAction =
   | { type: 'TOGGLE_READY' }
   | { type: 'SET_MODE'; mode: GameMode }
   | { type: 'LEAVE_ROOM' }
-  | { type: 'RECV_ROOM_STATE'; view: RoomView }
+  // Carries `you` because that is how the client learns which seat is its own.
+  // The stored roomView drops it again: userSlot is the one home for that fact.
+  | { type: 'RECV_ROOM_STATE'; view: RoomView & { you: PlayerId } }
   | { type: 'RECV_ERROR'; code: string; message: string };
 
 /** What to send to the server. */

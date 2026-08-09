@@ -71,13 +71,17 @@ export interface PlayerSlot {
   team: PlayerTeam;
 }
 
-/** The current room's state as seen by the player. */
+/**
+ * A room's state. Server and client share this one definition: the server
+ * builds it, ROOM_STATE carries it, and the client renders it. The recipient's
+ * own slot is not part of it, because a room does not have a point of view —
+ * ROOM_STATE adds `you` per recipient.
+ */
 export interface RoomView {
   code: RoomCode;
   mode: GameMode;
   host: PlayerId;
   slots: PlayerSlot[];
-  you: PlayerId;  // which slot this client holds
 }
 
 // ---------------------------------------------------------------------------
@@ -217,14 +221,7 @@ export type ServerMessage =
    * of `slots`, since nothing else on the wire ties a seat to a connection.
    * Lobby changes are rare, so the extra copies cost nothing.
    */
-  | {
-      type: 'ROOM_STATE';
-      code: RoomCode;
-      mode: GameMode;
-      host: PlayerId;
-      slots: PlayerSlot[];
-      you: PlayerId;
-    }
+  | ({ type: 'ROOM_STATE'; you: PlayerId } & RoomView)
   | { type: 'ERROR'; code: ErrorCode; message: string }
   /**
    * Match begins. `seed` is the uint32 every client feeds to mapgen, which is
