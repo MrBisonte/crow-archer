@@ -43,7 +43,15 @@ npm run dev
 
 Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
 
-**Play deathmatch.** Arrow keys move, the mouse aims, and left click or space shoots. Players take damage and respawn where they started. There is no map, no crows and no boss yet, and friendly fire is off in every mode — so in co-op your arrows pass through the only other things in the arena and nothing can happen. Deathmatch is the mode with a game in it.
+### Joining a game
+
+1. Open the server's URL and press **M**.
+2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
+3. The host sets the mode with **D** for deathmatch or **C** for co-op. Everyone presses **R**, and it starts once the last player is ready.
+
+Arrow keys move, the mouse aims, and left click or space shoots. Five hits kill, and you come back where you started three seconds later. **Pick deathmatch**: friendly fire is off in every mode and there are no crows yet, so co-op has nothing in it to shoot. Characters can be picked with **A**, **W** and **K**, but they all play the same for now.
+
+There is no map, no crows, no boss, no score and no end: a deathmatch runs until everyone leaves.
 
 Arrows are the server's: it decides where they go and what they hit. Your own movement is predicted locally, so it stays instant, but an arrow appears a round trip after you ask for it. That is the deliberate trade — the alternative is drawing arrows the server then disagrees with and having to take them back.
 
