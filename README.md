@@ -43,6 +43,8 @@ npm run dev
 
 Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
 
+**A match is movement only so far.** Players walk around an arena with no map, no crows, no boss and no arrows. The netcode is finished and the game is not: single player is the whole game, multiplayer is the transport proven end to end underneath it. Crows, projectiles and tiles are what turn it into the same game.
+
 Running it locally takes both halves:
 
 ```
@@ -66,6 +68,21 @@ docker run -p 8082:8082 crow-archer
 It reads `PORT` and answers `/healthz`, which is all any host taking a Dockerfile asks for. Without Docker, `npm run build && npm run build:server && npm start` does the same thing.
 
 Run a single instance. Rooms live in the process's memory, so a second instance would hold rooms the first one cannot see and a player would join a code their friend is not in.
+
+#### On Railway
+
+1. New project, deploy from this GitHub repo. The Dockerfile is detected; there is nothing to configure and no start command to set.
+2. Settings → Networking → **Generate Domain**. That URL is the game.
+3. Settings → check the replica count is **1**, and that the region is the one nearest the players.
+4. Leave `PORT` alone. Railway assigns it and the server reads it.
+
+Health checks can point at `/healthz`. Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
+
+#### Playing without deploying
+
+Both on one network: run `npm run server` and `npm run build`, serve the repo, and the others open `http://<your-lan-ip>:8082`. The page and the socket come from the same place, so nothing needs configuring.
+
+Otherwise a tunnel to `localhost:8082` gives a public HTTPS URL without deploying. That publishes the port on the machine running it for as long as it is open, so close it when the game ends.
 
 ## Controls
 
