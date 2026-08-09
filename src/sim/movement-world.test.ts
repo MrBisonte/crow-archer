@@ -3,13 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { EntityKind, type PlayerStart } from '../net/protocol';
 import { Button, type InputCommand } from './input';
 import { Team } from './team';
-import {
-  ARENA_H,
-  ARENA_W,
-  MovementWorld,
-  PLAYER_RADIUS,
-  PLAYER_SPEED,
-} from './movement-world';
+import { ARENA_H, ARENA_W, PLAYER_RADIUS, PLAYER_SPEED } from './arena';
+import { MovementWorld } from './movement-world';
 import type { StepInputs } from './world';
 
 const DT = 1 / 60;

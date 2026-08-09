@@ -14,7 +14,7 @@ import type { PlayerStart } from '../net/protocol';
 import { defaultServerUrl } from '../net/server-url';
 import { WsTransport } from '../net/ws-transport';
 import { LobbyController } from './lobby-controller';
-import { MatchView } from './match-view';
+import { MatchView, type AimInput } from './match-view';
 
 /** Remembered display name. Per-profile naming is a later phase. */
 const NAME_KEY = 'crowArcher.playerName';
@@ -104,7 +104,7 @@ export class MultiplayerSession {
    * displayed frame is the right rate and cannot drop or double a keystroke the
    * way an accumulator running zero or two steps would.
    */
-  frame(keys: Record<string, boolean>): void {
+  frame(keys: Record<string, boolean>, aim?: AimInput): void {
     if (this.#phase === 'failed') {
       this.#drawFailure();
       return;
@@ -126,7 +126,7 @@ export class MultiplayerSession {
     if (this.#match) {
       this.#controller.poll();                   // socket only; the view draws
       for (const snap of this.#controller.takeSnapshots()) this.#match.apply(snap);
-      this.#match.frame(keys);
+      this.#match.frame(keys, aim);
       return;
     }
 

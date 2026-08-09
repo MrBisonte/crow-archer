@@ -7,12 +7,32 @@
  * 20 times a second.
  */
 
-import { EntityKind, type EntitySnapshot, type PlayerStart, type Snapshot } from '../net/protocol';
+import {
+  EntityKind,
+  PlayerState,
+  type EntitySnapshot,
+  type PlayerStart,
+  type Snapshot,
+} from '../net/protocol';
 import { Interpolator } from '../net/interpolation';
 import { Predictor } from '../net/prediction';
 import { LocalInput, type RawInput } from '../sim/input';
-import { ARENA_H, ARENA_W, MovementWorld, PLAYER_RADIUS } from '../sim/movement-world';
+import { ARENA_H, ARENA_W, PLAYER_MAX_HP, PLAYER_RADIUS } from '../sim/arena';
+import { ARROW_RADIUS } from '../sim/arena-world';
+import { MovementWorld } from '../sim/movement-world';
 import type { Transport } from '../net/transport';
+
+/**
+ * Where the mouse is and whether its button is down, in canvas pixels.
+ *
+ * The legacy loop owns the pointer as it owns the keyboard, so this arrives per
+ * frame rather than being listened for a second time.
+ */
+export interface AimInput {
+  x: number;
+  y: number;
+  fire: boolean;
+}
 
 /** Height of the legacy HUD strip. The sim knows nothing about it. */
 const HUD_HEIGHT = 32;
@@ -33,6 +53,9 @@ const MOVE_KEYS = {
   left: 'ArrowLeft',
   right: 'ArrowRight',
 } as const;
+
+/** Fires as well as the left mouse button, so a keyboard alone can play. */
+const FIRE_KEY = ' ';
 
 export interface MatchViewOptions {
   ctx: CanvasRenderingContext2D;
@@ -102,16 +125,19 @@ export class MatchView {
    * was predicted but never sent would never be acknowledged and would be
    * replayed forever, walking the local body away from the server's.
    */
-  frame(keys: Record<string, boolean>): void {
+  frame(keys: Record<string, boolean>, aim: AimInput = blankAim()): void {
+    // A dead player is ignored by the server, so holding a key while waiting to
+    // respawn would predict a walk that every snapshot then takes back.
+    const dead = this.#ownState() === PlayerState.DEAD;
     this.#raw = {
-      up: !!keys[MOVE_KEYS.up],
-      down: !!keys[MOVE_KEYS.down],
-      left: !!keys[MOVE_KEYS.left],
-      right: !!keys[MOVE_KEYS.right],
-      fire: false,
+      up: !dead && !!keys[MOVE_KEYS.up],
+      down: !dead && !!keys[MOVE_KEYS.down],
+      left: !dead && !!keys[MOVE_KEYS.left],
+      right: !dead && !!keys[MOVE_KEYS.right],
+      fire: !dead && (aim.fire || !!keys[FIRE_KEY]),
       special: false,
       snipe: false,
-      aimAngle: 0,
+      aimAngle: this.#angleTo(aim),
     };
 
     const cmd = this.#input.sample();
@@ -125,6 +151,22 @@ export class MatchView {
     this.#draw();
   }
 
+  /** This client's own entity as the server last described it. */
+  #ownEntity(): EntitySnapshot | undefined {
+    return this.#latest?.entities.find((e) => e.id === this.#you);
+  }
+
+  #ownState(): number {
+    return this.#ownEntity()?.state ?? PlayerState.ALIVE;
+  }
+
+  /** Angle from your own body to the pointer, in world coordinates. */
+  #angleTo(aim: AimInput): number {
+    const me = this.#predictor.self();
+    if (!me) return 0;
+    return Math.atan2(aim.y - HUD_HEIGHT - me.y, aim.x - me.x);
+  }
+
   #draw(): void {
     const ctx = this.#ctx;
     ctx.fillStyle = '#0A0F0A';
@@ -134,21 +176,41 @@ export class MatchView {
     ctx.lineWidth = 2;
     ctx.strokeRect(0, HUD_HEIGHT, ARENA_W, ARENA_H);
 
-    // Everyone else, interpolated and a little behind
+    // Everyone else, interpolated and a little behind. Arrows come from here
+    // too: they are server-authoritative and nothing predicts them.
     for (const e of this.#interpolator.at(this.#now())) {
-      if (e.kind === EntityKind.PLAYER && e.id !== this.#you) this.#drawPlayer(e);
+      if (e.kind === EntityKind.PROJECTILE) this.#drawArrow(e);
+      else if (e.kind === EntityKind.PLAYER && e.id !== this.#you) this.#drawPlayer(e);
     }
 
-    // Your own body, predicted, drawn last so it is never hidden
+    // Your own body, predicted, drawn last so it is never hidden. Position is
+    // the predicted one, health is the server's: prediction covers movement,
+    // and inventing your own hit points would only be taken back.
     const me = this.#predictor.self();
+    const own = this.#ownEntity();
     if (me) {
       this.#drawPlayer({
         id: this.#you, kind: EntityKind.PLAYER,
-        x: me.x, y: me.y, hp: 10, state: 0,
+        x: me.x, y: me.y,
+        hp: own?.hp ?? PLAYER_MAX_HP,
+        state: own?.state ?? PlayerState.ALIVE,
       });
     }
 
     this.#drawHud();
+  }
+
+  #drawArrow(e: EntitySnapshot): void {
+    const ctx = this.#ctx;
+    // A projectile carries the firing team in `state`, so it reads as theirs.
+    const fill = TEAM_FILL[e.state] ?? TEAM_FILL[0];
+    ctx.fillStyle = fill;
+    ctx.shadowColor = fill;
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y + HUD_HEIGHT, ARROW_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   }
 
   #drawPlayer(e: EntitySnapshot): void {
@@ -157,6 +219,17 @@ export class MatchView {
     const fill = TEAM_FILL[start?.team ?? 0] ?? TEAM_FILL[0];
     const y = e.y + HUD_HEIGHT;
 
+    // A dead body is drawn hollow and unlit, so it reads as out of the fight
+    // without disappearing and leaving you wondering where someone went.
+    if (e.state === PlayerState.DEAD) {
+      ctx.strokeStyle = '#2A3A2A';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(e.x, y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      return;
+    }
+
     ctx.fillStyle = fill;
     ctx.shadowColor = fill;
     ctx.shadowBlur = 6;
@@ -164,6 +237,8 @@ export class MatchView {
     ctx.arc(e.x, y, PLAYER_RADIUS, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
+
+    this.#drawHealthBar(e, y, fill);
 
     // Your own body gets a ring, so identical dots stay tellable apart
     if (e.id === this.#you) {
@@ -180,18 +255,37 @@ export class MatchView {
     ctx.fillText(String(start?.character ?? '').toUpperCase(), e.x, y - PLAYER_RADIUS - 8);
   }
 
+  /** A short bar over the head, only while it means something. */
+  #drawHealthBar(e: EntitySnapshot, y: number, fill: string): void {
+    if (e.hp >= PLAYER_MAX_HP) return;
+    const ctx = this.#ctx;
+    const width = PLAYER_RADIUS * 2;
+    const top = y - PLAYER_RADIUS - 6;
+    ctx.fillStyle = '#2A1A1A';
+    ctx.fillRect(e.x - PLAYER_RADIUS, top, width, 2);
+    ctx.fillStyle = fill;
+    ctx.fillRect(e.x - PLAYER_RADIUS, top, (width * Math.max(0, e.hp)) / PLAYER_MAX_HP, 2);
+  }
+
   #drawHud(): void {
     const ctx = this.#ctx;
+    const own = this.#ownEntity();
     ctx.fillStyle = '#39FF14';
     ctx.font = '12px "Courier New", monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`TICK ${this.#latest?.tick ?? 0}`, 8, 20);
+    ctx.fillText(`HP ${own?.hp ?? PLAYER_MAX_HP}`, 8, 20);
 
     ctx.textAlign = 'center';
-    ctx.fillText('ARROW KEYS MOVE', this.#canvasW / 2, 20);
+    ctx.fillText(
+      own?.state === PlayerState.DEAD
+        ? 'DOWN  ·  BACK SHORTLY'
+        : 'ARROWS MOVE  ·  CLICK OR SPACE TO SHOOT',
+      this.#canvasW / 2,
+      20,
+    );
 
     ctx.textAlign = 'right';
-    ctx.fillText(`P${this.#you}`, this.#canvasW - 8, 20);
+    ctx.fillText(`P${this.#you}  T${this.#latest?.tick ?? 0}`, this.#canvasW - 8, 20);
   }
 }
 
@@ -200,4 +294,8 @@ function blankInput(): RawInput {
     up: false, down: false, left: false, right: false,
     fire: false, special: false, snipe: false, aimAngle: 0,
   };
+}
+
+function blankAim(): AimInput {
+  return { x: 0, y: 0, fire: false };
 }

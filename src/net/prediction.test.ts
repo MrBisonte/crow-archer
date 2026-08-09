@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { Team } from '../sim/team';
 import { Button } from '../sim/input';
-import { MovementWorld, PLAYER_SPEED } from '../sim/movement-world';
+import { PLAYER_SPEED } from '../sim/arena';
+import { MovementWorld } from '../sim/movement-world';
 import type { EntitySnapshot, PlayerStart, Snapshot } from './protocol';
 import { Predictor } from './prediction';
 

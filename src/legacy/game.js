@@ -416,12 +416,18 @@ canvas.addEventListener('mousemove', e => {
   mouse.y = (e.clientY - r.top)  * (CONFIG.canvasH / r.height);
 });
 let mouseRightHeld = false;
+// Held, not just pressed: multiplayer samples the button once per frame rather
+// than reacting to the event, the same way it reads the keyboard.
+let mouseLeftHeld = false;
 canvas.addEventListener('mousedown', e => {
   initAudio();
-  if (e.button === 0 && inGame()) shootPressed = true;
+  if (e.button === 0) { mouseLeftHeld = true; if (inGame()) shootPressed = true; }
   if (e.button === 2) { mouseRightHeld = true; startCharge(); }
 });
-canvas.addEventListener('mouseup',    e => { if (e.button === 2) { mouseRightHeld = false; releaseCharge(); } });
+canvas.addEventListener('mouseup',    e => {
+  if (e.button === 0) mouseLeftHeld = false;
+  if (e.button === 2) { mouseRightHeld = false; releaseCharge(); }
+});
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 document.addEventListener('keydown', e => {
@@ -4007,7 +4013,7 @@ function render(t) {
     }
     if (appState === 'paused')        drawPause();
     if (appState === 'boss_entrance') drawBossEntrance();
-  } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys);
+  } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys, { x: mouse.x, y: mouse.y, fire: mouseLeftHeld });
   } else if (appState === 'menu')       { drawMenu(t);
   } else if (appState === 'charselect') { drawCharSelect(t);
   } else if (appState === 'controls')   { drawControls(t);

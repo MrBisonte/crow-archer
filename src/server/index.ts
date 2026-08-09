@@ -20,7 +20,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { WS_PATH, type PlayerId } from '../net/protocol';
 import type { InputCommand } from '../sim/input';
-import { MovementWorld } from '../sim/movement-world';
+import { ArenaWorld } from '../sim/arena-world';
 import type { WorldFactory } from '../sim/world';
 import { FileClientPage, type ClientPage } from './client-page';
 import { Lobby, randomRoomCode, type Outbound } from './lobby';
@@ -90,8 +90,9 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     newCode: () => randomRoomCode(),
     maxRooms: options.maxRooms ?? MAX_ROOMS,
   });
-  // Only players move so far; crows, the boss and tiles are later slices
-  const makeWorld: WorldFactory = options.makeWorld ?? ((_seed, starts) => new MovementWorld(starts));
+  // Players and arrows. Crows, the boss and tiles are later slices, and the
+  // seed is what they will be built from.
+  const makeWorld: WorldFactory = options.makeWorld ?? ((_seed, starts) => new ArenaWorld(starts));
 
   const lobby = new Lobby({
     rooms,

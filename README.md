@@ -43,7 +43,9 @@ npm run dev
 
 Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
 
-**A match is movement only so far.** Players walk around an arena with no map, no crows, no boss and no arrows. The netcode is finished and the game is not: single player is the whole game, multiplayer is the transport proven end to end underneath it. Crows, projectiles and tiles are what turn it into the same game.
+**Play deathmatch.** Arrow keys move, the mouse aims, and left click or space shoots. Players take damage and respawn where they started. There is no map, no crows and no boss yet, and friendly fire is off in every mode — so in co-op your arrows pass through the only other things in the arena and nothing can happen. Deathmatch is the mode with a game in it.
+
+Arrows are the server's: it decides where they go and what they hit. Your own movement is predicted locally, so it stays instant, but an arrow appears a round trip after you ask for it. That is the deliberate trade — the alternative is drawing arrows the server then disagrees with and having to take them back.
 
 Running it locally takes both halves:
 

@@ -17,7 +17,9 @@ import { Button, type InputCommand } from '../sim/input';
 import { Team } from '../sim/team';
 
 /**
- * Protocol revision. Bump it on any change to a message shape.
+ * Protocol revision. Bump it on any change to a message shape, and on any
+ * change to what a field in one means: a client that reads `state` as always
+ * alive is as broken by a new meaning as by a new field.
  *
  * It is carried on the two handshake messages only: HELLO from the client and
  * WELCOME from the server. Both sides check it there and drop the connection on
@@ -25,7 +27,7 @@ import { Team } from '../sim/team';
  * message repeats it. This keeps the version out of SNAPSHOT, which is sent
  * 20 times a second.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Players in one room. Fixed at 4: 4-player co-op or 2v2 deathmatch. */
 export const MAX_PLAYERS = 4;
@@ -107,6 +109,20 @@ export const EntityKind = {
 } as const;
 
 export type EntityKind = (typeof EntityKind)[keyof typeof EntityKind];
+
+/**
+ * What `state` means on a PLAYER entity. A dead player stays in the snapshot so
+ * clients can draw the body waiting to respawn rather than have it vanish.
+ *
+ * On a PROJECTILE, `state` carries the team that fired it, so an arrow is drawn
+ * in its shooter's colour without the client having to remember whose it was.
+ */
+export const PlayerState = {
+  ALIVE: 0,
+  DEAD: 1,
+} as const;
+
+export type PlayerState = (typeof PlayerState)[keyof typeof PlayerState];
 
 /**
  * One entity in one snapshot. Every field is a number, and there are six of

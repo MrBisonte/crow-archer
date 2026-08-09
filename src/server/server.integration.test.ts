@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
 import { Team } from '../sim/team';
+import { Button } from '../sim/input';
+import { PLAYER_MAX_HP } from '../sim/arena';
 import {
+  EntityKind,
   MAX_PLAYERS,
   PROTOCOL_VERSION,
   WS_PATH,
@@ -339,6 +342,95 @@ describe('lobby server over websockets', () => {
     expect(afterDrop.you).toBe(1);
     expect(afterDrop.slots).toHaveLength(1);
   });
+});
+
+describe('a deathmatch that can be won', () => {
+  let server: RunningServer;
+  let clients: Client[] = [];
+
+  const connect = async (): Promise<Client> => {
+    const c = await Client.connect(server.port);
+    clients.push(c);
+    return c;
+  };
+
+  beforeEach(async () => { server = await startServer({ port: 0 }); });
+
+  afterEach(async () => {
+    for (const c of clients) c.close();
+    clients = [];
+    await server.close();
+  });
+
+  /** Two seats in a started deathmatch, with the spawn positions they were given. */
+  const startMatch = async () => {
+    const host = await connect();
+    const guest = await connect();
+    await host.hello('alex');
+    await guest.hello('sam');
+
+    const created = roomState(await host.ask({ type: 'CREATE_ROOM' }));
+    guest.send({ type: 'JOIN_ROOM', code: created.code });
+    await host.next();
+    await guest.next();
+
+    host.send({ type: 'SET_MODE', mode: 'deathmatch' });
+    await host.next();
+    await guest.next();
+
+    host.send({ type: 'SET_READY', ready: true });
+    await host.next();
+    await guest.next();
+    guest.send({ type: 'SET_READY', ready: true });
+
+    // Both get ROOM_STATE then MATCH_START; the starts are what we aim with.
+    let started: Extract<ServerMessage, { type: 'MATCH_START' }> | null = null;
+    for (let i = 0; i < 6 && !started; i++) {
+      const msg = await host.next();
+      if (msg.type === 'MATCH_START') started = msg;
+    }
+    if (!started) throw new Error('the match never started');
+    return { host, guest, starts: started.starts };
+  };
+
+  /** Reads snapshots until one satisfies the predicate, or gives up. */
+  const snapshotWhere = async (
+    client: Client,
+    predicate: (s: Extract<ServerMessage, { type: 'SNAPSHOT' }>['snap']) => boolean,
+  ) => {
+    for (let i = 0; i < 200; i++) {
+      const msg = await client.next();
+      if (msg.type === 'SNAPSHOT' && predicate(msg.snap)) return msg.snap;
+    }
+    throw new Error('no snapshot matched within 200 messages');
+  };
+
+  it('puts an arrow on the wire when a player fires', async () => {
+    const { host, starts } = await startMatch();
+    const me = starts.find((s) => s.id === 0)!;
+    const them = starts.find((s) => s.id === 1)!;
+    const aimAngle = Math.atan2(them.y - me.y, them.x - me.x);
+
+    host.send({ type: 'INPUT', cmd: { seq: 1, buttons: Button.FIRE, aimAngle } });
+    const snap = await snapshotWhere(host, (s) =>
+      s.entities.some((e) => e.kind === EntityKind.PROJECTILE),
+    );
+    expect(snap.entities.filter((e) => e.kind === EntityKind.PROJECTILE).length).toBeGreaterThan(0);
+  });
+
+  it('wounds the player it was aimed at, which is the whole game in one line', async () => {
+    const { host, starts } = await startMatch();
+    const me = starts.find((s) => s.id === 0)!;
+    const them = starts.find((s) => s.id === 1)!;
+    const aimAngle = Math.atan2(them.y - me.y, them.x - me.x);
+
+    host.send({ type: 'INPUT', cmd: { seq: 1, buttons: Button.FIRE, aimAngle } });
+    const snap = await snapshotWhere(host, (s) => {
+      const target = s.entities.find((e) => e.id === 1 && e.kind === EntityKind.PLAYER);
+      return !!target && target.hp < PLAYER_MAX_HP;
+    });
+    expect(snap.entities.find((e) => e.id === 1)!.hp).toBeLessThan(PLAYER_MAX_HP);
+  }, 10_000);
 });
 
 describe('serving the client', () => {
