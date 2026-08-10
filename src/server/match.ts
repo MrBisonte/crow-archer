@@ -20,10 +20,18 @@ import type { InputAck, PlayerId, RoomView, Snapshot } from '../net/protocol';
 export const TICK_HZ = 60;
 
 /**
- * Ticks between snapshots. Three at 60 Hz is 20 Hz on the wire, the rate the
- * roadmap sized at under 1 KB per snapshot.
+ * Ticks between snapshots. Two at 60 Hz is 30 Hz on the wire.
+ *
+ * The roadmap sized three, for 20 Hz. Two is better for the same reason a
+ * higher frame rate is: consecutive snapshots are 33 ms apart instead of 50, so
+ * the interpolation buffer that has to span two of them shrinks, and everyone
+ * else is drawn closer to now. It also samples motion finer, which a 700 px/s
+ * arrow shows as 23 px between snapshots rather than 35.
+ *
+ * The cost is half again the downstream bytes, about 30 KB/s per client at four
+ * players, which is not a number worth protecting.
  */
-export const TICKS_PER_SNAPSHOT = 3;
+export const TICKS_PER_SNAPSHOT = 2;
 
 /** Seconds per tick, the fixed step every world is advanced by. */
 export const FIXED_DT = 1 / TICK_HZ;

@@ -59,7 +59,17 @@ const MAX_FRAME_MS = 100;
  * inherits it. This is that plus a margin, and it measured no stall in an
  * arrow's flight where 100 ms occasionally did.
  */
-const INTERP_DELAY_MS = 125;
+/**
+ * How far behind the newest snapshot remote bodies are drawn.
+ *
+ * It has to span two snapshots, plus margin for a late one. At 20 Hz that meant
+ * 125 ms; at 30 Hz two snapshots are 67 ms, so 100 ms keeps very nearly the same
+ * margin for network lateness while drawing everyone 25 ms closer to now.
+ *
+ * Lower is more responsive and less forgiving. 90 is fine when everyone is on
+ * one continent; going under two snapshot intervals is not, at any latency.
+ */
+const INTERP_DELAY_MS = 100;
 
 /** Team colours, so two sides read apart at a glance. */
 const TEAM_FILL = ['#39FF14', '#39E0FF'] as const;

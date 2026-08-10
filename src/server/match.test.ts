@@ -42,13 +42,16 @@ describe('Match', () => {
       expect(match.tick).toBe(0);
     });
 
-    it('snapshots on every third tick and stays quiet in between', () => {
-      expect(match.step()).toBeNull();
-      expect(match.step()).toBeNull();
-      expect(match.step()).toMatchObject({ tick: 3 });
-      expect(match.step()).toBeNull();
-      expect(match.step()).toBeNull();
-      expect(match.step()).toMatchObject({ tick: 6 });
+    it('snapshots on the tick that is due and stays quiet in between', () => {
+      // Derived from the constant rather than spelled out, so changing the
+      // broadcast rate does not mean editing the test that describes it.
+      const quiet = () => {
+        for (let i = 1; i < TICKS_PER_SNAPSHOT; i++) expect(match.step()).toBeNull();
+      };
+      quiet();
+      expect(match.step()).toMatchObject({ tick: TICKS_PER_SNAPSHOT });
+      quiet();
+      expect(match.step()).toMatchObject({ tick: TICKS_PER_SNAPSHOT * 2 });
     });
 
     it('counts every tick, not only the broadcast ones', () => {
