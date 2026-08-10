@@ -10,7 +10,7 @@
  * It owns the socket, so leaving the screen closes it.
  */
 
-import type { PlayerStart } from '../net/protocol';
+import type { GameMode, PlayerStart } from '../net/protocol';
 import { defaultServerUrl } from '../net/server-url';
 import { WsTransport } from '../net/ws-transport';
 import { LobbyController } from './lobby-controller';
@@ -150,7 +150,7 @@ export class MultiplayerSession {
   }
 
   /** Swaps the lobby screens for the match view once the server says play began. */
-  #openMatch(started: { starts: readonly PlayerStart[] }): void {
+  #openMatch(started: { starts: readonly PlayerStart[]; mode: GameMode }): void {
     const ctx = this.#canvas.getContext('2d');
     if (!ctx || !this.#transport) return;
     this.#match = new MatchView({
@@ -159,6 +159,7 @@ export class MultiplayerSession {
       canvasH: this.#canvas.height,
       transport: this.#transport,
       starts: started.starts,
+      mode: started.mode,
       you: this.#controller?.state.userSlot ?? 0,
     });
   }

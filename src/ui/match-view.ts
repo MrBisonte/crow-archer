@@ -11,9 +11,11 @@ import {
   EntityKind,
   PlayerState,
   type EntitySnapshot,
+  type GameMode,
   type PlayerStart,
   type Snapshot,
 } from '../net/protocol';
+import { EffectKind, HitEffects } from './hit-effects';
 import { Interpolator } from '../net/interpolation';
 import { Predictor } from '../net/prediction';
 import { LocalInput, type RawInput } from '../sim/input';
@@ -92,6 +94,12 @@ export interface MatchViewOptions {
   transport: Transport;
   starts: readonly PlayerStart[];
   you: number;
+  /**
+   * Which mode is being played. The view says so, because co-op with friendly
+   * fire off and no crows yet is a match where an arrow cannot do anything, and
+   * that is indistinguishable from a broken game unless the screen explains it.
+   */
+  mode: GameMode;
   /** Injected so the interpolation clock is the same one the tests drive. */
   now?: () => number;
 }
@@ -103,6 +111,7 @@ export class MatchView {
   readonly #transport: Transport;
   readonly #starts: readonly PlayerStart[];
   readonly #you: number;
+  readonly #mode: GameMode;
   readonly #now: () => number;
   readonly #input: LocalInput;
   readonly #predictor: Predictor;
@@ -113,6 +122,7 @@ export class MatchView {
   #lastFrameAt: number | null = null;
   /** Simulated time owed but not yet stepped, carried between frames. */
   #owedMs = 0;
+  readonly #effects = new HitEffects();
 
   constructor(options: MatchViewOptions) {
     this.#ctx = options.ctx;
@@ -121,6 +131,7 @@ export class MatchView {
     this.#transport = options.transport;
     this.#starts = options.starts;
     this.#you = options.you;
+    this.#mode = options.mode;
     this.#now = options.now ?? (() => performance.now());
     this.#input = new LocalInput(() => this.#raw);
     this.#predictor = new Predictor({
@@ -176,6 +187,9 @@ export class MatchView {
     this.#latest = snap;
     this.#predictor.reconcile(snap);
     this.#interpolator.push(snap, this.#now());
+    // A hit is inferred from health falling between snapshots. The wire carries
+    // no cosmetics, so this is where a landed arrow becomes something visible.
+    this.#effects.observe(snap, this.#now());
   }
 
   /**
@@ -281,7 +295,62 @@ export class MatchView {
       });
     }
 
+    this.#drawEffects();
     this.#drawHud();
+  }
+
+  /**
+   * Hits and deaths, drawn over the bodies.
+   *
+   * A ring that expands and fades reads as an impact at a glance, and the number
+   * says how much it took. Both are drawn where the snapshot put the body rather
+   * than where it is now, because that is where the arrow actually struck.
+   */
+  #drawEffects(): void {
+    const ctx = this.#ctx;
+    const now = this.#now();
+    for (const { effect, progress } of this.#effects.active(now)) {
+      const y = effect.y + HUD_HEIGHT;
+      const fade = 1 - progress;
+      const death = effect.kind === EffectKind.DEATH;
+
+      ctx.globalAlpha = fade;
+      ctx.strokeStyle = death ? '#FF3B30' : '#FFFFFF';
+      ctx.lineWidth = death ? 3 : 2;
+      ctx.beginPath();
+      ctx.arc(effect.x, y, PLAYER_RADIUS + progress * (death ? 34 : 16), 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (effect.damage > 0) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 14px "Courier New", monospace';
+        ctx.textAlign = 'center';
+        // Rises as it fades, which is what the rest of the game does.
+        ctx.fillText(`-${effect.damage}`, effect.x, y - PLAYER_RADIUS - 10 - progress * 14);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    this.#drawOwnDamageFlash(now);
+  }
+
+  /**
+   * A red rim when it is you being hit.
+   *
+   * Your own body is under your cursor and hard to watch while moving, so taking
+   * damage needs to be visible at the edge of vision rather than on the body.
+   */
+  #drawOwnDamageFlash(now: number): void {
+    const mine = this.#effects
+      .active(now)
+      .find(({ effect }) => effect.id === this.#you && effect.damage > 0);
+    if (!mine) return;
+    const ctx = this.#ctx;
+    ctx.globalAlpha = (1 - mine.progress) * 0.5;
+    ctx.strokeStyle = '#FF3B30';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(5, HUD_HEIGHT + 5, ARENA_W - 10, ARENA_H - 10);
+    ctx.globalAlpha = 1;
   }
 
   #drawArrow(e: EntitySnapshot): void {
@@ -336,6 +405,17 @@ export class MatchView {
     ctx.fillText(String(start?.character ?? '').toUpperCase(), e.x, y - PLAYER_RADIUS - 8);
   }
 
+  /**
+   * The one line of text the HUD has room for, spent on whatever matters most
+   * right now: being dead, then a mode where arrows cannot hurt anyone, then
+   * the controls.
+   */
+  #centreLine(own: EntitySnapshot | undefined): string {
+    if (own?.state === PlayerState.DEAD) return 'DOWN  ·  BACK SHORTLY';
+    if (this.#mode === 'coop') return 'CO-OP  ·  ARROWS PASS THROUGH ALLIES  ·  NO CROWS YET';
+    return 'ARROWS MOVE  ·  CLICK OR SPACE TO SHOOT';
+  }
+
   /** A short bar over the head, only while it means something. */
   #drawHealthBar(e: EntitySnapshot, y: number, fill: string): void {
     if (e.hp >= PLAYER_MAX_HP) return;
@@ -357,13 +437,7 @@ export class MatchView {
     ctx.fillText(`HP ${own?.hp ?? PLAYER_MAX_HP}`, 8, 20);
 
     ctx.textAlign = 'center';
-    ctx.fillText(
-      own?.state === PlayerState.DEAD
-        ? 'DOWN  ·  BACK SHORTLY'
-        : 'ARROWS MOVE  ·  CLICK OR SPACE TO SHOOT',
-      this.#canvasW / 2,
-      20,
-    );
+    ctx.fillText(this.#centreLine(own), this.#canvasW / 2, 20);
 
     ctx.textAlign = 'right';
     ctx.fillText(`P${this.#you}  T${this.#latest?.tick ?? 0}`, this.#canvasW - 8, 20);
