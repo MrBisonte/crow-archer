@@ -463,6 +463,11 @@ describe('serving the client', () => {
     expect(await get('/index.html')).toMatchObject({ status: 200, body: PAGE });
   });
 
+  it('forbids caching the page, so a rebuild is never served stale', async () => {
+    const res = await fetch(`http://127.0.0.1:${server.port}/`);
+    expect(res.headers.get('cache-control')).toContain('no-store');
+  });
+
   it('ignores a query string, since ?server= and ?name= arrive on the page URL', async () => {
     expect(await get('/?name=alex')).toMatchObject({ status: 200, body: PAGE });
   });

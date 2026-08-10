@@ -135,7 +135,16 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
         res.writeHead(503, { 'content-type': 'text/plain' }).end('no client build to serve');
         return;
       }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);
+      // Never cached. Without a header a browser caches heuristically, and a
+      // stale page is a stale client: it may hold an old PROTOCOL_VERSION, and
+      // it silently lacks whatever the last build added, which is a confusing
+      // way to lose an evening. The page is one request per join, not per frame.
+      res
+        .writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store, must-revalidate',
+        })
+        .end(html);
     });
   });
 

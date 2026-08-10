@@ -20,7 +20,7 @@ import {
   type PlayerId,
   type PlayerStart,
 } from '../net/protocol';
-import type { Team } from './team';
+import { canDamage, type Team } from './team';
 import { Button, type InputCommand } from './input';
 import {
   ARENA_H,
@@ -224,8 +224,10 @@ export class ArenaWorld implements World {
     const reach = PLAYER_RADIUS + ARROW_RADIUS;
     for (const body of this.#bodies) {
       if (body.respawnIn !== null) continue;
-      // Friendly fire is off in every mode, which also covers the shooter.
-      if (body.team === arrow.team) continue;
+      // The rule lives in team.ts, which is the only place that decides who may
+      // damage whom. Spelling it out here as an equality check meant the same
+      // rule existed twice and could disagree with itself.
+      if (!canDamage(arrow.team, body.team)) continue;
       const dx = body.x - arrow.x;
       const dy = body.y - arrow.y;
       if (dx * dx + dy * dy <= reach * reach) return body;
