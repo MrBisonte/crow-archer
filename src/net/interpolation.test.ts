@@ -24,6 +24,7 @@ function snapshot(n: number, x: number, y = 0): Snapshot {
     tick: 3 * (n + 1),
     entities: [{ id: 1, kind: 0, x, y, hp: 10, state: 0 }],
     acks: [],
+    scores: { a: 0, b: 0 },
   };
 }
 
@@ -139,7 +140,7 @@ describe('Interpolator', () => {
     it('waits for a body the older snapshot did not have yet', () => {
       // The moment being drawn is at or after the older snapshot, and this body
       // did not exist then. Drawing it early puts it a delay ahead of itself.
-      interp.push({ tick: 3, entities: [], acks: [] }, arrivalOf(0));
+      interp.push({ tick: 3, entities: [], acks: [], scores: { a: 0, b: 0 } }, arrivalOf(0));
       interp.push(snapshot(1, 200), arrivalOf(1));
       expect(xAt(1125)).toBeUndefined();
     });
@@ -148,14 +149,14 @@ describe('Interpolator', () => {
       // An arrow that hit something is still in flight at the moment being
       // drawn. Removing it now deletes it a whole delay before the impact.
       interp.push(snapshot(0, 100), arrivalOf(0));
-      interp.push({ tick: 6, entities: [], acks: [] }, arrivalOf(1));
+      interp.push({ tick: 6, entities: [], acks: [], scores: { a: 0, b: 0 } }, arrivalOf(1));
       expect(xAt(1125)).toBe(100);
     });
 
     it('lets it go once the drawn moment passes the snapshot that dropped it', () => {
       interp.push(snapshot(0, 100), arrivalOf(0));
-      interp.push({ tick: 6, entities: [], acks: [] }, arrivalOf(1));
-      interp.push({ tick: 9, entities: [], acks: [] }, arrivalOf(2));
+      interp.push({ tick: 6, entities: [], acks: [], scores: { a: 0, b: 0 } }, arrivalOf(1));
+      interp.push({ tick: 9, entities: [], acks: [], scores: { a: 0, b: 0 } }, arrivalOf(2));
       expect(interp.at(1200)).toEqual([]);
     });
   });

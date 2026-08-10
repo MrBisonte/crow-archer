@@ -9,6 +9,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { Team } from '../sim/team';
 import { initialLobbyState, transitionLobby } from './lobby-state';
 import { type LobbyOutbound } from './lobby-state';
+import { DEFAULT_WIN_CONDITION } from '../net/protocol';
 
 describe('Phase 1 E2E: lobby state flow', () => {
   it('flows from menu → host → room state → character pick → ready → game start', () => {
@@ -31,6 +32,7 @@ describe('Phase 1 E2E: lobby state flow', () => {
         mode: 'coop',
         host: 0,
         you: 0,
+        win: DEFAULT_WIN_CONDITION,
         slots: [
           { id: 0, name: 'player', character: 'archer', ready: false, team: Team.A },
         ],
@@ -63,6 +65,7 @@ describe('Phase 1 E2E: lobby state flow', () => {
         mode: 'coop',
         host: 0,
         you: 0,
+        win: DEFAULT_WIN_CONDITION,
         slots: [
           { id: 0, name: 'player', character: 'wizard', ready: true, team: Team.A },
         ],

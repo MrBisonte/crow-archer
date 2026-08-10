@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { WS_PATH, type PlayerId, type Snapshot } from '../net/protocol';
+import { WS_PATH, type PlayerId, type RoomCode, type Snapshot } from '../net/protocol';
 import type { InputCommand } from '../sim/input';
 import { ArenaWorld } from '../sim/arena-world';
 import type { WorldFactory } from '../sim/world';
@@ -242,6 +242,29 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
   };
 
   /**
+   * Reports a finished match and returns its room to the lobby.
+   *
+   * A match with a result is one that was played to its end, and everyone still
+   * connected is owed the score. A match with no result ended because the last
+   * player left, and there is nobody to tell.
+   */
+  const finish = (code: string, match: Match) => {
+    const result = match.result;
+    if (result) {
+      for (const { conn } of rooms.seatsOf(code)) {
+        const socket = sockets.get(conn);
+        if (socket?.readyState === socket?.OPEN) {
+          socket?.send(JSON.stringify({ type: 'MATCH_END', result }));
+        }
+      }
+    }
+    // Back to the lobby either way, so the room can be played again rather than
+    // being stuck in a match that is over.
+    const view = rooms.endMatch(code as RoomCode);
+    if (view) send(lobby.roomState(view));
+  };
+
+  /**
    * Steps all running matches at 60 Hz and broadcasts snapshots.
    *
    * The number of steps comes from the clock, not from the number of times the
@@ -279,7 +302,11 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
         }
       }
 
-      for (const [code, match] of matches) if (match.isFinished()) matches.delete(code);
+      for (const [code, match] of matches) {
+        if (!match.isFinished()) continue;
+        finish(code, match);
+        matches.delete(code);
+      }
       if (matches.size === 0 && tickInterval) {
         clearInterval(tickInterval);
         tickInterval = null;

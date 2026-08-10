@@ -13,7 +13,10 @@
 
 import { EntityKind, type EntitySnapshot, type PlayerId, type PlayerStart } from '../net/protocol';
 import { ARENA_H, ARENA_W, PLAYER_MAX_HP, PLAYER_SPEED, clampToArena, direction } from './arena';
-import type { StepInputs, World } from './world';
+import type { Kill, StepInputs, World } from './world';
+
+/** Shared empty result, so a step in this world allocates nothing. */
+const NO_KILLS: readonly Kill[] = [];
 
 export class MovementWorld implements World {
   readonly #bodies: { id: PlayerId; x: number; y: number; hp: number }[];
@@ -22,7 +25,7 @@ export class MovementWorld implements World {
     this.#bodies = starts.map((s) => ({ id: s.id, x: s.x, y: s.y, hp: PLAYER_MAX_HP }));
   }
 
-  step(dt: number, inputs: StepInputs): void {
+  step(dt: number, inputs: StepInputs): readonly Kill[] {
     for (const body of this.#bodies) {
       const cmd = inputs.get(body.id);
       if (!cmd) continue;
@@ -32,6 +35,8 @@ export class MovementWorld implements World {
       body.x = clampToArena(body.x + dx * PLAYER_SPEED * dt, ARENA_W);
       body.y = clampToArena(body.y + dy * PLAYER_SPEED * dt, ARENA_H);
     }
+    // Nothing here can hurt anyone, so nothing is ever brought down.
+    return NO_KILLS;
   }
 
   remove(id: number): void {

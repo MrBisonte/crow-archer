@@ -47,7 +47,7 @@ Up to four players in a room, co-op or 2v2. The server runs the only simulation;
 
 1. Open the server's URL and press **M**.
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
-3. The host sets the mode with **D** for deathmatch or **C** for co-op. Everyone presses **R**, and it starts once the last player is ready.
+3. The host sets the mode with **D** for deathmatch or **C** for co-op, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes) — one or the other, not both. Everyone presses **R**, and it starts once the last player is ready.
 
 Arrow keys move, the mouse aims, and left click or space shoots. Five hits kill, and you come back where you started three seconds later. **Pick deathmatch**: friendly fire is off in every mode and there are no crows yet, so co-op has nothing in it to shoot. Characters can be picked with **A**, **W** and **K**, but they all play the same for now.
 

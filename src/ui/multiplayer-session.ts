@@ -10,7 +10,7 @@
  * It owns the socket, so leaving the screen closes it.
  */
 
-import type { GameMode, PlayerStart } from '../net/protocol';
+import type { GameMode, PlayerStart, WinCondition } from '../net/protocol';
 import { defaultServerUrl } from '../net/server-url';
 import { WsTransport } from '../net/ws-transport';
 import { LobbyController } from './lobby-controller';
@@ -80,6 +80,10 @@ export class MultiplayerSession {
       // last snapshot said. Smoothness lives here.
       interpolated: this.#match?.interpolated ?? null,
       interpDelayMs: this.#match?.interpDelayMs ?? null,
+      /** What the room plays to, the running score, and how the last one went. */
+      win: lobby?.roomView?.win ?? null,
+      scores: this.#match?.latest?.scores ?? null,
+      lastResult: this.#controller?.lastResult ?? null,
     };
   }
 
@@ -131,6 +135,10 @@ export class MultiplayerSession {
     // that is where snapshots arrive; only drawing and input move to the view.
     const started = this.#controller.matchStart();
     if (started && !this.#match) this.#openMatch(started);
+    // The controller clears matchStart on MATCH_END, so a match that has ended
+    // stops being drawn and the lobby screen takes the canvas back with the
+    // ROOM_STATE the server sends alongside it.
+    if (!started && this.#match) this.#match = null;
 
     if (this.#match) {
       this.#controller.poll();                   // socket only; the view draws
@@ -150,7 +158,11 @@ export class MultiplayerSession {
   }
 
   /** Swaps the lobby screens for the match view once the server says play began. */
-  #openMatch(started: { starts: readonly PlayerStart[]; mode: GameMode }): void {
+  #openMatch(started: {
+    starts: readonly PlayerStart[];
+    mode: GameMode;
+    win: WinCondition;
+  }): void {
     const ctx = this.#canvas.getContext('2d');
     if (!ctx || !this.#transport) return;
     this.#match = new MatchView({
@@ -160,6 +172,7 @@ export class MultiplayerSession {
       transport: this.#transport,
       starts: started.starts,
       mode: started.mode,
+      win: started.win,
       you: this.#controller?.state.userSlot ?? 0,
     });
   }

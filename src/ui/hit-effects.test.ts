@@ -8,7 +8,7 @@ const player = (id: number, hp: number, state: PlayerState = PlayerState.ALIVE):
 });
 
 const snap = (tick: number, entities: EntitySnapshot[]): Snapshot => ({
-  tick, entities, acks: [],
+  tick, entities, acks: [], scores: { a: 0, b: 0 },
 });
 
 describe('HitEffects', () => {

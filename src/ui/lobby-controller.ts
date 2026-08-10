@@ -4,7 +4,16 @@
  * (pure) and the Transport.
  */
 
-import type { CharacterKind, ServerMessage, Snapshot } from '../net/protocol';
+import { Team } from '../sim/team';
+import type {
+  CharacterKind,
+  GameMode,
+  MatchResult,
+  PlayerStart,
+  ServerMessage,
+  Snapshot,
+  WinCondition,
+} from '../net/protocol';
 import type { Transport } from '../net/transport';
 import {
   initialLobbyState,
@@ -66,7 +75,13 @@ export class LobbyController {
           this.#codeBuffer = '';
         }
       } else if (msg.type === 'MATCH_START') {
-        this.#matchStart = { seed: msg.seed, mode: msg.mode, starts: msg.starts };
+        this.#matchStart = { seed: msg.seed, mode: msg.mode, starts: msg.starts, win: msg.win };
+        this.#lastResult = null;
+      } else if (msg.type === 'MATCH_END') {
+        // Cleared with it, or matchStart() would keep describing the match that
+        // just finished and the session would open it again immediately.
+        this.#matchStart = null;
+        this.#lastResult = msg.result;
       } else if (msg.type === 'SNAPSHOT') {
         // Held for the session to drain: the match view owns drawing them, and
         // the first snapshots can arrive before it has been built.
@@ -146,6 +161,20 @@ export class LobbyController {
         this.#setState(next, send);
         return true;
       }
+      // Win condition: F cycles the frag target, T cycles the time limit. Each
+      // also selects that kind, so picking one turns the other off.
+      if (this.#state.userSlot === this.#state.roomView?.host) {
+        const cycle = { f: 'frags', t: 'time' } as const;
+        const kind = cycle[key.toLowerCase() as 'f' | 't'];
+        if (kind) {
+          const { state: next, send } = transitionLobby(this.#state, {
+            type: 'CYCLE_WIN_CONDITION',
+            kind,
+          });
+          this.#setState(next, send);
+          return true;
+        }
+      }
       // Mode toggle: C for coop, D for deathmatch (host only)
       if (this.#state.userSlot === this.#state.roomView?.host) {
         if (key.toLowerCase() === 'c') {
@@ -184,11 +213,18 @@ export class LobbyController {
    * Has the game started? Once MATCH_START arrives, the harness should hand
    * off to the game. Returns null until then.
    */
-  matchStart(): { seed: number; mode: any; starts: any[] } | null {
+  matchStart(): { seed: number; mode: GameMode; starts: PlayerStart[]; win: WinCondition } | null {
     return this.#matchStart;
   }
 
-  #matchStart: { seed: number; mode: any; starts: any[] } | null = null;
+  /** How the last match finished, for the lobby to report. Null before the first. */
+  get lastResult(): MatchResult | null {
+    return this.#lastResult;
+  }
+
+  #matchStart: { seed: number; mode: GameMode; starts: PlayerStart[]; win: WinCondition } | null =
+    null;
+  #lastResult: MatchResult | null = null;
   readonly #snapshots: Snapshot[] = [];
 
   /** Snapshots received since the last call, oldest first. Drains the buffer. */
@@ -303,7 +339,19 @@ export class LobbyController {
     const isHost = this.#state.userSlot === this.#state.roomView.host;
     const modeText = `MODE: ${this.#state.roomView.mode.toUpperCase()}${isHost ? ' [C/D]' : ''}`;
     this.#ctx.fillText(modeText, x, y);
-    y += 50;
+    y += 30;
+
+    // What ends the match. One or the other, so only the chosen one is shown as
+    // set, and the host is told which key changes each.
+    this.#ctx.fillText(`${describeWin(this.#state.roomView.win)}${isHost ? '  [F/T]' : ''}`, x, y);
+    y += 30;
+
+    // How the last one went, so a finished match is reported rather than the
+    // screen simply reappearing as though nothing had happened.
+    if (this.#lastResult) {
+      this.#ctx.fillText(describeResult(this.#lastResult), x, y);
+    }
+    y += 40;
 
     // Character picker
     this.#ctx.fillText('[A] ARCHER  [W] WIZARD  [K] KNIGHT', x, y);
@@ -324,4 +372,20 @@ export class LobbyController {
     y += 20;
     this.#ctx.fillText('[R] READY  [ESC] LEAVE', x, y);
   }
+}
+
+/**
+ * How the win condition reads on screen. One line, because only one of the two
+ * is ever in force.
+ */
+export function describeWin(win: WinCondition): string {
+  return win.kind === 'frags' ? `FIRST TO: ${win.target} FRAGS` : `TIME LIMIT: ${win.minutes} MIN`;
+}
+
+/** How a finished match reads on the lobby screen. */
+export function describeResult(result: MatchResult): string {
+  if (result.outcome !== 'DEATHMATCH') return `LAST: WAVE ${result.wave}`;
+  const line = `${result.scoreA} - ${result.scoreB}`;
+  if (result.winner === null) return `LAST: DRAW  ${line}`;
+  return `LAST: TEAM ${result.winner === Team.A ? 'A' : 'B'} WON  ${line}`;
 }

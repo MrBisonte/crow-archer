@@ -20,7 +20,7 @@ function serverSays(x: number, y: number, ack: number, tick = 1): Snapshot {
     { id: 0, kind: 0, x, y, hp: 10, state: 0 },
     { id: 1, kind: 0, x: 400, y: 300, hp: 10, state: 0 },
   ];
-  return { tick, entities, acks: [{ id: 0, seq: ack }, { id: 1, seq: 0 }] };
+  return { tick, entities, acks: [{ id: 0, seq: ack }, { id: 1, seq: 0 }], scores: { a: 0, b: 0 } };
 }
 
 describe('Predictor', () => {
@@ -146,6 +146,7 @@ describe('Predictor', () => {
         tick: 9,
         entities: [{ id: 1, kind: 0, x: 400, y: 300, hp: 10, state: 0 }],
         acks: [{ id: 1, seq: 0 }],
+        scores: { a: 0, b: 0 },
       });
       expect(me()!.x).toBe(predicted);
     });

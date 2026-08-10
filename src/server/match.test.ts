@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { Team } from '../sim/team';
 import { Button } from '../sim/input';
 import { MovementWorld } from '../sim/movement-world';
-import type { PlayerStart, RoomView } from '../net/protocol';
-import { GRACE_TICKS, Match, TICKS_PER_SNAPSHOT } from './match';
+import type { EntitySnapshot, PlayerStart, RoomView, WinCondition } from '../net/protocol';
+import type { Kill, World } from '../sim/world';
+import { GRACE_TICKS, Match, TICKS_PER_SNAPSHOT, TICK_HZ } from './match';
+import { DEFAULT_WIN_CONDITION } from '../net/protocol';
 
 const room: RoomView = {
   code: 'AAAA',
   mode: 'coop',
   host: 0,
+  win: DEFAULT_WIN_CONDITION,
   slots: [
     { id: 0, name: 'alex', character: 'archer', ready: true, team: Team.A },
     { id: 1, name: 'sam', character: 'wizard', ready: true, team: Team.A },
@@ -22,6 +25,35 @@ const starts: PlayerStart[] = [
 ];
 
 const newMatch = () => new Match(room, new MovementWorld(starts));
+
+/**
+ * A world that reports whatever kills a test queues, and does nothing else.
+ *
+ * The scoring rules are about what Match does with a kill, not about arrows, so
+ * this keeps arrow speeds and hit radii out of tests that are not about them.
+ */
+class KillingWorld implements World {
+  #pending: Kill[] = [];
+
+  /** Queues a kill for the next step to report. */
+  kill(k: Kill): void {
+    this.#pending.push(k);
+  }
+
+  step(): readonly Kill[] {
+    const out = this.#pending;
+    this.#pending = [];
+    return out;
+  }
+
+  snapshot(): EntitySnapshot[] {
+    return [];
+  }
+
+  restore(): void {}
+
+  remove(): void {}
+}
 
 /** Steps until a snapshot comes back, failing rather than looping forever. */
 function stepToSnapshot(match: Match) {
@@ -128,6 +160,113 @@ describe('Match', () => {
       for (let i = 0; i <= GRACE_TICKS; i++) match.step();
       expect(match.entities().some((e) => e.id === 0)).toBe(false);
       expect(match.entities().some((e) => e.id === 1)).toBe(true);
+    });
+  });
+
+  describe('scoring and ending', () => {
+    /** A room playing to a given win condition, with two opposed seats. */
+    const duel = (win: WinCondition): { match: Match; world: KillingWorld } => {
+      const room2: RoomView = {
+        ...room,
+        mode: 'deathmatch',
+        win,
+        slots: [
+          { id: 0, name: 'alex', character: 'archer', ready: true, team: Team.A },
+          { id: 1, name: 'sam', character: 'wizard', ready: true, team: Team.B },
+        ],
+      };
+      const world = new KillingWorld();
+      return { match: new Match(room2, world), world };
+    };
+
+    it('starts level', () => {
+      expect(duel({ kind: 'frags', target: 10 }).match.scores).toEqual({ a: 0, b: 0 });
+    });
+
+    it('credits a kill to the side that made it', () => {
+      const { match, world } = duel({ kind: 'frags', target: 10 });
+      world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+      match.step();
+      expect(match.scores).toEqual({ a: 1, b: 0 });
+    });
+
+    it('credits the other side too, so a scoreboard is not one-sided', () => {
+      const { match, world } = duel({ kind: 'frags', target: 10 });
+      world.kill({ victim: 0, killer: 1, killerTeam: Team.B });
+      match.step();
+      expect(match.scores).toEqual({ a: 0, b: 1 });
+    });
+
+    it('puts the score on the snapshot, so a client cannot drift from it', () => {
+      const { match, world } = duel({ kind: 'frags', target: 10 });
+      world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+      expect(stepToSnapshot(match).scores).toEqual({ a: 1, b: 0 });
+    });
+
+    it('is not over before the target is reached', () => {
+      const { match, world } = duel({ kind: 'frags', target: 10 });
+      for (let i = 0; i < 9; i++) {
+        world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+        match.step();
+      }
+      expect(match.result).toBeNull();
+      expect(match.isFinished()).toBe(false);
+    });
+
+    it('ends when a side reaches the target, naming the winner', () => {
+      const { match, world } = duel({ kind: 'frags', target: 10 });
+      for (let i = 0; i < 10; i++) {
+        world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+        match.step();
+      }
+      expect(match.result).toEqual({ outcome: 'DEATHMATCH', winner: Team.A, scoreA: 10, scoreB: 0 });
+      expect(match.isFinished()).toBe(true);
+    });
+
+    it('keeps the first result rather than judging again every tick', () => {
+      const { match, world } = duel({ kind: 'frags', target: 10 });
+      for (let i = 0; i < 10; i++) {
+        world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+        match.step();
+      }
+      const first = match.result;
+      match.step();
+      expect(match.result).toEqual(first);
+    });
+
+    describe('on a time limit', () => {
+      const fiveMinutes: WinCondition = { kind: 'time', minutes: 5 };
+      const ticks = 5 * 60 * TICK_HZ;
+
+      it('runs to the last tick', () => {
+        const { match } = duel(fiveMinutes);
+        for (let i = 0; i < ticks - 1; i++) match.step();
+        expect(match.result).toBeNull();
+      });
+
+      it('ends when the time is up', () => {
+        const { match, world } = duel(fiveMinutes);
+        world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+        for (let i = 0; i < ticks; i++) match.step();
+        expect(match.result).toMatchObject({ winner: Team.A, scoreA: 1, scoreB: 0 });
+      });
+
+      it('reports a draw as a draw, not as somebody winning', () => {
+        const { match } = duel(fiveMinutes);
+        for (let i = 0; i < ticks; i++) match.step();
+        expect(match.result).toEqual({
+          outcome: 'DEATHMATCH', winner: null, scoreA: 0, scoreB: 0,
+        });
+      });
+
+      it('does not end early on frags, since that is the other condition', () => {
+        const { match, world } = duel(fiveMinutes);
+        for (let i = 0; i < 40; i++) {
+          world.kill({ victim: 1, killer: 0, killerTeam: Team.A });
+          match.step();
+        }
+        expect(match.result).toBeNull();
+      });
     });
   });
 

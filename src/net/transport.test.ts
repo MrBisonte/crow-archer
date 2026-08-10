@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PROTOCOL_VERSION, type ServerMessage } from './protocol';
 import type { Transport } from './transport';
+import { DEFAULT_WIN_CONDITION } from './protocol';
 
 /**
  * Fake transport for unit tests. Accepts messages in a scripted order and
@@ -64,7 +65,7 @@ describe('Transport', () => {
     await t.connect();
     expect(t.state).toBe('connected');
 
-    t.injectResponses({ type: 'ROOM_STATE', code: 'AAAA', mode: 'coop', host: 0, slots: [], you: 0 });
+    t.injectResponses({ type: 'ROOM_STATE', code: 'AAAA', mode: 'coop', host: 0, slots: [], you: 0, win: DEFAULT_WIN_CONDITION });
     t.send({ type: 'CREATE_ROOM' });
 
     expect(t.recv()).toMatchObject({ type: 'ROOM_STATE' });

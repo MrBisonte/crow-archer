@@ -12,13 +12,16 @@ import { Button } from '../sim/input';
 import { PLAYER_MAX_HP } from '../sim/arena';
 import {
   EntityKind,
+  FRAG_TARGETS,
   MAX_PLAYERS,
   PROTOCOL_VERSION,
   WS_PATH,
   parseServerMessage,
   type ClientMessage,
+  type EntitySnapshot,
   type ServerMessage,
 } from '../net/protocol';
+import type { Kill, World } from '../sim/world';
 import { HEALTH_PATH, startServer, type RunningServer } from './index';
 
 /** A test client that queues what arrives, so a test can await the next message. */
@@ -70,6 +73,32 @@ class Client {
   close(): void {
     this.#socket.close();
   }
+}
+
+/**
+ * A world in which team A scores on a fixed schedule and nothing else happens.
+ *
+ * Injected so a match can be played to its end in under a second. It exists to
+ * exercise the path a score takes to the wire, not to simulate anything.
+ */
+class ScoringWorld implements World {
+  #ticks = 0;
+
+  constructor(private readonly everyTicks: number) {}
+
+  step(): readonly Kill[] {
+    this.#ticks++;
+    if (this.#ticks % this.everyTicks !== 0) return [];
+    return [{ victim: 1, killer: 0, killerTeam: Team.A }];
+  }
+
+  snapshot(): EntitySnapshot[] {
+    return [];
+  }
+
+  restore(): void {}
+
+  remove(): void {}
 }
 
 /** Narrows to ROOM_STATE, failing the test rather than returning a union. */
@@ -404,6 +433,70 @@ describe('a deathmatch that can be won', () => {
     }
     throw new Error('no snapshot matched within 200 messages');
   };
+
+  it('plays to a frag target, reports the winner, and hands the room back', async () => {
+    // The world is injected because ten frags of real archery is fifty seconds
+    // of arrows and respawns. What is under test here is the wiring: the score
+    // reaching the wire, MATCH_END, and the room becoming playable again.
+    // ArenaWorld's own rules are covered by its unit tests.
+    const fast = await startServer({ port: 0, makeWorld: () => new ScoringWorld(6) });
+    const host = await Client.connect(fast.port);
+    const guest = await Client.connect(fast.port);
+    try {
+      await host.hello('alex');
+      await guest.hello('sam');
+
+      const created = roomState(await host.ask({ type: 'CREATE_ROOM' }));
+      guest.send({ type: 'JOIN_ROOM', code: created.code });
+      await host.next();
+      await guest.next();
+
+      host.send({ type: 'SET_MODE', mode: 'deathmatch' });
+      await host.next();
+      await guest.next();
+
+      host.send({ type: 'SET_WIN_CONDITION', win: { kind: 'frags', target: FRAG_TARGETS[0]! } });
+      expect(roomState(await host.next()).win).toEqual({ kind: 'frags', target: 10 });
+      await guest.next();
+
+      host.send({ type: 'SET_READY', ready: true });
+      await host.next();
+      await guest.next();
+      guest.send({ type: 'SET_READY', ready: true });
+
+      let started: Extract<ServerMessage, { type: 'MATCH_START' }> | null = null;
+      for (let i = 0; i < 6 && !started; i++) {
+        const msg = await host.next();
+        if (msg.type === 'MATCH_START') started = msg;
+      }
+      if (!started) throw new Error('the match never started');
+      expect(started.win).toEqual({ kind: 'frags', target: 10 });
+
+      let ended: Extract<ServerMessage, { type: 'MATCH_END' }> | null = null;
+      let sawScore = false;
+      for (let i = 0; i < 500 && !ended; i++) {
+        const msg = await host.next();
+        if (msg.type === 'SNAPSHOT' && msg.snap.scores.a > 0) sawScore = true;
+        if (msg.type === 'MATCH_END') ended = msg;
+      }
+      if (!ended) throw new Error('the match never ended');
+
+      expect(sawScore).toBe(true);             // the score travelled while playing
+      expect(ended.result).toEqual({
+        outcome: 'DEATHMATCH', winner: Team.A, scoreA: 10, scoreB: 0,
+      });
+
+      // The room is playable again: back in its lobby, with readiness cleared so
+      // it does not restart the instant it finished.
+      const back = roomState(await host.next());
+      expect(back.slots.every((s) => !s.ready)).toBe(true);
+      expect(fast.activeMatches()).toBe(0);
+    } finally {
+      host.close();
+      guest.close();
+      await fast.close();
+    }
+  }, 20_000);
 
   it('puts an arrow on the wire when a player fires', async () => {
     const { host, starts } = await startMatch();

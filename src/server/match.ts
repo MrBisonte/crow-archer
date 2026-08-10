@@ -13,8 +13,17 @@
  */
 
 import type { InputCommand } from '../sim/input';
-import type { World } from '../sim/world';
-import type { InputAck, PlayerId, RoomView, Snapshot } from '../net/protocol';
+import type { Kill, World } from '../sim/world';
+import { Team } from '../sim/team';
+import type {
+  InputAck,
+  MatchResult,
+  PlayerId,
+  RoomView,
+  Snapshot,
+  TeamScores,
+  WinCondition,
+} from '../net/protocol';
 
 /** Server ticks per second. The client predicts against the same rate. */
 export const TICK_HZ = 60;
@@ -46,18 +55,36 @@ export const GRACE_TICKS = TICK_HZ * 10;
 export class Match {
   readonly #room: RoomView;
   readonly #world: World;
+  readonly #win: WinCondition;
   readonly #latestInput = new Map<PlayerId, InputCommand>();
   /** Seats still connected. A match with none left is over. */
   readonly #live = new Set<PlayerId>();
   /** Seats that dropped, and the tick their grace window began. */
   readonly #dropped = new Map<PlayerId, number>();
+  #scores: TeamScores = { a: 0, b: 0 };
+  /** The result once the match is over, and null while it is still being played. */
+  #result: MatchResult | null = null;
   #tick = 0;
   #ticksSinceSnapshot = 0;
 
   constructor(room: RoomView, world: World) {
     this.#room = room;
     this.#world = world;
+    this.#win = room.win;
     for (const slot of room.slots) this.#live.add(slot.id);
+  }
+
+  /** How the two sides stand. */
+  get scores(): TeamScores {
+    return { ...this.#scores };
+  }
+
+  /**
+   * The outcome, or null while the match is still being played. The entry point
+   * reads this after each step to know whether MATCH_END is owed.
+   */
+  get result(): MatchResult | null {
+    return this.#result;
   }
 
   /**
@@ -104,14 +131,51 @@ export class Match {
    * between packets would stutter every player who is simply walking.
    */
   step(): Snapshot | null {
-    this.#world.step(FIXED_DT, this.#latestInput);
+    const kills = this.#world.step(FIXED_DT, this.#latestInput);
     this.#tick++;
+    this.#score(kills);
     this.#reapDropped();
+    this.#judge();
     this.#ticksSinceSnapshot++;
     if (this.#ticksSinceSnapshot < TICKS_PER_SNAPSHOT) return null;
 
     this.#ticksSinceSnapshot = 0;
-    return { tick: this.#tick, entities: this.#world.snapshot(), acks: this.#acks() };
+    return {
+      tick: this.#tick,
+      entities: this.#world.snapshot(),
+      acks: this.#acks(),
+      scores: this.scores,
+    };
+  }
+
+  /** Credits each kill to the side that made it. */
+  #score(kills: readonly Kill[]): void {
+    for (const kill of kills) {
+      if (kill.killerTeam === Team.A) this.#scores.a++;
+      else this.#scores.b++;
+    }
+  }
+
+  /**
+   * Decides whether the match is over, and records the result if it is.
+   *
+   * Both conditions are checked against the same union, so exactly one of them
+   * applies and neither can be forgotten: a match always has a way to end.
+   */
+  #judge(): void {
+    if (this.#result) return;
+    const { a, b } = this.#scores;
+    switch (this.#win.kind) {
+      case 'frags':
+        if (a < this.#win.target && b < this.#win.target) return;
+        break;
+      case 'time':
+        if (this.#tick < this.#win.minutes * 60 * TICK_HZ) return;
+        break;
+    }
+    // A draw is only reachable on time. A frag target is crossed by one side.
+    const winner = a === b ? null : a > b ? Team.A : Team.B;
+    this.#result = { outcome: 'DEATHMATCH', winner, scoreA: a, scoreB: b };
   }
 
   /**
@@ -124,7 +188,7 @@ export class Match {
    * report it to.
    */
   isFinished(): boolean {
-    return this.#live.size === 0;
+    return this.#result !== null || this.#live.size === 0;
   }
 
   /** Removes bodies whose grace window has run out. */

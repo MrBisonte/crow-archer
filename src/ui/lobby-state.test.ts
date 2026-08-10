@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { Team } from '../sim/team';
+import { DEFAULT_WIN_CONDITION } from '../net/protocol';
 import {
   initialLobbyState,
   transitionLobby,
@@ -33,6 +34,7 @@ describe('Lobby state machine', () => {
           mode: 'coop',
           host: 0,
           you: 0,
+          win: DEFAULT_WIN_CONDITION,
           slots: [{ id: 0, name: 'alex', character: 'archer', ready: false, team: Team.A }],
         },
       }));
@@ -79,6 +81,7 @@ describe('Lobby state machine', () => {
       mode: 'coop' as const,
       host: 0,
       you: 0,
+      win: DEFAULT_WIN_CONDITION,
       slots: [
         {
           id: 0,

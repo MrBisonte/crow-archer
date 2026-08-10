@@ -14,6 +14,7 @@ import {
   type GameMode,
   type PlayerStart,
   type Snapshot,
+  type WinCondition,
 } from '../net/protocol';
 import { EffectKind, HitEffects } from './hit-effects';
 import { Interpolator } from '../net/interpolation';
@@ -39,8 +40,11 @@ export interface AimInput {
 /** Height of the legacy HUD strip. The sim knows nothing about it. */
 const HUD_HEIGHT = 32;
 
+/** Ticks per second, the rate the server counts in. */
+const TICK_RATE = 60;
+
 /** Fixed step, matching the server's, or replayed inputs would drift. */
-const DT = 1 / 60;
+const DT = 1 / TICK_RATE;
 
 /** The same step in milliseconds, which is what a frame is measured in. */
 const TICK_MS = 1000 * DT;
@@ -100,6 +104,8 @@ export interface MatchViewOptions {
    * that is indistinguishable from a broken game unless the screen explains it.
    */
   mode: GameMode;
+  /** What ends the match, so the HUD can show the target or the clock. */
+  win: WinCondition;
   /** Injected so the interpolation clock is the same one the tests drive. */
   now?: () => number;
 }
@@ -112,6 +118,7 @@ export class MatchView {
   readonly #starts: readonly PlayerStart[];
   readonly #you: number;
   readonly #mode: GameMode;
+  readonly #win: WinCondition;
   readonly #now: () => number;
   readonly #input: LocalInput;
   readonly #predictor: Predictor;
@@ -132,6 +139,7 @@ export class MatchView {
     this.#starts = options.starts;
     this.#you = options.you;
     this.#mode = options.mode;
+    this.#win = options.win;
     this.#now = options.now ?? (() => performance.now());
     this.#input = new LocalInput(() => this.#raw);
     this.#predictor = new Predictor({
@@ -440,7 +448,24 @@ export class MatchView {
     ctx.fillText(this.#centreLine(own), this.#canvasW / 2, 20);
 
     ctx.textAlign = 'right';
-    ctx.fillText(`P${this.#you}  T${this.#latest?.tick ?? 0}`, this.#canvasW - 8, 20);
+    ctx.fillText(this.#scoreLine(), this.#canvasW - 8, 20);
+  }
+
+  /**
+   * The score, and whichever of the two limits is in force.
+   *
+   * A frag match shows what it is played to; a timed one counts down, which is
+   * derived from the tick rather than a clock of its own so it cannot disagree
+   * with the server that will end the match.
+   */
+  #scoreLine(): string {
+    const { a, b } = this.#latest?.scores ?? { a: 0, b: 0 };
+    const score = `A ${a} - ${b} B`;
+    if (this.#win.kind === 'frags') return `${score}  /${this.#win.target}`;
+    const left = Math.max(0, this.#win.minutes * 60 - (this.#latest?.tick ?? 0) / TICK_RATE);
+    const mins = Math.floor(left / 60);
+    const secs = Math.floor(left % 60);
+    return `${score}  ${mins}:${String(secs).padStart(2, '0')}`;
   }
 }
 

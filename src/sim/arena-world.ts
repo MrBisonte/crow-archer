@@ -19,8 +19,9 @@ import {
   type EntitySnapshot,
   type PlayerId,
   type PlayerStart,
+  type PlayerTeam,
 } from '../net/protocol';
-import { canDamage, type Team } from './team';
+import { canDamage } from './team';
 import { Button, type InputCommand } from './input';
 import {
   ARENA_H,
@@ -32,7 +33,7 @@ import {
   direction,
   insideArena,
 } from './arena';
-import type { StepInputs, World } from './world';
+import type { Kill, StepInputs, World } from './world';
 
 /** Pixels per second. Fast enough that few arrows are in flight at once. */
 export const ARROW_SPEED = 700;
@@ -64,7 +65,7 @@ export const FIRST_ARROW_ID = 1000;
 
 interface Body {
   readonly id: PlayerId;
-  readonly team: Team;
+  readonly team: PlayerTeam;
   readonly spawnX: number;
   readonly spawnY: number;
   x: number;
@@ -79,7 +80,7 @@ interface Body {
 interface Arrow {
   readonly id: number;
   readonly owner: PlayerId;
-  readonly team: Team;
+  readonly team: PlayerTeam;
   x: number;
   y: number;
   readonly vx: number;
@@ -107,7 +108,7 @@ export class ArenaWorld implements World {
     }));
   }
 
-  step(dt: number, inputs: StepInputs): void {
+  step(dt: number, inputs: StepInputs): readonly Kill[] {
     for (const body of this.#bodies) {
       this.#countDown(body);
       const cmd = inputs.get(body.id);
@@ -115,7 +116,7 @@ export class ArenaWorld implements World {
       this.#move(body, cmd, dt);
       this.#fire(body, cmd);
     }
-    this.#advanceArrows(dt);
+    return this.#advanceArrows(dt);
   }
 
   remove(id: number): void {
@@ -202,8 +203,9 @@ export class ArenaWorld implements World {
   }
 
   /** Moves every arrow, resolves what it hit, and drops the spent ones. */
-  #advanceArrows(dt: number): void {
+  #advanceArrows(dt: number): readonly Kill[] {
     const surviving: Arrow[] = [];
+    const kills: Kill[] = [];
     for (const arrow of this.#arrows) {
       arrow.x += arrow.vx * dt;
       arrow.y += arrow.vy * dt;
@@ -211,12 +213,15 @@ export class ArenaWorld implements World {
       if (arrow.life <= 0 || !insideArena(arrow.x, arrow.y)) continue;
       const hit = this.#victimOf(arrow);
       if (hit) {
-        this.#wound(hit);
+        if (this.#wound(hit)) {
+          kills.push({ victim: hit.id, killer: arrow.owner, killerTeam: arrow.team });
+        }
         continue;
       }
       surviving.push(arrow);
     }
     this.#arrows = surviving;
+    return kills;
   }
 
   /** The first live opponent this arrow overlaps, or null if it hit nobody. */
@@ -235,10 +240,12 @@ export class ArenaWorld implements World {
     return null;
   }
 
-  #wound(body: Body): void {
+  /** Applies damage. True if this was the hit that brought the body down. */
+  #wound(body: Body): boolean {
     body.hp -= ARROW_DAMAGE;
-    if (body.hp > 0) return;
+    if (body.hp > 0) return false;
     body.hp = 0;
     body.respawnIn = RESPAWN_TICKS;
+    return true;
   }
 }

@@ -10,6 +10,7 @@
 
 import { Team } from '../sim/team';
 import {
+  DEFAULT_WIN_CONDITION,
   MAX_PLAYERS,
   type CharacterKind,
   type ErrorCode,
@@ -19,6 +20,7 @@ import {
   type PlayerTeam,
   type RoomCode,
   type RoomView,
+  type WinCondition,
 } from '../net/protocol';
 
 export type { RoomView };
@@ -84,6 +86,7 @@ interface Room {
   mode: GameMode;
   phase: RoomPhase;
   host: PlayerId;
+  win: WinCondition;
   /** Indexed by slot. A hole is a free seat, which the next joiner takes. */
   seats: (Seat | undefined)[];
 }
@@ -114,7 +117,7 @@ function viewOfRoom(room: Room): RoomView {
       team: teamFor(id, room.mode),
     });
   });
-  return { code: room.code, mode: room.mode, host: room.host, slots };
+  return { code: room.code, mode: room.mode, host: room.host, slots, win: room.win };
 }
 
 export class RoomStore {
@@ -145,6 +148,7 @@ export class RoomStore {
       mode: 'coop',
       phase: RoomPhase.LOBBY,
       host: 0,
+      win: DEFAULT_WIN_CONDITION,
       seats: new Array<Seat | undefined>(MAX_PLAYERS).fill(undefined),
     };
     this.#rooms.set(code, room);
@@ -207,10 +211,36 @@ export class RoomStore {
     return okay(viewOfRoom(room));
   }
 
+  /** Host only. What the next match plays to. */
+  setWinCondition(conn: ConnectionId, win: WinCondition): RoomResult<RoomView> {
+    const found = this.#locate(conn);
+    if (!found) return err('NOT_IN_ROOM');
+    const { room, slot } = found;
+    if (room.host !== slot) return err('NOT_HOST');
+
+    room.win = win;
+    return okay(viewOfRoom(room));
+  }
+
   /** Marks the room as playing, so late joiners get ROOM_IN_MATCH. */
   beginMatch(code: RoomCode): void {
     const room = this.#rooms.get(code);
     if (room) room.phase = RoomPhase.IN_MATCH;
+  }
+
+  /**
+   * Puts a room back in its lobby once the match is over.
+   *
+   * Readiness is cleared with it, or every seat would still be ready and the
+   * next match would begin the instant this one ended. Returns the view to
+   * broadcast, or null if the room has since gone.
+   */
+  endMatch(code: RoomCode): RoomView | null {
+    const room = this.#rooms.get(code);
+    if (!room) return null;
+    room.phase = RoomPhase.LOBBY;
+    for (const seat of room.seats) if (seat) seat.readiness = Readiness.NOT_READY;
+    return viewOfRoom(room);
   }
 
   /** True only for an occupied lobby whose every seat has readied. */

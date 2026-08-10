@@ -4,6 +4,7 @@ import { Button } from '../sim/input';
 import { Team } from '../sim/team';
 import {
   type ClientMessage,
+  DEFAULT_WIN_CONDITION,
   EntityKind,
   parseClientMessage,
   parseServerMessage,
@@ -32,6 +33,7 @@ const snapshot: ServerMessage = {
       { id: 0, seq: 41 },
       { id: 1, seq: 39 },
     ],
+    scores: { a: 3, b: 5 },
   },
 };
 
@@ -129,12 +131,14 @@ describe('parseServerMessage', () => {
         host: 0,
         slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.A }],
         you: 0,
+        win: DEFAULT_WIN_CONDITION,
       },
       {
         type: 'MATCH_START',
         seed: 0xdeadbeef,
         mode: 'coop',
         starts: [{ id: 0, character: 'archer', team: Team.A, x: 64, y: 64 }],
+        win: DEFAULT_WIN_CONDITION,
       },
       { type: 'MATCH_END', result: { outcome: 'COOP_CLEARED', wave: 12 } },
       { type: 'MATCH_END', result: { outcome: 'DEATHMATCH', winner: Team.B, scoreA: 8, scoreB: 15 } },
@@ -196,17 +200,17 @@ describe('parseServerMessage', () => {
   });
 
   it('rejects a SNAPSHOT with a malformed entity', () => {
-    expect(parseServerMessage({ type: 'SNAPSHOT', snap: { tick: 1, entities: [], acks: [] } })).not.toBeNull();
+    expect(parseServerMessage({ type: 'SNAPSHOT', snap: { tick: 1, entities: [], acks: [], scores: { a: 0, b: 0 } } })).not.toBeNull();
     expect(
       parseServerMessage({
         type: 'SNAPSHOT',
-        snap: { tick: 1, entities: [{ id: 0, kind: 99, x: 0, y: 0, hp: 1, state: 0 }], acks: [] },
+        snap: { tick: 1, entities: [{ id: 0, kind: 99, x: 0, y: 0, hp: 1, state: 0 }], acks: [], scores: { a: 0, b: 0 } },
       }),
     ).toBeNull();
     expect(
       parseServerMessage({
         type: 'SNAPSHOT',
-        snap: { tick: 1, entities: [{ id: 0, kind: EntityKind.CROW, x: 0, y: 0 }], acks: [] },
+        snap: { tick: 1, entities: [{ id: 0, kind: EntityKind.CROW, x: 0, y: 0 }], acks: [], scores: { a: 0, b: 0 } },
       }),
     ).toBeNull();
     expect(parseServerMessage({ type: 'SNAPSHOT', snap: { tick: 1, entities: [] } })).toBeNull();

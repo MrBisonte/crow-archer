@@ -11,15 +11,35 @@
  * step, and asked for a snapshot when one is due.
  */
 
-import type { EntitySnapshot, PlayerId, PlayerStart } from '../net/protocol';
+import type { EntitySnapshot, PlayerId, PlayerStart, PlayerTeam } from '../net/protocol';
 import type { InputCommand } from './input';
 
 /** The inputs that arrived for one step, by seat. A missing seat sent nothing. */
 export type StepInputs = ReadonlyMap<PlayerId, InputCommand>;
 
+/**
+ * One body brought down, and who by.
+ *
+ * A world knows a kill happened; only the match knows what it is worth. So the
+ * kill is reported rather than counted here, and the credit travels with it: the
+ * arrow's owner and team are the only place that information exists, and both
+ * are gone the moment the arrow is spent.
+ */
+export interface Kill {
+  victim: PlayerId;
+  killer: PlayerId;
+  killerTeam: PlayerTeam;
+}
+
 export interface World {
-  /** Advances one fixed step. `dt` is always the same value for a given match. */
-  step(dt: number, inputs: StepInputs): void;
+  /**
+   * Advances one fixed step. `dt` is always the same value for a given match.
+   *
+   * Returns whatever the step brought down. Returning it rather than leaving it
+   * to be collected means a caller cannot forget to look, which would lose the
+   * score silently.
+   */
+  step(dt: number, inputs: StepInputs): readonly Kill[];
 
   /**
    * Everything a client needs to draw this instant. Positions are rounded to

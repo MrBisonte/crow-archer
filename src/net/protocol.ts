@@ -27,7 +27,7 @@ import { Team } from '../sim/team';
  * message repeats it. This keeps the version out of SNAPSHOT, which is sent
  * 20 times a second.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Players in one room. Fixed at 4: 4-player co-op or 2v2 deathmatch. */
 export const MAX_PLAYERS = 4;
@@ -93,6 +93,8 @@ export interface RoomView {
   mode: GameMode;
   host: PlayerId;
   slots: PlayerSlot[];
+  /** What the match will play to. Set by the host, shown to everyone. */
+  win: WinCondition;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +164,12 @@ export interface Snapshot {
   tick: number;
   entities: EntitySnapshot[];
   acks: InputAck[];
+  /**
+   * The running score. Two integers on every snapshot rather than a message per
+   * kill: a snapshot states what is true, so a client that missed one is
+   * corrected by the next instead of staying wrong. Costs about 20 bytes.
+   */
+  scores: TeamScores;
 }
 
 /** Where one player begins the match. Sent once, in MATCH_START. */
@@ -173,11 +181,71 @@ export interface PlayerStart {
   y: number;
 }
 
-/** How a match ended. Co-op reports the wave reached; deathmatch reports frags. */
+// ---------------------------------------------------------------------------
+// Win conditions
+// ---------------------------------------------------------------------------
+
+/**
+ * What ends a deathmatch. One or the other, never both and never neither, so it
+ * is a union rather than two nullable settings that could contradict each other.
+ */
+export type WinCondition =
+  | { kind: 'frags'; target: number }
+  | { kind: 'time'; minutes: number };
+
+/** Frag targets offered, lowest first. The host cycles through these. */
+export const FRAG_TARGETS = [10, 15, 20, 25, 30] as const;
+
+/** Time limits in minutes, lowest first. */
+export const TIME_LIMITS = [5, 6, 7, 8, 9, 10] as const;
+
+/** What a new room plays to until the host says otherwise. */
+export const DEFAULT_WIN_CONDITION: WinCondition = { kind: 'frags', target: FRAG_TARGETS[0] };
+
+/**
+ * Builds a win condition, refusing a value that is not on offer.
+ *
+ * The bounds are the rule, so they are enforced here rather than trusted at
+ * every call site: a frag target of 3 or a 90 minute round has to be
+ * unrepresentable, not merely discouraged.
+ */
+export function winCondition(kind: 'frags' | 'time', value: number): WinCondition | null {
+  if (kind === 'frags') {
+    return FRAG_TARGETS.includes(value as (typeof FRAG_TARGETS)[number])
+      ? { kind: 'frags', target: value }
+      : null;
+  }
+  return TIME_LIMITS.includes(value as (typeof TIME_LIMITS)[number])
+    ? { kind: 'time', minutes: value }
+    : null;
+}
+
+/** The next value on offer, wrapping. Used by the lobby to cycle a setting. */
+export function nextWinCondition(current: WinCondition, kind: 'frags' | 'time'): WinCondition {
+  if (kind === 'frags') {
+    const at = current.kind === 'frags' ? FRAG_TARGETS.indexOf(current.target as 10) : -1;
+    return { kind: 'frags', target: FRAG_TARGETS[(at + 1) % FRAG_TARGETS.length]! };
+  }
+  const at = current.kind === 'time' ? TIME_LIMITS.indexOf(current.minutes as 5) : -1;
+  return { kind: 'time', minutes: TIME_LIMITS[(at + 1) % TIME_LIMITS.length]! };
+}
+
+/** How the two sides stand. Carried on every snapshot so it cannot drift. */
+export interface TeamScores {
+  a: number;
+  b: number;
+}
+
+/**
+ * How a match ended. Co-op reports the wave reached; deathmatch reports frags.
+ *
+ * `winner` is null for a draw, which a time limit can produce and a frag target
+ * cannot. Leaving it out would mean a tie had to be encoded as one side winning.
+ */
 export type MatchResult =
   | { outcome: 'COOP_CLEARED'; wave: number }
   | { outcome: 'COOP_WIPED'; wave: number }
-  | { outcome: 'DEATHMATCH'; winner: PlayerTeam; scoreA: number; scoreB: number };
+  | { outcome: 'DEATHMATCH'; winner: PlayerTeam | null; scoreA: number; scoreB: number };
 
 /** Why the server rejected something. The client maps these to its own text. */
 export type ErrorCode =
@@ -222,6 +290,8 @@ export type ClientMessage =
   | { type: 'SET_READY'; ready: boolean }
   // Host only. The server rejects this from any other player with NOT_HOST.
   | { type: 'SET_MODE'; mode: GameMode }
+  // Host only. Cycles the frag target or the time limit, one or the other.
+  | { type: 'SET_WIN_CONDITION'; win: WinCondition }
   // Match. One INPUT per sim tick, 60 times a second.
   | { type: 'INPUT'; cmd: InputCommand }
   // Round-trip probe. `sent` is the client clock reading, echoed back untouched.
@@ -252,7 +322,13 @@ export type ServerMessage =
    * Match begins. `seed` is the uint32 every client feeds to mapgen, which is
    * why the terrain never crosses the network: 4 bytes stand in for the grid.
    */
-  | { type: 'MATCH_START'; seed: number; mode: GameMode; starts: PlayerStart[] }
+  | {
+      type: 'MATCH_START';
+      seed: number;
+      mode: GameMode;
+      starts: PlayerStart[];
+      win: WinCondition;
+    }
   // Broadcast at 20 Hz while the match runs.
   | { type: 'SNAPSHOT'; snap: Snapshot }
   | { type: 'MATCH_END'; result: MatchResult }
@@ -361,11 +437,26 @@ const isEntitySnapshot = (v: unknown): v is EntitySnapshot =>
 const isInputAck = (v: unknown): v is InputAck =>
   isRec(v) && isPlayerId(v['id']) && isCount(v['seq']);
 
+const isTeamScores = (v: unknown): v is TeamScores =>
+  isRec(v) && isCount(v['a']) && isCount(v['b']);
+
 const isSnapshot = (v: unknown): v is Snapshot =>
   isRec(v) &&
   isCount(v['tick']) &&
   isArrayOf(v['entities'], isEntitySnapshot) &&
-  isArrayOf(v['acks'], isInputAck);
+  isArrayOf(v['acks'], isInputAck) &&
+  isTeamScores(v['scores']);
+
+/**
+ * Accepts only a value that is on offer, so a peer cannot ask for a two frag
+ * match or an hour-long round by sending one.
+ */
+const isWinCondition = (v: unknown): v is WinCondition => {
+  if (!isRec(v)) return false;
+  if (v['kind'] === 'frags') return winCondition('frags', v['target'] as number) !== null;
+  if (v['kind'] === 'time') return winCondition('time', v['minutes'] as number) !== null;
+  return false;
+};
 
 const isMatchResult = (v: unknown): v is MatchResult => {
   if (!isRec(v)) return false;
@@ -374,7 +465,12 @@ const isMatchResult = (v: unknown): v is MatchResult => {
     case 'COOP_WIPED':
       return isCount(v['wave']);
     case 'DEATHMATCH':
-      return isPlayerTeam(v['winner']) && isCount(v['scoreA']) && isCount(v['scoreB']);
+      // null is a draw, which a time limit can produce.
+      return (
+        (v['winner'] === null || isPlayerTeam(v['winner'])) &&
+        isCount(v['scoreA']) &&
+        isCount(v['scoreB'])
+      );
     default:
       return false;
   }
@@ -419,6 +515,10 @@ const clientReaders: ClientReaders = {
     const mode = m['mode'];
     return isMode(mode) ? { type: 'SET_MODE', mode } : null;
   },
+  SET_WIN_CONDITION: (m) => {
+    const win = m['win'];
+    return isWinCondition(win) ? { type: 'SET_WIN_CONDITION', win } : null;
+  },
   INPUT: (m) => {
     const cmd = m['cmd'];
     if (!isInputCommand(cmd)) return null;
@@ -439,9 +539,11 @@ const serverReaders: ServerReaders = {
     const host = m['host'];
     const slots = m['slots'];
     const you = m['you'];
+    const win = m['win'];
     if (!isRoomCode(code) || !isMode(mode) || !isPlayerId(host) || !isPlayerId(you)) return null;
     if (!isArrayOf(slots, isPlayerSlot) || slots.length > MAX_PLAYERS) return null;
-    return { type: 'ROOM_STATE', code, mode, host, slots, you };
+    if (!isWinCondition(win)) return null;
+    return { type: 'ROOM_STATE', code, mode, host, slots, you, win };
   },
   ERROR: (m) => {
     const code = m['code'];
@@ -452,9 +554,11 @@ const serverReaders: ServerReaders = {
     const seed = m['seed'];
     const mode = m['mode'];
     const starts = m['starts'];
+    const win = m['win'];
     if (!isUint32(seed) || !isMode(mode)) return null;
     if (!isArrayOf(starts, isPlayerStart) || starts.length > MAX_PLAYERS) return null;
-    return { type: 'MATCH_START', seed, mode, starts };
+    if (!isWinCondition(win)) return null;
+    return { type: 'MATCH_START', seed, mode, starts, win };
   },
   SNAPSHOT: (m) => {
     const snap = m['snap'];

@@ -107,7 +107,7 @@ export class Lobby {
   close(conn: ConnectionId): Outbound[] {
     this.#sessions.delete(conn);
     const outcome = this.#rooms.leave(conn);
-    return outcome.kind === 'updated' ? this.#roomState(outcome.view) : [];
+    return outcome.kind === 'updated' ? this.roomState(outcome.view) : [];
   }
 
   #greet(conn: ConnectionId, msg: Extract<ClientMessage, { type: 'HELLO' }>): Outbound[] {
@@ -134,6 +134,8 @@ export class Lobby {
         return this.#ready(conn, msg.ready ? Readiness.READY : Readiness.NOT_READY);
       case 'SET_MODE':
         return this.#answer(conn, this.#rooms.setMode(conn, msg.mode));
+      case 'SET_WIN_CONDITION':
+        return this.#answer(conn, this.#rooms.setWinCondition(conn, msg.win));
       case 'PING':
         return [{ to: conn, message: { type: 'PONG', sent: msg.sent, serverTime: this.#now() } }];
       case 'INPUT':
@@ -153,7 +155,7 @@ export class Lobby {
     if (!result.ok) return [this.#error(conn, result.error)];
 
     const view = result.value;
-    const out = this.#roomState(view);
+    const out = this.roomState(view);
     if (!this.#rooms.allReady(view.code)) return out;
     // Co-op alone is just single player, which is a fair thing to want.
     // Deathmatch alone has nobody to fight, so it waits for a second seat.
@@ -171,6 +173,7 @@ export class Lobby {
       seed: this.#newSeed(),
       mode: view.mode,
       starts,
+      win: view.win,
     };
     for (const { conn: seat } of this.#rooms.seatsOf(view.code)) {
       out.push({ to: seat, message: start });
@@ -186,20 +189,24 @@ export class Lobby {
       case 'closed':
         return [];
       case 'updated':
-        return this.#roomState(outcome.view);
+        return this.roomState(outcome.view);
     }
   }
 
   /** Room state to every seat on success, the error to the sender on failure. */
   #answer(conn: ConnectionId, result: RoomResult<RoomView>): Outbound[] {
-    return result.ok ? this.#roomState(result.value) : [this.#error(conn, result.error)];
+    return result.ok ? this.roomState(result.value) : [this.#error(conn, result.error)];
   }
 
   /**
    * One message per seat, each carrying that seat's own id. Built here rather
    * than broadcast because a client cannot otherwise find itself in `slots`.
+   *
+   * Public because the end of a match is not a lobby message but still returns a
+   * room to its lobby, and the entry point needs to say so with the same
+   * per-recipient shape rather than a second one that could drift from it.
    */
-  #roomState(view: RoomView): Outbound[] {
+  roomState(view: RoomView): Outbound[] {
     return this.#rooms.seatsOf(view.code).map(({ conn, slot }) => ({
       to: conn,
       message: { ...view, type: 'ROOM_STATE' as const, you: slot },

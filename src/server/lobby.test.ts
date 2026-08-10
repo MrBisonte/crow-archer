@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { Team } from '../sim/team';
 import {
+  DEFAULT_WIN_CONDITION,
   PROTOCOL_VERSION,
   type ClientMessage,
   type RoomCode,
@@ -85,6 +86,7 @@ describe('Lobby', () => {
         mode: 'coop',
         host: 0,
         you: 0,
+        win: DEFAULT_WIN_CONDITION,
         slots: [{ id: 0, name: 'alex', character: 'archer', ready: false, team: Team.A }],
       });
     });

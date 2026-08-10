@@ -3,7 +3,15 @@
  * new state + messages to send to the server. No I/O, no clock, no randomness.
  */
 
-import type { CharacterKind, GameMode, PlayerId, RoomCode, RoomView } from '../net/protocol';
+import {
+  nextWinCondition,
+  type CharacterKind,
+  type GameMode,
+  type PlayerId,
+  type RoomCode,
+  type RoomView,
+  type WinCondition,
+} from '../net/protocol';
 
 /**
  * Which screen the lobby is showing.
@@ -36,6 +44,12 @@ export type LobbyAction =
   | { type: 'PICK_CHARACTER'; char: CharacterKind }
   | { type: 'TOGGLE_READY' }
   | { type: 'SET_MODE'; mode: GameMode }
+  /**
+   * Cycles the frag target or the time limit. The kind is what the user chose;
+   * the value comes from the list on offer, so the two settings cannot both be
+   * active and neither can be set to something absurd.
+   */
+  | { type: 'CYCLE_WIN_CONDITION'; kind: 'frags' | 'time' }
   | { type: 'LEAVE_ROOM' }
   // Carries `you` because that is how the client learns which seat is its own.
   // The stored roomView drops it again: userSlot is the one home for that fact.
@@ -49,6 +63,7 @@ export type LobbyOutbound =
   | { type: 'SET_CHARACTER'; character: CharacterKind }
   | { type: 'SET_READY'; ready: boolean }
   | { type: 'SET_MODE'; mode: GameMode }
+  | { type: 'SET_WIN_CONDITION'; win: WinCondition }
   | { type: 'LEAVE_ROOM' };
 
 /** Initial state: at the main menu. */
@@ -122,6 +137,15 @@ export function transitionLobby(
         state,
         send: [{ type: 'SET_MODE', mode: action.mode }],
       };
+    }
+
+    case 'CYCLE_WIN_CONDITION': {
+      if (state.screen !== 'lobby' || !state.roomView) return { state, send: [] };
+      // Host only, like the mode. The next room state is what moves the display,
+      // so nothing is changed locally and the two cannot disagree.
+      if (state.userSlot !== state.roomView.host) return { state, send: [] };
+      const win = nextWinCondition(state.roomView.win, action.kind);
+      return { state, send: [{ type: 'SET_WIN_CONDITION', win }] };
     }
 
     case 'LEAVE_ROOM':
