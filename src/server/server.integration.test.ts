@@ -21,6 +21,9 @@ import {
   type EntitySnapshot,
   type ServerMessage,
 } from '../net/protocol';
+import { BattleWorld } from '../sim/battle-world';
+import { MAP_COLS, MAP_ROWS, Terrain } from '../sim/arena-map';
+import { TileMap } from '../sim/tilemap';
 import type { Kill, World } from '../sim/world';
 import { HEALTH_PATH, startServer, type RunningServer } from './index';
 
@@ -383,7 +386,27 @@ describe('a deathmatch that can be won', () => {
     return c;
   };
 
-  beforeEach(async () => { server = await startServer({ port: 0 }); });
+  /**
+   * The real battle world, but on open ground.
+   *
+   * A generated map puts rock between the two spawns often enough that a test
+   * firing across it would pass or fail on the seed. The terrain rules have
+   * their own tests; what this file is for is whether an input reaches the
+   * world and the result reaches the wire.
+   */
+  beforeEach(async () => {
+    server = await startServer({
+      port: 0,
+      makeWorld: (seed, starts, mode) =>
+        new BattleWorld({
+          seed,
+          starts,
+          mode,
+          noise: () => null,
+          terrain: new Terrain(new TileMap(MAP_ROWS, MAP_COLS)),
+        }),
+    });
+  });
 
   afterEach(async () => {
     for (const c of clients) c.close();

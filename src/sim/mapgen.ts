@@ -14,7 +14,21 @@ export type Noise2D = (x: number, y: number) => number;
  * With a null noise source, tiles scatter randomly instead of clustering
  * (same graceful fallback the CDN version had).
  */
-export function generateGrid(rows: number, cols: number, rng: Rng, noise: Noise2D | null): TileGrid {
+export function generateGrid(
+  rows: number,
+  cols: number,
+  rng: Rng,
+  noise: Noise2D | null,
+  density = 1,
+): TileGrid {
+  // How much of the clutter to keep. One is the single-player map, which was
+  // built for crows flying a corridor and is dense enough that a third of it
+  // stops an arrow. A duel wants cover, not a thicket, so the battle map passes
+  // less and the thresholds move towards one in proportion.
+  const cut = (base: number) => 1 - (1 - base) * density;
+  const waterAt = cut(0.76);
+  const rockAt = cut(0.77);
+  const treeAt = cut(0.76);
   const grid: TileGrid = [];
   const sx = rng() * 200;
   const sy = rng() * 200;
@@ -43,9 +57,9 @@ export function generateGrid(rows: number, cols: number, rng: Rng, noise: Noise2
       const nR = n2d(c, r, 0.18, 47, 19);
       const nT = n2d(c, r, 0.15, 83, 61);
       // Priority: water > rock > tree (water wins ties so ponds stay contiguous)
-      if (nW > 0.76) row[c] = TILE.WATER;
-      else if (nR > 0.77) row[c] = TILE.ROCK;
-      else if (nT > 0.76) row[c] = TILE.TREE;
+      if (nW > waterAt) row[c] = TILE.WATER;
+      else if (nR > rockAt) row[c] = TILE.ROCK;
+      else if (nT > treeAt) row[c] = TILE.TREE;
     }
   }
 

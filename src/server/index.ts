@@ -20,7 +20,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { WS_PATH, type PlayerId, type RoomCode, type Snapshot } from '../net/protocol';
 import type { InputCommand } from '../sim/input';
-import { ArenaWorld } from '../sim/arena-world';
+import { BattleWorld } from '../sim/battle-world';
+import { noiseFor } from '../sim/noise';
 import type { WorldFactory } from '../sim/world';
 import { FileClientPage, type ClientPage } from './client-page';
 import { Lobby, randomRoomCode, type Outbound } from './lobby';
@@ -103,9 +104,11 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     newCode: () => randomRoomCode(),
     maxRooms: options.maxRooms ?? MAX_ROOMS,
   });
-  // Players and arrows. Crows, the boss and tiles are later slices, and the
-  // seed is what they will be built from.
-  const makeWorld: WorldFactory = options.makeWorld ?? ((_seed, starts) => new ArenaWorld(starts));
+  // The full battle: characters, weapons, terrain built from the seed, and the
+  // crow that wanders through it.
+  const makeWorld: WorldFactory =
+    options.makeWorld ??
+    ((seed, starts, mode) => new BattleWorld({ seed, starts, mode, noise: noiseFor }));
 
   const lobby = new Lobby({
     rooms,
@@ -176,7 +179,10 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
       if (message.type === 'MATCH_START') {
         const view = rooms.viewFor(to);
         if (view && !matches.has(view.code)) {
-          matches.set(view.code, new Match(view, makeWorld(message.seed, message.starts)));
+          matches.set(
+            view.code,
+            new Match(view, makeWorld(message.seed, message.starts, message.mode)),
+          );
           startTickLoop();
         }
       }

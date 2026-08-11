@@ -11,7 +11,13 @@
  * step, and asked for a snapshot when one is due.
  */
 
-import type { EntitySnapshot, PlayerId, PlayerStart, PlayerTeam } from '../net/protocol';
+import type {
+  EntitySnapshot,
+  GameMode,
+  PlayerId,
+  PlayerStart,
+  PlayerTeam,
+} from '../net/protocol';
 import type { InputCommand } from './input';
 
 /** The inputs that arrived for one step, by seat. A missing seat sent nothing. */
@@ -67,5 +73,15 @@ export interface World {
   remove(id: number): void;
 }
 
-/** How a world is built at match start. Keeps construction out of Match. */
-export type WorldFactory = (seed: number, starts: readonly PlayerStart[]) => World;
+/**
+ * How a world is built at match start. Keeps construction out of Match.
+ *
+ * The mode is passed because the rules of engagement differ by it: dynamite is
+ * the archer's alone in co-op and everyone's in a duel, and only the world can
+ * decide that, because only it knows who is carrying what.
+ */
+export type WorldFactory = (
+  seed: number,
+  starts: readonly PlayerStart[],
+  mode: GameMode,
+) => World;

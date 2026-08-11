@@ -43,15 +43,33 @@ npm run dev
 
 Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
 
+Every match is a fresh generated map — rock, trees, water and huts — built on both machines from the four-byte seed rather than sent over the wire. Terrain stops you and stops arrows; water stops you but not arrows; dynamite burns a hut down to ash you can then walk over.
+
+Each character fights differently:
+
+| | weapon | rhythm |
+|---|---|---|
+| **Archer** | bow | fastest shots, weakest hit — about five to kill |
+| **Wizard** | staff | slow, hard-hitting bolts that steer toward whoever is nearest |
+| **Knight** | spear | nothing at range; a thrust that lands twice per swing |
+
+Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
+
+**Dynamite** is the archer's second weapon and everyone's in a duel — in co-op only the archer carries it, because a blast radius against crows would not be a fight. Four sticks, a 1.5 second fuse, and it never catches you or your team.
+
+Every fifteen seconds or so a **crow** drifts across. It dies to one hit and drops a powerup where it falls: a replacement shield, or fire that doubles your damage for eight seconds.
+
 ### Joining a game
 
 1. Open the server's URL and press **M**.
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
 3. The host sets the mode with **D** for deathmatch or **C** for co-op, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes) — one or the other, not both. Everyone presses **R**, and it starts once the last player is ready.
 
-Arrow keys move, the mouse aims, and left click or space shoots. Five hits kill, and you come back where you started three seconds later. **Pick deathmatch**: friendly fire is off in every mode and there are no crows yet, so co-op has nothing in it to shoot. Characters can be picked with **A**, **W** and **K**, but they all play the same for now.
+Arrow keys move, the mouse aims, **left click or space** shoots, and **right click or Q** throws dynamite. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard) or **K** (knight) — they play differently.
 
-There is no map, no crows, no boss, no score and no end: a deathmatch runs until everyone leaves.
+Any team split works: 1v1, 2v1 and 2v2 all start, and seats spawn on opposite sides of whatever map came up.
+
+**Pick deathmatch.** Friendly fire is off in every mode, so co-op is currently a walk in the woods with a crow in it.
 
 Arrows are the server's: it decides where they go and what they hit. Your own movement is predicted locally, so it stays instant, but an arrow appears a round trip after you ask for it. That is the deliberate trade — the alternative is drawing arrows the server then disagrees with and having to take them back.
 

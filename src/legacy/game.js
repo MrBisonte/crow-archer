@@ -4013,7 +4013,7 @@ function render(t) {
     }
     if (appState === 'paused')        drawPause();
     if (appState === 'boss_entrance') drawBossEntrance();
-  } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys, { x: mouse.x, y: mouse.y, fire: mouseLeftHeld });
+  } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys, { x: mouse.x, y: mouse.y, fire: mouseLeftHeld, special: mouseRightHeld });
   } else if (appState === 'menu')       { drawMenu(t);
   } else if (appState === 'charselect') { drawCharSelect(t);
   } else if (appState === 'controls')   { drawControls(t);

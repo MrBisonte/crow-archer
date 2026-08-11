@@ -162,6 +162,7 @@ export class MultiplayerSession {
     starts: readonly PlayerStart[];
     mode: GameMode;
     win: WinCondition;
+    seed: number;
   }): void {
     const ctx = this.#canvas.getContext('2d');
     if (!ctx || !this.#transport) return;
@@ -173,6 +174,7 @@ export class MultiplayerSession {
       starts: started.starts,
       mode: started.mode,
       win: started.win,
+      seed: started.seed,
       you: this.#controller?.state.userSlot ?? 0,
     });
   }

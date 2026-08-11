@@ -9,6 +9,9 @@
  * out.
  */
 
+import { Terrain } from '../sim/arena-map';
+import { noiseFor } from '../sim/noise';
+import { pickSpawns } from '../sim/spawns';
 import {
   PROTOCOL_VERSION,
   parseClientMessage,
@@ -41,19 +44,21 @@ export interface LobbyOptions {
    * generator: the store stays pure and a test can force a known map.
    */
   newSeed: () => number;
+  /** Where seats start. Injected so a test need not generate a map. */
+  spawnsFor?: SpawnPicker;
 }
 
 /**
- * Where each seat starts. Spread around the arena so nobody spawns on top of
- * anyone else. Phase 2 will take these from level data instead; four fixed
- * points are enough while the sim still lives in the legacy monolith.
+ * Where each seat starts, worked out from the map the seed describes.
+ *
+ * It is a function rather than a table because the map is generated: a fixed
+ * point is a point that will eventually be inside a rock. Injected so a test
+ * can place players without generating terrain first.
  */
-const SPAWN_POINTS = [
-  { x: 160, y: 160 },
-  { x: 160, y: 544 },
-  { x: 480, y: 160 },
-  { x: 480, y: 544 },
-] as const;
+export type SpawnPicker = (seed: number, count: number) => { x: number; y: number }[];
+
+const terrainSpawns: SpawnPicker = (seed, count) =>
+  pickSpawns(Terrain.fromSeed(seed, noiseFor), count);
 
 /** What the server knows about a connection once it has said hello. */
 interface Session {
@@ -78,12 +83,14 @@ export class Lobby {
   readonly #rooms: RoomStore;
   readonly #now: () => number;
   readonly #newSeed: () => number;
+  readonly #spawnsFor: SpawnPicker;
   readonly #sessions = new Map<ConnectionId, Session>();
 
   constructor(options: LobbyOptions) {
     this.#rooms = options.rooms;
     this.#now = options.now;
     this.#newSeed = options.newSeed;
+    this.#spawnsFor = options.spawnsFor ?? terrainSpawns;
   }
 
   /**
@@ -162,15 +169,21 @@ export class Lobby {
     if (view.mode === 'deathmatch' && view.slots.length < 2) return out;
 
     this.#rooms.beginMatch(view.code);
-    const starts: PlayerStart[] = view.slots.map((slot) => ({
+    // The seed is chosen first, because the spawns come out of the map it
+    // describes. Sending a position that ignored the terrain would put a body
+    // inside a rock, and would put the client's prediction somewhere the server
+    // never had it.
+    const seed = this.#newSeed();
+    const spawns = this.#spawnsFor(seed, view.slots.length);
+    const starts: PlayerStart[] = view.slots.map((slot, i) => ({
       id: slot.id,
       character: slot.character,
       team: slot.team,
-      ...SPAWN_POINTS[slot.id % SPAWN_POINTS.length]!,
+      ...(spawns[i] ?? { x: 160, y: 160 }),
     }));
     const start: ServerMessage = {
       type: 'MATCH_START',
-      seed: this.#newSeed(),
+      seed,
       mode: view.mode,
       starts,
       win: view.win,
