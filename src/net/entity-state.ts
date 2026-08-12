@@ -92,18 +92,30 @@ export interface ShotWireState {
   aim: number;
   /** 0 to 1 for a burning fuse, 0 for anything without one. */
   fuse: number;
+  /**
+   * Whether it was fired while alight. Drawn differently and it hits harder, so
+   * an opponent can see a fire arrow coming and treat it as one.
+   */
+  fiery: boolean;
 }
 
 const FLAVOUR_SHIFT = 1;
 const FUSE_STEPS = 16;
 const FUSE_SHIFT = 3;
 const SHOT_AIM_SHIFT = 7;
+const SHOT_FIERY_BIT = 1 << 15;
 
 export function packShotState(v: ShotWireState): number {
   const turns = ((v.aim % TAU) + TAU) % TAU / TAU;
   const aim = Math.min(AIM_STEPS - 1, Math.floor(turns * AIM_STEPS));
   const fuse = Math.min(FUSE_STEPS - 1, Math.max(0, Math.floor(v.fuse * FUSE_STEPS)));
-  return v.team | (v.flavour << FLAVOUR_SHIFT) | (fuse << FUSE_SHIFT) | (aim << SHOT_AIM_SHIFT);
+  return (
+    v.team |
+    (v.flavour << FLAVOUR_SHIFT) |
+    (fuse << FUSE_SHIFT) |
+    (aim << SHOT_AIM_SHIFT) |
+    (v.fiery ? SHOT_FIERY_BIT : 0)
+  );
 }
 
 export function unpackShotState(state: number): ShotWireState {
@@ -112,5 +124,6 @@ export function unpackShotState(state: number): ShotWireState {
     flavour: ((state >> FLAVOUR_SHIFT) & 0b11) as ShotFlavourCode,
     fuse: ((state >> FUSE_SHIFT) & (FUSE_STEPS - 1)) / FUSE_STEPS,
     aim: (((state >> SHOT_AIM_SHIFT) & (AIM_STEPS - 1)) / AIM_STEPS) * TAU,
+    fiery: (state & SHOT_FIERY_BIT) !== 0,
   };
 }

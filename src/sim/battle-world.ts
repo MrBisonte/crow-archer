@@ -28,7 +28,13 @@ import { Terrain, type NoiseFactory } from './arena-map';
 import { slide } from './collide';
 import { advanceCrow, spawnCrow, CROW_HIT_RADIUS, CROW_INTERVAL_TICKS, MAX_CROWS, type Crow } from './crows';
 import { Button, type InputCommand } from './input';
-import { DROPPED_KINDS, PICKUP_RADIUS, applyPickup, type PickupKind } from './pickups';
+import {
+  DROPPED_KINDS,
+  FIRE_DAMAGE_MULTIPLIER,
+  PICKUP_RADIUS,
+  applyPickup,
+  type PickupKind,
+} from './pickups';
 import { mulberry32, type Rng } from './rng';
 import { canDamage } from './team';
 import { ticks } from './tick';
@@ -38,6 +44,8 @@ import {
   DYNAMITE_CARRIED,
   DYNAMITE_CHARGE_MULTIPLIER,
   DYNAMITE_CHARGE_TICKS,
+  DYNAMITE_DRAG,
+  DYNAMITE_REST_SPEED,
   DynamitePouch,
   carriesDynamite,
   primaryWeapon,
@@ -113,6 +121,8 @@ interface Shot {
   owner: PlayerId;
   team: PlayerTeam;
   spec: ShotSpec;
+  /** Fired while its owner was alight, which is both damage and appearance. */
+  fiery: boolean;
   x: number;
   y: number;
   vx: number;
@@ -270,6 +280,7 @@ export class BattleWorld implements World {
           flavour: FLAVOUR_CODES[s.spec.flavour],
           aim: Math.atan2(s.vy, s.vx),
           fuse: s.spec.flavour === 'dynamite' ? 1 - s.life / s.spec.lifeTicks : 0,
+          fiery: s.fiery,
         }),
       })),
       ...this.#pickups.map((p) => ({
@@ -404,14 +415,20 @@ export class BattleWorld implements World {
         vx: cos * spec.speed * speedScale,
         vy: sin * spec.speed * speedScale,
         life: spec.lifeTicks,
+        fiery: f.fireTicks > 0,
         damage: this.#damageOf(f, spec.damage),
       });
     }
   }
 
-  /** Fire doubles what anything does, for as long as it burns. */
+  /**
+   * What a hit is worth, with fire counted in.
+   *
+   * Rounded, because health is whole numbers: half again of three is four and a
+   * half, and a player cannot be left on half a hit point.
+   */
   #damageOf(f: Fighter, base: number): number {
-    return f.fireTicks > 0 ? base * 2 : base;
+    return f.fireTicks > 0 ? Math.round(base * FIRE_DAMAGE_MULTIPLIER) : base;
   }
 
   // -------------------------------------------------------------------------
@@ -479,6 +496,15 @@ export class BattleWorld implements World {
         if (shot.spec.flavour === 'dynamite') this.#explode(shot, kills);
         continue;
       }
+      // A thrown stick that has stopped goes off where it lies, against
+      // whatever stopped it, rather than waiting out a fuse in the open.
+      if (
+        shot.spec.onTerrain === 'bounce' &&
+        Math.hypot(shot.vx, shot.vy) < DYNAMITE_REST_SPEED
+      ) {
+        this.#explode(shot, kills);
+        continue;
+      }
       if (shot.spec.onTerrain === 'stop' && this.terrain.blocksShot(shot.x, shot.y)) {
         continue;
       }
@@ -502,6 +528,11 @@ export class BattleWorld implements World {
       shot.y += shot.vy * dt;
       return true;
     }
+    // Drag first, so a stick loses speed whether or not it hits anything and
+    // comes to rest rather than crossing the map for a second and a half.
+    shot.vx *= DYNAMITE_DRAG;
+    shot.vy *= DYNAMITE_DRAG;
+
     const nx = shot.x + shot.vx * dt;
     if (shot.spec.drownsInWater && this.terrain.drowns(nx, shot.y)) return false;
     if (this.terrain.blocksShot(nx, shot.y)) shot.vx = -shot.vx * DYNAMITE_BOUNCE;

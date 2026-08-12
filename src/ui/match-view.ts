@@ -63,6 +63,9 @@ export interface AimInput {
 /** Height of the legacy HUD strip. The sim knows nothing about it. */
 const HUD_HEIGHT = 32;
 
+/** How wide the five health pips are together. */
+const HEALTH_BAR_WIDTH = 22;
+
 /** Ticks per second, the rate the server counts in. */
 const TICK_RATE = 60;
 
@@ -157,6 +160,9 @@ export class MatchView {
   #raw: RawInput = blankInput();
   #latest: Snapshot | null = null;
   readonly #tiles: StaticTileLayer;
+  readonly #terrain: Terrain;
+  /** Blasts already applied to the local grid, so each one clears tiles once. */
+  readonly #cleared = new Set<number>();
   /** Walk cycle per body, and where each was last seen, to advance it. */
   readonly #walkPhase = new Map<number, number>();
   readonly #lastSeen = new Map<number, { x: number; y: number }>();
@@ -200,8 +206,11 @@ export class MatchView {
     });
     // Built from the seed, not received: four bytes stand in for 693 tiles, and
     // this is the exact grid the server is deciding collisions against.
-    const terrain = Terrain.fromSeed(options.seed, noiseFor);
-    this.#tiles = new StaticTileLayer(terrain.map, { tileSize: TILE_SIZE, hudHeight: HUD_HEIGHT });
+    this.#terrain = Terrain.fromSeed(options.seed, noiseFor);
+    this.#tiles = new StaticTileLayer(this.#terrain.map, {
+      tileSize: TILE_SIZE,
+      hudHeight: HUD_HEIGHT,
+    });
     this.#tiles.repaintAll();
     const mine = options.starts.find((s) => s.id === options.you);
     this.#hasDynamite = carriesDynamite(mine?.character ?? 'archer', options.mode);
@@ -250,6 +259,7 @@ export class MatchView {
     // A hit is inferred from health falling between snapshots. The wire carries
     // no cosmetics, so this is where a landed arrow becomes something visible.
     this.#effects.observe(snap, this.#now());
+    this.#applyBlasts(snap);
   }
 
   /**
@@ -390,6 +400,23 @@ export class MatchView {
     this.#drawHud();
   }
 
+  /**
+   * Clears the tiles each new blast destroyed.
+   *
+   * The server mutates its own grid and says nothing about it, because it does
+   * not have to: the rule is deterministic and the blast's position is already
+   * on the wire, so running the same rule here lands on the same grid. Without
+   * this the client kept drawing trees the server had already cleared, and
+   * players walked through scenery that was no longer there.
+   */
+  #applyBlasts(snap: Snapshot): void {
+    for (const e of snap.entities) {
+      if (e.kind !== EntityKind.BLAST || this.#cleared.has(e.id)) continue;
+      this.#cleared.add(e.id);
+      this.#terrain.destroyArea(e.x, e.y, DYNAMITE_BLAST_RADIUS);
+    }
+  }
+
   /** A player, in whichever body they picked in the lobby. */
   #drawBody(e: EntitySnapshot, loopT: number): void {
     const start = this.#starts.find((s) => s.id === e.id);
@@ -415,7 +442,7 @@ export class MatchView {
       loopT,
       HUD_HEIGHT,
     );
-    if (!visual.dead) this.#drawHealthBar(e, e.y + HUD_HEIGHT, teamColour(start?.team ?? 0));
+    if (!visual.dead) this.#drawHealthBar(e, e.y + HUD_HEIGHT, visual.shielded);
   }
 
   /**
@@ -436,6 +463,7 @@ export class MatchView {
 
   #drawShotEntity(e: EntitySnapshot, loopT: number): void {
     const wire = unpackShotState(e.state);
+    if (wire.fiery) this.#drawFlame(e, loopT);
     drawShot(
       this.#ctx,
       { x: e.x, y: e.y, angle: wire.aim, flavour: FLAVOUR_ART[wire.flavour] ?? 'arrow', team: wire.team,
@@ -443,6 +471,29 @@ export class MatchView {
       loopT,
       HUD_HEIGHT,
     );
+  }
+
+  /**
+   * The flame on a burning shot, drawn under it.
+   *
+   * Under rather than over, so the shot itself stays the readable part and the
+   * fire is what makes it unmistakable at a glance.
+   */
+  #drawFlame(e: EntitySnapshot, loopT: number): void {
+    const ctx = this.#ctx;
+    const flicker = 4 + Math.sin(loopT * 24 + e.id) * 1.5;
+    ctx.save();
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = '#FF6600';
+    ctx.beginPath();
+    ctx.arc(e.x, e.y + HUD_HEIGHT, flicker + 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFD400';
+    ctx.beginPath();
+    ctx.arc(e.x, e.y + HUD_HEIGHT, flicker * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   #drawDrop(e: EntitySnapshot, loopT: number): void {
@@ -551,16 +602,28 @@ export class MatchView {
     return 'ARROWS MOVE  ·  CLICK OR SPACE TO SHOOT';
   }
 
-  /** A short bar over the head, only while it means something. */
-  #drawHealthBar(e: EntitySnapshot, y: number, fill: string): void {
-    if (e.hp >= PLAYER_MAX_HP) return;
+  /**
+   * Health as five pips over the head, one per fifth.
+   *
+   * Pips rather than a continuous bar, because a fifth is what a hit is worth
+   * and counting two left is quicker than judging a length. Amber while the
+   * shield is up and green once it is gone, so the one thing that decides
+   * whether the next hit costs health is the colour of the thing showing health.
+   */
+  #drawHealthBar(e: EntitySnapshot, y: number, shielded: boolean): void {
     const ctx = this.#ctx;
-    const width = PLAYER_RADIUS * 2;
-    const top = y - PLAYER_RADIUS - 6;
-    ctx.fillStyle = '#2A1A1A';
-    ctx.fillRect(e.x - PLAYER_RADIUS, top, width, 2);
-    ctx.fillStyle = fill;
-    ctx.fillRect(e.x - PLAYER_RADIUS, top, (width * Math.max(0, e.hp)) / PLAYER_MAX_HP, 2);
+    const pips = 5;
+    const gap = 1;
+    const pipWidth = (HEALTH_BAR_WIDTH - gap * (pips - 1)) / pips;
+    const left = e.x - HEALTH_BAR_WIDTH / 2;
+    const top = y - PLAYER_RADIUS - 8;
+    // Ceil, so any health at all still lights a pip: a player on one hit point
+    // must not look dead.
+    const lit = Math.ceil((Math.max(0, e.hp) / PLAYER_MAX_HP) * pips);
+    for (let i = 0; i < pips; i++) {
+      ctx.fillStyle = i < lit ? (shielded ? '#FFB400' : '#39FF14') : '#2A2A2A';
+      ctx.fillRect(left + i * (pipWidth + gap), top, pipWidth, 3);
+    }
   }
 
   #drawHud(): void {

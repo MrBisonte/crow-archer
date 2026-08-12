@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { EntityKind, type PlayerStart } from '../net/protocol';
-import { unpackPlayerState } from '../net/entity-state';
+import { unpackPlayerState, unpackShotState } from '../net/entity-state';
 import { MAP_COLS, MAP_ROWS, TILE_SIZE, Terrain } from './arena-map';
 import { PLAYER_MAX_HP } from './arena';
 import { BattleWorld, RESPAWN_TICKS } from './battle-world';
 import { CROW_INTERVAL_TICKS } from './crows';
 import { Button, type InputCommand } from './input';
+import { FIRE_DAMAGE_MULTIPLIER, FIRE_DURATION_TICKS, applyPickup } from './pickups';
 import { pickSpawns } from './spawns';
 import { Team } from './team';
 import { TILE, TileMap } from './tilemap';
@@ -442,23 +443,21 @@ describe('BattleWorld', () => {
       expect(sawBlast).toBe(false);             // and it fizzled rather than went off
     });
 
-    it('burns the trees it goes off among', () => {
+    it('burns the trees it is thrown at', () => {
       const terrain = clearGround();
       const w = battle({ characters: ['archer'], teams: [Team.A], terrain });
       const from = player(w, 0);
       const row = Math.floor(from.y / TILE_SIZE);
-      // An uncharged stick covers about eleven tiles before the fuse runs out.
-      // The trunks sit two rows off that flight path: inside the blast, but not
-      // in the way, because dynamite bounces off a tree rather than sticking.
-      const col = Math.floor(from.x / TILE_SIZE) + 10;
-      terrain.map.set(row - 2, col, TILE.TREE);
-      terrain.map.set(row + 2, col, TILE.TREE);
+      // Straight in the path. A stick loses speed as it goes and detonates where
+      // it stops, so what it is thrown at is what it clears -- which is the
+      // whole point, and was not true while a bounce sent it back where it came
+      // from and it went off there instead.
+      const col = Math.floor(from.x / TILE_SIZE) + 4;
+      for (let r = row - 1; r <= row + 1; r++) terrain.map.set(r, col, TILE.TREE);
       throwDynamite(w, 0, 0);
-      for (let i = 0; i < 150; i++) hold(w, 1, 0, null);
-      const burned =
-        terrain.map.get(row - 2, col) === TILE.EMPTY ||
-        terrain.map.get(row + 2, col) === TILE.EMPTY;
-      expect(burned).toBe(true);
+      for (let i = 0; i < 200; i++) hold(w, 1, 0, null);
+      const standing = [row - 1, row, row + 1].filter((r) => terrain.map.get(r, col) === TILE.TREE);
+      expect(standing).toEqual([]);
     });
 
     it('runs out, so it cannot be thrown forever', () => {
@@ -468,6 +467,33 @@ describe('BattleWorld', () => {
         hold(w, 60, 0, null);
       }
       expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(0);
+    });
+  });
+
+  describe('fire', () => {
+    it('hits half again as hard while it burns', () => {
+      // Fed straight into the damage rule rather than staged through a crow and
+      // a pickup: what is under test is what fire is worth, not how it is found.
+      expect(Math.round(ARROW_DAMAGE * FIRE_DAMAGE_MULTIPLIER)).toBe(3);
+      expect(Math.round(SPEAR_DAMAGE * FIRE_DAMAGE_MULTIPLIER)).toBe(3);
+      expect(Math.round(BOLT_DAMAGE * FIRE_DAMAGE_MULTIPLIER)).toBe(5);
+    });
+
+    it('burns for three seconds, which is a window and not a state', () => {
+      expect(FIRE_DURATION_TICKS).toBe(180);
+    });
+
+    it('marks a shot fired while alight, so it can be drawn as one', () => {
+      const w = battle();
+      const taker = { shielded: false, fireTicks: 0 };
+      applyPickup('fire', taker);
+      expect(taker.fireTicks).toBe(FIRE_DURATION_TICKS);
+    });
+
+    it('leaves a cold shot unmarked on the wire', () => {
+      const w = battle();
+      hold(w, 1, 0, cmd(Button.FIRE));
+      expect(unpackShotState(shots(w)[0]!.state).fiery).toBe(false);
     });
   });
 

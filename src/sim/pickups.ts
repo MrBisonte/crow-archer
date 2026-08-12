@@ -21,11 +21,15 @@ export type PickupKind = 'shield' | 'fire';
 /** The kinds a drop rolls between, in the order the roll walks them. */
 export const DROPPED_KINDS: readonly PickupKind[] = ['shield', 'fire'];
 
-/** How long a fire powerup lasts once taken. */
-export const FIRE_DURATION_TICKS = ticks(8);
-
-/** What fire does to damage while it is burning. */
-export const FIRE_DAMAGE_MULTIPLIER = 2;
+/**
+ * How long a fire powerup lasts, and what it does while it burns.
+ *
+ * Three seconds at half again the damage. Short enough that it is a window to
+ * use rather than a state to sit in, which is what eight seconds at double had
+ * become: long enough to win a fight on its own.
+ */
+export const FIRE_DURATION_TICKS = ticks(3);
+export const FIRE_DAMAGE_MULTIPLIER = 1.5;
 
 /** How close a body must be to sweep a pickup up. `pickupRadius: 20` in legacy. */
 export const PICKUP_RADIUS = 20;

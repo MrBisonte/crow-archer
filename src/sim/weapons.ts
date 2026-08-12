@@ -137,8 +137,36 @@ export const DYNAMITE_CHARGE_MULTIPLIER = 3;
 /** How long a full charge takes to wind up. One second, as in the legacy game. */
 export const DYNAMITE_CHARGE_TICKS = ticks(1);
 
-/** How hard a stick comes off a wall. `-0.65` restitution, as in the legacy game. */
-export const DYNAMITE_BOUNCE = 0.65;
+/**
+ * How much speed a stick keeps when it comes off a wall.
+ *
+ * The legacy figure is 0.65, and against a boss that never moved it did not
+ * matter where the thing ended up. It matters here: at 0.65 a stick thrown into
+ * a tree rebounded most of the way back and went off where it came from, so the
+ * one tile it never cleared was the one it hit. A third of its speed still reads
+ * as a ricochet and leaves it beside what stopped it.
+ */
+export const DYNAMITE_BOUNCE = 0.35;
+
+/**
+ * Speed a thrown stick keeps each tick, the legacy `0.985` per frame.
+ *
+ * Without it a stick that bounced kept every bit of its speed and ping-ponged
+ * across the map until the fuse ran out, so it never went off near the tree it
+ * hit and nothing ever burned. Drag is what makes it settle where it landed.
+ */
+export const DYNAMITE_DRAG = 0.985;
+
+/**
+ * Below this speed a thrown stick has stopped, and goes off where it lies.
+ *
+ * Without it a stick that struck a tree bounced away and detonated back where
+ * it came from, so the tree it hit was the one thing the blast never reached:
+ * aiming at a thicket cleared nothing. A stick that comes to rest against what
+ * stopped it blows that up, which is both what a player expects and the only
+ * way ricochet and burning terrain can both be true.
+ */
+export const DYNAMITE_REST_SPEED = 50;
 
 /** Sticks a player carries into a match. `resources.dynamites.max` at fast pace. */
 export const DYNAMITE_CARRIED = 4;

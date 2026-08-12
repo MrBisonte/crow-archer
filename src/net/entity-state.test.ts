@@ -96,8 +96,8 @@ describe('shot state packing', () => {
   const roundTrip = (v: Parameters<typeof packShotState>[0]) => unpackShotState(packShotState(v));
 
   it('carries the firing team', () => {
-    expect(roundTrip({ team: 0, flavour: ShotFlavourCode.ARROW, aim: 0, fuse: 0 }).team).toBe(0);
-    expect(roundTrip({ team: 1, flavour: ShotFlavourCode.ARROW, aim: 0, fuse: 0 }).team).toBe(1);
+    expect(roundTrip({ team: 0, flavour: ShotFlavourCode.ARROW, aim: 0, fuse: 0, fiery: false }).team).toBe(0);
+    expect(roundTrip({ team: 1, flavour: ShotFlavourCode.ARROW, aim: 0, fuse: 0, fiery: false }).team).toBe(1);
   });
 
   it.each([
@@ -105,21 +105,32 @@ describe('shot state packing', () => {
     ['a bolt', ShotFlavourCode.BOLT],
     ['dynamite', ShotFlavourCode.DYNAMITE],
   ])('carries %s back as itself', (_name, flavour) => {
-    expect(roundTrip({ team: 1, flavour, aim: 2, fuse: 0.5 }).flavour).toBe(flavour);
+    expect(roundTrip({ team: 1, flavour, aim: 2, fuse: 0.5, fiery: false }).flavour).toBe(flavour);
   });
 
   it('carries the direction of travel, so a shot points where it is going', () => {
-    const back = roundTrip({ team: 0, flavour: ShotFlavourCode.ARROW, aim: 2.5, fuse: 0 });
+    const back = roundTrip({ team: 0, flavour: ShotFlavourCode.ARROW, aim: 2.5, fuse: 0, fiery: false });
     expect(Math.abs(back.aim - 2.5)).toBeLessThan(TAU / 256 + 1e-9);
   });
 
   it('carries the fuse, so a countdown can be drawn', () => {
-    const back = roundTrip({ team: 0, flavour: ShotFlavourCode.DYNAMITE, aim: 0, fuse: 0.75 });
+    const back = roundTrip({ team: 0, flavour: ShotFlavourCode.DYNAMITE, aim: 0, fuse: 0.75, fiery: false });
     expect(Math.abs(back.fuse - 0.75)).toBeLessThan(1 / 16 + 1e-9);
   });
 
+  it('says whether a shot was fired alight, so it reads as a fire arrow', () => {
+    const lit = roundTrip({ team: 0, flavour: ShotFlavourCode.ARROW, aim: 1, fuse: 0, fiery: true });
+    expect(lit.fiery).toBe(true);
+    expect(lit.team).toBe(0);
+    expect(lit.flavour).toBe(ShotFlavourCode.ARROW);
+    const cold = roundTrip({ team: 1, flavour: ShotFlavourCode.BOLT, aim: 1, fuse: 0, fiery: false });
+    expect(cold.fiery).toBe(false);
+    expect(cold.team).toBe(1);
+  });
+
   it('keeps every field independent', () => {
-    const back = roundTrip({ team: 1, flavour: ShotFlavourCode.DYNAMITE, aim: 4, fuse: 0.5 });
+    const back = roundTrip({ team: 1, flavour: ShotFlavourCode.DYNAMITE, aim: 4, fuse: 0.5, fiery: true });
+    expect(back.fiery).toBe(true);
     expect(back.team).toBe(1);
     expect(back.flavour).toBe(ShotFlavourCode.DYNAMITE);
     expect(Math.abs(back.aim - 4)).toBeLessThan(TAU / 256 + 1e-9);
