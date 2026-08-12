@@ -91,13 +91,23 @@ const MAX_FRAME_MS = 100;
  */
 const INTERP_DELAY_MS = 100;
 
-/** Movement keys, matching the legacy arrow-key defaults. */
+/**
+ * Movement keys. The legacy arrows, and WASD beside them.
+ *
+ * Both at once rather than a setting, because there is nothing to choose
+ * between: a hand on the arrows and a hand on WASD want the same thing, and
+ * having to pick is friction for no gain.
+ */
 const MOVE_KEYS = {
-  up: 'ArrowUp',
-  down: 'ArrowDown',
-  left: 'ArrowLeft',
-  right: 'ArrowRight',
+  up: ['ArrowUp', 'w', 'W'],
+  down: ['ArrowDown', 's', 'S'],
+  left: ['ArrowLeft', 'a', 'A'],
+  right: ['ArrowRight', 'd', 'D'],
 } as const;
+
+/** True when any of the keys bound to a direction is down. */
+const anyDown = (keys: Record<string, boolean>, bound: readonly string[]): boolean =>
+  bound.some((k) => !!keys[k]);
 
 /** Fires as well as the left mouse button, so a keyboard alone can play. */
 const FIRE_KEY = ' ';
@@ -280,14 +290,18 @@ export class MatchView {
     // respawn would predict a walk that every snapshot then takes back.
     const dead = this.#ownState() === PlayerState.DEAD;
     this.#raw = {
-      up: !dead && !!keys[MOVE_KEYS.up],
-      down: !dead && !!keys[MOVE_KEYS.down],
-      left: !dead && !!keys[MOVE_KEYS.left],
-      right: !dead && !!keys[MOVE_KEYS.right],
+      up: !dead && anyDown(keys, MOVE_KEYS.up),
+      down: !dead && anyDown(keys, MOVE_KEYS.down),
+      left: !dead && anyDown(keys, MOVE_KEYS.left),
+      right: !dead && anyDown(keys, MOVE_KEYS.right),
       fire: !dead && (aim.fire || !!keys[FIRE_KEY]),
       // Right mouse, or Q for a keyboard alone. Dynamite in a duel; the
       // archer's second weapon in co-op.
-      special: !dead && (aim.special || DYNAMITE_KEYS.some((k) => !!keys[k])),
+      // Gated on actually carrying dynamite. A wizard in co-op carries none, and
+      // without this the HUD wound a charge up that the server would never
+      // throw: the weapon looked loaded and did nothing.
+      special:
+        !dead && this.#hasDynamite && (aim.special || DYNAMITE_KEYS.some((k) => !!keys[k])),
       snipe: false,
       aimAngle: this.#angleTo(aim),
     };

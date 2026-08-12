@@ -24,11 +24,12 @@ describe('RoomStore', () => {
   });
 
   describe('create', () => {
-    it('seats the creator in slot 0 as host, in a coop lobby', () => {
+    it('seats the creator in slot 0 as host, ready to fight', () => {
       const view = ok(store.create(10, 'alex'));
       expect(view.code).toBe('AAAA');
       expect(view.host).toBe(0);
-      expect(view.mode).toBe('coop');
+      // Deathmatch is the default now: co-op has nothing in it to fight yet.
+      expect(view.mode).toBe('deathmatch');
       expect(view.slots).toHaveLength(1);
       expect(view.slots[0]).toEqual({
         id: 0, name: 'alex', character: 'archer', ready: false, team: Team.A,
@@ -156,6 +157,8 @@ describe('RoomStore', () => {
     });
 
     it('puts everyone on team A in coop', () => {
+      // Co-op has to be asked for now, since a new room opens in deathmatch.
+      store.setMode(10, 'coop');
       expect(ok(store.viewOf('AAAA')).slots.map((s) => s.team))
         .toEqual([Team.A, Team.A, Team.A, Team.A]);
     });

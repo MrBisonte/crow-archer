@@ -145,7 +145,11 @@ export class RoomStore {
 
     const room: Room = {
       code,
-      mode: 'coop',
+      // Deathmatch, not co-op. Friendly fire is off in every mode and there are
+      // no crows to fight in co-op yet, so a room that opened in co-op was a
+      // room where nothing could happen: no damage, and dynamite for the archer
+      // alone. Co-op is still one keypress away for anyone who wants a walk.
+      mode: 'deathmatch',
       phase: RoomPhase.LOBBY,
       host: 0,
       win: DEFAULT_WIN_CONDITION,

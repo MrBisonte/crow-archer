@@ -83,7 +83,7 @@ describe('Lobby', () => {
       expect(msg).toEqual({
         type: 'ROOM_STATE',
         code: 'AAAA',
-        mode: 'coop',
+        mode: 'deathmatch',
         host: 0,
         you: 0,
         win: DEFAULT_WIN_CONDITION,
@@ -196,12 +196,10 @@ describe('Lobby', () => {
         .filter((m) => m.type === 'MATCH_START');
       expect(starts).toHaveLength(2);
       expect(starts[0]).toEqual(starts[1]);          // one message, two recipients
-      expect(starts[0]).toMatchObject({
-        seed: 0xdeadbeef,
-        mode: 'coop',
+      expect(starts[0]).toMatchObject({ seed: 0xdeadbeef, mode: 'deathmatch',
         starts: [
           { id: 0, character: 'archer', team: Team.A },
-          { id: 1, character: 'archer', team: Team.A },
+          { id: 1, character: 'archer', team: Team.B },
         ],
       });
     });

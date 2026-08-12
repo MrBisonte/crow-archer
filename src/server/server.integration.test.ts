@@ -231,6 +231,12 @@ describe('lobby server over websockets', () => {
     await host.next();
     await guest.next();
 
+    // Co-op on purpose: this test is about two seats on one side starting a
+    // match, and a room now opens in deathmatch.
+    host.send({ type: 'SET_MODE', mode: 'coop' });
+    await host.next();
+    await guest.next();
+
     host.send({ type: 'SET_READY', ready: true });
     await host.next();
     await guest.next();
@@ -256,6 +262,8 @@ describe('lobby server over websockets', () => {
     const created = roomState(await solo.ask({ type: 'CREATE_ROOM' }));
     expect(created.slots).toHaveLength(1);
 
+    // Co-op, because a solo deathmatch has nobody to fight and will not start.
+    await solo.ask({ type: 'SET_MODE', mode: 'coop' });
     solo.send({ type: 'SET_READY', ready: true });
     await solo.next();                                    // ROOM_STATE
     await solo.next();                                    // MATCH_START
@@ -274,6 +282,8 @@ describe('lobby server over websockets', () => {
     const solo = await connect();
     await solo.hello('alex');
     await solo.ask({ type: 'CREATE_ROOM' });
+    // Co-op, because a solo deathmatch has nobody to fight and will not start.
+    await solo.ask({ type: 'SET_MODE', mode: 'coop' });
     solo.send({ type: 'SET_READY', ready: true });
     await solo.next();                                    // ROOM_STATE
     await solo.next();                                    // MATCH_START
@@ -309,6 +319,9 @@ describe('lobby server over websockets', () => {
     const solo = await connect();
     await solo.hello('alex');
     await solo.ask({ type: 'CREATE_ROOM' });
+    // Asked for, because a room now opens in deathmatch, and a deathmatch of one
+    // has nobody to fight.
+    await solo.ask({ type: 'SET_MODE', mode: 'coop' });
     solo.send({ type: 'SET_READY', ready: true });
     await solo.next();
     expect(await solo.next()).toMatchObject({ type: 'MATCH_START', mode: 'coop' });
@@ -318,6 +331,8 @@ describe('lobby server over websockets', () => {
     const solo = await connect();
     await solo.hello('alex');
     await solo.ask({ type: 'CREATE_ROOM' });
+    // Co-op, because a solo deathmatch has nobody to fight and will not start.
+    await solo.ask({ type: 'SET_MODE', mode: 'coop' });
     solo.send({ type: 'SET_READY', ready: true });
     await solo.next();                                    // ROOM_STATE
     await solo.next();                                    // MATCH_START
