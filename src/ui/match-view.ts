@@ -29,7 +29,7 @@ import { Interpolator } from '../net/interpolation';
 import { Predictor } from '../net/prediction';
 import { LocalInput, type RawInput } from '../sim/input';
 import { ARENA_H, ARENA_W, PLAYER_MAX_HP, PLAYER_RADIUS } from '../sim/arena';
-import { ARROW_RADIUS } from '../sim/arena-world';
+import { DYNAMITE_BLAST_RADIUS, DYNAMITE_CARRIED, carriesDynamite } from '../sim/weapons';
 import { MovementWorld } from '../sim/movement-world';
 import type { Transport } from '../net/transport';
 
@@ -145,6 +145,8 @@ export class MatchView {
   /** Simulated time owed but not yet stepped, carried between frames. */
   #owedMs = 0;
   readonly #effects = new HitEffects();
+  /** Whether this character carries dynamite at all, which the mode decides. */
+  readonly #hasDynamite: boolean;
 
   constructor(options: MatchViewOptions) {
     this.#ctx = options.ctx;
@@ -173,6 +175,8 @@ export class MatchView {
     const terrain = Terrain.fromSeed(options.seed, noiseFor);
     this.#tiles = new StaticTileLayer(terrain.map, { tileSize: TILE_SIZE, hudHeight: HUD_HEIGHT });
     this.#tiles.repaintAll();
+    const mine = options.starts.find((s) => s.id === options.you);
+    this.#hasDynamite = carriesDynamite(mine?.character ?? 'archer', options.mode);
   }
 
   /** The most recent snapshot applied, for the dev hook. */
@@ -327,6 +331,9 @@ export class MatchView {
     for (const e of visible) {
       if (e.kind === EntityKind.PLAYER && e.id !== this.#you) this.#drawBody(e, loopT);
     }
+    for (const e of visible) {
+      if (e.kind === EntityKind.BLAST) this.#drawBlast(e);
+    }
 
     // Your own body, predicted, drawn last so it is never hidden. Position is
     // the predicted one, everything else is the server's: prediction covers
@@ -407,6 +414,31 @@ export class MatchView {
       loopT,
       HUD_HEIGHT,
     );
+  }
+
+  /**
+   * A blast going off: a ring that expands to the real radius and fades.
+   *
+   * Drawn at the radius the simulation actually uses, so what you see is what
+   * caught you. `state` carries how far through it is, in sixteenths.
+   */
+  #drawBlast(e: EntitySnapshot): void {
+    const ctx = this.#ctx;
+    const progress = Math.min(1, e.state / 16);
+    const y = e.y + HUD_HEIGHT;
+    ctx.save();
+    ctx.globalAlpha = 1 - progress;
+    ctx.fillStyle = '#FFB400';
+    ctx.beginPath();
+    ctx.arc(e.x, y, DYNAMITE_BLAST_RADIUS * progress * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#FF3B30';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(e.x, y, DYNAMITE_BLAST_RADIUS * progress, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   #drawBird(e: EntitySnapshot, loopT: number): void {
@@ -496,7 +528,19 @@ export class MatchView {
     ctx.fillStyle = '#39FF14';
     ctx.font = '12px "Courier New", monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(`HP ${own?.hp ?? PLAYER_MAX_HP}`, 8, 20);
+    // Health, shield and sticks left. Without the last two, a player cannot
+    // tell whether they are carrying dynamite, and a weapon nobody knows they
+    // have is a weapon that does not exist.
+    const mine = own ? unpackPlayerState(own.state) : null;
+    const left = mine?.dynamite ?? 0;
+    const sticks = '■'.repeat(left) + '□'.repeat(Math.max(0, DYNAMITE_CARRIED - left));
+    ctx.fillText(
+      `HP ${own?.hp ?? PLAYER_MAX_HP}` +
+        (mine?.shielded ? '  SHLD' : '') +
+        (this.#hasDynamite ? `  DYN ${sticks}` : ''),
+      8,
+      20,
+    );
 
     ctx.textAlign = 'center';
     ctx.fillText(this.#centreLine(own), this.#canvasW / 2, 20);

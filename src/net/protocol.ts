@@ -108,6 +108,15 @@ export const EntityKind = {
   BOSS: 2,
   PROJECTILE: 3,
   PICKUP: 4,
+  /**
+   * A blast that has just gone off, carried for a few ticks so it can be drawn.
+   *
+   * A stick of dynamite that simply vanished from one snapshot to the next was
+   * indistinguishable from one that fizzled: the whole weapon was invisible.
+   * Explosions are the one cosmetic the wire carries, because the client cannot
+   * infer where a shot that hit nobody went off.
+   */
+  BLAST: 5,
 } as const;
 
 export type EntityKind = (typeof EntityKind)[keyof typeof EntityKind];

@@ -65,6 +65,7 @@ const player = (w: BattleWorld, id: number) => players(w).find((e) => e.id === i
 const shots = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.PROJECTILE);
 const crows = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.CROW);
 const drops = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.PICKUP);
+const blasts = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.BLAST);
 
 /** Places two fighters a set distance apart, facing each other. */
 function face(w: BattleWorld, gap: number): { shooter: number; target: number; angle: number } {
@@ -308,6 +309,64 @@ describe('BattleWorld', () => {
       const w = battle({ characters: ['knight', 'archer'], mode: 'deathmatch' });
       hold(w, 1, 0, cmd(Button.SPECIAL));
       expect(shots(w)).toHaveLength(1);
+    });
+
+    it('goes off, and says so on the wire so it can be drawn', () => {
+      const w = battle({ characters: ['archer', 'archer'] });
+      hold(w, 1, 0, cmd(Button.SPECIAL, 0));
+      expect(blasts(w)).toHaveLength(0);        // the fuse has not run yet
+      // Sampled every tick: a blast lasts a third of a second, and a fixed
+      // number of steps can land after it has already faded.
+      let sawBlast = false;
+      for (let i = 0; i < 200 && !sawBlast; i++) {
+        w.step(DT, new Map());
+        if (blasts(w).length > 0) sawBlast = true;
+      }
+      expect(sawBlast).toBe(true);
+    });
+
+    it('hurts an enemy caught in the blast', () => {
+      // Uncharged dynamite covers about 500 px before the fuse runs out, which
+      // is well short of the width of the map. Walk the target into range
+      // first, the way anyone throwing one would have to.
+      const w = battle({ characters: ['archer', 'archer'] });
+      const a = player(w, 0);
+      const b = player(w, 1);
+      const towards = Math.atan2(a.y - b.y, a.x - b.x);
+      const closing = new Map([[1, cmd(Button.LEFT, towards)]]);
+      for (let i = 0; i < 200; i++) w.step(DT, closing);
+
+      const me = player(w, 0);
+      const them = player(w, 1);
+      const angle = Math.atan2(them.y - me.y, them.x - me.x);
+      const throwing = new Map([[0, cmd(Button.SPECIAL, angle, 2)]]);
+      let hurt = false;
+      for (let i = 0; i < 400 && !hurt; i++) {
+        w.step(DT, throwing);
+        const target = player(w, 1);
+        hurt = target.hp < PLAYER_MAX_HP || !unpackPlayerState(target.state).shielded;
+      }
+      expect(hurt).toBe(true);
+    });
+
+    it('never catches a teammate, since friendly fire is off', () => {
+      const w = battle({ characters: ['archer', 'archer'], teams: [Team.A, Team.A] });
+      const { angle } = face(w, 0);
+      hold(w, 400, 0, cmd(Button.SPECIAL, angle));
+      expect(player(w, 1).hp).toBe(PLAYER_MAX_HP);
+      expect(unpackPlayerState(player(w, 1).state).shielded).toBe(true);
+    });
+
+    it('reports how many sticks are left, so the HUD can show them', () => {
+      const w = battle();
+      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(4);
+      hold(w, 1, 0, cmd(Button.SPECIAL, -Math.PI / 2));
+      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(3);
+    });
+
+    it('reports none for a knight in co-op, who carries none', () => {
+      const w = battle({ characters: ['knight', 'archer'], teams: [Team.A, Team.A], mode: 'coop' });
+      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(0);
     });
 
     it('runs out, so it cannot be thrown forever', () => {

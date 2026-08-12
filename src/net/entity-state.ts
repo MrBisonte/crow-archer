@@ -26,6 +26,15 @@ const AIM_SHIFT = 2;
 const SWING_STEPS = 16;
 const SWING_SHIFT = 10;
 
+/**
+ * Sticks of dynamite left, in 3 bits.
+ *
+ * On the wire because it is the server's count, and a player who cannot see how
+ * many they have cannot tell they have any: the weapon may as well not exist.
+ */
+const DYNAMITE_MAX = 7;
+const DYNAMITE_SHIFT = 14;
+
 const TAU = Math.PI * 2;
 
 export interface PlayerVisualState {
@@ -35,6 +44,8 @@ export interface PlayerVisualState {
   aim: number;
   /** 0 when not swinging, otherwise how far through the swing, 0 to 1. */
   swing: number;
+  /** Sticks of dynamite left. Zero for anyone not carrying any. */
+  dynamite: number;
 }
 
 /** Packs a player's drawable state into the one number the snapshot carries. */
@@ -45,7 +56,8 @@ export function packPlayerState(v: PlayerVisualState): number {
   const turns = ((v.aim % TAU) + TAU) % TAU / TAU;
   const aim = Math.min(AIM_STEPS - 1, Math.floor(turns * AIM_STEPS));
   const swing = Math.min(SWING_STEPS - 1, Math.max(0, Math.floor(v.swing * SWING_STEPS)));
-  return flags | (aim << AIM_SHIFT) | (swing << SWING_SHIFT);
+  const sticks = Math.min(DYNAMITE_MAX, Math.max(0, Math.floor(v.dynamite)));
+  return flags | (aim << AIM_SHIFT) | (swing << SWING_SHIFT) | (sticks << DYNAMITE_SHIFT);
 }
 
 /** Reads back what packPlayerState wrote. */
@@ -57,6 +69,7 @@ export function unpackPlayerState(state: number): PlayerVisualState {
     shielded: (state & PlayerFlag.SHIELDED) !== 0,
     aim: (aim / AIM_STEPS) * TAU,
     swing: swing / SWING_STEPS,
+    dynamite: (state >> DYNAMITE_SHIFT) & DYNAMITE_MAX,
   };
 }
 

@@ -88,6 +88,18 @@ export const DYNAMITE_DAMAGE = 4;
 export const DYNAMITE_BLAST_RADIUS = 90;
 
 /**
+ * How near a shot has to pass to count as a hit.
+ *
+ * Larger than the projectile looks, and deliberately so. Everyone else is drawn
+ * a tenth of a second in the past, which at a walking pace of 200 px/s is 20 px
+ * behind where the server has them. A player aims at what is on screen, so a
+ * hit window narrower than that offset means a perfectly aimed shot misses and
+ * the game feels broken. Twelve plus the body's eight covers it.
+ */
+export const ARROW_RADIUS = 12;
+export const BOLT_RADIUS = 12;
+
+/**
  * How far the spear reaches at rest, and how much further the thrust pushes it.
  *
  * Exported because the renderer has to draw the same weapon the simulation is
@@ -129,7 +141,7 @@ export class Bow implements Weapon {
           speed: 500,          // arrowSpeed
           damage: ARROW_DAMAGE,
           lifeTicks: ticks(1.5), // arrowLifetime
-          radius: 4,
+          radius: ARROW_RADIUS,
           homingRate: 0,
         },
       },
@@ -158,7 +170,7 @@ export class Staff implements Weapon {
           speed: 468,            // wizBoltSpeed
           damage: BOLT_DAMAGE,
           lifeTicks: ticks(3.5), // wizBoltLifetime
-          radius: 6,
+          radius: BOLT_RADIUS,
           homingRate: 4.5,       // wizBoltTurnRate
         },
       },
@@ -215,7 +227,7 @@ export class DynamitePouch {
           speed: 336,                    // dynamiteSpeed, uncharged
           damage: DYNAMITE_DAMAGE,
           lifeTicks: DYNAMITE_FUSE_TICKS,
-          radius: 6,
+          radius: BOLT_RADIUS,
           homingRate: 0,
         },
       },

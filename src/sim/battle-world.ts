@@ -61,6 +61,16 @@ export const RESPAWN_TICKS = ticks(3);
 const FIRST_SHOT_ID = 1000;
 const FIRST_PICKUP_ID = 5000;
 const FIRST_CROW_ID = 8000;
+const FIRST_BLAST_ID = 9000;
+
+/**
+ * How long a blast stays in the snapshot.
+ *
+ * Long enough to survive the interpolation delay and be drawn, short enough
+ * that it is gone before the next one. Without this a stick of dynamite simply
+ * disappeared, which looked exactly like a dud.
+ */
+const BLAST_TICKS = ticks(0.35);
 
 /** Bodies and shots are circles; this is how they are compared. */
 const withinRadius = (ax: number, ay: number, bx: number, by: number, r: number): boolean => {
@@ -135,9 +145,12 @@ export class BattleWorld implements World {
   #shots: Shot[] = [];
   #pickups: GroundPickup[] = [];
   #crows: Crow[] = [];
+  /** Blasts still worth drawing, with the ticks each has left. */
+  #blasts: { id: number; x: number; y: number; left: number }[] = [];
   #nextShotId = FIRST_SHOT_ID;
   #nextPickupId = FIRST_PICKUP_ID;
   #nextCrowId = FIRST_CROW_ID;
+  #nextBlastId = FIRST_BLAST_ID;
   #tick = 0;
   #crowTimer = CROW_INTERVAL_TICKS;
 
@@ -197,6 +210,7 @@ export class BattleWorld implements World {
     this.#advanceShots(dt, kills);
     this.#advanceCrows(dt);
     this.#collectPickups();
+    this.#blasts = this.#blasts.filter((b) => --b.left > 0);
     return kills;
   }
 
@@ -230,6 +244,7 @@ export class BattleWorld implements World {
           shielded: f.shielded,
           aim: f.aim,
           swing: f.swing ? 1 - f.swing.left / f.swing.spec.durationTicks : 0,
+          dynamite: f.dynamite ? f.dynamiteLeft : 0,
         }),
       })),
       ...this.#shots.map((s) => ({
@@ -252,6 +267,15 @@ export class BattleWorld implements World {
         y: Math.round(p.y),
         hp: 0,
         state: p.kind === 'shield' ? 0 : 1,
+      })),
+      ...this.#blasts.map((b) => ({
+        id: b.id,
+        kind: EntityKind.BLAST,
+        x: Math.round(b.x),
+        y: Math.round(b.y),
+        hp: 0,
+        // How far through it is, in sixteenths, so the ring can expand.
+        state: Math.min(15, Math.floor((1 - b.left / BLAST_TICKS) * 16)),
       })),
       ...this.#crows.map((c) => ({
         id: c.id,
@@ -491,6 +515,9 @@ export class BattleWorld implements World {
    * corridor.
    */
   #explode(shot: Shot, kills: Kill[]): void {
+    // Recorded before anything is resolved, so a blast that hits nothing is
+    // still seen. A weapon you cannot see go off is a weapon nobody trusts.
+    this.#blasts.push({ id: this.#nextBlastId++, x: shot.x, y: shot.y, left: BLAST_TICKS });
     for (const target of this.#fighters) {
       if (target.respawnIn !== null || !canDamage(shot.team, target.team)) continue;
       if (!withinRadius(shot.x, shot.y, target.x, target.y, DYNAMITE_BLAST_RADIUS)) continue;
