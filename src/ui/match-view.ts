@@ -29,7 +29,12 @@ import { Interpolator } from '../net/interpolation';
 import { Predictor } from '../net/prediction';
 import { LocalInput, type RawInput } from '../sim/input';
 import { ARENA_H, ARENA_W, PLAYER_MAX_HP, PLAYER_RADIUS } from '../sim/arena';
-import { DYNAMITE_BLAST_RADIUS, DYNAMITE_CARRIED, carriesDynamite } from '../sim/weapons';
+import {
+  DYNAMITE_BLAST_RADIUS,
+  DYNAMITE_CARRIED,
+  DYNAMITE_CHARGE_TICKS,
+  carriesDynamite,
+} from '../sim/weapons';
 import { MovementWorld } from '../sim/movement-world';
 import type { Transport } from '../net/transport';
 
@@ -147,6 +152,14 @@ export class MatchView {
   readonly #effects = new HitEffects();
   /** Whether this character carries dynamite at all, which the mode decides. */
   readonly #hasDynamite: boolean;
+  /**
+   * How far this client's own throw is wound up, 0 to 1.
+   *
+   * Counted here rather than read off the wire: it is this player's own button,
+   * so the answer is already local, and a charge bar that waited a round trip
+   * would lag the finger holding it.
+   */
+  #windUp = 0;
 
   constructor(options: MatchViewOptions) {
     this.#ctx = options.ctx;
@@ -273,6 +286,12 @@ export class MatchView {
       snipe: false,
       aimAngle: this.#angleTo(aim),
     };
+
+    // A held throw winds up at the same rate the server counts it, so the bar
+    // and the distance agree.
+    this.#windUp = this.#raw.special
+      ? Math.min(1, this.#windUp + 1 / DYNAMITE_CHARGE_TICKS)
+      : 0;
 
     const cmd = this.#input.sample();
     try {
@@ -427,10 +446,13 @@ export class MatchView {
     const progress = Math.min(1, e.state / 16);
     const y = e.y + HUD_HEIGHT;
     ctx.save();
-    ctx.globalAlpha = 1 - progress;
+    // Fades out over the whole second, and the fill goes first, so the ring is
+    // still readable when the flash has gone.
+    ctx.globalAlpha = (1 - progress) * 0.8;
     ctx.fillStyle = '#FFB400';
     ctx.beginPath();
-    ctx.arc(e.x, y, DYNAMITE_BLAST_RADIUS * progress * 0.9, 0, Math.PI * 2);
+    // The flash only covers the first third; after that it is smoke and a ring.
+    ctx.arc(e.x, y, DYNAMITE_BLAST_RADIUS * Math.min(1, progress * 3) * 0.75, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = '#FF3B30';
     ctx.lineWidth = 4;
@@ -537,7 +559,8 @@ export class MatchView {
     ctx.fillText(
       `HP ${own?.hp ?? PLAYER_MAX_HP}` +
         (mine?.shielded ? '  SHLD' : '') +
-        (this.#hasDynamite ? `  DYN ${sticks}` : ''),
+        (this.#hasDynamite ? `  DYN ${sticks}` : '') +
+        (this.#windUp > 0 ? `  CHARGING ${Math.round(this.#windUp * 100)}%` : ''),
       8,
       20,
     );

@@ -87,13 +87,33 @@ export class Terrain {
     return tile === TILE.ROCK || tile === TILE.TREE || tile === TILE.HUT;
   }
 
+  /** Would a thrown thing sink here? Only dynamite cares, and it fizzles out. */
+  drowns(x: number, y: number): boolean {
+    return this.tileAt(x, y) === TILE.WATER;
+  }
+
   /**
-   * Burns a hut tile down to ash. Dynamite is the only thing that does this so
-   * far, and it is what makes the terrain worth destroying.
+   * Burns everything that burns within a radius down to ash.
+   *
+   * Trees and huts go; rock and water do not, because no blast shifts either.
+   * A radius rather than a point, since a blast is a radius: dynamite that
+   * cleared exactly one tile of a forest read as having missed.
    */
-  burn(x: number, y: number): void {
-    const r = Math.floor(y / TILE_SIZE);
-    const c = Math.floor(x / TILE_SIZE);
-    if (this.map.get(r, c) === TILE.HUT) this.map.set(r, c, TILE.ASH);
+  burnArea(x: number, y: number, radius: number): void {
+    const reach = Math.ceil(radius / TILE_SIZE);
+    const r0 = Math.floor(y / TILE_SIZE);
+    const c0 = Math.floor(x / TILE_SIZE);
+    for (let dr = -reach; dr <= reach; dr++) {
+      for (let dc = -reach; dc <= reach; dc++) {
+        const r = r0 + dr;
+        const c = c0 + dc;
+        // Tile centres, so a tile only burns when the blast really covers it.
+        const cx = c * TILE_SIZE + TILE_SIZE / 2;
+        const cy = r * TILE_SIZE + TILE_SIZE / 2;
+        if ((cx - x) ** 2 + (cy - y) ** 2 > radius * radius) continue;
+        const tile = this.map.get(r, c);
+        if (tile === TILE.HUT || tile === TILE.TREE) this.map.set(r, c, TILE.ASH);
+      }
+    }
   }
 }

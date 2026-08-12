@@ -94,21 +94,71 @@ describe('Terrain', () => {
   });
 
   describe('burning', () => {
+    /** The centre of a tile, which is what burnArea measures against. */
+    const at = (row: number, col: number) => ({
+      x: col * TILE_SIZE + TILE_SIZE / 2,
+      y: row * TILE_SIZE + TILE_SIZE / 2,
+    });
+
     it('turns a hut to ash, which can then be walked over', () => {
       const t = blank();
       t.map.set(4, 4, TILE.HUT);
-      const x = 4 * TILE_SIZE + 4;
-      t.burn(x, x);
-      expect(t.tileAt(x, x)).toBe(TILE.ASH);
-      expect(t.walkable(x, x)).toBe(true);
+      const p = at(4, 4);
+      t.burnArea(p.x, p.y, 40);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.ASH);
+      expect(t.walkable(p.x, p.y)).toBe(true);
     });
 
-    it('leaves rock alone, which no blast is going to shift', () => {
+    it('burns trees too, so a blast clears a thicket', () => {
       const t = blank();
-      t.map.set(4, 4, TILE.ROCK);
-      const x = 4 * TILE_SIZE + 4;
-      t.burn(x, x);
-      expect(t.tileAt(x, x)).toBe(TILE.ROCK);
+      t.map.set(4, 4, TILE.TREE);
+      const p = at(4, 4);
+      t.burnArea(p.x, p.y, 40);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.ASH);
+    });
+
+    it.each([
+      ['rock', TILE.ROCK],
+      ['water', TILE.WATER],
+    ])('leaves %s alone, which no blast is going to shift', (_name, tile) => {
+      const t = blank();
+      t.map.set(4, 4, tile);
+      const p = at(4, 4);
+      t.burnArea(p.x, p.y, 90);
+      expect(t.tileAt(p.x, p.y)).toBe(tile);
+    });
+
+    it('clears a whole radius, not just the tile it went off on', () => {
+      const t = blank();
+      for (let dc = -2; dc <= 2; dc++) t.map.set(4, 4 + dc, TILE.TREE);
+      const p = at(4, 4);
+      t.burnArea(p.x, p.y, 90);
+      for (let dc = -2; dc <= 2; dc++) {
+        expect(t.tileAt(at(4, 4 + dc).x, at(4, 4 + dc).y)).toBe(TILE.ASH);
+      }
+    });
+
+    it('leaves what the blast did not reach', () => {
+      const t = blank();
+      t.map.set(4, 10, TILE.TREE);
+      const p = at(4, 4);
+      t.burnArea(p.x, p.y, 90);
+      expect(t.tileAt(at(4, 10).x, at(4, 10).y)).toBe(TILE.TREE);
+    });
+  });
+
+  describe('drowning', () => {
+    it('sinks a thrown thing in water', () => {
+      const t = blank();
+      t.map.set(3, 3, TILE.WATER);
+      expect(t.drowns(3 * TILE_SIZE + 4, 3 * TILE_SIZE + 4)).toBe(true);
+    });
+
+    it('does not sink one on open ground or on rock', () => {
+      const t = blank();
+      t.map.set(3, 3, TILE.ROCK);
+      expect(t.drowns(3 * TILE_SIZE + 4, 3 * TILE_SIZE + 4)).toBe(false);
+      expect(t.drowns(100, 100)).toBe(false);
     });
   });
 });

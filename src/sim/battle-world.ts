@@ -34,7 +34,10 @@ import { canDamage } from './team';
 import { ticks } from './tick';
 import {
   DYNAMITE_BLAST_RADIUS,
+  DYNAMITE_BOUNCE,
   DYNAMITE_CARRIED,
+  DYNAMITE_CHARGE_MULTIPLIER,
+  DYNAMITE_CHARGE_TICKS,
   DynamitePouch,
   carriesDynamite,
   primaryWeapon,
@@ -66,11 +69,12 @@ const FIRST_BLAST_ID = 9000;
 /**
  * How long a blast stays in the snapshot.
  *
- * Long enough to survive the interpolation delay and be drawn, short enough
- * that it is gone before the next one. Without this a stick of dynamite simply
- * disappeared, which looked exactly like a dud.
+ * A full second, which is far longer than the damage takes: everything caught
+ * is resolved on the tick it goes off, and this is only how long the sight of it
+ * lingers. Separating the two is what lets an explosion read as an event
+ * without the hit landing late.
  */
-const BLAST_TICKS = ticks(0.35);
+const BLAST_TICKS = ticks(1);
 
 /** Bodies and shots are circles; this is how they are compared. */
 const withinRadius = (ax: number, ay: number, bx: number, by: number, r: number): boolean => {
@@ -98,6 +102,8 @@ interface Fighter {
   dynamiteLeft: number;
   invulnerable: number;
   respawnIn: number | null;
+  /** Ticks the throw has been wound up, or null when not winding one. */
+  charge: number | null;
   /** Ticks left in the current swing, and what it is. Null when not swinging. */
   swing: { left: number; spec: SwingSpec; struckPhaseOne: boolean; struckPhaseTwo: boolean } | null;
 }
@@ -188,6 +194,7 @@ export class BattleWorld implements World {
         dynamiteLeft: DYNAMITE_CARRIED,
         invulnerable: 0,
         respawnIn: null,
+        charge: null,
         swing: null,
       };
     });
@@ -204,6 +211,11 @@ export class BattleWorld implements World {
       if (cmd) {
         this.#move(f, cmd, dt);
         this.#act(f, cmd);
+      } else {
+        // Silence is not a held button. A player who stops sending, or who
+        // drops mid-wind-up, lets go of the throw rather than holding it for
+        // the rest of the match.
+        this.#chargeThrow(f, false);
       }
       this.#resolveSwing(f, kills);
     }
@@ -332,16 +344,35 @@ export class BattleWorld implements World {
       f.cooldown = f.weapon.cooldownTicks;
       this.#apply(f, f.weapon.use());
     }
+    this.#chargeThrow(f, (cmd.buttons & Button.SPECIAL) !== 0);
+  }
+
+  /**
+   * Winds a throw up while the button is held and lets it go on release.
+   *
+   * Held rather than tapped, because distance is the decision: a stick lobbed at
+   * full wind-up travels three times as far as one flicked out, and that choice
+   * is the whole weapon. A tap is still a throw, just a short one.
+   */
+  #chargeThrow(f: Fighter, held: boolean): void {
     const pouch = f.dynamite;
-    if (cmd.buttons & Button.SPECIAL && pouch && f.dynamiteCooldown <= 0 && f.dynamiteLeft > 0) {
-      f.dynamiteCooldown = pouch.cooldownTicks;
-      f.dynamiteLeft--;
-      this.#apply(f, pouch.use());
+    if (!pouch) return;
+    if (held) {
+      if (f.charge === null && f.dynamiteCooldown <= 0 && f.dynamiteLeft > 0) f.charge = 0;
+      else if (f.charge !== null) f.charge = Math.min(DYNAMITE_CHARGE_TICKS, f.charge + 1);
+      return;
     }
+    if (f.charge === null) return;
+    const wound = f.charge / DYNAMITE_CHARGE_TICKS;
+    f.charge = null;
+    if (f.dynamiteLeft <= 0) return;
+    f.dynamiteCooldown = pouch.cooldownTicks;
+    f.dynamiteLeft--;
+    this.#apply(f, pouch.use(), 1 + wound * (DYNAMITE_CHARGE_MULTIPLIER - 1));
   }
 
   /** A weapon said what it made; this is where it becomes part of the world. */
-  #apply(f: Fighter, effects: ReturnType<Weapon['use']>): void {
+  #apply(f: Fighter, effects: ReturnType<Weapon['use']>, speedScale = 1): void {
     for (const effect of effects) {
       if (effect.kind === 'swing') {
         f.swing = {
@@ -370,8 +401,8 @@ export class BattleWorld implements World {
         spec,
         x: clear ? muzzleX : f.x,
         y: clear ? muzzleY : f.y,
-        vx: cos * spec.speed,
-        vy: sin * spec.speed,
+        vx: cos * spec.speed * speedScale,
+        vy: sin * spec.speed * speedScale,
         life: spec.lifeTicks,
         damage: this.#damageOf(f, spec.damage),
       });
@@ -440,8 +471,7 @@ export class BattleWorld implements World {
     const surviving: Shot[] = [];
     for (const shot of this.#shots) {
       this.#steer(shot, dt);
-      shot.x += shot.vx * dt;
-      shot.y += shot.vy * dt;
+      if (!this.#carry(shot, dt)) continue;      // sank, and left nothing behind
       shot.life--;
 
       if (shot.life <= 0) {
@@ -449,14 +479,39 @@ export class BattleWorld implements World {
         if (shot.spec.flavour === 'dynamite') this.#explode(shot, kills);
         continue;
       }
-      if (this.terrain.blocksShot(shot.x, shot.y)) {
-        if (shot.spec.flavour === 'dynamite') this.#explode(shot, kills);
+      if (shot.spec.onTerrain === 'stop' && this.terrain.blocksShot(shot.x, shot.y)) {
         continue;
       }
       if (this.#hitSomething(shot, kills)) continue;
       surviving.push(shot);
     }
     this.#shots = surviving;
+  }
+
+  /**
+   * Moves a shot one step, obeying whatever terrain does to it.
+   *
+   * Returns false when it is gone: only water does that, and only to something
+   * thrown. A bouncing shot keeps its position and reverses the axis it was
+   * blocked on, per axis, so a stick fired into a corner comes back out of it
+   * rather than sticking.
+   */
+  #carry(shot: Shot, dt: number): boolean {
+    if (shot.spec.onTerrain === 'stop') {
+      shot.x += shot.vx * dt;
+      shot.y += shot.vy * dt;
+      return true;
+    }
+    const nx = shot.x + shot.vx * dt;
+    if (shot.spec.drownsInWater && this.terrain.drowns(nx, shot.y)) return false;
+    if (this.terrain.blocksShot(nx, shot.y)) shot.vx = -shot.vx * DYNAMITE_BOUNCE;
+    else shot.x = nx;
+
+    const ny = shot.y + shot.vy * dt;
+    if (shot.spec.drownsInWater && this.terrain.drowns(shot.x, ny)) return false;
+    if (this.terrain.blocksShot(shot.x, ny)) shot.vy = -shot.vy * DYNAMITE_BOUNCE;
+    else shot.y = ny;
+    return true;
   }
 
   /** Homing, for the weapons that have it. Turns towards the nearest enemy. */
@@ -530,7 +585,7 @@ export class BattleWorld implements World {
       this.#dropFrom(c);
       return false;
     });
-    this.terrain.burn(shot.x, shot.y);
+    this.terrain.burnArea(shot.x, shot.y, DYNAMITE_BLAST_RADIUS);
   }
 
   // -------------------------------------------------------------------------

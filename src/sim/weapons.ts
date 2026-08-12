@@ -43,9 +43,21 @@ export interface ShotSpec {
   radius: number;
   /** Turn rate in radians per second. Zero for a projectile that flies straight. */
   homingRate: number;
+  /** Whether hitting something solid ends it or turns it around. */
+  onTerrain: TerrainResponse;
+  /** Whether water puts it out. Only a thrown thing sinks. */
+  drownsInWater: boolean;
 }
 
 export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite';
+
+/**
+ * What terrain does to a shot.
+ *
+ * Data rather than a branch on flavour, so a projectile that bounces is a
+ * different value here and not another `if` in the world's step.
+ */
+export type TerrainResponse = 'stop' | 'bounce';
 
 /** A melee swing about to begin. */
 export interface SwingSpec {
@@ -112,6 +124,22 @@ export const SPEAR_THRUST = 22;
 /** Fuse, in ticks. `dynamiteLifetime: 1.5` in the legacy CONFIG. */
 export const DYNAMITE_FUSE_TICKS = ticks(1.5);
 
+/**
+ * Throw speed at no charge, and the multiplier a full charge adds.
+ *
+ * The legacy figures are 336 and three times that at full charge. Both are 30%
+ * slower here: at full speed a stick crossed half the map before anyone could
+ * react to it, and a grenade you cannot see coming is not a decision.
+ */
+export const DYNAMITE_SPEED = Math.round(336 * 0.7);
+export const DYNAMITE_CHARGE_MULTIPLIER = 3;
+
+/** How long a full charge takes to wind up. One second, as in the legacy game. */
+export const DYNAMITE_CHARGE_TICKS = ticks(1);
+
+/** How hard a stick comes off a wall. `-0.65` restitution, as in the legacy game. */
+export const DYNAMITE_BOUNCE = 0.65;
+
 /** Sticks a player carries into a match. `resources.dynamites.max` at fast pace. */
 export const DYNAMITE_CARRIED = 4;
 
@@ -143,6 +171,8 @@ export class Bow implements Weapon {
           lifeTicks: ticks(1.5), // arrowLifetime
           radius: ARROW_RADIUS,
           homingRate: 0,
+          onTerrain: 'stop',
+          drownsInWater: false,
         },
       },
     ];
@@ -172,6 +202,8 @@ export class Staff implements Weapon {
           lifeTicks: ticks(3.5), // wizBoltLifetime
           radius: BOLT_RADIUS,
           homingRate: 4.5,       // wizBoltTurnRate
+          onTerrain: 'stop',
+          drownsInWater: false,
         },
       },
     ];
@@ -224,11 +256,14 @@ export class DynamitePouch {
         kind: 'shot',
         shot: {
           flavour: 'dynamite',
-          speed: 336,                    // dynamiteSpeed, uncharged
+          speed: DYNAMITE_SPEED,
           damage: DYNAMITE_DAMAGE,
           lifeTicks: DYNAMITE_FUSE_TICKS,
           radius: BOLT_RADIUS,
           homingRate: 0,
+          // Off walls and trees, and out in water.
+          onTerrain: 'bounce',
+          drownsInWater: true,
         },
       },
     ];

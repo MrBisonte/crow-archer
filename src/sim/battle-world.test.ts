@@ -10,7 +10,7 @@ import { Button, type InputCommand } from './input';
 import { pickSpawns } from './spawns';
 import { Team } from './team';
 import { TILE, TileMap } from './tilemap';
-import { ARROW_DAMAGE, BOLT_DAMAGE, SPEAR_DAMAGE } from './weapons';
+import { ARROW_DAMAGE, BOLT_DAMAGE, DYNAMITE_CHARGE_TICKS, SPEAR_DAMAGE } from './weapons';
 
 const DT = 1 / 60;
 
@@ -66,6 +66,15 @@ const shots = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKi
 const crows = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.CROW);
 const drops = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.PICKUP);
 const blasts = (w: BattleWorld) => w.snapshot().filter((e) => e.kind === EntityKind.BLAST);
+
+/**
+ * Winds a throw up and lets it go, which is what a throw is now. `windUp` is in
+ * ticks; a full charge is DYNAMITE_CHARGE_TICKS.
+ */
+function throwDynamite(w: BattleWorld, id: number, angle: number, windUp = 1): void {
+  hold(w, windUp, id, cmd(Button.SPECIAL, angle));
+  hold(w, 1, id, cmd(0, angle, 2));
+}
 
 /** Places two fighters a set distance apart, facing each other. */
 function face(w: BattleWorld, gap: number): { shooter: number; target: number; angle: number } {
@@ -295,25 +304,25 @@ describe('BattleWorld', () => {
   describe('dynamite', () => {
     it('is thrown by the archer in co-op, where it is the archer&apos;s own weapon', () => {
       const w = battle({ characters: ['archer', 'archer'], teams: [Team.A, Team.A], mode: 'coop' });
-      hold(w, 1, 0, cmd(Button.SPECIAL));
+      throwDynamite(w, 0, 0);
       expect(shots(w)).toHaveLength(1);
     });
 
     it('is not carried by a knight in co-op, where it would be overpowered', () => {
       const w = battle({ characters: ['knight', 'archer'], teams: [Team.A, Team.A], mode: 'coop' });
-      hold(w, 1, 0, cmd(Button.SPECIAL));
+      throwDynamite(w, 0, 0);
       expect(shots(w)).toHaveLength(0);
     });
 
     it('is carried by everyone in player versus player', () => {
       const w = battle({ characters: ['knight', 'archer'], mode: 'deathmatch' });
-      hold(w, 1, 0, cmd(Button.SPECIAL));
+      throwDynamite(w, 0, 0);
       expect(shots(w)).toHaveLength(1);
     });
 
     it('goes off, and says so on the wire so it can be drawn', () => {
       const w = battle({ characters: ['archer', 'archer'] });
-      hold(w, 1, 0, cmd(Button.SPECIAL, 0));
+      throwDynamite(w, 0, 0);
       expect(blasts(w)).toHaveLength(0);        // the fuse has not run yet
       // Sampled every tick: a blast lasts a third of a second, and a fixed
       // number of steps can land after it has already faded.
@@ -339,10 +348,10 @@ describe('BattleWorld', () => {
       const me = player(w, 0);
       const them = player(w, 1);
       const angle = Math.atan2(them.y - me.y, them.x - me.x);
-      const throwing = new Map([[0, cmd(Button.SPECIAL, angle, 2)]]);
+      throwDynamite(w, 0, angle);
       let hurt = false;
       for (let i = 0; i < 400 && !hurt; i++) {
-        w.step(DT, throwing);
+        w.step(DT, new Map());
         const target = player(w, 1);
         hurt = target.hp < PLAYER_MAX_HP || !unpackPlayerState(target.state).shielded;
       }
@@ -360,7 +369,7 @@ describe('BattleWorld', () => {
     it('reports how many sticks are left, so the HUD can show them', () => {
       const w = battle();
       expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(4);
-      hold(w, 1, 0, cmd(Button.SPECIAL, -Math.PI / 2));
+      throwDynamite(w, 0, -Math.PI / 2);
       expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(3);
     });
 
@@ -369,12 +378,96 @@ describe('BattleWorld', () => {
       expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(0);
     });
 
+    it('throws nothing while the button is still held, and lets go on release', () => {
+      const w = battle();
+      hold(w, 30, 0, cmd(Button.SPECIAL, 0));   // winding up
+      expect(shots(w)).toHaveLength(0);
+      hold(w, 1, 0, cmd(0, 0, 2));              // released
+      expect(shots(w)).toHaveLength(1);
+    });
+
+    it('lets go for a player who simply stops sending anything', () => {
+      const w = battle();
+      hold(w, 10, 0, cmd(Button.SPECIAL, 0));
+      hold(w, 1, 0, null);
+      expect(shots(w)).toHaveLength(1);
+    });
+
+    it('goes further the longer it is wound up', () => {
+      const travel = (windUp: number): number => {
+        const w = battle({ characters: ['archer'], teams: [Team.A] });
+        const from = player(w, 0).x;
+        throwDynamite(w, 0, 0, windUp);
+        hold(w, 20, 0, null);
+        const shot = shots(w)[0];
+        return shot ? shot.x - from : 0;
+      };
+      expect(travel(DYNAMITE_CHARGE_TICKS)).toBeGreaterThan(travel(1) * 2);
+    });
+
+    it('bounces off rock rather than stopping dead on it', () => {
+      const terrain = clearGround();
+      const w = battle({ characters: ['archer'], teams: [Team.A], terrain });
+      const from = player(w, 0);
+      const col = Math.floor(from.x / TILE_SIZE) + 3;
+      for (let r = 0; r < MAP_ROWS; r++) terrain.map.set(r, col, TILE.ROCK);
+      throwDynamite(w, 0, 0, DYNAMITE_CHARGE_TICKS);   // hard, so it comes back
+      // Travel into the wall, then back off it: the x velocity has to reverse.
+      let sawApproach = false;
+      let cameBack = false;
+      let furthest = from.x;
+      for (let i = 0; i < 80; i++) {
+        hold(w, 1, 0, null);
+        const shot = shots(w)[0];
+        if (!shot) break;
+        if (shot.x > furthest) { furthest = shot.x; sawApproach = true; }
+        if (sawApproach && shot.x < furthest - 8) cameBack = true;
+      }
+      expect(cameBack).toBe(true);
+    });
+
+    it('sinks in water, leaving no blast behind', () => {
+      const terrain = clearGround();
+      const w = battle({ characters: ['archer'], teams: [Team.A], terrain });
+      const from = player(w, 0);
+      const col = Math.floor(from.x / TILE_SIZE) + 3;
+      for (let r = 0; r < MAP_ROWS; r++) terrain.map.set(r, col, TILE.WATER);
+      throwDynamite(w, 0, 0);
+      let sawBlast = false;
+      for (let i = 0; i < 150; i++) {
+        hold(w, 1, 0, null);
+        if (blasts(w).length > 0) sawBlast = true;
+      }
+      expect(shots(w)).toHaveLength(0);         // gone
+      expect(sawBlast).toBe(false);             // and it fizzled rather than went off
+    });
+
+    it('burns the trees it goes off among', () => {
+      const terrain = clearGround();
+      const w = battle({ characters: ['archer'], teams: [Team.A], terrain });
+      const from = player(w, 0);
+      const row = Math.floor(from.y / TILE_SIZE);
+      // An uncharged stick covers about eleven tiles before the fuse runs out.
+      // The trunks sit two rows off that flight path: inside the blast, but not
+      // in the way, because dynamite bounces off a tree rather than sticking.
+      const col = Math.floor(from.x / TILE_SIZE) + 10;
+      terrain.map.set(row - 2, col, TILE.TREE);
+      terrain.map.set(row + 2, col, TILE.TREE);
+      throwDynamite(w, 0, 0);
+      for (let i = 0; i < 150; i++) hold(w, 1, 0, null);
+      const burned =
+        terrain.map.get(row - 2, col) === TILE.ASH ||
+        terrain.map.get(row + 2, col) === TILE.ASH;
+      expect(burned).toBe(true);
+    });
+
     it('runs out, so it cannot be thrown forever', () => {
-      const w = battle({ characters: ['archer', 'archer'] });
-      for (let i = 0; i < 20; i++) hold(w, 60, 0, cmd(Button.SPECIAL, -Math.PI / 2));
-      hold(w, 200, 0, null);
-      hold(w, 1, 0, cmd(Button.SPECIAL, -Math.PI / 2));
-      expect(shots(w).length).toBeLessThanOrEqual(1);
+      const w = battle({ characters: ['archer'], teams: [Team.A] });
+      for (let i = 0; i < 8; i++) {
+        throwDynamite(w, 0, -Math.PI / 2);
+        hold(w, 60, 0, null);
+      }
+      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(0);
     });
   });
 
