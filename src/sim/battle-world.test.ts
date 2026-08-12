@@ -456,8 +456,8 @@ describe('BattleWorld', () => {
       throwDynamite(w, 0, 0);
       for (let i = 0; i < 150; i++) hold(w, 1, 0, null);
       const burned =
-        terrain.map.get(row - 2, col) === TILE.ASH ||
-        terrain.map.get(row + 2, col) === TILE.ASH;
+        terrain.map.get(row - 2, col) === TILE.EMPTY ||
+        terrain.map.get(row + 2, col) === TILE.EMPTY;
       expect(burned).toBe(true);
     });
 

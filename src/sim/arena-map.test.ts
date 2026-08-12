@@ -100,41 +100,34 @@ describe('Terrain', () => {
       y: row * TILE_SIZE + TILE_SIZE / 2,
     });
 
-    it('turns a hut to ash, which can then be walked over', () => {
-      const t = blank();
-      t.map.set(4, 4, TILE.HUT);
-      const p = at(4, 4);
-      t.burnArea(p.x, p.y, 40);
-      expect(t.tileAt(p.x, p.y)).toBe(TILE.ASH);
-      expect(t.walkable(p.x, p.y)).toBe(true);
-    });
-
-    it('burns trees too, so a blast clears a thicket', () => {
-      const t = blank();
-      t.map.set(4, 4, TILE.TREE);
-      const p = at(4, 4);
-      t.burnArea(p.x, p.y, 40);
-      expect(t.tileAt(p.x, p.y)).toBe(TILE.ASH);
-    });
-
     it.each([
+      ['a hut', TILE.HUT],
+      ['a tree', TILE.TREE],
       ['rock', TILE.ROCK],
-      ['water', TILE.WATER],
-    ])('leaves %s alone, which no blast is going to shift', (_name, tile) => {
+    ])('clears %s to open ground, as the legacy blast does', (_name, tile) => {
       const t = blank();
       t.map.set(4, 4, tile);
       const p = at(4, 4);
-      t.burnArea(p.x, p.y, 90);
-      expect(t.tileAt(p.x, p.y)).toBe(tile);
+      t.destroyArea(p.x, p.y, 40);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.EMPTY);
+      expect(t.walkable(p.x, p.y)).toBe(true);
+    });
+
+    it('leaves water alone, because a pond is not rubble', () => {
+      const t = blank();
+      t.map.set(4, 4, TILE.WATER);
+      const p = at(4, 4);
+      t.destroyArea(p.x, p.y, 90);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.WATER);
     });
 
     it('clears a whole radius, not just the tile it went off on', () => {
       const t = blank();
       for (let dc = -2; dc <= 2; dc++) t.map.set(4, 4 + dc, TILE.TREE);
       const p = at(4, 4);
-      t.burnArea(p.x, p.y, 90);
+      t.destroyArea(p.x, p.y, 90);
       for (let dc = -2; dc <= 2; dc++) {
-        expect(t.tileAt(at(4, 4 + dc).x, at(4, 4 + dc).y)).toBe(TILE.ASH);
+        expect(t.tileAt(at(4, 4 + dc).x, at(4, 4 + dc).y)).toBe(TILE.EMPTY);
       }
     });
 
@@ -142,7 +135,7 @@ describe('Terrain', () => {
       const t = blank();
       t.map.set(4, 10, TILE.TREE);
       const p = at(4, 4);
-      t.burnArea(p.x, p.y, 90);
+      t.destroyArea(p.x, p.y, 90);
       expect(t.tileAt(at(4, 10).x, at(4, 10).y)).toBe(TILE.TREE);
     });
   });

@@ -93,13 +93,19 @@ export class Terrain {
   }
 
   /**
-   * Burns everything that burns within a radius down to ash.
+   * Clears everything solid within a radius, the way a legacy blast does.
    *
-   * Trees and huts go; rock and water do not, because no blast shifts either.
-   * A radius rather than a point, since a blast is a radius: dynamite that
-   * cleared exactly one tile of a forest read as having missed.
+   * Rock, trees and huts all go, and they go to EMPTY rather than ash, which is
+   * exactly what `explodeDynamite` does in the single-player game. Rock was
+   * left standing here at first on the reasoning that no blast shifts stone;
+   * the legacy game disagrees, and it is the one that decides.
+   *
+   * Water is untouched: a pond is not rubble.
+   *
+   * A radius rather than a point, since a blast is a radius. Tile centres are
+   * what is measured, also as in the legacy game.
    */
-  burnArea(x: number, y: number, radius: number): void {
+  destroyArea(x: number, y: number, radius: number): void {
     const reach = Math.ceil(radius / TILE_SIZE);
     const r0 = Math.floor(y / TILE_SIZE);
     const c0 = Math.floor(x / TILE_SIZE);
@@ -112,7 +118,9 @@ export class Terrain {
         const cy = r * TILE_SIZE + TILE_SIZE / 2;
         if ((cx - x) ** 2 + (cy - y) ** 2 > radius * radius) continue;
         const tile = this.map.get(r, c);
-        if (tile === TILE.HUT || tile === TILE.TREE) this.map.set(r, c, TILE.ASH);
+        if (tile === TILE.ROCK || tile === TILE.TREE || tile === TILE.HUT) {
+          this.map.set(r, c, TILE.EMPTY);
+        }
       }
     }
   }

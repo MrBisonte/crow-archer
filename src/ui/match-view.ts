@@ -102,8 +102,13 @@ const MOVE_KEYS = {
 /** Fires as well as the left mouse button, so a keyboard alone can play. */
 const FIRE_KEY = ' ';
 
-/** Throws dynamite, as the right mouse button does. */
-const DYNAMITE_KEY = 'q';
+/**
+ * Throws dynamite, as the right mouse button does.
+ *
+ * F, because that is the key the single-player game charges a throw on, and a
+ * player who has played that one will reach for it here.
+ */
+const DYNAMITE_KEYS = ['f', 'F'] as const;
 
 export interface MatchViewOptions {
   ctx: CanvasRenderingContext2D;
@@ -282,7 +287,7 @@ export class MatchView {
       fire: !dead && (aim.fire || !!keys[FIRE_KEY]),
       // Right mouse, or Q for a keyboard alone. Dynamite in a duel; the
       // archer's second weapon in co-op.
-      special: !dead && (aim.special || !!keys[DYNAMITE_KEY]),
+      special: !dead && (aim.special || DYNAMITE_KEYS.some((k) => !!keys[k])),
       snipe: false,
       aimAngle: this.#angleTo(aim),
     };

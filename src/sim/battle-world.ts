@@ -585,7 +585,7 @@ export class BattleWorld implements World {
       this.#dropFrom(c);
       return false;
     });
-    this.terrain.burnArea(shot.x, shot.y, DYNAMITE_BLAST_RADIUS);
+    this.terrain.destroyArea(shot.x, shot.y, DYNAMITE_BLAST_RADIUS);
   }
 
   // -------------------------------------------------------------------------
