@@ -15,6 +15,7 @@ Survive the flock, kill the Crow King. A browser game on HTML5 Canvas and the We
 ![Gameplay: arrow kills, boss entrance cinematic, boss fight](media/gameplay.gif)
 
 - [Play](#play)
+- [Multiplayer](#multiplayer)
 - [Controls](#controls)
 - [Characters](#characters)
 - [Game loop](#game-loop)
@@ -28,14 +29,18 @@ Survive the flock, kill the Crow King. A browser game on HTML5 Canvas and the We
 
 ## Play
 
-Download [`dist/index.html`](dist/index.html) and open it in any modern browser. Every dependency is inlined, so it needs no server and no internet connection.
+**Single-player**, offline, no server: download [`dist/index.html`](dist/index.html) and open it in any modern browser. Every dependency is inlined.
 
-To run from source:
+**Multiplayer** needs a server — see [Multiplayer](#multiplayer).
+
+To run either from source:
 
 ```
 npm install
 npm run dev
 ```
+
+`npm run dev` alone serves single-player. Multiplayer additionally needs `npm run server`, covered below.
 
 `npm run build` regenerates `dist/index.html`. The committed copy is built from the current `master`.
 
