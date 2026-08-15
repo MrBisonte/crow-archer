@@ -1,5 +1,10 @@
 # CROW ARCHER
 
+[![CI](https://github.com/MrBisonte/crow-archer/actions/workflows/ci.yml/badge.svg)](https://github.com/MrBisonte/crow-archer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/MrBisonte/crow-archer)](LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
+
 ```
   ██████╗██████╗  ██████╗ ██╗    ██╗
  ██╔════╝██╔══██╗██╔═══██╗██║    ██║
