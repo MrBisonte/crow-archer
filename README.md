@@ -52,10 +52,11 @@ Each character fights differently:
 | **Archer** | bow | fastest shots, weakest hit — about five to kill |
 | **Wizard** | staff | slow, hard-hitting bolts that steer toward whoever is nearest |
 | **Knight** | spear | nothing at range; a thrust that lands twice per swing |
+| **Ranger** | crossbow | three smaller, weaker bolts per shot, each an independent hit |
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
-**Dynamite** is the archer's second weapon and everyone's in a duel — in co-op only the archer carries it, because a blast radius against crows would not be a fight. Four sticks, a 1.5 second fuse, and it never catches you or your team.
+The archer and ranger each carry their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a five-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. Wizard and knight carry dynamite too, but only in a duel — in co-op, only a character's own weapon is carried, because a blast radius against crows would not be a fight.
 
 Every fifteen seconds or so a **crow** drifts across. It dies to one hit and drops a powerup where it falls: a replacement shield, or fire that doubles your damage for eight seconds.
 
@@ -65,7 +66,7 @@ Every fifteen seconds or so a **crow** drifts across. It dies to one hit and dro
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
 3. The host sets the mode with **D** for deathmatch or **C** for co-op, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes) — one or the other, not both. Everyone presses **R**, and it starts once the last player is ready.
 
-Arrow keys move, the mouse aims, **left click or space** shoots, and **right click or Q** throws dynamite. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard) or **K** (knight) — they play differently.
+Arrow keys move, the mouse aims, **left click or space** shoots, and **right click or Q** throws dynamite (or the satchel, for a ranger). You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight) or **X** (ranger) — they play differently.
 
 Any team split works: 1v1, 2v1 and 2v2 all start, and seats spawn on opposite sides of whatever map came up.
 
@@ -119,7 +120,7 @@ Otherwise a tunnel to `localhost:8082` gives a public HTTPS URL without deployin
 | Move | Arrow keys |
 | Aim | Mouse |
 | Shoot / Cast | Space |
-| Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) |
+| Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice — throw, then arm (Ranger) |
 | Sniper mode | Shift |
 | Pause | Escape |
 | Inventory | I (while paused) |
@@ -146,7 +147,15 @@ Frontline melee with a long spear.
 - **Special:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 8 s cooldown
 - **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup), Fire Sword (2x damage and range for 8 s, leaves burning patches)
 
+### Ranger
+Skirmisher with a rapid-fire crossbow.
+- **Primary:** Crossbow, same quiver of 10 as the archer's — one press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
+- **Special:** Satchel, first click throws it inert, second click arms a 5 s fuse shown as a countdown on the bag; the ranger's own bolt sets it off instantly, armed or not
+- **Pickups:** Ricochet bolts (bounce off walls with a speed boost), fire bolts (leave burning patches) — the archer's own pickup effects, unchanged
+
 ## Game loop
+
+### Single-player
 
 ```mermaid
 flowchart LR
@@ -166,6 +175,23 @@ Boss shield phases:
 - First 10 s: blue rotating shield, fully immune
 - 5 s open window: attack freely
 - Randomly re-shields for 5 s (purple ring), up to 3 times per 30-second window
+
+### Multiplayer
+
+No boss, and no win screen of its own: a match ends back at the lobby, showing
+whatever it was decided on.
+
+```mermaid
+flowchart LR
+    J[Host or join a room] --> L[Lobby: pick a character, ready up]
+    L --> S{Everyone ready?}
+    S -- no --> L
+    S -- yes --> M[Match: deathmatch or co-op]
+    M --> D{Frag target or time limit reached?}
+    D -- no --> M
+    D -- yes --> R[Back to lobby, last result shown]
+    R --> L
+```
 
 ## Systems
 

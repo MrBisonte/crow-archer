@@ -28,12 +28,14 @@ import { EffectKind, HitEffects } from './hit-effects';
 import { Interpolator } from '../net/interpolation';
 import { Predictor } from '../net/prediction';
 import { LocalInput, type RawInput } from '../sim/input';
-import { ARENA_H, ARENA_W, PLAYER_MAX_HP, PLAYER_RADIUS } from '../sim/arena';
+import { ARENA_H, ARENA_W, CHARACTER_STATS, PLAYER_RADIUS } from '../sim/arena';
 import {
   DYNAMITE_BLAST_RADIUS,
   DYNAMITE_CARRIED,
   DYNAMITE_CHARGE_TICKS,
-  carriesDynamite,
+  SATCHEL_CARRIED,
+  secondaryWeapon,
+  type Secondary,
 } from '../sim/weapons';
 import { MovementWorld } from '../sim/movement-world';
 import type { Transport } from '../net/transport';
@@ -43,6 +45,7 @@ const FLAVOUR_ART: Record<number, ShotFlavour> = {
   [ShotFlavourCode.ARROW]: 'arrow',
   [ShotFlavourCode.BOLT]: 'bolt',
   [ShotFlavourCode.DYNAMITE]: 'dynamite',
+  [ShotFlavourCode.SATCHEL]: 'satchel',
 };
 
 
@@ -171,8 +174,10 @@ export class MatchView {
   /** Simulated time owed but not yet stepped, carried between frames. */
   #owedMs = 0;
   readonly #effects = new HitEffects();
-  /** Whether this character carries dynamite at all, which the mode decides. */
-  readonly #hasDynamite: boolean;
+  /** This character's second weapon, which the mode and the character decide. */
+  readonly #secondary: Secondary;
+  /** This character's own max health, for the fallback before a snapshot arrives. */
+  readonly #ownMaxHp: number;
   /**
    * How far this client's own throw is wound up, 0 to 1.
    *
@@ -213,7 +218,8 @@ export class MatchView {
     });
     this.#tiles.repaintAll();
     const mine = options.starts.find((s) => s.id === options.you);
-    this.#hasDynamite = carriesDynamite(mine?.character ?? 'archer', options.mode);
+    this.#secondary = secondaryWeapon(mine?.character ?? 'archer', options.mode);
+    this.#ownMaxHp = CHARACTER_STATS[mine?.character ?? 'archer'].maxHp;
   }
 
   /** The most recent snapshot applied, for the dev hook. */
@@ -260,6 +266,7 @@ export class MatchView {
     // no cosmetics, so this is where a landed arrow becomes something visible.
     this.#effects.observe(snap, this.#now());
     this.#applyBlasts(snap);
+    this.#applyBurns(snap);
   }
 
   /**
@@ -306,19 +313,22 @@ export class MatchView {
       right: !dead && anyDown(keys, MOVE_KEYS.right),
       fire: !dead && (aim.fire || !!keys[FIRE_KEY]),
       // Right mouse, or Q for a keyboard alone. Dynamite in a duel; the
-      // archer's second weapon in co-op.
-      // Gated on actually carrying dynamite. A wizard in co-op carries none, and
-      // without this the HUD wound a charge up that the server would never
-      // throw: the weapon looked loaded and did nothing.
+      // archer's second weapon in co-op; the satchel for the ranger.
+      // Gated on actually carrying a secondary. A wizard in co-op carries
+      // none, and without this the HUD wound a charge up that the server
+      // would never throw: the weapon looked loaded and did nothing.
       special:
-        !dead && this.#hasDynamite && (aim.special || DYNAMITE_KEYS.some((k) => !!keys[k])),
+        !dead && this.#secondary.kind !== 'none' &&
+        (aim.special || DYNAMITE_KEYS.some((k) => !!keys[k])),
       snipe: false,
       aimAngle: this.#angleTo(aim),
     };
 
     // A held throw winds up at the same rate the server counts it, so the bar
-    // and the distance agree.
-    this.#windUp = this.#raw.special
+    // and the distance agree. Only dynamite has a wind-up: the satchel's
+    // click is instant, so this stays at zero for a ranger and the bar never
+    // appears.
+    this.#windUp = this.#raw.special && this.#secondary.kind === 'dynamite'
       ? Math.min(1, this.#windUp + 1 / DYNAMITE_CHARGE_TICKS)
       : 0;
 
@@ -381,6 +391,7 @@ export class MatchView {
     }
     for (const e of visible) {
       if (e.kind === EntityKind.BLAST) this.#drawBlast(e);
+      if (e.kind === EntityKind.BURN) this.#drawBurn(e);
     }
 
     // Your own body, predicted, drawn last so it is never hidden. Position is
@@ -391,7 +402,7 @@ export class MatchView {
     if (me) {
       this.#drawBody(
         { id: this.#you, kind: EntityKind.PLAYER, x: me.x, y: me.y,
-          hp: own?.hp ?? PLAYER_MAX_HP, state: own?.state ?? 0 },
+          hp: own?.hp ?? this.#ownMaxHp, state: own?.state ?? 0 },
         loopT,
       );
     }
@@ -414,6 +425,21 @@ export class MatchView {
       if (e.kind !== EntityKind.BLAST || this.#cleared.has(e.id)) continue;
       this.#cleared.add(e.id);
       this.#terrain.destroyArea(e.x, e.y, DYNAMITE_BLAST_RADIUS);
+    }
+  }
+
+  /**
+   * Chars the tile each new fire hit burned. Same deterministic-replay
+   * pattern as #applyBlasts and the same reason: the server mutates its grid
+   * and says nothing further, so the client runs the identical one-tile rule
+   * itself. Shares #cleared with #applyBlasts — both sets just mean "already
+   * replayed", and BURN and BLAST ids are drawn from disjoint ranges.
+   */
+  #applyBurns(snap: Snapshot): void {
+    for (const e of snap.entities) {
+      if (e.kind !== EntityKind.BURN || this.#cleared.has(e.id)) continue;
+      this.#cleared.add(e.id);
+      this.#terrain.burnTile(e.x, e.y);
     }
   }
 
@@ -442,7 +468,10 @@ export class MatchView {
       loopT,
       HUD_HEIGHT,
     );
-    if (!visual.dead) this.#drawHealthBar(e, e.y + HUD_HEIGHT, visual.shielded);
+    if (!visual.dead) {
+      const maxHp = CHARACTER_STATS[start?.character ?? 'archer'].maxHp;
+      this.#drawHealthBar(e, e.y + HUD_HEIGHT, visual.shielded, maxHp);
+    }
   }
 
   /**
@@ -533,6 +562,29 @@ export class MatchView {
     ctx.globalAlpha = 1;
   }
 
+  /**
+   * A tile catching fire — one flare-up sized to the tile it hit, not the
+   * expanding blast wave #drawBlast draws. `state` is the same sixteenths
+   * fade the server already sends for BLAST.
+   */
+  #drawBurn(e: EntitySnapshot): void {
+    const ctx = this.#ctx;
+    const progress = Math.min(1, e.state / 16);
+    const y = e.y + HUD_HEIGHT;
+    ctx.save();
+    ctx.globalAlpha = 1 - progress;
+    ctx.fillStyle = '#FF7A1F';
+    ctx.beginPath();
+    ctx.arc(e.x, y, (TILE_SIZE / 2) * (1 - progress * 0.4), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFB400';
+    ctx.beginPath();
+    ctx.arc(e.x, y, (TILE_SIZE / 4) * (1 - progress * 0.4), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
   #drawBird(e: EntitySnapshot, loopT: number): void {
     drawCrow(this.#ctx, { x: e.x, y: e.y, wingPhase: loopT * 12 + e.id }, loopT, HUD_HEIGHT);
   }
@@ -563,8 +615,11 @@ export class MatchView {
         ctx.fillStyle = '#FFFFFF';
         ctx.font = 'bold 14px "Courier New", monospace';
         ctx.textAlign = 'center';
-        // Rises as it fades, which is what the rest of the game does.
-        ctx.fillText(`-${effect.damage}`, effect.x, y - PLAYER_RADIUS - 10 - progress * 14);
+        // Rises as it fades, which is what the rest of the game does. Rounded
+        // for display only: a crossbow bolt's 0.7 damage is real to the
+        // simulation, but "-0.7" would read as broken next to every other
+        // weapon's whole numbers.
+        ctx.fillText(`-${Math.round(effect.damage)}`, effect.x, y - PLAYER_RADIUS - 10 - progress * 14);
       }
       ctx.globalAlpha = 1;
     }
@@ -610,7 +665,7 @@ export class MatchView {
    * shield is up and green once it is gone, so the one thing that decides
    * whether the next hit costs health is the colour of the thing showing health.
    */
-  #drawHealthBar(e: EntitySnapshot, y: number, shielded: boolean): void {
+  #drawHealthBar(e: EntitySnapshot, y: number, shielded: boolean, maxHp: number): void {
     const ctx = this.#ctx;
     const pips = 5;
     const gap = 1;
@@ -619,7 +674,7 @@ export class MatchView {
     const top = y - PLAYER_RADIUS - 8;
     // Ceil, so any health at all still lights a pip: a player on one hit point
     // must not look dead.
-    const lit = Math.ceil((Math.max(0, e.hp) / PLAYER_MAX_HP) * pips);
+    const lit = Math.ceil((Math.max(0, e.hp) / maxHp) * pips);
     for (let i = 0; i < pips; i++) {
       ctx.fillStyle = i < lit ? (shielded ? '#FFB400' : '#39FF14') : '#2A2A2A';
       ctx.fillRect(left + i * (pipWidth + gap), top, pipWidth, 3);
@@ -636,12 +691,14 @@ export class MatchView {
     // tell whether they are carrying dynamite, and a weapon nobody knows they
     // have is a weapon that does not exist.
     const mine = own ? unpackPlayerState(own.state) : null;
-    const left = mine?.dynamite ?? 0;
-    const sticks = '■'.repeat(left) + '□'.repeat(Math.max(0, DYNAMITE_CARRIED - left));
+    const left = mine?.secondaryAmmo ?? 0;
+    const carriedMax = this.#secondary.kind === 'satchel' ? SATCHEL_CARRIED : DYNAMITE_CARRIED;
+    const rounds = '■'.repeat(left) + '□'.repeat(Math.max(0, carriedMax - left));
+    const secondaryLabel = this.#secondary.kind === 'satchel' ? 'SAT' : 'DYN';
     ctx.fillText(
-      `HP ${own?.hp ?? PLAYER_MAX_HP}` +
+      `HP ${Math.round(own?.hp ?? this.#ownMaxHp)}` +
         (mine?.shielded ? '  SHLD' : '') +
-        (this.#hasDynamite ? `  DYN ${sticks}` : '') +
+        (this.#secondary.kind !== 'none' ? `  ${secondaryLabel} ${rounds}` : '') +
         (this.#windUp > 0 ? `  CHARGING ${Math.round(this.#windUp * 100)}%` : ''),
       8,
       20,

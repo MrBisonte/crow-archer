@@ -21,6 +21,39 @@ import {
   type LobbyState,
 } from './lobby-state';
 
+/**
+ * One key per character. `Record<CharacterKind, string>` rather than the
+ * reverse, so widening `CharacterKind` fails to compile until the new hero
+ * has a letter: the old shape, keyed by letter, let a forgotten binding
+ * compile clean and leave a character nobody could ever pick.
+ *
+ * `r` is not free: the lobby screen already reads it as ready-toggle, and
+ * that check runs before this table is ever consulted, so a ranger bound to
+ * `r` would silently never be reachable. `x`, for x-bow, is not claimed by
+ * ready, leave, a mode letter, or a win-condition letter below.
+ */
+const CHARACTER_KEYS: Record<CharacterKind, string> = {
+  archer: 'a',
+  wizard: 'w',
+  knight: 'k',
+  ranger: 'x',
+};
+
+/** The reverse lookup the picker actually reads a keypress against. */
+const KEY_TO_CHARACTER = new Map<string, CharacterKind>(
+  (Object.entries(CHARACTER_KEYS) as [CharacterKind, string][]).map(([kind, key]) => [key, kind]),
+);
+
+/**
+ * The on-screen legend, built from `CHARACTER_KEYS` rather than written out a
+ * second time. A hand-written copy here is exactly how a ranger who compiles
+ * fine and answers to `x` still never gets seen: the key worked, nothing on
+ * screen said so.
+ */
+const CHARACTER_LEGEND = (Object.entries(CHARACTER_KEYS) as [CharacterKind, string][])
+  .map(([kind, key]) => `[${key.toUpperCase()}] ${kind.toUpperCase()}`)
+  .join('  ');
+
 export class LobbyController {
   #transport: Transport;
   #state: LobbyState;
@@ -146,13 +179,8 @@ export class LobbyController {
         this.#setState(next, send);
         return true;
       }
-      // Character picker: A/W/K for archer/wizard/knight
-      const charMap: Record<string, CharacterKind> = {
-        a: 'archer',
-        w: 'wizard',
-        k: 'knight',
-      };
-      const char = charMap[key.toLowerCase()];
+      // Character picker: one key per character, from CHARACTER_KEYS.
+      const char = KEY_TO_CHARACTER.get(key.toLowerCase());
       if (char) {
         const { state: next, send } = transitionLobby(this.#state, {
           type: 'PICK_CHARACTER',
@@ -354,7 +382,7 @@ export class LobbyController {
     y += 40;
 
     // Character picker
-    this.#ctx.fillText('[A] ARCHER  [W] WIZARD  [K] KNIGHT', x, y);
+    this.#ctx.fillText(CHARACTER_LEGEND, x, y);
     y += 40;
 
     // Render slots

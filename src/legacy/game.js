@@ -147,6 +147,16 @@ const CONFIG = {
   stormBossDamage: 3,
   stormFlashDuration: 0.35,       // seconds of blue screen-flash after storm
 
+  // Ranger — crossbow ammo, cooldown and pickups reuse the archer's own
+  // arrows/ricochetArrows/fireArrows fields and CONFIG.arrowBossDamage
+  // unchanged; only the burst and its per-bolt scale-down live here.
+  crossbowBoltCount: 3, crossbowBoltDamageMult: 0.7, crossbowBoltRadiusMult: 0.7,
+  crossbowSpreadRadians: Math.PI / 60,   // 3° between adjacent bolts
+  // Satchel: no charge to hold, one click is one throw at a fixed speed.
+  // Blast radius and boss damage reuse dynamiteBlastRadius/dynamiteBossDamage
+  // below — an explosion is an explosion, not a second copy of the same figure.
+  satchelThrowSpeed: 336, satchelArmFuse: 5, satchelIdleLife: 60,
+
   // Hit detection radii
   arrowHitRadius: 14,             // arrow / javelin vs crow
   firePatchRadius: 20,            // fire patch vs crow
@@ -162,7 +172,8 @@ const CONFIG = {
   // Adding a new resource type only requires a new entry here.
   resources: {
     arrows:    { max: 10, restore: 5, color: '#aaff44', dim: '#2d2d2d', icon: '▶', spacing: 13 },
-    dynamites: { max:  3, restore: 1, color: '#ff6600', dim: '#2d2d2d', icon: '■', spacing: 13 }
+    dynamites: { max:  3, restore: 1, color: '#ff6600', dim: '#2d2d2d', icon: '■', spacing: 13 },
+    satchels:  { max:  3, restore: 1, color: '#ffcc00', dim: '#2d2d2d', icon: '●', spacing: 13 }
   },
 
   audio: true,
@@ -180,13 +191,20 @@ const CONFIG = {
  * together: raising crow density without raising arrows in flight and starting
  * ammo makes the game unwinnable rather than faster.
  *
- * baseArrows and baseDynamites are the starting count and the cap. Drop rates
- * are untouched, since more crows already means more drops.
+ * baseArrows and baseDynamites are the starting count and the cap. arrowRestore
+ * is how many a pickup refills; it was a flat 5 regardless of pace until
+ * Nightmare needed its own. Drop rates are untouched, since more crows already
+ * means more drops.
+ *
+ * Nightmare's baseArrows and arrowRestore are both 25% over their prior values
+ * (24->30, 5->6): Nightmare was staying unwinnable because ammo ran out before
+ * the crow density did, and this is the small, direct answer rather than a
+ * full re-derivation of the density-to-ammo ratio the other two presets use.
  */
 const PACE_PRESETS = {
-  calm:      { crowStartCount:  5, crowEscalationInterval: 12, crowMax: 12, crowAggroTimeout:  4, crowPassiveSpeed:  60, maxArrowsInFlight: 3, baseArrows: 10, baseDynamites: 3 },
-  fast:      { crowStartCount:  9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4 },
-  nightmare: { crowStartCount: 12, crowEscalationInterval:  2.5, crowMax: 22, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 24, baseDynamites: 5 },
+  calm:      { crowStartCount:  5, crowEscalationInterval: 12, crowMax: 12, crowAggroTimeout:  4, crowPassiveSpeed:  60, maxArrowsInFlight: 3, baseArrows: 10, baseDynamites: 3, arrowRestore: 5 },
+  fast:      { crowStartCount:  9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5 },
+  nightmare: { crowStartCount: 12, crowEscalationInterval:  2.5, crowMax: 22, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 30, baseDynamites: 5, arrowRestore: 6 },
 };
 
 /**
@@ -206,8 +224,12 @@ function applyPace(name) {
   CONFIG.maxArrowsInFlight     = preset.maxArrowsInFlight;
   CONFIG.baseArrows            = preset.baseArrows;
   CONFIG.baseDynamites         = preset.baseDynamites;
-  CONFIG.resources.arrows.max    = preset.baseArrows;
+  CONFIG.resources.arrows.max     = preset.baseArrows;
+  CONFIG.resources.arrows.restore = preset.arrowRestore;
   CONFIG.resources.dynamites.max = preset.baseDynamites;
+  // The ranger's satchel count matches the archer's dynamite count — same
+  // tool tier, nothing asked for a different number.
+  CONFIG.resources.satchels.max  = preset.baseDynamites;
 }
 
 applyPace(new URLSearchParams(location.search).get('pace') ?? CONFIG.pace);
@@ -255,6 +277,28 @@ const MENU_ENTRIES = [
     run: () => transitionTo('controls') },
 ];
 let controlsSelection = 0, remapTarget = null;
+
+/**
+ * The character-select screen, in one place. drawCharSelect() renders these
+ * panels in array order, and the charselect input handler in stepGame() reads
+ * the same array for arrow-key cycling and the bracketed hotkey, so a new
+ * character is one entry rather than two lists that have to independently
+ * agree on the same three names.
+ */
+const CHAR_PANELS = [
+  { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
+           'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
+  { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    lines:['Homing magic bolts  3s CD','Fire Bolt pickup: 2 dmg homing',
+           'Laser pickup: pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
+  { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    lines:['Long spear  ·  melee range','Pickup: Iron Javelin (pierces)',
+           'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Frontline playstyle'] },
+  { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+    lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
+           'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
+];
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
 let boss = null, bossDeathSeq = null, entrance = null;
@@ -262,7 +306,7 @@ let winScore = 0, winKills = 0, winHP = 0;
 let sniperMode = false;
 
 // Character selection — persists for the session, reset only on new run
-let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight'
+let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
@@ -400,6 +444,10 @@ function startCharge() {
   } else if (selectedChar === 'knight') {
     if (knightWhirlwindCD <= 0 && knightWhirlwindTimer <= 0 && inGame()) startWhirlwind();
     else if (knightWhirlwindCD > 0) events.emit({ type: 'ACTION_BLOCKED' });
+  } else if (selectedChar === 'ranger') {
+    // No charge-and-hold: each click either throws a satchel or arms the one
+    // already out. releaseCharge() has nothing to do for the ranger.
+    if (inGame()) useSatchel();
   } else {
     if (inv.dynamites > 0 && !charge.on && inGame()) { charge.on = true; charge.t0 = performance.now(); }
   }
@@ -459,7 +507,7 @@ canvas.addEventListener('click', e => {
 
 // ── ENTITIES ──────────────────────────────────────────────────────────────────
 
-let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamites = [];
+let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamites = [], satchels = [];
 
 // Local player input. Produces one InputCommand per tick from keyboard + mouse.
 // The command shape matches the network input packet, so phase 2 sends the same
@@ -487,12 +535,13 @@ const events = new EventBus();
 // decides how it sounds.
 const BOSS_HIT_FX = {
   pitchfork: [6, 200], spear: [5, 200],
-  arrow: null, javelin: null, whirlwind: null, storm: null, dynamite: null,
+  arrow: null, javelin: null, whirlwind: null, storm: null, dynamite: null, satchel: null,
 };
 // Sound and shake per attack the player starts.
 const WEAPON_FX = {
   arrow:     { sound: () => sndShoot,     shake: null },
   bolt:      { sound: () => sndWizBolt,   shake: null },
+  crossbow:  { sound: () => sndCrossbow,  shake: null },
   pitchfork: { sound: () => sndPitchfork, shake: [3, 90] },
   spear:     { sound: () => sndPitchfork, shake: [2, 70] },
   javelin:   { sound: () => sndPitchfork, shake: [3, 80] },
@@ -563,7 +612,7 @@ events.on(e => {
       }
       break;
 
-    case 'DYNAMITE_SPLASH':
+    case 'SPLASH':
       burst(e.x, e.y, { count: 10, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
         speedMin: 40, speedMax: 120, decay: 2.5,
         shapeMix: [['spark', 0.7], ['circle', 0.3]],
@@ -578,6 +627,13 @@ events.on(e => {
 
     case 'ACTION_BLOCKED':
       playSound(sndEmpty);
+      break;
+
+    case 'SATCHEL_ARMED':
+      playSound(sndArm);
+      burst(e.x, e.y, { count: 6, colors: ['#FFCC00','#FFFFFF'],
+        speedMin: 20, speedMax: 60, decay: 3.0, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#FFCC00' });
       break;
 
     case 'WHIRLWIND_START':
@@ -728,7 +784,7 @@ function initGame() {
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   shootPressed = false;
-  arrows = []; pickups = []; particles = []; dynamites = []; fires = []; floaters = [];
+  arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null;
@@ -953,6 +1009,7 @@ function updatePlayer(dt) {
 function tryShoot() {
   if (selectedChar === 'wizard') { tryWizardBolt(); return; }
   if (selectedChar === 'knight') { tryKnightAttack(); return; }
+  if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
   if (arrows.length >= CONFIG.maxArrowsInFlight) return;
@@ -967,6 +1024,36 @@ function tryShoot() {
     initSpeed: CONFIG.arrowSpeed,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0 });
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
+}
+
+/**
+ * The ranger's crossbow. Same ammo pool, deduction and pickup effects as the
+ * archer's bow — one press spends exactly one unit of ammo, whichever type is
+ * queued first — but that one press fires three independent, weaker, smaller
+ * bolts in a narrow spread instead of one full-strength arrow.
+ */
+function tryCrossbowBolt() {
+  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+  if (!hasArrows) { tryPitchfork(); return; }
+  if (arrows.length >= CONFIG.maxArrowsInFlight) return;
+  let type = 'normal';
+  if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
+  else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
+  else                             { inv.arrows--;                             }
+  const half = (CONFIG.crossbowBoltCount - 1) / 2;
+  for (let i = 0; i < CONFIG.crossbowBoltCount; i++) {
+    const boltAngle = player.aimAngle + (i - half) * CONFIG.crossbowSpreadRadians;
+    arrows.push({ x: player.x, y: player.y,
+      vx: Math.cos(boltAngle) * CONFIG.arrowSpeed,
+      vy: Math.sin(boltAngle) * CONFIG.arrowSpeed,
+      life: CONFIG.arrowLifetime, type, bounces: 0,
+      initSpeed: CONFIG.arrowSpeed,
+      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      bolt: true,
+      hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
+      dmgMult: CONFIG.crossbowBoltDamageMult });
+  }
+  events.emit({ type: 'WEAPON_FIRED', kind: 'crossbow' });
 }
 
 function tryWizardBolt() {
@@ -1246,9 +1333,29 @@ function updateArrows(dt) {
     }
     if (removed) continue;
 
+    // The ranger's own bolt sets off their own satchel on contact, armed or
+    // not — no timer needed. Only the ranger ever has a satchel on the field,
+    // so this never needs a selectedChar check of its own.
+    if (satchels.length) {
+      let hitSatchel = false;
+      const r = a.hitRadius || CONFIG.arrowHitRadius;
+      for (let k = satchels.length - 1; k >= 0; k--) {
+        if (dist2(a.x, a.y, satchels[k].x, satchels[k].y) < r*r) {
+          explodeExplosive(satchels[k], 'satchel');
+          satchels.splice(k, 1);
+          arrows.splice(i, 1);
+          hitSatchel = true;
+          break;
+        }
+      }
+      if (hitSatchel) continue;
+    }
+
     // Boss hit. Ricochet arrows bounce and stay alive; everything else stops,
-    // including on the shield, so no arrow passes through him.
-    const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage, 'arrow');
+    // including on the shield, so no arrow passes through him. Crossbow bolts
+    // carry their own reduced damage; every other arrow's dmgMult is unset,
+    // which the ||1 reads as full strength.
+    const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage * (a.dmgMult || 1), 'arrow');
     if (arrowHit === BossHit.DAMAGED) {
       if (a.type === 'fire') spawnFire(a.x, a.y);
       arrows.splice(i, 1); continue;
@@ -1256,10 +1363,12 @@ function updateArrows(dt) {
     if (arrowHit === BossHit.ABSORBED) { arrows.splice(i, 1); continue; }
     if (arrowHit === BossHit.REFLECTED) continue;
 
-    // Crow hit
+    // Crow hit. Crows die to one hit of anything, so a crossbow bolt's lower
+    // damage never matters here — only its smaller hitRadius does.
     let hit = false;
+    const hitR = a.hitRadius || CONFIG.arrowHitRadius;
     for (let j = crows.length - 1; j >= 0; j--) {
-      if (dist2(a.x, a.y, crows[j].x, crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
+      if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
         killCrow(j); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
@@ -1331,7 +1440,7 @@ function updateDynamites(dt) {
     const d = dynamites[i];
     d.life -= dt; d.angle += dt * 5;
 
-    if (d.life <= 0) { explodeDynamite(d); dynamites.splice(i, 1); continue; }
+    if (d.life <= 0) { explodeExplosive(d, 'dynamite'); dynamites.splice(i, 1); continue; }
 
     let splashed = false;
     const nx = d.x + d.vx * dt;
@@ -1349,7 +1458,7 @@ function updateDynamites(dt) {
     }
 
     if (splashed) {
-      events.emit({ type: 'DYNAMITE_SPLASH', x: d.x, y: d.y });
+      events.emit({ type: 'SPLASH', x: d.x, y: d.y });
       dynamites.splice(i, 1); continue;
     }
 
@@ -1359,7 +1468,15 @@ function updateDynamites(dt) {
   }
 }
 
-function explodeDynamite(d) {
+/**
+ * One explosive going off — dynamite's timer running out, or a satchel's
+ * timer or the ranger's own bolt. Blast radius and boss damage are
+ * dynamite's own CONFIG figures for both: nothing asked for the satchel to
+ * hit harder or softer, and a second copy of the same number would only be
+ * one more place for the two to quietly drift apart. `source` is carried
+ * through to `damageBoss` only to tag which weapon the hit event names.
+ */
+function explodeExplosive(d, source) {
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
   events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater });
@@ -1383,7 +1500,70 @@ function explodeDynamite(d) {
     if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) killCrow(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
-    damageBoss(CONFIG.dynamiteBossDamage, d.x, d.y, 'dynamite', 0.25);
+    damageBoss(CONFIG.dynamiteBossDamage, d.x, d.y, source, 0.25);
+  }
+}
+
+// ── SATCHELS (ranger) ────────────────────────────────────────────────────────
+
+/**
+ * Throws a satchel, or arms the one already out.
+ *
+ * Unlike dynamite there is no charge to hold: the first click always throws
+ * at the same fixed speed. The second click does not throw a second satchel
+ * while the first is still live and unarmed — it arms that one, which is
+ * what "a second mouse2 click" means. Once armed it drops out of this search
+ * (armed !== unarmed), so a third click starts a fresh throw if ammo remains.
+ */
+function useSatchel() {
+  const own = satchels.find(s => !s.armed);
+  if (own) {
+    own.armed = true;
+    own.life  = CONFIG.satchelArmFuse;
+    events.emit({ type: 'SATCHEL_ARMED', x: own.x, y: own.y });
+    return;
+  }
+  if (inv.satchels <= 0) return;
+  inv.satchels--;
+  const spd = CONFIG.satchelThrowSpeed;
+  satchels.push({
+    x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd, vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.satchelIdleLife, armed: false, resting: false,
+    angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
+  });
+}
+
+/**
+ * Flight and countdown for every satchel on the field.
+ *
+ * Terrain response is "rest", not dynamite's bounce: the satchel is meant to
+ * be found sitting where it landed, so it decelerates to a stop on the first
+ * thing it touches rather than ricocheting off it. `life` is doing double
+ * duty by design, the same way it does for dynamite: before arming it counts
+ * down the idle backstop (satchelIdleLife), and arming resets it to count
+ * down the real fuse (satchelArmFuse) instead.
+ */
+function updateSatchels(dt) {
+  for (let i = satchels.length - 1; i >= 0; i--) {
+    const s = satchels[i];
+    s.life -= dt;
+    if (s.life <= 0) { explodeExplosive(s, 'satchel'); satchels.splice(i, 1); continue; }
+
+    if (s.resting) continue;
+
+    const nx = s.x + s.vx * dt, tx = tileAt(nx, s.y);
+    if (tx === TILE.WATER) { events.emit({ type: 'SPLASH', x: s.x, y: s.y }); satchels.splice(i, 1); continue; }
+    if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) s.vx = 0; else s.x = nx;
+
+    const ny = s.y + s.vy * dt, ty = tileAt(s.x, ny);
+    if (ty === TILE.WATER) { events.emit({ type: 'SPLASH', x: s.x, y: s.y }); satchels.splice(i, 1); continue; }
+    if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) s.vy = 0; else s.y = ny;
+
+    // Settling drag — faster than dynamite's 0.985, so a thrown satchel rolls
+    // a short distance and stops rather than sliding the width of a room.
+    s.vx *= 0.9; s.vy *= 0.9;
+    if (Math.hypot(s.vx, s.vy) < 8) { s.vx = 0; s.vy = 0; s.resting = true; }
   }
 }
 
@@ -1482,8 +1662,9 @@ function checkPickupCollection() {
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
     if (dist2(player.x, player.y, p.x, p.y) >= CONFIG.pickupRadius*CONFIG.pickupRadius) continue;
-    // Base ammo restore (archer only — wizard/knight use different systems)
-    if (selectedChar === 'archer') {
+    // Base ammo restore (archer and ranger — both run a countable quiver;
+    // wizard/knight use different systems entirely)
+    if (selectedChar === 'archer' || selectedChar === 'ranger') {
       for (const [k, r] of Object.entries(CONFIG.resources))
         if (inv[k] < r.max) inv[k] = Math.min(r.max, inv[k] + r.restore);
     }
@@ -1897,6 +2078,8 @@ const sndPitchfork     = [.35, 0,   140, 0, .06, .1,  2, 1, -80];       // sawto
 const sndExplosion     = [.8,  .05,  90, 0, .18, .3,  5, 1, -40];       // lowpass noise — boom
 const sndWizBolt       = [.25, 0,   440, 0, .04, .13, 0, 1, 0, 0, 440, .05]; // sine + pitch jump — magic zap
 const sndLightning     = [.75, .15, 120, 0, .25, .3,  4, 1];            // bit noise — lightning crack
+const sndCrossbow      = [.28, .04, 550, 0, .03, .06, 4, 1, -120];      // bit noise snap, downward pitch — mechanical thock
+const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // triangle blip, upward pitch — arm confirm
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
 function sndGameover() {
@@ -2454,36 +2637,11 @@ function drawWizard() {
 function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
   if (selectedChar === 'knight') { drawKnight(); return; }
+  if (selectedChar === 'ranger') { drawRanger(); return; }
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
-  // Aim line
-  const aimLen = sniperMode ? 220 : 80, aimAlpha = sniperMode ? 0.75 : 0.38;
-  const aimRGB = sniperMode ? '255,255,60' : '170,255,68';
-  ctx.save();
-  ctx.setLineDash(sniperMode ? [5,3] : [3,4]); ctx.lineWidth = sniperMode ? 1.5 : 1;
-  const lx1 = px + Math.cos(player.aimAngle)*aimLen, ly1 = py + Math.sin(player.aimAngle)*aimLen;
-  const aimGrad = ctx.createLinearGradient(px, py, lx1, ly1);
-  aimGrad.addColorStop(0, `rgba(${aimRGB},${aimAlpha})`);
-  aimGrad.addColorStop(1, `rgba(${aimRGB},0)`);
-  ctx.strokeStyle = aimGrad;
-  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(lx1, ly1); ctx.stroke();
-  ctx.setLineDash([]);
-  if (sniperMode) {
-    ctx.strokeStyle = `rgba(${aimRGB},0.7)`; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(lx1-7, ly1); ctx.lineTo(lx1+7, ly1); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(lx1, ly1-7); ctx.lineTo(lx1, ly1+7); ctx.stroke();
-    ctx.beginPath(); ctx.arc(lx1, ly1, 5, 0, Math.PI*2); ctx.stroke();
-  }
-  ctx.restore();
-
-  // Chromatic aberration ghost on hit
-  if (playerHitFlash > 0.15) {
-    const off = Math.round(playerHitFlash * 5);
-    ctx.save(); ctx.globalAlpha = 0.30;
-    ctx.fillStyle = '#ff0000'; ctx.fillRect(px - 5 + off, py - 7, 10, 14);
-    ctx.fillStyle = '#0044ff'; ctx.fillRect(px - 5 - off, py - 7, 10, 14);
-    ctx.restore();
-  }
+  drawAimLine(px, py);
+  drawHitFlashGhost(px, py);
 
   ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
   const localAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
@@ -2553,111 +2711,11 @@ function drawPlayer() {
     ctx.beginPath(); ctx.moveTo(bowTop.x, bowTop.y); ctx.lineTo(nxOff, nyOff); ctx.lineTo(bowBot.x, bowBot.y); ctx.stroke();
     ctx.shadowBlur = 0;
   } else {
-    // Pitchfork — three-phase swing: WIND-UP → STRIKE → RECOVER
-    const prog = pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : -1;
-    let sOff = 0;
-    if      (prog >= 0    && prog < 0.28) sOff = -(prog / 0.28) * 0.9;
-    else if (prog >= 0.28 && prog < 0.62) sOff = -0.9 + ((prog - 0.28) / 0.34) * 1.5;
-    else if (prog >= 0.62)                sOff =  0.6  - ((prog - 0.62) / 0.38) * 0.6;
-    const isStrike = prog >= 0.28 && prog < 0.62;
-    const swingAngle = localAngle + sOff;
-    const handX = Math.cos(localAngle) * 8, handY = Math.sin(localAngle) * 8;
-
-    // Impact arc sweep — drawn behind the handle (before inner translate)
-    if (isStrike) {
-      const st = (prog - 0.28) / 0.34;
-      const arcAlpha = (1 - st) * 0.75;
-      const arcG = ctx.createLinearGradient(handX, handY,
-        handX + Math.cos(swingAngle)*32, handY + Math.sin(swingAngle)*32);
-      arcG.addColorStop(0, `rgba(255,255,255,${arcAlpha})`);
-      arcG.addColorStop(1, 'rgba(57,255,20,0)');
-      ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 6 * (1 - st);
-      ctx.strokeStyle = arcG; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(handX, handY, 30, swingAngle - 0.5, swingAngle + 0.5);
-      ctx.stroke(); ctx.shadowBlur = 0;
-    }
-
-    ctx.save();
-    ctx.translate(handX, handY);
-    ctx.rotate(swingAngle);
-
-    const onCooldown = pfCooldown > 0;
-    const readyGlow  = !onCooldown && !isStrike;
-
-    // Handle
-    if (readyGlow) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 2 + Math.sin(loopT*4)*1.5; }
-    ctx.strokeStyle = onCooldown ? '#4a3010' : '#8A6028'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(28, 0); ctx.stroke();
-    // Handle highlight (1px top edge)
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = onCooldown ? '#2a1a08' : '#B58A4A'; ctx.lineWidth = 0.5;
-    ctx.beginPath(); ctx.moveTo(2, -0.5); ctx.lineTo(26, -0.5); ctx.stroke();
-
-    // Crossbar + tines
-    const tineCol = isStrike ? '#FFFFFF' : onCooldown ? '#666666' : '#C8C8C8';
-    if (isStrike) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 12 + 8*Math.sin(loopT*20); }
-    else if (readyGlow) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3; }
-    ctx.strokeStyle = tineCol; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(28, -5); ctx.lineTo(28, 5); ctx.stroke();
-    for (let t = -1; t <= 1; t++) {
-      ctx.beginPath(); ctx.moveTo(28, t*5); ctx.lineTo(36, t*5); ctx.stroke();
-    }
-
-    // Tine glints during STRIKE
-    if (isStrike) {
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(35.5, -5.5, 1, 1);
-      ctx.fillRect(35.5, -0.5, 1, 1);
-      ctx.fillRect(35.5,  4.5, 1, 1);
-    }
-    ctx.shadowBlur = 0;
-    ctx.restore();
+    drawPitchfork(localAngle);
   }
   ctx.restore();
 
-  // Pitchfork range indicators (outside sprite transform, world coordinates)
-  if (inv.arrows <= 0 && inv.ricochetArrows <= 0 && inv.fireArrows <= 0) {
-    // Recharge ring
-    if (pfCooldown > 0) {
-      const fill = 1 - pfCooldown / CONFIG.pitchforkCooldown;
-      ctx.save(); ctx.globalAlpha = 0.55; ctx.strokeStyle = '#5a4010'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(px, py, 14, -Math.PI/2, -Math.PI/2 + fill * Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = '#8A6028'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(px, py, 14, -Math.PI/2, -Math.PI/2); ctx.stroke();
-      ctx.restore();
-    }
-    // Ready ring — full circle; brightens when any crow is within range
-    if (pfCooldown <= 0 && pfSwing <= 0) {
-      const pfR  = FEATHERS.pfRange();
-      const r2pf = pfR ** 2;
-      const targetInRange = crows.some(c => dist2(player.x, player.y, c.x, c.y) < r2pf);
-      const arcAlpha = targetInRange
-        ? 0.30 + 0.18 * Math.abs(Math.sin(loopT * 7))
-        : 0.07 + 0.04 * Math.sin(loopT * 2.5);
-      const arcCol = targetInRange ? '#39FF14' : '#4a6630';
-      ctx.save(); ctx.globalAlpha = arcAlpha;
-      if (targetInRange) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 6; }
-      ctx.strokeStyle = arcCol; ctx.lineWidth = targetInRange ? 2 : 1.5;
-      ctx.setLineDash([4, 5]);
-      ctx.beginPath(); ctx.arc(px, py, pfR, 0, Math.PI * 2);
-      ctx.stroke(); ctx.setLineDash([]); ctx.shadowBlur = 0; ctx.restore();
-    }
-    // Strike sweep arc — bright phosphor green flash at peak
-    if (pfSwing > 0) {
-      const pfR = FEATHERS.pfRange();
-      const prog = 1 - pfSwing / CONFIG.pitchforkSwingDuration;
-      if (prog >= 0.28 && prog < 0.75) {
-        const st  = (prog - 0.28) / 0.47;
-        const sOff2 = -0.9 + st * 1.5;
-        const arcMid = player.aimAngle + sOff2 * player.facing;
-        ctx.save(); ctx.globalAlpha = (1 - st) * 0.8;
-        ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 10 * (1 - st);
-        ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 3.5;
-        ctx.beginPath(); ctx.arc(px, py, pfR * 0.82, arcMid - 0.32, arcMid + 0.32);
-        ctx.stroke(); ctx.shadowBlur = 0; ctx.restore();
-      }
-    }
-  }
+  if (!hasArrows) drawPitchforkIndicators(px, py);
 
   // Dynamite charge bar
   if (charge.on) {
@@ -2668,6 +2726,256 @@ function drawPlayer() {
     ctx.fillRect(bx, by, bw * chargeFrac, bh);
     ctx.strokeStyle = '#555'; ctx.lineWidth = 0.5; ctx.strokeRect(bx, by, bw, bh);
   }
+}
+
+/** Dotted aim line with a sniper-mode reticle. Shared by every character that
+ * draws one — today the archer and the ranger, the game's two marksmen. */
+function drawAimLine(px, py) {
+  const aimLen = sniperMode ? 220 : 80, aimAlpha = sniperMode ? 0.75 : 0.38;
+  const aimRGB = sniperMode ? '255,255,60' : '170,255,68';
+  ctx.save();
+  ctx.setLineDash(sniperMode ? [5,3] : [3,4]); ctx.lineWidth = sniperMode ? 1.5 : 1;
+  const lx1 = px + Math.cos(player.aimAngle)*aimLen, ly1 = py + Math.sin(player.aimAngle)*aimLen;
+  const aimGrad = ctx.createLinearGradient(px, py, lx1, ly1);
+  aimGrad.addColorStop(0, `rgba(${aimRGB},${aimAlpha})`);
+  aimGrad.addColorStop(1, `rgba(${aimRGB},0)`);
+  ctx.strokeStyle = aimGrad;
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(lx1, ly1); ctx.stroke();
+  ctx.setLineDash([]);
+  if (sniperMode) {
+    ctx.strokeStyle = `rgba(${aimRGB},0.7)`; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(lx1-7, ly1); ctx.lineTo(lx1+7, ly1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx1, ly1-7); ctx.lineTo(lx1, ly1+7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(lx1, ly1, 5, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Red/blue split-channel ghost, shown right after a hit. Shared for the same
+ * reason as drawAimLine. */
+function drawHitFlashGhost(px, py) {
+  if (playerHitFlash <= 0.15) return;
+  const off = Math.round(playerHitFlash * 5);
+  ctx.save(); ctx.globalAlpha = 0.30;
+  ctx.fillStyle = '#ff0000'; ctx.fillRect(px - 5 + off, py - 7, 10, 14);
+  ctx.fillStyle = '#0044ff'; ctx.fillRect(px - 5 - off, py - 7, 10, 14);
+  ctx.restore();
+}
+
+/**
+ * The ammo-out fallback melee weapon, drawn in local (translated/rotated)
+ * sprite space. The archer and the ranger both fall back to it — same ammo
+ * fields, same tryPitchfork() — so it is shared rather than copied.
+ */
+function drawPitchfork(localAngle) {
+  // Pitchfork — three-phase swing: WIND-UP → STRIKE → RECOVER
+  const prog = pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : -1;
+  let sOff = 0;
+  if      (prog >= 0    && prog < 0.28) sOff = -(prog / 0.28) * 0.9;
+  else if (prog >= 0.28 && prog < 0.62) sOff = -0.9 + ((prog - 0.28) / 0.34) * 1.5;
+  else if (prog >= 0.62)                sOff =  0.6  - ((prog - 0.62) / 0.38) * 0.6;
+  const isStrike = prog >= 0.28 && prog < 0.62;
+  const swingAngle = localAngle + sOff;
+  const handX = Math.cos(localAngle) * 8, handY = Math.sin(localAngle) * 8;
+
+  // Impact arc sweep — drawn behind the handle (before inner translate)
+  if (isStrike) {
+    const st = (prog - 0.28) / 0.34;
+    const arcAlpha = (1 - st) * 0.75;
+    const arcG = ctx.createLinearGradient(handX, handY,
+      handX + Math.cos(swingAngle)*32, handY + Math.sin(swingAngle)*32);
+    arcG.addColorStop(0, `rgba(255,255,255,${arcAlpha})`);
+    arcG.addColorStop(1, 'rgba(57,255,20,0)');
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 6 * (1 - st);
+    ctx.strokeStyle = arcG; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(handX, handY, 30, swingAngle - 0.5, swingAngle + 0.5);
+    ctx.stroke(); ctx.shadowBlur = 0;
+  }
+
+  ctx.save();
+  ctx.translate(handX, handY);
+  ctx.rotate(swingAngle);
+
+  const onCooldown = pfCooldown > 0;
+  const readyGlow  = !onCooldown && !isStrike;
+
+  // Handle
+  if (readyGlow) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 2 + Math.sin(loopT*4)*1.5; }
+  ctx.strokeStyle = onCooldown ? '#4a3010' : '#8A6028'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(28, 0); ctx.stroke();
+  // Handle highlight (1px top edge)
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = onCooldown ? '#2a1a08' : '#B58A4A'; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.moveTo(2, -0.5); ctx.lineTo(26, -0.5); ctx.stroke();
+
+  // Crossbar + tines
+  const tineCol = isStrike ? '#FFFFFF' : onCooldown ? '#666666' : '#C8C8C8';
+  if (isStrike) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 12 + 8*Math.sin(loopT*20); }
+  else if (readyGlow) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3; }
+  ctx.strokeStyle = tineCol; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(28, -5); ctx.lineTo(28, 5); ctx.stroke();
+  for (let t = -1; t <= 1; t++) {
+    ctx.beginPath(); ctx.moveTo(28, t*5); ctx.lineTo(36, t*5); ctx.stroke();
+  }
+
+  // Tine glints during STRIKE
+  if (isStrike) {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(35.5, -5.5, 1, 1);
+    ctx.fillRect(35.5, -0.5, 1, 1);
+    ctx.fillRect(35.5,  4.5, 1, 1);
+  }
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/** Recharge ring, ready ring and strike sweep for the pitchfork fallback,
+ * drawn in world space outside the sprite transform. Shared for the same
+ * reason as drawPitchfork. */
+function drawPitchforkIndicators(px, py) {
+  // Recharge ring
+  if (pfCooldown > 0) {
+    const fill = 1 - pfCooldown / CONFIG.pitchforkCooldown;
+    ctx.save(); ctx.globalAlpha = 0.55; ctx.strokeStyle = '#5a4010'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 14, -Math.PI/2, -Math.PI/2 + fill * Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#8A6028'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(px, py, 14, -Math.PI/2, -Math.PI/2); ctx.stroke();
+    ctx.restore();
+  }
+  // Ready ring — full circle; brightens when any crow is within range
+  if (pfCooldown <= 0 && pfSwing <= 0) {
+    const pfR  = FEATHERS.pfRange();
+    const r2pf = pfR ** 2;
+    const targetInRange = crows.some(c => dist2(player.x, player.y, c.x, c.y) < r2pf);
+    const arcAlpha = targetInRange
+      ? 0.30 + 0.18 * Math.abs(Math.sin(loopT * 7))
+      : 0.07 + 0.04 * Math.sin(loopT * 2.5);
+    const arcCol = targetInRange ? '#39FF14' : '#4a6630';
+    ctx.save(); ctx.globalAlpha = arcAlpha;
+    if (targetInRange) { ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 6; }
+    ctx.strokeStyle = arcCol; ctx.lineWidth = targetInRange ? 2 : 1.5;
+    ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.arc(px, py, pfR, 0, Math.PI * 2);
+    ctx.stroke(); ctx.setLineDash([]); ctx.shadowBlur = 0; ctx.restore();
+  }
+  // Strike sweep arc — bright phosphor green flash at peak
+  if (pfSwing > 0) {
+    const pfR = FEATHERS.pfRange();
+    const prog = 1 - pfSwing / CONFIG.pitchforkSwingDuration;
+    if (prog >= 0.28 && prog < 0.75) {
+      const st  = (prog - 0.28) / 0.47;
+      const sOff2 = -0.9 + st * 1.5;
+      const arcMid = player.aimAngle + sOff2 * player.facing;
+      ctx.save(); ctx.globalAlpha = (1 - st) * 0.8;
+      ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 10 * (1 - st);
+      ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.arc(px, py, pfR * 0.82, arcMid - 0.32, arcMid + 0.32);
+      ctx.stroke(); ctx.shadowBlur = 0; ctx.restore();
+    }
+  }
+}
+
+/**
+ * The ranger. Built as the archer's own sibling — same cloaked-marksman
+ * silhouette, same pitchfork fallback when ammo runs dry — with a hood
+ * instead of a brimmed hat, a satchel pouch at the hip, and a crossbow's
+ * crosswise limb and stock in place of the bow's curved arc.
+ */
+function drawRanger() {
+  const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
+
+  drawAimLine(px, py);
+  drawHitFlashGhost(px, py);
+
+  ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+  const localAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
+  const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash * 20) % 2 === 0;
+
+  // 1. Ground shadow
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.ellipse(0, 9, 9, 2.5, 0, 0, Math.PI*2); ctx.fill();
+
+  // 2. Cloak
+  const cloakSway   = 0.15 * Math.sin(loopT * 2.2);
+  const cloakOffset = 1.5  * Math.sin((player.walkPhase || 0) + cloakSway);
+  ctx.beginPath();
+  ctx.moveTo(-5, -3);
+  ctx.bezierCurveTo(-9, 0, -9, 4, -7, 7 + cloakOffset);
+  ctx.lineTo(7, 7 - cloakOffset);
+  ctx.bezierCurveTo(9, 4, 9, 0, 5, -3);
+  ctx.closePath();
+  ctx.fillStyle = flashOn ? '#882222' : '#0E1410'; ctx.fill();
+  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 3;
+  ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // 3. Body / tunic — earthy olive, distinct from the archer's blue
+  ctx.fillStyle = flashOn ? '#8fae5a' : '#4A5D2E'; ctx.fillRect(-5, -3, 10, 11);
+  ctx.fillStyle = '#0E1410'; ctx.fillRect(-5, 3, 10, 1); // belt
+
+  // 3b. Satchel pouch, opposite hip from the weapon arm
+  ctx.fillStyle = '#5A4A2A'; ctx.fillRect(f === 1 ? -8 : 4, 0, 4, 5);
+  ctx.strokeStyle = '#3A2A10'; ctx.lineWidth = 0.5;
+  ctx.strokeRect(f === 1 ? -8 : 4, 0, 4, 5);
+
+  // 4. Head
+  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
+  ctx.beginPath(); ctx.arc(0, -8, 5, 0, Math.PI*2); ctx.fill();
+
+  // 5. Hood — peaked and swept back, distinct from the archer's flat hat
+  ctx.fillStyle = '#24301A';
+  ctx.beginPath();
+  ctx.moveTo(-6, -9); ctx.lineTo(-4, -16); ctx.lineTo(2, -18); ctx.lineTo(6, -11); ctx.lineTo(4, -9);
+  ctx.closePath(); ctx.fill();
+
+  // Shield halo
+  if (playerShield) {
+    const shP = loopT * 4;
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
+    ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -1, 16 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+  if (hasArrows) {
+    // 6. Crossbow arm
+    const gx = Math.cos(localAngle) * 8, gy = Math.sin(localAngle) * 8;
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#D9B98A'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(gx, gy); ctx.stroke();
+
+    // 7. Stock, along the aim line
+    ctx.strokeStyle = '#5A3A1A'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy);
+    ctx.lineTo(gx + Math.cos(localAngle)*9, gy + Math.sin(localAngle)*9);
+    ctx.stroke();
+
+    // 8. Limb — a crosswise bar near the front of the stock, not a curved arc
+    const limbX = gx + Math.cos(localAngle)*6, limbY = gy + Math.sin(localAngle)*6;
+    const perpA = localAngle + Math.PI/2;
+    const limbTop = { x: limbX + Math.cos(perpA)*6, y: limbY + Math.sin(perpA)*6 };
+    const limbBot = { x: limbX - Math.cos(perpA)*6, y: limbY - Math.sin(perpA)*6 };
+    ctx.strokeStyle = '#8A6028'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(limbTop.x, limbTop.y); ctx.lineTo(limbBot.x, limbBot.y); ctx.stroke();
+
+    // 9. String — straight, offset in front of the limb rather than through it
+    const so = 1.5;
+    const strTop = { x: limbTop.x + Math.cos(localAngle)*so, y: limbTop.y + Math.sin(localAngle)*so };
+    const strBot = { x: limbBot.x + Math.cos(localAngle)*so, y: limbBot.y + Math.sin(localAngle)*so };
+    ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 4;
+    ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(strTop.x, strTop.y); ctx.lineTo(strBot.x, strBot.y); ctx.stroke();
+    ctx.shadowBlur = 0;
+  } else {
+    drawPitchfork(localAngle);
+  }
+  ctx.restore();
+
+  if (!hasArrows) drawPitchforkIndicators(px, py);
 }
 
 function drawKnight() {
@@ -3043,6 +3351,71 @@ function drawDynamites() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     ctx.fillText(String(Math.max(1, Math.ceil(fuseT))), 0, -12);
     ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+}
+
+/**
+ * The ranger's satchels. A dull leather bag while thrown-but-unarmed — it can
+ * sit for up to satchelIdleLife without going off, so nothing here should
+ * read as urgent — and a glowing, counting-down bag once armed, matching how
+ * drawDynamites shows its own fuse.
+ */
+function drawSatchels() {
+  for (const s of satchels) {
+    const dx = s.x, dy = s.y + CONFIG.hudHeight;
+    const bobOff = 1.5 * Math.sin(loopT * 4 + (s.bobPhase || 0));
+    ctx.save(); ctx.translate(dx, dy + bobOff);
+
+    if (s.armed) {
+      // Blast radius ring — dynamiteBlastRadius, the one shared figure every
+      // explosive in the game uses.
+      ctx.globalAlpha = 0.15; ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1;
+      ctx.setLineDash([4,4]); ctx.beginPath(); ctx.arc(0, 0, CONFIG.dynamiteBlastRadius, 0, Math.PI*2); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+
+    ctx.rotate(s.angle);
+
+    // 1. Ground shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath(); ctx.ellipse(0, 7, 10, 2.5, 0, 0, Math.PI*2); ctx.fill();
+
+    // 2. Bag body
+    ctx.fillStyle = s.armed ? '#B08020' : '#5A4A2A';
+    ctx.beginPath();
+    ctx.moveTo(-9, 2); ctx.quadraticCurveTo(-9, -6, 0, -6); ctx.quadraticCurveTo(9, -6, 9, 2);
+    ctx.quadraticCurveTo(9, 6, 0, 7); ctx.quadraticCurveTo(-9, 6, -9, 2);
+    ctx.closePath(); ctx.fill();
+
+    // 3. Strap and buckle
+    ctx.strokeStyle = '#3A2A10'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-6, -5); ctx.lineTo(6, -5); ctx.stroke();
+    ctx.fillStyle = '#D0B060'; ctx.fillRect(-2, -6, 4, 3);
+
+    if (s.armed) {
+      // 4. Armed pulse
+      const sparkPhase = loopT * 10;
+      ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 4 * Math.sin(sparkPhase);
+      ctx.fillStyle = 'rgba(255,180,0,0.5)';
+      ctx.beginPath(); ctx.arc(0, -2, 2 + Math.sin(sparkPhase), 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    ctx.rotate(-s.angle);
+
+    if (s.armed) {
+      // 5. Countdown text, same tiered color/glow treatment as dynamite's
+      const fuseT = s.life;
+      let countCol = '#FFCC00', countBlur = 4;
+      if      (fuseT <= 0.5) { countCol = '#FFFFFF'; countBlur = 16; }
+      else if (fuseT <= 1.0) { countCol = '#FFB400'; countBlur = 4;  }
+      ctx.shadowColor = countCol; ctx.shadowBlur = countBlur;
+      ctx.fillStyle = countCol; ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText(String(Math.max(1, Math.ceil(fuseT))), 0, -10);
+      ctx.shadowBlur = 0;
+    }
     ctx.restore();
   }
 }
@@ -3504,12 +3877,19 @@ function drawHUD(t) {
     if (pulse) ctx.shadowBlur = 0;
   }
 
-  // Resources — archer quiver OR wizard cooldowns
+  // Resources — archer/ranger quiver OR knight/wizard cooldowns. Each branch
+  // is named explicitly rather than falling through to a trailing else, so a
+  // fifth character with none of these draws nothing here instead of
+  // silently inheriting whichever branch used to be last.
   ctx.font = 'bold 10px "Courier New", monospace';
   let rx = isBoss ? 692 : 568;
   ctx.textAlign = 'left';
-  if (selectedChar === 'archer') {
-    for (const [k, r] of Object.entries(CONFIG.resources)) {
+  if (selectedChar === 'archer' || selectedChar === 'ranger') {
+    // Same ammo fields, same pickup effects — only which second resource
+    // shows (dynamites vs satchels) differs.
+    const keys = selectedChar === 'archer' ? ['arrows', 'dynamites'] : ['arrows', 'satchels'];
+    for (const k of keys) {
+      const r = CONFIG.resources[k];
       const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
       // One icon per unit reads well up to a point. Past it the row would run
       // off the HUD, so show a single icon and a count instead.
@@ -3549,7 +3929,7 @@ function drawHUD(t) {
       ctx.fillStyle='#FF7A1F';
       ctx.fillText(`[FS:${inv.knightFireSwordTimer.toFixed(1)}s]`, rx, 16); rx+=70;
     }
-  } else {
+  } else if (selectedChar === 'wizard') {
     // Wizard — bolt cooldown bar
     const boltRdy  = wizBoltCD <= 0;
     const boltFrac = boltRdy ? 1 : (CONFIG.wizBoltCooldown - wizBoltCD) / CONFIG.wizBoltCooldown;
@@ -3684,7 +4064,7 @@ function _drawCharPreview(cx, cy, char, t) {
     ctx.beginPath(); ctx.arc(12,-2+0.5*Math.sin(op2),4,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(11,-3,1.2,0,Math.PI*2); ctx.fill();
     ctx.shadowBlur=0;
-  } else {
+  } else if (char === 'knight') {
     // Knight — plate armour mini-preview
     // Legs
     ctx.fillStyle='#1e2030'; ctx.fillRect(-7,5,6,9); ctx.fillRect(1,5,6,9);
@@ -3709,6 +4089,29 @@ function _drawCharPreview(cx, cy, char, t) {
     ctx.fillStyle='#D0D0D8';
     ctx.beginPath(); ctx.moveTo(16,-4); ctx.lineTo(24,0); ctx.lineTo(16,4); ctx.closePath(); ctx.fill();
     ctx.restore();
+  } else if (char === 'ranger') {
+    // Cloak
+    ctx.fillStyle='#0E1410'; ctx.beginPath();
+    ctx.moveTo(-5,-3); ctx.bezierCurveTo(-9,0,-9,4,-7,7); ctx.lineTo(7,7); ctx.bezierCurveTo(9,4,9,0,5,-3); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle='#FFCC00'; ctx.lineWidth=0.5; ctx.stroke();
+    // Body — earthy olive, distinct from the archer's blue
+    ctx.fillStyle='#4A5D2E'; ctx.fillRect(-5,-3,10,11);
+    // Head
+    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-8,5,0,Math.PI*2); ctx.fill();
+    // Hood — peaked and swept back, distinct from the archer's flat hat
+    ctx.fillStyle='#24301A';
+    ctx.beginPath();
+    ctx.moveTo(-6,-9); ctx.lineTo(-4,-16); ctx.lineTo(2,-18); ctx.lineTo(6,-11); ctx.lineTo(4,-9);
+    ctx.closePath(); ctx.fill();
+    // Crossbow — stock, crosswise limb, string; not the archer's curved bow
+    ctx.shadowColor='#8A6028'; ctx.shadowBlur=2;
+    ctx.strokeStyle='#5A3A1A'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(13,0); ctx.stroke();
+    ctx.strokeStyle='#8A6028'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(11,-6); ctx.lineTo(11,6); ctx.stroke();
+    ctx.strokeStyle='#FFCC00'; ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(12.5,-6); ctx.lineTo(12.5,6); ctx.stroke();
+    ctx.shadowBlur=0;
   }
   ctx.restore();
 }
@@ -3727,23 +4130,15 @@ function drawCharSelect(t) {
   ctx.font='12px "Courier New",monospace'; ctx.fillStyle='#1a7a08';
   ctx.fillText(`MODE: ${gameMode.toUpperCase()}`, CONFIG.canvasW/2, 100);
 
-  const panelW=296, panelH=390, gapX=18;
-  const totalW = panelW*3 + gapX*2;
+  // Panel width shrinks to fit however many CHAR_PANELS holds today — four
+  // panels at the old 296px width would run 182px wider than the canvas.
+  const gapX = 12, panelH = 390;
+  const panelW = Math.floor((1000 - gapX * (CHAR_PANELS.length - 1)) / CHAR_PANELS.length);
+  const totalW = panelW*CHAR_PANELS.length + gapX*(CHAR_PANELS.length-1);
   const startX = CONFIG.canvasW/2 - totalW/2;
   const panelY = 118;
-  const panels = [
-    { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
-      lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
-             'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
-    { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
-      lines:['Homing magic bolts  3s CD','Fire Bolt pickup: 2 dmg homing',
-             'Laser pickup: pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
-    { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
-      lines:['Long spear  ·  melee range','Pickup: Iron Javelin (throws/pierces)',
-             'Pickup: Fire Sword (2× dmg/range)','Tool: Whirlwind (breaks tiles)','Frontline playstyle'] },
-  ];
 
-  panels.forEach((p, idx) => {
+  CHAR_PANELS.forEach((p, idx) => {
     const px = startX + idx * (panelW + gapX);
     const sel = selectedChar === p.char;
     ctx.fillStyle = sel ? p.bg : p.dimBg;
@@ -3767,7 +4162,8 @@ function drawCharSelect(t) {
   });
 
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
-  ctx.fillText('← →  /  [A] [W] [K]  SWITCH    ENTER  CONFIRM', CONFIG.canvasW/2, CONFIG.canvasH-22);
+  const keyHint = CHAR_PANELS.map(p => `[${p.key}]`).join(' ');
+  ctx.fillText(`← →  /  ${keyHint}  SWITCH    ENTER  CONFIRM`, CONFIG.canvasW/2, CONFIG.canvasH-22);
 }
 
 function drawMenu(t) {
@@ -3976,7 +4372,7 @@ function render(t) {
     ctx.save(); ctx.translate(so.x, so.y);
     drawTiles(); FORESHADOW.drawSkyTint(); drawPickups(); drawFires(); drawParticles();
     crows.forEach(drawCrow);
-    drawArrows(); drawDynamites(); drawPlayer(); drawBoss(); drawFloaters();
+    drawArrows(); drawDynamites(); drawSatchels(); drawPlayer(); drawBoss(); drawFloaters();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -4118,13 +4514,16 @@ function stepGame(dt) {
     case 'multiplayer': handleMultiplayerInput(); break;
 
     case 'charselect': {
-      const chars = ['archer','wizard','knight'];
-      const ci = chars.indexOf(selectedChar);
-      if (keys['ArrowLeft'])  { selectedChar = chars[(ci+2)%3]; keys['ArrowLeft']=false; }
-      if (keys['ArrowRight']) { selectedChar = chars[(ci+1)%3]; keys['ArrowRight']=false; }
-      if (keys['a']||keys['A']) { selectedChar='archer'; keys['a']=keys['A']=false; }
-      if (keys['w']||keys['W']) { selectedChar='wizard'; keys['w']=keys['W']=false; }
-      if (keys['k']||keys['K']) { selectedChar='knight'; keys['k']=keys['K']=false; }
+      // Reads CHAR_PANELS rather than its own list, so a character exists on
+      // screen and here at once — see the comment on CHAR_PANELS.
+      const chars = CHAR_PANELS.map(p => p.char);
+      const n = chars.length, ci = chars.indexOf(selectedChar);
+      if (keys['ArrowLeft'])  { selectedChar = chars[(ci+n-1)%n]; keys['ArrowLeft']=false; }
+      if (keys['ArrowRight']) { selectedChar = chars[(ci+1)%n];   keys['ArrowRight']=false; }
+      for (const p of CHAR_PANELS) {
+        const lower = p.key.toLowerCase();
+        if (keys[lower] || keys[p.key]) { selectedChar = p.char; keys[lower] = keys[p.key] = false; }
+      }
       if (keys['Enter']) { transitionTo('playing'); keys['Enter']=false; }
       if (keys['Escape']) { transitionTo('menu'); keys['Escape']=false; }
       break; }
@@ -4138,7 +4537,7 @@ function stepGame(dt) {
     case 'playing':
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
-      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateCrows(dt);
+      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -4150,7 +4549,7 @@ function stepGame(dt) {
     case 'boss_fight':
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
-      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateCrows(dt);
+      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       if (bossDeathSeq) updateBossDeath(dt); else updateBoss(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
@@ -4230,10 +4629,12 @@ window.__game = {
   },
   // Dev triggers that drive real sim paths, for headless event-bus checks.
   kill(i = 0) { if (i >= 0 && i < crows.length) killCrow(i); },
-  blast(x, y) { explodeDynamite({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }); },
+  blast(x, y) { explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'dynamite'); },
   floaters: () => floaters,
   arrows: () => arrows,
   pickups: () => pickups,
+  dynamites: () => dynamites,
+  satchels: () => satchels,
   boss: () => boss,
   // Tap the event bus, for verifying which gameplay events fire.
   onEvent: fn => events.on(fn),

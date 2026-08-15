@@ -14,7 +14,7 @@ import { glowDotStamp } from './stamps';
 const TAU = Math.PI * 2;
 
 /** Which projectile this is. Drives the art, not the physics. */
-export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite';
+export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite' | 'satchel';
 
 export interface ShotVisual {
   x: number;
@@ -24,7 +24,11 @@ export interface ShotVisual {
   flavour: ShotFlavour;
   /** 0 or 1. The firing side, so an incoming shot is readable. */
   team: 0 | 1;
-  /** 0..1, how much of a dynamite fuse has burnt. Ignored by other flavours. */
+  /**
+   * 0..1, counting up to something about to go off. A burning fuse for
+   * dynamite; an armed satchel's countdown to its own detonation, exactly
+   * zero while it is still unarmed. Ignored by other flavours.
+   */
   fuse: number;
 }
 
@@ -54,11 +58,13 @@ const TEAM_TINT: Readonly<Record<0 | 1, string>> = { 0: TEAM_COLOURS[0], 1: TEAM
 const BLAST_RADIUS = 90;
 
 /**
- * How long a fuse burns, in seconds. A ShotVisual carries only a normalised
- * fuse, so seconds cannot be derived from it — this has to track the sim's fuse
- * length or the countdown counts down to the wrong moment.
+ * How long each countdown runs, in seconds. A ShotVisual carries only a
+ * normalised fuse, so seconds cannot be derived from it alone — each has to
+ * track its own weapon's fuse length in `src/sim/weapons.ts`, or the number
+ * on screen counts down to the wrong moment.
  */
-const FUSE_SECONDS = 1.5;
+const DYNAMITE_FUSE_SECONDS = 1.5;
+const SATCHEL_FUSE_SECONDS = 5;
 
 /**
  * A stable phase offset made from world position. Without one, every pickup on
@@ -88,6 +94,7 @@ const SHOT_PAINTERS: Readonly<Record<ShotFlavour, ShotPainter>> = {
   arrow: paintArrow,
   bolt: paintBolt,
   dynamite: paintDynamite,
+  satchel: paintSatchel,
 };
 
 /**
@@ -170,7 +177,7 @@ function paintDynamite(ctx: CanvasRenderingContext2D, v: ShotVisual, loopT: numb
   paintWick(ctx, Math.min(0.8, v.fuse), loopT * 18);
   ctx.restore();
   // Outside the spin, because a tumbling number is unreadable.
-  paintFuseCountdown(ctx, v.fuse);
+  paintFuseCountdown(ctx, v.fuse, DYNAMITE_FUSE_SECONDS);
 }
 
 /** Faint and dashed: the ring has to be judgeable without hiding the fight. */
@@ -234,15 +241,60 @@ function countdownLook(secondsLeft: number): CountdownLook {
   return { colour: '#FFFFFF', blur: 4 };
 }
 
-/** Whole seconds, floored at 1: a visible "0" would claim it already went off. */
-function paintFuseCountdown(ctx: CanvasRenderingContext2D, fuse: number): void {
-  const left = Math.max(0, 1 - fuse) * FUSE_SECONDS;
+/**
+ * Whole seconds, floored at 1: a visible "0" would claim it already went off.
+ * `totalSeconds` is the full fuse this particular countdown counts down from,
+ * since dynamite's and the satchel's differ.
+ */
+function paintFuseCountdown(ctx: CanvasRenderingContext2D, fuse: number, totalSeconds: number): void {
+  const left = Math.max(0, 1 - fuse) * totalSeconds;
   const look = countdownLook(left);
   ctx.shadowColor = look.colour; ctx.shadowBlur = look.blur;
   ctx.fillStyle = look.colour; ctx.font = 'bold 10px monospace';
   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   ctx.fillText(String(Math.max(1, Math.ceil(left))), 0, -12);
   ctx.shadowBlur = 0;
+}
+
+/**
+ * The satchel charge: an inert bag until armed, then the same kind of
+ * countdown as dynamite, because from that moment it is the same kind of
+ * threat.
+ *
+ * Unarmed (`fuse === 0`) it is deliberately dull: no blast ring, no
+ * countdown, nothing to suggest it is about to do anything, because it is
+ * not, yet. The moment it is armed the bag itself takes on the glow, so
+ * "live" is readable from the bag alone before anyone is close enough to
+ * read the number over it.
+ */
+function paintSatchel(ctx: CanvasRenderingContext2D, v: ShotVisual, loopT: number): void {
+  const phase = phaseAt(v.x, v.y);
+  const armed = v.fuse > 0;
+  ctx.translate(0, 0.8 * Math.sin(loopT * 2.5 + phase));
+  if (armed) paintBlastRing(ctx);
+  paintSatchelBag(ctx, armed, loopT * 3 + phase);
+  if (armed) paintFuseCountdown(ctx, v.fuse, SATCHEL_FUSE_SECONDS);
+}
+
+/** Canvas bag with a buckled flap. Dull tan at rest; a warmer, glowing tan
+ *  once armed, which is the one colour change that says "live" unaided. */
+function paintSatchelBag(ctx: CanvasRenderingContext2D, armed: boolean, pulsePhase: number): void {
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(0, 7, 10, 2.2, 0, 0, TAU); ctx.fill();
+  if (armed) {
+    ctx.shadowColor = '#FFB400';
+    ctx.shadowBlur = 6 + 3 * Math.sin(pulsePhase);
+  }
+  ctx.fillStyle = armed ? '#C08A3E' : '#7A6A50';
+  ctx.beginPath(); ctx.ellipse(0, 2, 9, 6, 0, 0, TAU); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#5A4A34';
+  ctx.beginPath(); ctx.ellipse(0, -2, 6, 3, 0, 0, TAU); ctx.fill();
+  ctx.strokeStyle = '#3A2E1E'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-3, -3); ctx.lineTo(-3, 5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(3, -3); ctx.lineTo(3, 5); ctx.stroke();
+  ctx.fillStyle = '#D8B860';
+  ctx.beginPath(); ctx.arc(0, -1, 1.3, 0, TAU); ctx.fill();
 }
 
 /** Draws at the pickup's spot, context already translated there. */

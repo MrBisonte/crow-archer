@@ -61,7 +61,7 @@ export type RoomCode = string;
 // Lobby
 // ---------------------------------------------------------------------------
 
-export type CharacterKind = 'archer' | 'wizard' | 'knight';
+export type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger';
 
 /** 'coop' is 4-player PVE. 'deathmatch' is 2v2. The host picks. */
 export type GameMode = 'coop' | 'deathmatch';
@@ -117,6 +117,12 @@ export const EntityKind = {
    * infer where a shot that hit nobody went off.
    */
   BLAST: 5,
+  /**
+   * A tile a fiery shot just charred, carried the same way and for the same
+   * reason as BLAST: the server mutates its grid and says nothing further, so
+   * without this the client keeps drawing a tree that is no longer there.
+   */
+  BURN: 6,
 } as const;
 
 export type EntityKind = (typeof EntityKind)[keyof typeof EntityKind];
@@ -373,7 +379,7 @@ const isOneOf = <T extends string>(allowed: readonly T[], v: unknown): v is T =>
 const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
   Array.isArray(v) && v.every(item);
 
-const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight'];
+const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
 const ERROR_CODES: readonly ErrorCode[] = [
   'VERSION_MISMATCH',

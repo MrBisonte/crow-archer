@@ -47,17 +47,30 @@ export interface ShotSpec {
   onTerrain: TerrainResponse;
   /** Whether water puts it out. Only a thrown thing sinks. */
   drownsInWater: boolean;
+  /**
+   * Angle in radians relative to the aim the world applies, for a weapon that
+   * fires more than one shot per use. Zero, the default, means straight down
+   * the aim line. The weapon still does not know the absolute angle, only its
+   * own offset from whatever the world decides that is.
+   */
+  angleOffset?: number;
 }
 
-export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite';
+export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite' | 'satchel';
 
 /**
  * What terrain does to a shot.
  *
  * Data rather than a branch on flavour, so a projectile that bounces is a
  * different value here and not another `if` in the world's step.
+ *
+ * `'stop'` ends on contact, gone, the way an arrow does. `'bounce'` reflects
+ * at reduced speed, the way a thrown stick of dynamite does. `'rest'` also
+ * loses speed on contact, but stops dead rather than reflecting, and stays:
+ * the satchel is meant to be found sitting where it landed, not to vanish
+ * like an arrow or ricochet away like dynamite.
  */
-export type TerrainResponse = 'stop' | 'bounce';
+export type TerrainResponse = 'stop' | 'bounce' | 'rest';
 
 /** A melee swing about to begin. */
 export interface SwingSpec {
@@ -96,7 +109,13 @@ export const BOLT_DAMAGE = 3;
 export const SPEAR_DAMAGE = 2;
 export const DYNAMITE_DAMAGE = 4;
 
-/** Blast radius of a stick of dynamite. Straight from the legacy CONFIG. */
+/**
+ * Blast radius of a stick of dynamite. Straight from the legacy CONFIG.
+ *
+ * Shared with the satchel: the world's `#explode` does not ask a shot's
+ * flavour how wide it hits, so this is every explosive's blast radius, not
+ * only dynamite's.
+ */
 export const DYNAMITE_BLAST_RADIUS = 90;
 
 /**
@@ -170,6 +189,81 @@ export const DYNAMITE_REST_SPEED = 50;
 
 /** Sticks a player carries into a match. `resources.dynamites.max` at fast pace. */
 export const DYNAMITE_CARRIED = 4;
+
+/**
+ * Sticks the ranger's crossbow fires per use.
+ *
+ * Bolts are independent shots, each resolving its own hit, not one shot
+ * worth three hits.
+ */
+export const CROSSBOW_BOLT_COUNT = 3;
+
+/**
+ * Damage of a single bolt, and the discrepancy it comes from.
+ *
+ * "30% less than the archer's 2 damage" is 1.4. The worked total that came
+ * with it, 0.7 + 0.7 + 0.7 = 2.1, is not that: it is 0.7 a bolt. The two
+ * disagree, and 0.7 is what is built, because it was computed explicitly and
+ * repeated, and a burst that lands every pellet for 2.1 against a single
+ * arrow's 2 is a coherent weapon on its own terms. If 1.4 was intended
+ * instead, this is the one constant to change.
+ *
+ * Health stops being a whole number once this lands, since 0.7 does not
+ * divide it evenly. The simulation keeps the fraction; only the display
+ * rounds it.
+ */
+export const CROSSBOW_BOLT_DAMAGE = 0.7;
+
+/** Hit radius of one bolt. 30% smaller than the archer's arrow, matching how
+ * the dynamite throw's own "30% slower" was rounded. */
+export const CROSSBOW_BOLT_RADIUS = Math.round(ARROW_RADIUS * 0.7);
+
+/**
+ * Angle between adjacent bolts in a burst.
+ *
+ * Not specified, so chosen narrow: wide enough that three overlapping bolts
+ * read as three rather than one arrow drawn thrice on top of itself, narrow
+ * enough that landing all three on one target is the common case at close
+ * range, not a coincidence.
+ */
+export const CROSSBOW_SPREAD_RADIANS = Math.PI / 60; // 3 degrees
+
+/**
+ * How near the ranger's own bolt must pass to detonate their own satchel.
+ *
+ * Reuses the shared shot-hit radius rather than inventing a second number for
+ * the same kind of question: how close counts as a hit.
+ */
+export const SATCHEL_TRIGGER_RADIUS = BOLT_RADIUS;
+
+/**
+ * Damage of a satchel's blast. Same as dynamite's: nothing asked for it to
+ * hit harder or softer, and the world's `#explode` does not distinguish
+ * blast radius by flavour at all, so the two already share `DYNAMITE_BLAST_RADIUS`
+ * without needing a second constant for the same number.
+ */
+export const SATCHEL_DAMAGE = DYNAMITE_DAMAGE;
+
+/** Fixed throw speed. The satchel has no charge-and-hold: one click is one
+ * throw, always at this speed. Reuses dynamite's own already-slowed figure
+ * rather than inventing a second thrown-explosive speed. */
+export const SATCHEL_THROW_SPEED = DYNAMITE_SPEED;
+
+/** How long an armed satchel counts down before it goes off on its own. */
+export const SATCHEL_ARM_FUSE_TICKS = ticks(5);
+
+/**
+ * How long a thrown, unarmed satchel sits before it quietly expires.
+ *
+ * Long enough that within any real match it reads as "stays until armed or
+ * shot", not "times out". It is a backstop against an abandoned satchel
+ * living forever, not a mechanic a player is meant to see.
+ */
+export const SATCHEL_IDLE_TICKS = ticks(60);
+
+/** Satchels a player carries into a match. Matches dynamite's own count;
+ * nothing in the request asked for a different number. */
+export const SATCHEL_CARRIED = DYNAMITE_CARRIED;
 
 // ---------------------------------------------------------------------------
 // The three weapons
@@ -267,6 +361,37 @@ export class Spear implements Weapon {
 }
 
 /**
+ * The ranger's crossbow. Three weak bolts instead of the archer's one strong
+ * arrow, fired on the same rhythm.
+ *
+ * Ammo, cooldown, speed and lifetime are the archer's own bow figures,
+ * unchanged: the request was for the same mechanics in everything but the
+ * burst, the size, and the damage.
+ */
+export class Crossbow implements Weapon {
+  readonly kind = 'arrow' as const;
+  readonly cooldownTicks = ticks(0.35);
+
+  use(): WeaponEffect[] {
+    const half = (CROSSBOW_BOLT_COUNT - 1) / 2;
+    return Array.from({ length: CROSSBOW_BOLT_COUNT }, (_, i) => ({
+      kind: 'shot' as const,
+      shot: {
+        flavour: 'arrow' as const,
+        speed: 500,
+        damage: CROSSBOW_BOLT_DAMAGE,
+        lifeTicks: ticks(1.5),
+        radius: CROSSBOW_BOLT_RADIUS,
+        homingRate: 0,
+        onTerrain: 'stop' as const,
+        drownsInWater: false,
+        angleOffset: (i - half) * CROSSBOW_SPREAD_RADIANS,
+      },
+    }));
+  }
+}
+
+/**
  * Dynamite, which everyone can throw but not always.
  *
  * It is the archer's second weapon in the single-player game. In a duel it is
@@ -298,6 +423,38 @@ export class DynamitePouch {
   }
 }
 
+/**
+ * The ranger's satchel charge. Thrown inert, armed on command, and set off
+ * early by the ranger's own bolt.
+ *
+ * One click is one throw, always at the same speed: there is no charge to
+ * hold, unlike dynamite. What happens after the throw, arming a countdown or
+ * detonating on a hit, is state the world tracks per shot, not something a
+ * weapon this simple describes.
+ */
+export class Satchel implements Weapon {
+  readonly kind = 'satchel' as const;
+  readonly cooldownTicks = ticks(0.8);
+
+  use(): WeaponEffect[] {
+    return [
+      {
+        kind: 'shot',
+        shot: {
+          flavour: 'satchel',
+          speed: SATCHEL_THROW_SPEED,
+          damage: SATCHEL_DAMAGE,
+          lifeTicks: SATCHEL_IDLE_TICKS,
+          radius: SATCHEL_TRIGGER_RADIUS,
+          homingRate: 0,
+          onTerrain: 'rest',
+          drownsInWater: true,
+        },
+      },
+    ];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -307,6 +464,7 @@ const PRIMARY: Record<CharacterKind, () => Weapon> = {
   archer: () => new Bow(),
   wizard: () => new Staff(),
   knight: () => new Spear(),
+  ranger: () => new Crossbow(),
 };
 
 export function primaryWeapon(character: CharacterKind): Weapon {
@@ -314,12 +472,37 @@ export function primaryWeapon(character: CharacterKind): Weapon {
 }
 
 /**
- * May this character throw dynamite in this mode?
- *
- * The archer always carries it, because it is part of the archer. Everyone else
- * carries it only in player versus player, where the answer to a stick of
- * dynamite is another stick of dynamite.
+ * A character's second weapon, exhaustively: nothing, dynamite, or the
+ * satchel. Carries the instance along with the tag, so a caller that has
+ * matched `kind` never has to cast to reach it.
  */
-export function carriesDynamite(character: CharacterKind, mode: GameMode): boolean {
-  return character === 'archer' || mode === 'deathmatch';
+export type Secondary =
+  | { kind: 'none' }
+  | { kind: 'dynamite'; weapon: DynamitePouch }
+  | { kind: 'satchel'; weapon: Satchel };
+
+/**
+ * A character's own second weapon, in every mode: archer and ranger only.
+ * Dynamite and the satchel are each already balanced as their owner's real
+ * weapon, not a stand-in for one that does not exist yet.
+ */
+const OWN_SECONDARY: Partial<Record<CharacterKind, () => Secondary>> = {
+  archer: () => ({ kind: 'dynamite', weapon: new DynamitePouch() }),
+  ranger: () => ({ kind: 'satchel', weapon: new Satchel() }),
+};
+
+/**
+ * What a character throws as their second weapon, if anything.
+ *
+ * Wizard and knight's real specials, drawn from their single-player Lightning
+ * Storm and Whirlwind, are not built in this sim yet, and both are
+ * multi-target area attacks that would be the strongest thing on the field in
+ * a duel. Until they exist and are balanced for player versus player, wizard
+ * and knight keep dynamite as a stand-in, and only in deathmatch: co-op has
+ * no PVE content yet to spend a placeholder weapon on.
+ */
+export function secondaryWeapon(character: CharacterKind, mode: GameMode): Secondary {
+  const own = OWN_SECONDARY[character];
+  if (own) return own();
+  return mode === 'deathmatch' ? { kind: 'dynamite', weapon: new DynamitePouch() } : { kind: 'none' };
 }

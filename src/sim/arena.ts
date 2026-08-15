@@ -7,16 +7,46 @@
  * whichever happened to be written first.
  */
 
+import type { CharacterKind } from '../net/protocol';
 import { Button, type InputCommand } from './input';
 
 /** Playable area, the tile grid in pixels. The HUD is a client-side offset. */
 export const ARENA_W = 33 * 32;
 export const ARENA_H = 21 * 32;
 
-/** Matches the legacy CONFIG, so movement feels the same once the sims merge. */
+/**
+ * Matches the legacy CONFIG, so movement feels the same once the sims merge.
+ *
+ * The default for a world with no character of its own: MovementWorld and
+ * ArenaWorld move one kind of body and know nothing of `CharacterKind`, so
+ * they keep reading these flat constants unchanged. BattleWorld reads
+ * `CHARACTER_STATS` instead, below.
+ */
 export const PLAYER_SPEED = 200;
 export const PLAYER_RADIUS = 8;
 export const PLAYER_MAX_HP = 10;
+
+/** A character's speed and health. Everything else about them is a weapon. */
+export interface CharacterStats {
+  speed: number;
+  maxHp: number;
+}
+
+/**
+ * Per-character speed and max health, one row per `CharacterKind`.
+ *
+ * Every row matches the shared defaults above today: nothing has asked a
+ * character to move faster or survive more hits than another yet. The table
+ * exists anyway, because the day one does, this is the one place that
+ * changes, and the compiler refuses to build a `ranger` row short of both
+ * fields.
+ */
+export const CHARACTER_STATS: Record<CharacterKind, CharacterStats> = {
+  archer: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
+  wizard: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
+  knight: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
+  ranger: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
+};
 
 /**
  * Unit vector for the held direction buttons. Opposing buttons cancel, and a

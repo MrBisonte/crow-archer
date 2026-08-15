@@ -124,4 +124,22 @@ export class Terrain {
       }
     }
   }
+
+  /**
+   * Burns exactly the tile at this point, if it can burn.
+   *
+   * Rock does not catch — the same exception the legacy game's fire arrows
+   * make — so this only ever clears a tree or a hut. One tile, not a radius:
+   * this is a shot landing on what it hit, not a blast. Returns whether
+   * anything actually burned, so a caller only bothers telling clients about
+   * hits that changed something.
+   */
+  burnTile(x: number, y: number): boolean {
+    const r = Math.floor(y / TILE_SIZE);
+    const c = Math.floor(x / TILE_SIZE);
+    const tile = this.map.get(r, c);
+    if (tile !== TILE.TREE && tile !== TILE.HUT) return false;
+    this.map.set(r, c, TILE.EMPTY);
+    return true;
+  }
 }

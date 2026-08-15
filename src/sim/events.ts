@@ -17,10 +17,11 @@ export type HitSource =
   | 'spear'
   | 'whirlwind'
   | 'storm'
-  | 'dynamite';
+  | 'dynamite'
+  | 'satchel';
 
 /** Which attack a player started. */
-export type WeaponKind = 'arrow' | 'bolt' | 'pitchfork' | 'spear' | 'javelin';
+export type WeaponKind = 'arrow' | 'bolt' | 'crossbow' | 'pitchfork' | 'spear' | 'javelin';
 
 export type PickupKind = 'ricochet' | 'fire' | 'shield';
 
@@ -32,7 +33,7 @@ export type GameEvent =
   | { type: 'ARROW_MISS' }
   | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
   | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean }
-  | { type: 'DYNAMITE_SPLASH'; x: number; y: number }
+  | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
   | { type: 'ACTION_BLOCKED' }
@@ -40,6 +41,7 @@ export type GameEvent =
   | { type: 'WHIRLWIND_TICK'; x: number; y: number }
   | { type: 'WHIRLWIND_END'; x: number; y: number }
   | { type: 'STORM_CAST'; x: number; y: number }
+  | { type: 'SATCHEL_ARMED'; x: number; y: number }
   // Player state
   | { type: 'PLAYER_HIT' }
   | { type: 'SHIELD_BLOCKED'; x: number; y: number }

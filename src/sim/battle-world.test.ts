@@ -11,7 +11,16 @@ import { FIRE_DAMAGE_MULTIPLIER, FIRE_DURATION_TICKS, applyPickup } from './pick
 import { pickSpawns } from './spawns';
 import { Team } from './team';
 import { TILE, TileMap } from './tilemap';
-import { ARROW_DAMAGE, BOLT_DAMAGE, DYNAMITE_CHARGE_TICKS, SPEAR_DAMAGE } from './weapons';
+import {
+  ARROW_DAMAGE,
+  BOLT_DAMAGE,
+  CROSSBOW_BOLT_COUNT,
+  DYNAMITE_CHARGE_TICKS,
+  SATCHEL_ARM_FUSE_TICKS,
+  SATCHEL_CARRIED,
+  SATCHEL_IDLE_TICKS,
+  SPEAR_DAMAGE,
+} from './weapons';
 
 const DT = 1 / 60;
 
@@ -369,14 +378,14 @@ describe('BattleWorld', () => {
 
     it('reports how many sticks are left, so the HUD can show them', () => {
       const w = battle();
-      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(4);
+      expect(unpackPlayerState(player(w, 0).state).secondaryAmmo).toBe(4);
       throwDynamite(w, 0, -Math.PI / 2);
-      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(3);
+      expect(unpackPlayerState(player(w, 0).state).secondaryAmmo).toBe(3);
     });
 
     it('reports none for a knight in co-op, who carries none', () => {
       const w = battle({ characters: ['knight', 'archer'], teams: [Team.A, Team.A], mode: 'coop' });
-      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(0);
+      expect(unpackPlayerState(player(w, 0).state).secondaryAmmo).toBe(0);
     });
 
     it('throws nothing while the button is still held, and lets go on release', () => {
@@ -466,7 +475,122 @@ describe('BattleWorld', () => {
         throwDynamite(w, 0, -Math.PI / 2);
         hold(w, 60, 0, null);
       }
-      expect(unpackPlayerState(player(w, 0).state).dynamite).toBe(0);
+      expect(unpackPlayerState(player(w, 0).state).secondaryAmmo).toBe(0);
+    });
+  });
+
+  describe('ranger crossbow', () => {
+    it('fires three independent bolts per press, not one shot', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      hold(w, 1, 0, cmd(Button.FIRE, 0));
+      expect(shots(w)).toHaveLength(CROSSBOW_BOLT_COUNT);
+    });
+
+    it('kills a stationary target over repeated bursts', () => {
+      // Placed close by hand, so this is a test of whether the weapon can
+      // kill at all, not of whatever distance the random spawns picked.
+      const w = new BattleWorld({
+        seed: 1,
+        mode: 'deathmatch',
+        noise: () => null,
+        terrain: clearGround(),
+        starts: [
+          { id: 0, character: 'ranger', team: Team.A, x: 100, y: 100 },
+          { id: 1, character: 'archer', team: Team.B, x: 140, y: 100 },
+        ],
+      });
+      const angle = 0; // seat 1 sits directly to the right of seat 0
+      let dead = false;
+      for (let burst = 0; burst < 40 && !dead; burst++) {
+        hold(w, 1, 0, cmd(Button.FIRE, angle));
+        hold(w, 25, 0, cmd(0, angle)); // clears the crossbow's own cooldown
+        dead = unpackPlayerState(player(w, 1).state).dead;
+      }
+      expect(dead).toBe(true);
+    });
+
+  });
+
+  describe('ranger satchel', () => {
+    /** One tick down, then released: the click a fresh SPECIAL press is. */
+    function click(w: BattleWorld, id: number, angle: number): void {
+      hold(w, 1, id, cmd(Button.SPECIAL, angle));
+      hold(w, 1, id, cmd(0, angle, 99));
+    }
+
+    it('is thrown by one click, unarmed, showing no countdown yet', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      click(w, 0, angle);
+      expect(shots(w)).toHaveLength(1);
+      expect(unpackShotState(shots(w)[0]!.state).fuse).toBe(0);
+    });
+
+    it('does nothing while held: only a fresh click throws or arms it', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      hold(w, 40, 0, cmd(Button.SPECIAL, angle)); // held, never released
+      expect(shots(w)).toHaveLength(1); // exactly one throw, not one per tick
+    });
+
+    it('starts counting down only once armed by a second click', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      click(w, 0, angle); // throw
+      hold(w, 30, 0, cmd(0, angle)); // sits inert; nothing arms it on its own
+      expect(unpackShotState(shots(w)[0]!.state).fuse).toBe(0);
+      click(w, 0, angle); // arm
+      // The wire fuse is quantised to 16 steps, so the first ~19 ticks after
+      // arming still read as 0: not a sign it failed to arm, just too fine a
+      // grain for the wire to show yet. Past one full step removes the doubt.
+      hold(w, 60, 0, cmd(0, angle));
+      expect(unpackShotState(shots(w)[0]!.state).fuse).toBeGreaterThan(0);
+    });
+
+    it('explodes on its own once the armed countdown runs out', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      click(w, 0, angle);
+      click(w, 0, angle);
+      let sawBlast = false;
+      for (let i = 0; i < SATCHEL_ARM_FUSE_TICKS + 5 && !sawBlast; i++) {
+        w.step(DT, new Map());
+        if (blasts(w).length > 0) sawBlast = true;
+      }
+      expect(sawBlast).toBe(true);
+    });
+
+    it('never explodes on its own while unarmed', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      click(w, 0, angle); // thrown, never armed
+      for (let i = 0; i < SATCHEL_IDLE_TICKS + 60; i++) w.step(DT, new Map());
+      expect(blasts(w)).toHaveLength(0); // outlived its idle timer, and just went quiet
+      expect(shots(w)).toHaveLength(0);
+    });
+
+    it('goes off instantly if its owner shoots it, armed or not', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      click(w, 0, angle); // thrown, unarmed
+      hold(w, 1, 0, cmd(Button.FIRE, angle)); // the ranger's own bolt, same line
+      let sawBlast = false;
+      for (let i = 0; i < 30 && !sawBlast; i++) {
+        w.step(DT, new Map());
+        if (blasts(w).length > 0) sawBlast = true;
+      }
+      expect(sawBlast).toBe(true);
+    });
+
+    it('runs out, so it cannot be thrown forever', () => {
+      const w = battle({ characters: ['ranger', 'archer'] });
+      const { angle } = face(w, 0);
+      for (let i = 0; i < SATCHEL_CARRIED + 2; i++) {
+        click(w, 0, angle); // throw
+        click(w, 0, angle); // arm
+        hold(w, SATCHEL_ARM_FUSE_TICKS + 5, 0, cmd(0, angle)); // let it go off
+      }
+      expect(unpackPlayerState(player(w, 0).state).secondaryAmmo).toBe(0);
     });
   });
 
@@ -494,6 +618,25 @@ describe('BattleWorld', () => {
       const w = battle();
       hold(w, 1, 0, cmd(Button.FIRE));
       expect(unpackShotState(shots(w)[0]!.state).fiery).toBe(false);
+    });
+
+    it('leaves a tree standing when the shot that hit it was not alight', () => {
+      // The positive case — a fiery shot chars the tile it hits — is
+      // Terrain.burnTile's own unit tests in arena-map.test.ts, which do not
+      // need a fighter to actually be on fire to check what burning does.
+      // What only a real BattleWorld can prove is the other half: an ordinary
+      // shot must not trip the same rule, since fireTicks otherwise has
+      // nothing to gate.
+      const terrain = clearGround();
+      const w = battle({ characters: ['archer'], teams: [Team.A], terrain });
+      const from = player(w, 0);
+      const row = Math.floor(from.y / TILE_SIZE);
+      const col = Math.floor(from.x / TILE_SIZE) + 3;
+      terrain.map.set(row, col, TILE.TREE);
+      hold(w, 1, 0, cmd(Button.FIRE, 0));
+      for (let i = 0; i < 30; i++) hold(w, 1, 0, null);
+      expect(terrain.map.get(row, col)).toBe(TILE.TREE);
+      expect(w.snapshot().some((e) => e.kind === EntityKind.BURN)).toBe(false);
     });
   });
 

@@ -140,6 +140,52 @@ describe('Terrain', () => {
     });
   });
 
+  describe('burnTile', () => {
+    /** The centre of a tile, which is what burnTile measures against. */
+    const at = (row: number, col: number) => ({
+      x: col * TILE_SIZE + TILE_SIZE / 2,
+      y: row * TILE_SIZE + TILE_SIZE / 2,
+    });
+
+    it.each([
+      ['a hut', TILE.HUT],
+      ['a tree', TILE.TREE],
+    ])('chars %s to open ground, and says so', (_name, tile) => {
+      const t = blank();
+      t.map.set(4, 4, tile);
+      const p = at(4, 4);
+      expect(t.burnTile(p.x, p.y)).toBe(true);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.EMPTY);
+    });
+
+    it('does not catch rock, the one exception a blast does not make', () => {
+      const t = blank();
+      t.map.set(4, 4, TILE.ROCK);
+      const p = at(4, 4);
+      expect(t.burnTile(p.x, p.y)).toBe(false);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.ROCK);
+    });
+
+    it('leaves open ground and water alone, and says nothing burned', () => {
+      const t = blank();
+      const p = at(4, 4);
+      expect(t.burnTile(p.x, p.y)).toBe(false);
+      t.map.set(5, 5, TILE.WATER);
+      const w = at(5, 5);
+      expect(t.burnTile(w.x, w.y)).toBe(false);
+      expect(t.tileAt(w.x, w.y)).toBe(TILE.WATER);
+    });
+
+    it('only ever takes the one tile, not a radius', () => {
+      const t = blank();
+      for (let dc = -1; dc <= 1; dc++) t.map.set(4, 4 + dc, TILE.TREE);
+      const p = at(4, 4);
+      t.burnTile(p.x, p.y);
+      expect(t.tileAt(at(4, 3).x, at(4, 3).y)).toBe(TILE.TREE);
+      expect(t.tileAt(at(4, 5).x, at(4, 5).y)).toBe(TILE.TREE);
+    });
+  });
+
   describe('drowning', () => {
     it('sinks a thrown thing in water', () => {
       const t = blank();

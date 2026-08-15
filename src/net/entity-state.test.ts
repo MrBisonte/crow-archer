@@ -15,18 +15,18 @@ describe('player state packing', () => {
     unpackPlayerState(packPlayerState(v));
 
   it('carries the flags back', () => {
-    expect(roundTrip({ dead: true, shielded: false, aim: 0, swing: 0, dynamite: 0 })).toMatchObject({
+    expect(roundTrip({ dead: true, shielded: false, aim: 0, swing: 0, secondaryAmmo: 0 })).toMatchObject({
       dead: true,
       shielded: false,
     });
-    expect(roundTrip({ dead: false, shielded: true, aim: 0, swing: 0, dynamite: 0 })).toMatchObject({
+    expect(roundTrip({ dead: false, shielded: true, aim: 0, swing: 0, secondaryAmmo: 0 })).toMatchObject({
       dead: false,
       shielded: true,
     });
   });
 
   it('carries both flags at once, since a shielded body can also go down', () => {
-    expect(roundTrip({ dead: true, shielded: true, aim: 0, swing: 0, dynamite: 0 })).toMatchObject({
+    expect(roundTrip({ dead: true, shielded: true, aim: 0, swing: 0, secondaryAmmo: 0 })).toMatchObject({
       dead: true,
       shielded: true,
     });
@@ -34,59 +34,59 @@ describe('player state packing', () => {
 
   it('keeps the aim angle within the quantisation step', () => {
     for (const aim of [0, 0.5, 1, 2, 3, 4, 5, 6.2]) {
-      const back = roundTrip({ dead: false, shielded: false, aim, swing: 0, dynamite: 0 });
+      const back = roundTrip({ dead: false, shielded: false, aim, swing: 0, secondaryAmmo: 0 });
       expect(Math.abs(back.aim - aim)).toBeLessThan(TAU / 256 + 1e-9);
     }
   });
 
   it('normalises a negative angle instead of letting the sign reach the flags', () => {
-    const back = roundTrip({ dead: false, shielded: false, aim: -Math.PI / 2, swing: 0, dynamite: 0 });
+    const back = roundTrip({ dead: false, shielded: false, aim: -Math.PI / 2, swing: 0, secondaryAmmo: 0 });
     expect(back.dead).toBe(false);
     expect(back.shielded).toBe(false);
     expect(Math.abs(back.aim - (TAU - Math.PI / 2))).toBeLessThan(TAU / 256 + 1e-9);
   });
 
   it('normalises an angle past a full turn', () => {
-    const back = roundTrip({ dead: false, shielded: false, aim: TAU + 1, swing: 0, dynamite: 0 });
+    const back = roundTrip({ dead: false, shielded: false, aim: TAU + 1, swing: 0, secondaryAmmo: 0 });
     expect(Math.abs(back.aim - 1)).toBeLessThan(TAU / 256 + 1e-9);
   });
 
   it('carries swing progress back to within a sixteenth', () => {
     for (const swing of [0, 0.25, 0.5, 0.75, 0.99]) {
-      const back = roundTrip({ dead: false, shielded: false, aim: 0, swing, dynamite: 0 });
+      const back = roundTrip({ dead: false, shielded: false, aim: 0, swing, secondaryAmmo: 0 });
       expect(Math.abs(back.swing - swing)).toBeLessThan(1 / 16 + 1e-9);
     }
   });
 
   it('reports not swinging as exactly zero, so a rest pose is never a swing', () => {
-    expect(roundTrip({ dead: false, shielded: false, aim: 1, swing: 0, dynamite: 0 }).swing).toBe(0);
+    expect(roundTrip({ dead: false, shielded: false, aim: 1, swing: 0, secondaryAmmo: 0 }).swing).toBe(0);
   });
 
   it('keeps every field independent', () => {
-    const back = roundTrip({ dead: true, shielded: true, aim: 3, swing: 0.5, dynamite: 0 });
+    const back = roundTrip({ dead: true, shielded: true, aim: 3, swing: 0.5, secondaryAmmo: 0 });
     expect(back.dead).toBe(true);
     expect(back.shielded).toBe(true);
     expect(Math.abs(back.aim - 3)).toBeLessThan(TAU / 256 + 1e-9);
     expect(Math.abs(back.swing - 0.5)).toBeLessThan(1 / 16 + 1e-9);
   });
 
-  it('carries the sticks left, so the HUD can say what you have', () => {
-    for (const dynamite of [0, 1, 4, 7]) {
-      expect(roundTrip({ dead: false, shielded: false, aim: 0, swing: 0, dynamite }).dynamite)
-        .toBe(dynamite);
+  it('carries the rounds left, so the HUD can say what you have', () => {
+    for (const secondaryAmmo of [0, 1, 4, 7]) {
+      expect(roundTrip({ dead: false, shielded: false, aim: 0, swing: 0, secondaryAmmo }).secondaryAmmo)
+        .toBe(secondaryAmmo);
     }
   });
 
-  it('keeps the sticks clear of every other field', () => {
-    const back = roundTrip({ dead: true, shielded: true, aim: 3, swing: 0.5, dynamite: 4 });
+  it('keeps the rounds clear of every other field', () => {
+    const back = roundTrip({ dead: true, shielded: true, aim: 3, swing: 0.5, secondaryAmmo: 4 });
     expect(back.dead).toBe(true);
     expect(back.shielded).toBe(true);
-    expect(back.dynamite).toBe(4);
+    expect(back.secondaryAmmo).toBe(4);
     expect(Math.abs(back.aim - 3)).toBeLessThan(TAU / 256 + 1e-9);
   });
 
   it('packs to a non-negative integer, which is what the wire encodes', () => {
-    const packed = packPlayerState({ dead: true, shielded: true, aim: 5.9, swing: 0.9, dynamite: 0 });
+    const packed = packPlayerState({ dead: true, shielded: true, aim: 5.9, swing: 0.9, secondaryAmmo: 0 });
     expect(Number.isInteger(packed)).toBe(true);
     expect(packed).toBeGreaterThanOrEqual(0);
   });

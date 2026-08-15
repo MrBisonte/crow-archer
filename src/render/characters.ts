@@ -132,6 +132,9 @@ const SILHOUETTES: Record<CharacterKind, Silhouette> = {
   archer: { shadowY: 9, shadowRX: 9, shadowRY: 2.5, haloY: -1, haloR: 16 },
   wizard: { shadowY: 11, shadowRX: 9, shadowRY: 2.5, haloY: 0, haloR: 16 },
   knight: { shadowY: 14, shadowRX: 13, shadowRY: 4, haloY: -6, haloR: 23 },
+  // Same build as the archer: both are light, ranged fighters, and nothing
+  // asked the ranger to stand taller or cast a wider shadow.
+  ranger: { shadowY: 9, shadowRX: 9, shadowRY: 2.5, haloY: -1, haloR: 16 },
 };
 
 /**
@@ -209,6 +212,7 @@ const PAINTERS: Record<CharacterKind, (ctx: CanvasRenderingContext2D, p: Pose) =
   archer: paintArcher,
   wizard: paintWizard,
   knight: paintKnight,
+  ranger: paintRanger,
 };
 
 // ---------------------------------------------------------------------------
@@ -325,6 +329,94 @@ function paintBow(ctx: CanvasRenderingContext2D, p: Pose): void {
   ctx.moveTo(top.x, top.y);
   ctx.lineTo(nock.x, nock.y);
   ctx.lineTo(bot.x, bot.y);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Ranger
+// ---------------------------------------------------------------------------
+
+/**
+ * Same cloak-and-tunic build as the archer, in a cooler, unbelted colourway,
+ * with a hood in place of the flat hat and a crossbow in place of the bow.
+ * Close up they read as the same kind of fighter; at a glance across the
+ * arena the silhouette is what has to tell them apart, not the palette.
+ */
+function paintRanger(ctx: CanvasRenderingContext2D, p: Pose): void {
+  const sway = 0.15 * Math.sin(p.t * 2.2);
+  const hem = 1.5 * Math.sin(p.walk + sway);
+  ctx.beginPath();
+  ctx.moveTo(-5, -3);
+  ctx.bezierCurveTo(-8, 0, -8, 4, -6, 7 + hem);
+  ctx.lineTo(6, 7 - hem);
+  ctx.bezierCurveTo(8, 4, 8, 0, 5, -3);
+  ctx.closePath();
+  ctx.fillStyle = shade(p, '#1A2318');
+  ctx.fill();
+  ctx.shadowColor = p.trim;
+  ctx.shadowBlur = 3;
+  ctx.strokeStyle = p.trim;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = shade(p, '#4A6741');
+  ctx.fillRect(-5, -3, 10, 11);
+  paintRangerHead(ctx, p);
+  paintCrossbow(ctx, p);
+}
+
+function paintRangerHead(ctx: CanvasRenderingContext2D, p: Pose): void {
+  ctx.fillStyle = shade(p, '#D9B98A');
+  ctx.beginPath();
+  ctx.arc(0, -8, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // A hood rather than the archer's flat hat brim, so the two ranged
+  // characters are told apart by shape alone, not only by colour.
+  ctx.fillStyle = shade(p, '#1A2318');
+  ctx.beginPath();
+  ctx.moveTo(-6, -9);
+  ctx.quadraticCurveTo(0, -17, 6, -9);
+  ctx.quadraticCurveTo(0, -12, -6, -9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = p.trim;
+  ctx.fillRect(-6, -9.5, 12, 1);
+}
+
+/**
+ * A crossbow held level: a stock along the aim and limbs crosswise to it,
+ * rather than the archer's bow curved along the aim. Crosswise limbs are the
+ * one shape that reads as "crossbow" instead of "bow" at this size.
+ */
+function paintCrossbow(ctx: CanvasRenderingContext2D, p: Pose): void {
+  const gx = Math.cos(p.aim) * 8;
+  const gy = Math.sin(p.aim) * 8;
+  ctx.strokeStyle = shade(p, '#5A3A10');
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, -1);
+  ctx.lineTo(gx, gy);
+  ctx.stroke();
+  const perp = p.aim + Math.PI / 2;
+  const bx = Math.cos(perp) * 6;
+  const by = Math.sin(perp) * 6;
+  ctx.strokeStyle = shade(p, '#3A2008');
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(gx - bx, gy - by);
+  ctx.lineTo(gx + bx, gy + by);
+  ctx.stroke();
+  // String, drawn taut to a point ahead of the stock, in the team colour, the
+  // same idea as the archer's bowstring.
+  ctx.shadowColor = p.trim;
+  ctx.shadowBlur = 3;
+  ctx.strokeStyle = p.trim;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(gx - bx, gy - by);
+  ctx.lineTo(gx + Math.cos(p.aim) * 3, gy + Math.sin(p.aim) * 3);
+  ctx.lineTo(gx + bx, gy + by);
   ctx.stroke();
   ctx.shadowBlur = 0;
 }

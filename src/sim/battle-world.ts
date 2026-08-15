@@ -23,7 +23,7 @@ import {
   type PlayerTeam,
 } from '../net/protocol';
 import { ShotFlavourCode, packPlayerState, packShotState } from '../net/entity-state';
-import { ARENA_H, ARENA_W, PLAYER_MAX_HP, PLAYER_RADIUS, PLAYER_SPEED, direction } from './arena';
+import { ARENA_H, ARENA_W, CHARACTER_STATS, PLAYER_RADIUS, direction } from './arena';
 import { Terrain, type NoiseFactory } from './arena-map';
 import { slide } from './collide';
 import { advanceCrow, spawnCrow, CROW_HIT_RADIUS, CROW_INTERVAL_TICKS, MAX_CROWS, type Crow } from './crows';
@@ -47,8 +47,13 @@ import {
   DYNAMITE_DRAG,
   DYNAMITE_REST_SPEED,
   DynamitePouch,
-  carriesDynamite,
+  SATCHEL_ARM_FUSE_TICKS,
+  SATCHEL_CARRIED,
+  SATCHEL_TRIGGER_RADIUS,
+  Satchel,
   primaryWeapon,
+  secondaryWeapon,
+  type Secondary,
   type ShotSpec,
   type SwingSpec,
   type Weapon,
@@ -73,6 +78,7 @@ const FIRST_SHOT_ID = 1000;
 const FIRST_PICKUP_ID = 5000;
 const FIRST_CROW_ID = 8000;
 const FIRST_BLAST_ID = 9000;
+const FIRST_BURN_ID = 10000;
 
 /**
  * How long a blast stays in the snapshot.
@@ -91,12 +97,49 @@ const withinRadius = (ax: number, ay: number, bx: number, by: number, r: number)
   return dx * dx + dy * dy <= r * r;
 };
 
+/**
+ * A fighter's second weapon, exhaustively: nothing, dynamite, or the satchel,
+ * each carrying the runtime tracking that kind needs. A fighter has at most
+ * one, so this is one field rather than two independently-nullable ones that
+ * could disagree about which is set.
+ */
+type SecondaryState =
+  | { readonly kind: 'none' }
+  | {
+      readonly kind: 'dynamite';
+      readonly pouch: DynamitePouch;
+      cooldown: number;
+      left: number;
+      /** Ticks the throw has been wound up, or null when not winding one. */
+      charge: number | null;
+    }
+  | {
+      readonly kind: 'satchel';
+      readonly pouch: Satchel;
+      cooldown: number;
+      left: number;
+      /** Whether SPECIAL was held last tick, so only a fresh press acts. */
+      wasHeld: boolean;
+    };
+
+/** Turns a character's secondary weapon into the mutable state a fighter tracks it with. */
+function initialSecondary(secondary: Secondary): SecondaryState {
+  switch (secondary.kind) {
+    case 'none':
+      return { kind: 'none' };
+    case 'dynamite':
+      return { kind: 'dynamite', pouch: secondary.weapon, cooldown: 0, left: DYNAMITE_CARRIED, charge: null };
+    case 'satchel':
+      return { kind: 'satchel', pouch: secondary.weapon, cooldown: 0, left: SATCHEL_CARRIED, wasHeld: false };
+  }
+}
+
 interface Fighter {
   readonly id: PlayerId;
   readonly team: PlayerTeam;
   readonly character: CharacterKind;
   readonly weapon: Weapon;
-  readonly dynamite: DynamitePouch | null;
+  readonly secondary: SecondaryState;
   readonly spawnX: number;
   readonly spawnY: number;
   x: number;
@@ -106,12 +149,8 @@ interface Fighter {
   shielded: boolean;
   fireTicks: number;
   cooldown: number;
-  dynamiteCooldown: number;
-  dynamiteLeft: number;
   invulnerable: number;
   respawnIn: number | null;
-  /** Ticks the throw has been wound up, or null when not winding one. */
-  charge: number | null;
   /** Ticks left in the current swing, and what it is. Null when not swinging. */
   swing: { left: number; spec: SwingSpec; struckPhaseOne: boolean; struckPhaseTwo: boolean } | null;
 }
@@ -129,6 +168,12 @@ interface Shot {
   vy: number;
   life: number;
   damage: number;
+  /**
+   * Whether an armed satchel's countdown is running. False for everything
+   * else. A satchel is thrown inert; a second click from its owner sets this
+   * and resets `life` to the fuse it then counts down.
+   */
+  armed: boolean;
 }
 
 interface GroundPickup {
@@ -163,10 +208,13 @@ export class BattleWorld implements World {
   #crows: Crow[] = [];
   /** Blasts still worth drawing, with the ticks each has left. */
   #blasts: { id: number; x: number; y: number; left: number }[] = [];
+  /** Fire hits still worth drawing, the same carried-for-a-few-ticks shape as blasts. */
+  #burns: { id: number; x: number; y: number; left: number }[] = [];
   #nextShotId = FIRST_SHOT_ID;
   #nextPickupId = FIRST_PICKUP_ID;
   #nextCrowId = FIRST_CROW_ID;
   #nextBlastId = FIRST_BLAST_ID;
+  #nextBurnId = FIRST_BURN_ID;
   #tick = 0;
   #crowTimer = CROW_INTERVAL_TICKS;
 
@@ -188,23 +236,20 @@ export class BattleWorld implements World {
         team: start.team,
         character: start.character,
         weapon: primaryWeapon(start.character),
-        dynamite: carriesDynamite(start.character, options.mode) ? new DynamitePouch() : null,
+        secondary: initialSecondary(secondaryWeapon(start.character, options.mode)),
         spawnX: at.x,
         spawnY: at.y,
         x: at.x,
         y: at.y,
-        hp: PLAYER_MAX_HP,
+        hp: CHARACTER_STATS[start.character].maxHp,
         aim: 0,
         // Everyone starts behind a shield, so the first exchange of a match is
         // a trade rather than an execution.
         shielded: true,
         fireTicks: 0,
         cooldown: 0,
-        dynamiteCooldown: 0,
-        dynamiteLeft: DYNAMITE_CARRIED,
         invulnerable: 0,
         respawnIn: null,
-        charge: null,
         swing: null,
       };
     });
@@ -225,7 +270,7 @@ export class BattleWorld implements World {
         // Silence is not a held button. A player who stops sending, or who
         // drops mid-wind-up, lets go of the throw rather than holding it for
         // the rest of the match.
-        this.#chargeThrow(f, false);
+        this.#useSecondary(f, false);
       }
       this.#resolveSwing(f, kills);
     }
@@ -233,6 +278,7 @@ export class BattleWorld implements World {
     this.#advanceCrows(dt);
     this.#collectPickups();
     this.#blasts = this.#blasts.filter((b) => --b.left > 0);
+    this.#burns = this.#burns.filter((b) => --b.left > 0);
     return kills;
   }
 
@@ -266,7 +312,7 @@ export class BattleWorld implements World {
           shielded: f.shielded,
           aim: f.aim,
           swing: f.swing ? 1 - f.swing.left / f.swing.spec.durationTicks : 0,
-          dynamite: f.dynamite ? f.dynamiteLeft : 0,
+          secondaryAmmo: f.secondary.kind !== 'none' ? f.secondary.left : 0,
         }),
       })),
       ...this.#shots.map((s) => ({
@@ -279,7 +325,7 @@ export class BattleWorld implements World {
           team: s.team as 0 | 1,
           flavour: FLAVOUR_CODES[s.spec.flavour],
           aim: Math.atan2(s.vy, s.vx),
-          fuse: s.spec.flavour === 'dynamite' ? 1 - s.life / s.spec.lifeTicks : 0,
+          fuse: this.#fuseOf(s),
           fiery: s.fiery,
         }),
       })),
@@ -300,6 +346,14 @@ export class BattleWorld implements World {
         // How far through it is, in sixteenths, so the ring can expand.
         state: Math.min(15, Math.floor((1 - b.left / BLAST_TICKS) * 16)),
       })),
+      ...this.#burns.map((b) => ({
+        id: b.id,
+        kind: EntityKind.BURN,
+        x: Math.round(b.x),
+        y: Math.round(b.y),
+        hp: 0,
+        state: Math.min(15, Math.floor((1 - b.left / BLAST_TICKS) * 16)),
+      })),
       ...this.#crows.map((c) => ({
         id: c.id,
         kind: EntityKind.CROW,
@@ -311,6 +365,19 @@ export class BattleWorld implements World {
     ];
   }
 
+  /**
+   * A shot's fuse fraction, 0 to 1, for whichever countdown it is having.
+   *
+   * Dynamite counts down from the moment it is thrown. A satchel shows
+   * nothing until armed, then counts down the same way from that moment.
+   * Everything else has no fuse to show.
+   */
+  #fuseOf(s: Shot): number {
+    if (s.spec.flavour === 'dynamite') return 1 - s.life / s.spec.lifeTicks;
+    if (s.spec.flavour === 'satchel' && s.armed) return 1 - s.life / SATCHEL_ARM_FUSE_TICKS;
+    return 0;
+  }
+
   // -------------------------------------------------------------------------
   // Players
   // -------------------------------------------------------------------------
@@ -318,14 +385,14 @@ export class BattleWorld implements World {
   /** Every per-tick timer a fighter carries, and the return that ends the last. */
   #countDown(f: Fighter): void {
     if (f.cooldown > 0) f.cooldown--;
-    if (f.dynamiteCooldown > 0) f.dynamiteCooldown--;
+    if (f.secondary.kind !== 'none' && f.secondary.cooldown > 0) f.secondary.cooldown--;
     if (f.invulnerable > 0) f.invulnerable--;
     if (f.fireTicks > 0) f.fireTicks--;
     if (f.swing && --f.swing.left <= 0) f.swing = null;
     if (f.respawnIn === null) return;
     if (--f.respawnIn > 0) return;
     f.respawnIn = null;
-    f.hp = PLAYER_MAX_HP;
+    f.hp = CHARACTER_STATS[f.character].maxHp;
     f.x = f.spawnX;
     f.y = f.spawnY;
     // The shield comes back with the body. Without it the first death would
@@ -337,14 +404,8 @@ export class BattleWorld implements World {
   #move(f: Fighter, cmd: InputCommand, dt: number): void {
     const { dx, dy } = direction(cmd);
     if (dx === 0 && dy === 0) return;
-    const moved = slide(
-      this.terrain,
-      f.x,
-      f.y,
-      dx * PLAYER_SPEED * dt,
-      dy * PLAYER_SPEED * dt,
-      PLAYER_RADIUS,
-    );
+    const speed = CHARACTER_STATS[f.character].speed;
+    const moved = slide(this.terrain, f.x, f.y, dx * speed * dt, dy * speed * dt, PLAYER_RADIUS);
     f.x = Math.min(Math.max(moved.x, PLAYER_RADIUS), ARENA_W - PLAYER_RADIUS);
     f.y = Math.min(Math.max(moved.y, PLAYER_RADIUS), ARENA_H - PLAYER_RADIUS);
   }
@@ -355,7 +416,13 @@ export class BattleWorld implements World {
       f.cooldown = f.weapon.cooldownTicks;
       this.#apply(f, f.weapon.use());
     }
-    this.#chargeThrow(f, (cmd.buttons & Button.SPECIAL) !== 0);
+    this.#useSecondary(f, (cmd.buttons & Button.SPECIAL) !== 0);
+  }
+
+  /** Sends SPECIAL to whichever secondary this fighter carries, if any. */
+  #useSecondary(f: Fighter, held: boolean): void {
+    if (f.secondary.kind === 'dynamite') this.#chargeThrow(f, f.secondary, held);
+    else if (f.secondary.kind === 'satchel') this.#useSatchel(f, f.secondary, held);
   }
 
   /**
@@ -365,21 +432,47 @@ export class BattleWorld implements World {
    * full wind-up travels three times as far as one flicked out, and that choice
    * is the whole weapon. A tap is still a throw, just a short one.
    */
-  #chargeThrow(f: Fighter, held: boolean): void {
-    const pouch = f.dynamite;
-    if (!pouch) return;
+  #chargeThrow(f: Fighter, secondary: Extract<SecondaryState, { kind: 'dynamite' }>, held: boolean): void {
     if (held) {
-      if (f.charge === null && f.dynamiteCooldown <= 0 && f.dynamiteLeft > 0) f.charge = 0;
-      else if (f.charge !== null) f.charge = Math.min(DYNAMITE_CHARGE_TICKS, f.charge + 1);
+      if (secondary.charge === null && secondary.cooldown <= 0 && secondary.left > 0) secondary.charge = 0;
+      else if (secondary.charge !== null) {
+        secondary.charge = Math.min(DYNAMITE_CHARGE_TICKS, secondary.charge + 1);
+      }
       return;
     }
-    if (f.charge === null) return;
-    const wound = f.charge / DYNAMITE_CHARGE_TICKS;
-    f.charge = null;
-    if (f.dynamiteLeft <= 0) return;
-    f.dynamiteCooldown = pouch.cooldownTicks;
-    f.dynamiteLeft--;
-    this.#apply(f, pouch.use(), 1 + wound * (DYNAMITE_CHARGE_MULTIPLIER - 1));
+    if (secondary.charge === null) return;
+    const wound = secondary.charge / DYNAMITE_CHARGE_TICKS;
+    secondary.charge = null;
+    if (secondary.left <= 0) return;
+    secondary.cooldown = secondary.pouch.cooldownTicks;
+    secondary.left--;
+    this.#apply(f, secondary.pouch.use(), 1 + wound * (DYNAMITE_CHARGE_MULTIPLIER - 1));
+  }
+
+  /**
+   * Throws a satchel on a fresh click, or arms the oldest unarmed one already
+   * on the field if this fighter has one out.
+   *
+   * No charge: one click is the whole gesture, so this only needs to know
+   * whether this tick's press is new. Arming takes priority over throwing a
+   * second one, so a satchel is always thrown, then armed or shot, before its
+   * owner can have another out unarmed.
+   */
+  #useSatchel(f: Fighter, secondary: Extract<SecondaryState, { kind: 'satchel' }>, held: boolean): void {
+    const fresh = held && !secondary.wasHeld;
+    secondary.wasHeld = held;
+    if (!fresh) return;
+
+    const unarmed = this.#shots.find((s) => s.spec.flavour === 'satchel' && s.owner === f.id && !s.armed);
+    if (unarmed) {
+      unarmed.armed = true;
+      unarmed.life = SATCHEL_ARM_FUSE_TICKS;
+      return;
+    }
+    if (secondary.cooldown > 0 || secondary.left <= 0) return;
+    secondary.cooldown = secondary.pouch.cooldownTicks;
+    secondary.left--;
+    this.#apply(f, secondary.pouch.use());
   }
 
   /** A weapon said what it made; this is where it becomes part of the world. */
@@ -395,8 +488,11 @@ export class BattleWorld implements World {
         continue;
       }
       const spec = effect.shot;
-      const cos = Math.cos(f.aim);
-      const sin = Math.sin(f.aim);
+      // Relative to the aim, so a burst weapon can fan several shots from one
+      // use without the weapon itself knowing the absolute angle.
+      const angle = f.aim + (spec.angleOffset ?? 0);
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
       // Clear of the thrower, so nothing is hit before it has left the hand.
       // Unless that puts it inside a wall: someone with their back to rock
       // would otherwise fire shot after shot that died on the tick it was made,
@@ -417,6 +513,7 @@ export class BattleWorld implements World {
         life: spec.lifeTicks,
         fiery: f.fireTicks > 0,
         damage: this.#damageOf(f, spec.damage),
+        armed: false,
       });
     }
   }
@@ -485,6 +582,11 @@ export class BattleWorld implements World {
   // -------------------------------------------------------------------------
 
   #advanceShots(dt: number, kills: Kill[]): void {
+    // Checked before anything else moves this tick, so a satchel struck by
+    // its owner's own bolt goes off here and never also runs its fuse or
+    // flight for the tick it was hit.
+    this.#detonateStruckSatchels(kills);
+
     const surviving: Shot[] = [];
     for (const shot of this.#shots) {
       this.#steer(shot, dt);
@@ -492,12 +594,18 @@ export class BattleWorld implements World {
       shot.life--;
 
       if (shot.life <= 0) {
-        // A fuse running out is the point of dynamite, not the end of it.
-        if (shot.spec.flavour === 'dynamite') this.#explode(shot, kills);
+        // A fuse running out is the point of dynamite, and of an armed
+        // satchel, not the end of it. An unarmed satchel that outlasts its
+        // idle timer has simply gone unused, and just disappears.
+        if (shot.spec.flavour === 'dynamite' || (shot.spec.flavour === 'satchel' && shot.armed)) {
+          this.#explode(shot, kills);
+        }
         continue;
       }
       // A thrown stick that has stopped goes off where it lies, against
-      // whatever stopped it, rather than waiting out a fuse in the open.
+      // whatever stopped it, rather than waiting out a fuse in the open. Only
+      // dynamite bounces to a rest this way; a satchel that stops is meant to
+      // sit there inert, so this never fires for one.
       if (
         shot.spec.onTerrain === 'bounce' &&
         Math.hypot(shot.vx, shot.vy) < DYNAMITE_REST_SPEED
@@ -506,6 +614,13 @@ export class BattleWorld implements World {
         continue;
       }
       if (shot.spec.onTerrain === 'stop' && this.terrain.blocksShot(shot.x, shot.y)) {
+        // A fiery hit chars whatever tree or hut stopped it — the fire
+        // powerup's other half, alongside the damage #damageOf already
+        // applies. Only pushed when something actually burned, so a fiery
+        // shot stopped by rock does not spam an empty marker.
+        if (shot.fiery && this.terrain.burnTile(shot.x, shot.y)) {
+          this.#burns.push({ id: this.#nextBurnId++, x: shot.x, y: shot.y, left: BLAST_TICKS });
+        }
         continue;
       }
       if (this.#hitSomething(shot, kills)) continue;
@@ -515,12 +630,38 @@ export class BattleWorld implements World {
   }
 
   /**
+   * A bolt landing on its own thrower's satchel sets it off immediately,
+   * armed or not: the one way the ranger detonates on demand rather than
+   * waiting out the arm countdown.
+   */
+  #detonateStruckSatchels(kills: Kill[]): void {
+    const struck = new Set<number>();
+    for (const bolt of this.#shots) {
+      if (bolt.spec.flavour !== 'arrow') continue;
+      const satchel = this.#shots.find(
+        (s) =>
+          s.spec.flavour === 'satchel' &&
+          !struck.has(s.id) &&
+          s.owner === bolt.owner &&
+          withinRadius(bolt.x, bolt.y, s.x, s.y, SATCHEL_TRIGGER_RADIUS),
+      );
+      if (!satchel) continue;
+      struck.add(satchel.id);
+      struck.add(bolt.id);
+      this.#explode(satchel, kills);
+    }
+    if (struck.size > 0) this.#shots = this.#shots.filter((s) => !struck.has(s.id));
+  }
+
+  /**
    * Moves a shot one step, obeying whatever terrain does to it.
    *
    * Returns false when it is gone: only water does that, and only to something
-   * thrown. A bouncing shot keeps its position and reverses the axis it was
-   * blocked on, per axis, so a stick fired into a corner comes back out of it
-   * rather than sticking.
+   * thrown. `'bounce'` keeps its position and reverses the axis it was blocked
+   * on, per axis, so a stick fired into a corner comes back out of it rather
+   * than sticking. `'rest'` does the same losing-speed-per-tick, but stops
+   * dead on that axis instead of reversing, so a thrown satchel lands and
+   * stays rather than ricocheting away.
    */
   #carry(shot: Shot, dt: number): boolean {
     if (shot.spec.onTerrain === 'stop') {
@@ -528,19 +669,21 @@ export class BattleWorld implements World {
       shot.y += shot.vy * dt;
       return true;
     }
-    // Drag first, so a stick loses speed whether or not it hits anything and
-    // comes to rest rather than crossing the map for a second and a half.
+    // Drag first, so a thrown thing loses speed whether or not it hits
+    // anything and comes to rest rather than crossing the map for a second
+    // and a half.
     shot.vx *= DYNAMITE_DRAG;
     shot.vy *= DYNAMITE_DRAG;
+    const reflects = shot.spec.onTerrain === 'bounce';
 
     const nx = shot.x + shot.vx * dt;
     if (shot.spec.drownsInWater && this.terrain.drowns(nx, shot.y)) return false;
-    if (this.terrain.blocksShot(nx, shot.y)) shot.vx = -shot.vx * DYNAMITE_BOUNCE;
+    if (this.terrain.blocksShot(nx, shot.y)) shot.vx = reflects ? -shot.vx * DYNAMITE_BOUNCE : 0;
     else shot.x = nx;
 
     const ny = shot.y + shot.vy * dt;
     if (shot.spec.drownsInWater && this.terrain.drowns(shot.x, ny)) return false;
-    if (this.terrain.blocksShot(shot.x, ny)) shot.vy = -shot.vy * DYNAMITE_BOUNCE;
+    if (this.terrain.blocksShot(shot.x, ny)) shot.vy = reflects ? -shot.vy * DYNAMITE_BOUNCE : 0;
     else shot.y = ny;
     return true;
   }
@@ -574,8 +717,14 @@ export class BattleWorld implements World {
     return best;
   }
 
-  /** True when the shot is spent, whether on a body, a bird, or a blast. */
+  /**
+   * True when the shot is spent, whether on a body, a bird, or a blast.
+   *
+   * A satchel never resolves this way: sitting near a fighter or a crow is
+   * not a hit for it, only its own owner's bolt or its own fuse is.
+   */
   #hitSomething(shot: Shot, kills: Kill[]): boolean {
+    if (shot.spec.flavour === 'satchel') return false;
     for (const target of this.#fighters) {
       if (target.respawnIn !== null || !canDamage(shot.team, target.team)) continue;
       if (!withinRadius(shot.x, shot.y, target.x, target.y, shot.spec.radius + PLAYER_RADIUS)) {
@@ -704,4 +853,5 @@ const FLAVOUR_CODES = {
   arrow: ShotFlavourCode.ARROW,
   bolt: ShotFlavourCode.BOLT,
   dynamite: ShotFlavourCode.DYNAMITE,
+  satchel: ShotFlavourCode.SATCHEL,
 } as const;
