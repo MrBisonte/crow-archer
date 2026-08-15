@@ -1062,7 +1062,9 @@ function tryShoot() {
 function tryCrossbowBolt() {
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
-  if (arrows.length >= CONFIG.maxArrowsInFlight) return;
+  // Reserve room for the whole burst up front — a partial push would let
+  // arrows.length overshoot maxArrowsInFlight and stall the next press.
+  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) return;
   let type = 'normal';
   if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
   else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
