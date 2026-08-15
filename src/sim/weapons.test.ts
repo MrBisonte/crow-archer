@@ -7,8 +7,10 @@ import {
   CROSSBOW_SPREAD_RADIANS,
   Crossbow,
   DynamitePouch,
+  LightningStorm,
   SATCHEL_CARRIED,
   Satchel,
+  Whirlwind,
   primaryWeapon,
   secondaryWeapon,
 } from './weapons';
@@ -81,14 +83,14 @@ describe('secondaryWeapon', () => {
     expect(secondaryWeapon('ranger', 'deathmatch').kind).toBe('satchel');
   });
 
-  it('gives wizard and knight dynamite only in deathmatch, as a stand-in', () => {
-    expect(secondaryWeapon('wizard', 'deathmatch').kind).toBe('dynamite');
-    expect(secondaryWeapon('knight', 'deathmatch').kind).toBe('dynamite');
+  it('gives the wizard storm in every mode, now that it is their own real weapon', () => {
+    expect(secondaryWeapon('wizard', 'coop').kind).toBe('storm');
+    expect(secondaryWeapon('wizard', 'deathmatch').kind).toBe('storm');
   });
 
-  it('gives wizard and knight nothing in coop: no real secondary exists yet there', () => {
-    expect(secondaryWeapon('wizard', 'coop').kind).toBe('none');
-    expect(secondaryWeapon('knight', 'coop').kind).toBe('none');
+  it('gives the knight whirlwind in every mode, now that it is their own real weapon', () => {
+    expect(secondaryWeapon('knight', 'coop').kind).toBe('whirlwind');
+    expect(secondaryWeapon('knight', 'deathmatch').kind).toBe('whirlwind');
   });
 
   it('carries the concrete weapon instance alongside the tag, so a caller never casts', () => {
@@ -99,6 +101,51 @@ describe('secondaryWeapon', () => {
     const sat = secondaryWeapon('ranger', 'coop');
     if (sat.kind !== 'satchel') throw new Error('expected satchel');
     expect(sat.weapon).toBeInstanceOf(Satchel);
+
+    const storm = secondaryWeapon('wizard', 'coop');
+    if (storm.kind !== 'storm') throw new Error('expected storm');
+    expect(storm.weapon).toBeInstanceOf(LightningStorm);
+
+    const spin = secondaryWeapon('knight', 'coop');
+    if (spin.kind !== 'whirlwind') throw new Error('expected whirlwind');
+    expect(spin.weapon).toBeInstanceOf(Whirlwind);
+  });
+});
+
+describe('LightningStorm', () => {
+  it('is instant: a single-tick burst, not a channel', () => {
+    const [effect] = new LightningStorm().use();
+    if (!effect || effect.kind !== 'burst') throw new Error('expected a burst');
+    expect(effect.burst.durationTicks).toBe(0);
+  });
+
+  it('clears terrain, the way an explosion does', () => {
+    const [effect] = new LightningStorm().use();
+    if (!effect || effect.kind !== 'burst') throw new Error('expected a burst');
+    expect(effect.burst.destroysTerrain).toBe(true);
+  });
+
+  it('has a radius well short of the legacy 450px, so it cannot catch the whole arena', () => {
+    const [effect] = new LightningStorm().use();
+    if (!effect || effect.kind !== 'burst') throw new Error('expected a burst');
+    expect(effect.burst.radius).toBeLessThan(450);
+  });
+});
+
+describe('Whirlwind', () => {
+  it('channels for longer than one tick, unlike storm', () => {
+    const [effect] = new Whirlwind().use();
+    if (!effect || effect.kind !== 'burst') throw new Error('expected a burst');
+    expect(effect.burst.durationTicks).toBeGreaterThan(1);
+  });
+
+  it('deals its damage in small repeated ticks, not one lump sum', () => {
+    const [effect] = new Whirlwind().use();
+    if (!effect || effect.kind !== 'burst') throw new Error('expected a burst');
+    expect(effect.burst.tickIntervalTicks).toBeGreaterThan(0);
+    const possibleHits = effect.burst.durationTicks / effect.burst.tickIntervalTicks;
+    expect(effect.burst.damage * possibleHits).toBeGreaterThan(10); // lethal if never once interrupted by iframes
+    expect(effect.burst.damage).toBeLessThan(2); // but never lethal on a single tick
   });
 });
 

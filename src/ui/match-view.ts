@@ -16,7 +16,7 @@ import {
   type Snapshot,
   type WinCondition,
 } from '../net/protocol';
-import { unpackPlayerState, unpackShotState, ShotFlavourCode } from '../net/entity-state';
+import { SECONDARY_AMMO_MAX, unpackPlayerState, unpackShotState, ShotFlavourCode } from '../net/entity-state';
 import { Terrain, TILE_SIZE } from '../sim/arena-map';
 import { noiseFor } from '../sim/noise';
 import { StaticTileLayer } from '../render/tiles';
@@ -687,18 +687,15 @@ export class MatchView {
     ctx.fillStyle = '#39FF14';
     ctx.font = '12px "Courier New", monospace';
     ctx.textAlign = 'left';
-    // Health, shield and sticks left. Without the last two, a player cannot
-    // tell whether they are carrying dynamite, and a weapon nobody knows they
-    // have is a weapon that does not exist.
+    // Health, shield and the secondary's own readout. Without the last one, a
+    // player cannot tell whether they are carrying dynamite or whether storm
+    // is off cooldown, and a weapon nobody knows the state of is a weapon
+    // nobody uses with confidence.
     const mine = own ? unpackPlayerState(own.state) : null;
-    const left = mine?.secondaryAmmo ?? 0;
-    const carriedMax = this.#secondary.kind === 'satchel' ? SATCHEL_CARRIED : DYNAMITE_CARRIED;
-    const rounds = '■'.repeat(left) + '□'.repeat(Math.max(0, carriedMax - left));
-    const secondaryLabel = this.#secondary.kind === 'satchel' ? 'SAT' : 'DYN';
     ctx.fillText(
       `HP ${Math.round(own?.hp ?? this.#ownMaxHp)}` +
         (mine?.shielded ? '  SHLD' : '') +
-        (this.#secondary.kind !== 'none' ? `  ${secondaryLabel} ${rounds}` : '') +
+        (this.#secondary.kind !== 'none' ? `  ${this.#secondaryHudText(mine?.secondaryAmmo ?? 0)}` : '') +
         (this.#windUp > 0 ? `  CHARGING ${Math.round(this.#windUp * 100)}%` : ''),
       8,
       20,
@@ -709,6 +706,31 @@ export class MatchView {
 
     ctx.textAlign = 'right';
     ctx.fillText(this.#scoreLine(), this.#canvasW - 8, 20);
+  }
+
+  /**
+   * The secondary readout, in whatever unit this character's own kind means.
+   * Dynamite and the satchel show rounds left, out of what they carry. Storm
+   * and whirlwind carry nothing to count, only a cooldown, so they show
+   * READY or a rough fraction of it instead — the wire packs both into the
+   * same secondaryAmmo field, quantized, and this is where the difference
+   * between the two readings actually lives.
+   */
+  #secondaryHudText(value: number): string {
+    switch (this.#secondary.kind) {
+      case 'none':
+        return '';
+      case 'dynamite':
+      case 'satchel': {
+        const max = this.#secondary.kind === 'satchel' ? SATCHEL_CARRIED : DYNAMITE_CARRIED;
+        const label = this.#secondary.kind === 'satchel' ? 'SAT' : 'DYN';
+        return `${label} ${'■'.repeat(value)}${'□'.repeat(Math.max(0, max - value))}`;
+      }
+      case 'storm':
+        return value <= 0 ? 'STORM READY' : `STORM ${value}/${SECONDARY_AMMO_MAX}`;
+      case 'whirlwind':
+        return value <= 0 ? 'SPIN READY' : `SPIN ${value}/${SECONDARY_AMMO_MAX}`;
+    }
   }
 
   /**

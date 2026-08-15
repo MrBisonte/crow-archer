@@ -318,16 +318,16 @@ describe('BattleWorld', () => {
       expect(shots(w)).toHaveLength(1);
     });
 
-    it('is not carried by a knight in co-op, where it would be overpowered', () => {
+    it('is not what a knight throws in co-op — whirlwind is their own real weapon there now', () => {
       const w = battle({ characters: ['knight', 'archer'], teams: [Team.A, Team.A], mode: 'coop' });
       throwDynamite(w, 0, 0);
-      expect(shots(w)).toHaveLength(0);
+      expect(shots(w)).toHaveLength(0); // whirlwind is not a shot at all, let alone a dynamite-flavoured one
     });
 
-    it('is carried by everyone in player versus player', () => {
+    it('is not what a knight throws in player versus player either, now that whirlwind replaced the stand-in', () => {
       const w = battle({ characters: ['knight', 'archer'], mode: 'deathmatch' });
       throwDynamite(w, 0, 0);
-      expect(shots(w)).toHaveLength(1);
+      expect(shots(w)).toHaveLength(0);
     });
 
     it('goes off, and says so on the wire so it can be drawn', () => {
@@ -591,6 +591,130 @@ describe('BattleWorld', () => {
         hold(w, SATCHEL_ARM_FUSE_TICKS + 5, 0, cmd(0, angle)); // let it go off
       }
       expect(unpackPlayerState(player(w, 0).state).secondaryAmmo).toBe(0);
+    });
+  });
+
+  describe('wizard storm', () => {
+    /** Wizard at (100,100) facing right, an enemy close enough for its
+     * shrunk-for-PVP radius to still reach. */
+    function duo(gap = 60): BattleWorld {
+      return new BattleWorld({
+        seed: 1,
+        mode: 'deathmatch',
+        noise: () => null,
+        terrain: clearGround(),
+        starts: [
+          { id: 0, character: 'wizard', team: Team.A, x: 100, y: 100 },
+          { id: 1, character: 'archer', team: Team.B, x: 100 + gap, y: 100 },
+        ],
+      });
+    }
+    /** One tick down, then released: the fresh SPECIAL press storm casts on. */
+    function cast(w: BattleWorld, id: number, angle: number): void {
+      hold(w, 1, id, cmd(Button.SPECIAL, angle));
+      hold(w, 1, id, cmd(0, angle, 99));
+    }
+
+    it('damages an enemy in its radius on the very tick it is cast', () => {
+      const w = duo();
+      const before = player(w, 1);
+      cast(w, 0, 0);
+      const after = player(w, 1);
+      // Everyone starts shielded, so the first hit of a match may spend the
+      // shield rather than show up as lost HP — either one is the burst
+      // having landed.
+      const shieldSpent = unpackPlayerState(before.state).shielded && !unpackPlayerState(after.state).shielded;
+      expect(shieldSpent || after.hp < before.hp).toBe(true);
+    });
+
+    it('does nothing on a second press before its cooldown clears', () => {
+      const w = duo();
+      cast(w, 0, 0);
+      const afterFirst = player(w, 1).hp;
+      cast(w, 0, 0);
+      expect(player(w, 1).hp).toBe(afterFirst); // still on cooldown, no second hit
+    });
+
+    it('clears trees in its radius, the way an explosion does', () => {
+      const terrain = clearGround();
+      const w = new BattleWorld({
+        seed: 1, mode: 'deathmatch', noise: () => null, terrain,
+        starts: [{ id: 0, character: 'wizard', team: Team.A, x: 100, y: 100 }],
+      });
+      const col = Math.floor(100 / TILE_SIZE) + 1;
+      const row = Math.floor(100 / TILE_SIZE);
+      terrain.map.set(row, col, TILE.TREE);
+      cast(w, 0, 0);
+      expect(terrain.map.get(row, col)).not.toBe(TILE.TREE);
+    });
+
+    it('leaves an enemy outside its radius untouched', () => {
+      const w = duo(1000); // far past STORM_BLAST_RADIUS
+      cast(w, 0, 0);
+      const after = player(w, 1);
+      expect(after.hp).toBe(PLAYER_MAX_HP);
+      expect(unpackPlayerState(after.state).shielded).toBe(true); // shield never even spent
+    });
+  });
+
+  describe('knight whirlwind', () => {
+    function duo(gap = 40): BattleWorld {
+      return new BattleWorld({
+        seed: 1,
+        mode: 'deathmatch',
+        noise: () => null,
+        terrain: clearGround(),
+        starts: [
+          { id: 0, character: 'knight', team: Team.A, x: 100, y: 100 },
+          { id: 1, character: 'archer', team: Team.B, x: 100 + gap, y: 100 },
+        ],
+      });
+    }
+    function cast(w: BattleWorld, id: number, angle: number): void {
+      hold(w, 1, id, cmd(Button.SPECIAL, angle));
+      hold(w, 1, id, cmd(0, angle, 99));
+    }
+
+    it('does not land its whole effect on the tick it is cast — it channels', () => {
+      const w = duo();
+      const before = player(w, 1).hp;
+      cast(w, 0, 0);
+      const rightAfter = player(w, 1).hp;
+      // Some damage may already have landed on the casting tick itself, but
+      // not the whole channel's worth: there is more still to come.
+      expect(rightAfter).toBeGreaterThan(0);
+      expect(before - rightAfter).toBeLessThan(4);
+    });
+
+    it('damages an enemy standing in it over the course of the channel', () => {
+      const w = duo();
+      const before = player(w, 1).hp;
+      cast(w, 0, 0);
+      hold(w, 200, 0, cmd(0, 0)); // outlasts the whole channel
+      expect(player(w, 1).hp).toBeLessThan(before);
+    });
+
+    it('clears trees in its radius, the way an explosion does', () => {
+      const terrain = clearGround();
+      const w = new BattleWorld({
+        seed: 1, mode: 'deathmatch', noise: () => null, terrain,
+        starts: [{ id: 0, character: 'knight', team: Team.A, x: 100, y: 100 }],
+      });
+      const col = Math.floor(100 / TILE_SIZE) + 1;
+      const row = Math.floor(100 / TILE_SIZE);
+      terrain.map.set(row, col, TILE.TREE);
+      cast(w, 0, 0);
+      hold(w, 200, 0, cmd(0, 0));
+      expect(terrain.map.get(row, col)).not.toBe(TILE.TREE);
+    });
+
+    it('cannot be recast until its cooldown clears', () => {
+      const w = duo();
+      cast(w, 0, 0);
+      hold(w, 200, 0, cmd(0, 0)); // let the channel finish
+      const settled = player(w, 1).hp;
+      cast(w, 0, 0); // still on cooldown
+      expect(player(w, 1).hp).toBe(settled);
     });
   });
 

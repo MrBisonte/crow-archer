@@ -29,7 +29,8 @@ import { ticks } from './tick';
 /** What using a weapon produced. The world turns these into world state. */
 export type WeaponEffect =
   | { kind: 'shot'; shot: ShotSpec }
-  | { kind: 'swing'; swing: SwingSpec };
+  | { kind: 'swing'; swing: SwingSpec }
+  | { kind: 'burst'; burst: BurstSpec };
 
 /** A projectile about to exist. */
 export interface ShotSpec {
@@ -72,6 +73,25 @@ export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite' | 'satchel';
  */
 export type TerrainResponse = 'stop' | 'bounce' | 'rest';
 
+/**
+ * An area effect centred on whoever cast it, not a projectile: nothing
+ * travels, and nothing can dodge it by breaking line of sight to where it
+ * started. Lightning Storm and Whirlwind are both this — one instant, one
+ * channelled over `durationTicks` — and the difference between them is
+ * entirely in the numbers, not in a second shape.
+ */
+export interface BurstSpec {
+  radius: number;
+  /** Damage on whichever tick actually lands, not a total for the whole effect. */
+  damage: number;
+  /** Ticks between damage ticks while channelling. Unused when instant. */
+  tickIntervalTicks: number;
+  /** Zero means instant, resolved once on cast. Above zero channels this long. */
+  durationTicks: number;
+  /** Whether it also clears ROCK/TREE/HUT tiles in radius, the way a blast does. */
+  destroysTerrain: boolean;
+}
+
 /** A melee swing about to begin. */
 export interface SwingSpec {
   /** How far the tip reaches at rest, before the thrust extends it. */
@@ -86,7 +106,7 @@ export interface SwingSpec {
 }
 
 export interface Weapon {
-  readonly kind: ShotFlavour | 'spear';
+  readonly kind: ShotFlavour | 'spear' | 'storm' | 'whirlwind';
   /** Ticks between uses. */
   readonly cooldownTicks: number;
   /**
@@ -455,6 +475,89 @@ export class Satchel implements Weapon {
   }
 }
 
+/**
+ * The wizard's real secondary, replacing the dynamite stand-in.
+ *
+ * Legacy's storm is a 450px radius, five times dynamite's blast, and hits
+ * everyone in it once for boss-tier damage. At that radius in this arena it
+ * would catch nearly the whole map, so the one figure this does not carry
+ * over is the radius: down to 180, big enough to threaten a contested area,
+ * small enough that catching it requires actually closing on someone.
+ * Damage matches dynamite's, since a single-target throw and a
+ * whole-area-at-once hit dealing the same number is already the AoE's real
+ * advantage — it does not also need to hit harder.
+ */
+export const STORM_BLAST_RADIUS = 180;
+export const STORM_DAMAGE = DYNAMITE_DAMAGE;
+export const STORM_COOLDOWN_TICKS = ticks(6);
+
+/**
+ * The knight's real secondary, replacing the dynamite stand-in.
+ *
+ * Legacy channels for 3 seconds, hitting everything in a 72px ring roughly
+ * five times a second. A player has a third of a second of immunity after
+ * any hit (IFRAME_TICKS), so a tick rate faster than that is not five hits,
+ * it is one hit that keeps re-arriving exactly when immunity expires — the
+ * legacy rate is kept as the closest approximation, and the real cadence a
+ * caught target takes damage at is the iframe's, not this number's. Radius
+ * trims slightly, to 70, for the same reason storm's does.
+ */
+export const WHIRLWIND_BLAST_RADIUS = 70;
+export const WHIRLWIND_TICK_DAMAGE = 1;
+export const WHIRLWIND_TICK_INTERVAL_TICKS = ticks(0.22);
+export const WHIRLWIND_DURATION_TICKS = ticks(3);
+export const WHIRLWIND_COOLDOWN_TICKS = ticks(6);
+
+/**
+ * The wizard's Lightning Storm. Instant: there is no wind-up and nothing
+ * travels, so line of sight to where it lands is not something an opponent
+ * can break by moving.
+ */
+export class LightningStorm implements Weapon {
+  readonly kind = 'storm' as const;
+  readonly cooldownTicks = STORM_COOLDOWN_TICKS;
+
+  use(): WeaponEffect[] {
+    return [
+      {
+        kind: 'burst',
+        burst: {
+          radius: STORM_BLAST_RADIUS,
+          damage: STORM_DAMAGE,
+          tickIntervalTicks: 0,
+          durationTicks: 0,
+          destroysTerrain: true,
+        },
+      },
+    ];
+  }
+}
+
+/**
+ * The knight's Whirlwind. Channelled: the caster is committed to standing in
+ * it for the full duration, the same way legacy's is, rather than a single
+ * cast-and-walk-away hit.
+ */
+export class Whirlwind implements Weapon {
+  readonly kind = 'whirlwind' as const;
+  readonly cooldownTicks = WHIRLWIND_COOLDOWN_TICKS;
+
+  use(): WeaponEffect[] {
+    return [
+      {
+        kind: 'burst',
+        burst: {
+          radius: WHIRLWIND_BLAST_RADIUS,
+          damage: WHIRLWIND_TICK_DAMAGE,
+          tickIntervalTicks: WHIRLWIND_TICK_INTERVAL_TICKS,
+          durationTicks: WHIRLWIND_DURATION_TICKS,
+          destroysTerrain: true,
+        },
+      },
+    ];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -472,34 +575,40 @@ export function primaryWeapon(character: CharacterKind): Weapon {
 }
 
 /**
- * A character's second weapon, exhaustively: nothing, dynamite, or the
- * satchel. Carries the instance along with the tag, so a caller that has
- * matched `kind` never has to cast to reach it.
+ * A character's second weapon, exhaustively. Carries the instance along with
+ * the tag, so a caller that has matched `kind` never has to cast to reach it.
  */
 export type Secondary =
   | { kind: 'none' }
   | { kind: 'dynamite'; weapon: DynamitePouch }
-  | { kind: 'satchel'; weapon: Satchel };
+  | { kind: 'satchel'; weapon: Satchel }
+  | { kind: 'storm'; weapon: LightningStorm }
+  | { kind: 'whirlwind'; weapon: Whirlwind };
 
 /**
- * A character's own second weapon, in every mode: archer and ranger only.
- * Dynamite and the satchel are each already balanced as their owner's real
- * weapon, not a stand-in for one that does not exist yet.
+ * A character's own second weapon, in every mode. Every character has one
+ * now: wizard and knight's real specials replaced the dynamite stand-in each
+ * carried while Lightning Storm and Whirlwind were still single-player-only.
+ *
+ * Still `Partial`, on purpose: the day a fifth hero lands without its own
+ * secondary built yet, `secondaryWeapon` below falls back to dynamite for it
+ * exactly the way wizard and knight's did, rather than needing an edit here.
  */
 const OWN_SECONDARY: Partial<Record<CharacterKind, () => Secondary>> = {
   archer: () => ({ kind: 'dynamite', weapon: new DynamitePouch() }),
   ranger: () => ({ kind: 'satchel', weapon: new Satchel() }),
+  wizard: () => ({ kind: 'storm', weapon: new LightningStorm() }),
+  knight: () => ({ kind: 'whirlwind', weapon: new Whirlwind() }),
 };
 
 /**
  * What a character throws as their second weapon, if anything.
  *
- * Wizard and knight's real specials, drawn from their single-player Lightning
- * Storm and Whirlwind, are not built in this sim yet, and both are
- * multi-target area attacks that would be the strongest thing on the field in
- * a duel. Until they exist and are balanced for player versus player, wizard
- * and knight keep dynamite as a stand-in, and only in deathmatch: co-op has
- * no PVE content yet to spend a placeholder weapon on.
+ * The mode-gated dynamite fallback below is unreachable today, since all
+ * four current characters are in OWN_SECONDARY — it exists for whichever
+ * character is next, the same way it carried wizard and knight before their
+ * real specials existed. Co-op gets `none` from it rather than dynamite,
+ * because co-op has no PVE content yet to spend a placeholder weapon on.
  */
 export function secondaryWeapon(character: CharacterKind, mode: GameMode): Secondary {
   const own = OWN_SECONDARY[character];

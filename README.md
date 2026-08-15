@@ -56,7 +56,7 @@ Each character fights differently:
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
-The archer and ranger each carry their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. Wizard and knight carry dynamite too, but only in a duel — in co-op, only a character's own weapon is carried, because a blast radius against crows would not be a fight.
+Every character carries their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. The wizard's **Lightning Storm** and the knight's **Whirlwind** land instantly and over a 3-second channel respectively, hit everyone in range at once, and clear rock, trees and huts the way an explosion does — both are cut down from their single-player radius, since a duel is not a boss fight and neither should be able to catch the whole arena in one press.
 
 Every fifteen seconds or so a **crow** drifts across. It dies to one hit and drops a powerup where it falls: a replacement shield, or fire that doubles your damage for eight seconds.
 
@@ -66,7 +66,7 @@ Every fifteen seconds or so a **crow** drifts across. It dies to one hit and dro
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
 3. The host sets the mode with **D** for deathmatch or **C** for co-op, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes) — one or the other, not both. Everyone presses **R**, and it starts once the last player is ready.
 
-Arrow keys move, the mouse aims, **left click or space** shoots, and **right click or Q** throws dynamite (or the satchel, for a ranger). You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight) or **X** (ranger) — they play differently.
+Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or Q** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight) or **X** (ranger) — they play differently.
 
 Any team split works: 1v1, 2v1 and 2v2 all start, and seats spawn on opposite sides of whatever map came up.
 

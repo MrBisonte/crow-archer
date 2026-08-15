@@ -34,7 +34,7 @@ const SWING_SHIFT = 10;
  * exist. One field regardless of which secondary it is, since a fighter only
  * ever carries one: dynamite for most, the satchel for the ranger.
  */
-const SECONDARY_AMMO_MAX = 7;
+export const SECONDARY_AMMO_MAX = 7;
 const SECONDARY_AMMO_SHIFT = 14;
 
 const TAU = Math.PI * 2;

@@ -22,7 +22,7 @@ import {
   type PlayerStart,
   type PlayerTeam,
 } from '../net/protocol';
-import { ShotFlavourCode, packPlayerState, packShotState } from '../net/entity-state';
+import { SECONDARY_AMMO_MAX, ShotFlavourCode, packPlayerState, packShotState } from '../net/entity-state';
 import { ARENA_H, ARENA_W, CHARACTER_STATS, PLAYER_RADIUS, direction } from './arena';
 import { Terrain, type NoiseFactory } from './arena-map';
 import { slide } from './collide';
@@ -47,12 +47,15 @@ import {
   DYNAMITE_DRAG,
   DYNAMITE_REST_SPEED,
   DynamitePouch,
+  LightningStorm,
   SATCHEL_ARM_FUSE_TICKS,
   SATCHEL_CARRIED,
   SATCHEL_TRIGGER_RADIUS,
   Satchel,
+  Whirlwind,
   primaryWeapon,
   secondaryWeapon,
+  type BurstSpec,
   type Secondary,
   type ShotSpec,
   type SwingSpec,
@@ -98,10 +101,14 @@ const withinRadius = (ax: number, ay: number, bx: number, by: number, r: number)
 };
 
 /**
- * A fighter's second weapon, exhaustively: nothing, dynamite, or the satchel,
- * each carrying the runtime tracking that kind needs. A fighter has at most
- * one, so this is one field rather than two independently-nullable ones that
- * could disagree about which is set.
+ * A fighter's second weapon, exhaustively, each carrying the runtime tracking
+ * that kind needs. A fighter has at most one, so this is one field rather
+ * than two independently-nullable ones that could disagree about which is
+ * set.
+ *
+ * Storm and whirlwind carry no `left`: unlike dynamite and the satchel, they
+ * are not consumed from a stock, only gated by their own cooldown, the same
+ * way the primary weapons already are.
  */
 type SecondaryState =
   | { readonly kind: 'none' }
@@ -120,6 +127,18 @@ type SecondaryState =
       left: number;
       /** Whether SPECIAL was held last tick, so only a fresh press acts. */
       wasHeld: boolean;
+    }
+  | {
+      readonly kind: 'storm';
+      readonly pouch: LightningStorm;
+      cooldown: number;
+      wasHeld: boolean;
+    }
+  | {
+      readonly kind: 'whirlwind';
+      readonly pouch: Whirlwind;
+      cooldown: number;
+      wasHeld: boolean;
     };
 
 /** Turns a character's secondary weapon into the mutable state a fighter tracks it with. */
@@ -131,6 +150,10 @@ function initialSecondary(secondary: Secondary): SecondaryState {
       return { kind: 'dynamite', pouch: secondary.weapon, cooldown: 0, left: DYNAMITE_CARRIED, charge: null };
     case 'satchel':
       return { kind: 'satchel', pouch: secondary.weapon, cooldown: 0, left: SATCHEL_CARRIED, wasHeld: false };
+    case 'storm':
+      return { kind: 'storm', pouch: secondary.weapon, cooldown: 0, wasHeld: false };
+    case 'whirlwind':
+      return { kind: 'whirlwind', pouch: secondary.weapon, cooldown: 0, wasHeld: false };
   }
 }
 
@@ -153,6 +176,13 @@ interface Fighter {
   respawnIn: number | null;
   /** Ticks left in the current swing, and what it is. Null when not swinging. */
   swing: { left: number; spec: SwingSpec; struckPhaseOne: boolean; struckPhaseTwo: boolean } | null;
+  /**
+   * Ticks left in the current burst, and what it is. Null when not
+   * channelling. An instant burst (storm) is a channel of a single tick, so
+   * it lands and clears on the very next resolution pass rather than needing
+   * a separate immediate code path.
+   */
+  burst: { left: number; spec: BurstSpec; tickTimer: number } | null;
 }
 
 interface Shot {
@@ -251,6 +281,7 @@ export class BattleWorld implements World {
         invulnerable: 0,
         respawnIn: null,
         swing: null,
+        burst: null,
       };
     });
   }
@@ -273,6 +304,7 @@ export class BattleWorld implements World {
         this.#useSecondary(f, false);
       }
       this.#resolveSwing(f, kills);
+      this.#resolveBurst(f, kills);
     }
     this.#advanceShots(dt, kills);
     this.#advanceCrows(dt);
@@ -312,7 +344,7 @@ export class BattleWorld implements World {
           shielded: f.shielded,
           aim: f.aim,
           swing: f.swing ? 1 - f.swing.left / f.swing.spec.durationTicks : 0,
-          secondaryAmmo: f.secondary.kind !== 'none' ? f.secondary.left : 0,
+          secondaryAmmo: this.#secondaryAmmoOf(f),
         }),
       })),
       ...this.#shots.map((s) => ({
@@ -378,6 +410,29 @@ export class BattleWorld implements World {
     return 0;
   }
 
+  /**
+   * What the HUD's secondary readout means for this fighter's own kind.
+   *
+   * Dynamite and the satchel are a stock: this is how many are left. Storm
+   * and whirlwind are not consumed from anything, only gated by their own
+   * cooldown, so this instead packs how close that cooldown is to clear,
+   * quantized into the same field a round count already fits in — 0 is
+   * ready, SECONDARY_AMMO_MAX is just used. One wire field, read according
+   * to which secondary it is, the same way a projectile's `state` already is.
+   */
+  #secondaryAmmoOf(f: Fighter): number {
+    switch (f.secondary.kind) {
+      case 'none':
+        return 0;
+      case 'dynamite':
+      case 'satchel':
+        return f.secondary.left;
+      case 'storm':
+      case 'whirlwind':
+        return Math.ceil((f.secondary.cooldown / f.secondary.pouch.cooldownTicks) * SECONDARY_AMMO_MAX);
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Players
   // -------------------------------------------------------------------------
@@ -423,6 +478,26 @@ export class BattleWorld implements World {
   #useSecondary(f: Fighter, held: boolean): void {
     if (f.secondary.kind === 'dynamite') this.#chargeThrow(f, f.secondary, held);
     else if (f.secondary.kind === 'satchel') this.#useSatchel(f, f.secondary, held);
+    else if (f.secondary.kind === 'storm' || f.secondary.kind === 'whirlwind') {
+      this.#useBurstSecondary(f, f.secondary, held);
+    }
+  }
+
+  /**
+   * Casts storm or whirlwind on a fresh press, the same "held does not mean
+   * held-to-repeat" rule the satchel uses: without it, holding SPECIAL would
+   * auto-recast the instant a long cooldown cleared.
+   */
+  #useBurstSecondary(
+    f: Fighter,
+    secondary: Extract<SecondaryState, { kind: 'storm' | 'whirlwind' }>,
+    held: boolean,
+  ): void {
+    const fresh = held && !secondary.wasHeld;
+    secondary.wasHeld = held;
+    if (!fresh || secondary.cooldown > 0) return;
+    secondary.cooldown = secondary.pouch.cooldownTicks;
+    this.#apply(f, secondary.pouch.use());
   }
 
   /**
@@ -484,6 +559,17 @@ export class BattleWorld implements World {
           spec: effect.swing,
           struckPhaseOne: false,
           struckPhaseTwo: false,
+        };
+        continue;
+      }
+      if (effect.kind === 'burst') {
+        // durationTicks 0 means instant: one tick of channel, so it lands on
+        // the very next #resolveBurst pass rather than needing a second,
+        // immediate code path here.
+        f.burst = {
+          left: Math.max(1, effect.burst.durationTicks),
+          spec: effect.burst,
+          tickTimer: 0,
         };
         continue;
       }
@@ -575,6 +661,30 @@ export class BattleWorld implements World {
       return true;
     }
     return this.#killCrowNear(probe.x, probe.y, spec.radius);
+  }
+
+  /**
+   * A channelled or instant burst, ticking down and landing on its own
+   * schedule. An instant burst (`left` starts at 1) lands once, on this very
+   * call — the same tick it was cast, since #apply runs earlier in the same
+   * step() pass — and is gone. A channelled one lands every
+   * `tickIntervalTicks` until `left` runs out.
+   */
+  #resolveBurst(f: Fighter, kills: Kill[]): void {
+    const burst = f.burst;
+    if (!burst) return;
+    if (burst.tickTimer <= 0) {
+      // Same visual marker a blast uses: the client has already learned to
+      // clear terrain wherever one of these appears, and a spinning or
+      // crackling AoE landing is exactly that same "something happened here,
+      // and the client was not told directly" problem.
+      this.#blasts.push({ id: this.#nextBlastId++, x: f.x, y: f.y, left: BLAST_TICKS });
+      this.#blastAt(f.x, f.y, burst.spec.radius, this.#damageOf(f, burst.spec.damage), f.team, f.id, kills, burst.spec.destroysTerrain);
+      burst.tickTimer = Math.max(1, burst.spec.tickIntervalTicks);
+    } else {
+      burst.tickTimer--;
+    }
+    if (--burst.left <= 0) f.burst = null;
   }
 
   // -------------------------------------------------------------------------
@@ -764,19 +874,38 @@ export class BattleWorld implements World {
     // Recorded before anything is resolved, so a blast that hits nothing is
     // still seen. A weapon you cannot see go off is a weapon nobody trusts.
     this.#blasts.push({ id: this.#nextBlastId++, x: shot.x, y: shot.y, left: BLAST_TICKS });
+    this.#blastAt(shot.x, shot.y, DYNAMITE_BLAST_RADIUS, shot.damage, shot.team, shot.owner, kills, true);
+  }
+
+  /**
+   * Damages everyone an area effect reaches, and clears terrain in it if
+   * asked. Shared by dynamite/satchel's #explode and the wizard/knight
+   * specials' #resolveBurst, so "what an AoE hit does" has one answer rather
+   * than two copies that could quietly drift apart.
+   */
+  #blastAt(
+    x: number,
+    y: number,
+    radius: number,
+    damage: number,
+    ownerTeam: PlayerTeam,
+    ownerId: PlayerId,
+    kills: Kill[],
+    destroysTerrain: boolean,
+  ): void {
     for (const target of this.#fighters) {
-      if (target.respawnIn !== null || !canDamage(shot.team, target.team)) continue;
-      if (!withinRadius(shot.x, shot.y, target.x, target.y, DYNAMITE_BLAST_RADIUS)) continue;
-      if (this.#wound(target, shot.damage)) {
-        kills.push({ victim: target.id, killer: shot.owner, killerTeam: shot.team });
+      if (target.respawnIn !== null || !canDamage(ownerTeam, target.team)) continue;
+      if (!withinRadius(x, y, target.x, target.y, radius)) continue;
+      if (this.#wound(target, damage)) {
+        kills.push({ victim: target.id, killer: ownerId, killerTeam: ownerTeam });
       }
     }
     this.#crows = this.#crows.filter((c) => {
-      if (!withinRadius(shot.x, shot.y, c.x, c.y, DYNAMITE_BLAST_RADIUS)) return true;
+      if (!withinRadius(x, y, c.x, c.y, radius)) return true;
       this.#dropFrom(c);
       return false;
     });
-    this.terrain.destroyArea(shot.x, shot.y, DYNAMITE_BLAST_RADIUS);
+    if (destroysTerrain) this.terrain.destroyArea(x, y, radius);
   }
 
   // -------------------------------------------------------------------------
