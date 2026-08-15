@@ -613,6 +613,17 @@ export class BattleWorld implements World {
         this.#explode(shot, kills);
         continue;
       }
+      // A satchel does not explode from slowing down, but it still needs to
+      // stop: DYNAMITE_DRAG alone only ever approaches zero, so in open
+      // ground with nothing to bounce off, an unarmed satchel would keep
+      // visibly creeping for seconds after the throw instead of landing.
+      if (
+        shot.spec.onTerrain === 'rest' &&
+        Math.hypot(shot.vx, shot.vy) < DYNAMITE_REST_SPEED
+      ) {
+        shot.vx = 0;
+        shot.vy = 0;
+      }
       if (shot.spec.onTerrain === 'stop' && this.terrain.blocksShot(shot.x, shot.y)) {
         // A fiery hit chars whatever tree or hut stopped it — the fire
         // powerup's other half, alongside the damage #damageOf already

@@ -155,7 +155,7 @@ const CONFIG = {
   // Satchel: no charge to hold, one click is one throw at a fixed speed.
   // Blast radius and boss damage reuse dynamiteBlastRadius/dynamiteBossDamage
   // below — an explosion is an explosion, not a second copy of the same figure.
-  satchelThrowSpeed: 336, satchelArmFuse: 5, satchelIdleLife: 60,
+  satchelThrowSpeed: 336, satchelArmFuse: 3, satchelIdleLife: 60,
 
   // Hit detection radii
   arrowHitRadius: 14,             // arrow / javelin vs crow

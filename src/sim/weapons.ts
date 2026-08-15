@@ -250,7 +250,7 @@ export const SATCHEL_DAMAGE = DYNAMITE_DAMAGE;
 export const SATCHEL_THROW_SPEED = DYNAMITE_SPEED;
 
 /** How long an armed satchel counts down before it goes off on its own. */
-export const SATCHEL_ARM_FUSE_TICKS = ticks(5);
+export const SATCHEL_ARM_FUSE_TICKS = ticks(3);
 
 /**
  * How long a thrown, unarmed satchel sits before it quietly expires.

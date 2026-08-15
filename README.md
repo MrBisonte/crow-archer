@@ -56,7 +56,7 @@ Each character fights differently:
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
-The archer and ranger each carry their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a five-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. Wizard and knight carry dynamite too, but only in a duel — in co-op, only a character's own weapon is carried, because a blast radius against crows would not be a fight.
+The archer and ranger each carry their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. Wizard and knight carry dynamite too, but only in a duel — in co-op, only a character's own weapon is carried, because a blast radius against crows would not be a fight.
 
 Every fifteen seconds or so a **crow** drifts across. It dies to one hit and drops a powerup where it falls: a replacement shield, or fire that doubles your damage for eight seconds.
 
@@ -150,7 +150,7 @@ Frontline melee with a long spear.
 ### Ranger
 Skirmisher with a rapid-fire crossbow.
 - **Primary:** Crossbow, same quiver of 10 as the archer's — one press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
-- **Special:** Satchel, first click throws it inert, second click arms a 5 s fuse shown as a countdown on the bag; the ranger's own bolt sets it off instantly, armed or not
+- **Special:** Satchel, first click throws it inert, second click arms a 3 s fuse shown as a countdown on the bag; the ranger's own bolt sets it off instantly, armed or not
 - **Pickups:** Ricochet bolts (bounce off walls with a speed boost), fire bolts (leave burning patches) — the archer's own pickup effects, unchanged
 
 ## Game loop
