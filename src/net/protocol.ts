@@ -17,7 +17,9 @@ import { Button, type InputCommand } from '../sim/input';
 import { Team } from '../sim/team';
 
 /**
- * Protocol revision. Bump it on any change to a message shape.
+ * Protocol revision. Bump it on any change to a message shape, and on any
+ * change to what a field in one means: a client that reads `state` as always
+ * alive is as broken by a new meaning as by a new field.
  *
  * It is carried on the two handshake messages only: HELLO from the client and
  * WELCOME from the server. Both sides check it there and drop the connection on
@@ -25,7 +27,7 @@ import { Team } from '../sim/team';
  * message repeats it. This keeps the version out of SNAPSHOT, which is sent
  * 20 times a second.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 5;
 
 /** Players in one room. Fixed at 4: 4-player co-op or 2v2 deathmatch. */
 export const MAX_PLAYERS = 4;
@@ -35,6 +37,15 @@ export const MAX_NAME_LENGTH = 16;
 
 /** Room codes are 4 uppercase letters, short enough to read aloud. */
 export const ROOM_CODE_PATTERN = /^[A-Z]{4}$/;
+
+/**
+ * Path the socket lives on, so the same origin can also serve the page.
+ *
+ * It is here rather than in the server because three places must agree on it:
+ * the server mounts it, the client derives its URL from it, and the dev proxy
+ * forwards it from the Vite port to the server port.
+ */
+export const WS_PATH = '/ws';
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -50,7 +61,7 @@ export type RoomCode = string;
 // Lobby
 // ---------------------------------------------------------------------------
 
-export type CharacterKind = 'archer' | 'wizard' | 'knight';
+export type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger';
 
 /** 'coop' is 4-player PVE. 'deathmatch' is 2v2. The host picks. */
 export type GameMode = 'coop' | 'deathmatch';
@@ -71,6 +82,21 @@ export interface PlayerSlot {
   team: PlayerTeam;
 }
 
+/**
+ * A room's state. Server and client share this one definition: the server
+ * builds it, ROOM_STATE carries it, and the client renders it. The recipient's
+ * own slot is not part of it, because a room does not have a point of view —
+ * ROOM_STATE adds `you` per recipient.
+ */
+export interface RoomView {
+  code: RoomCode;
+  mode: GameMode;
+  host: PlayerId;
+  slots: PlayerSlot[];
+  /** What the match will play to. Set by the host, shown to everyone. */
+  win: WinCondition;
+}
+
 // ---------------------------------------------------------------------------
 // Match
 // ---------------------------------------------------------------------------
@@ -82,9 +108,38 @@ export const EntityKind = {
   BOSS: 2,
   PROJECTILE: 3,
   PICKUP: 4,
+  /**
+   * A blast that has just gone off, carried for a few ticks so it can be drawn.
+   *
+   * A stick of dynamite that simply vanished from one snapshot to the next was
+   * indistinguishable from one that fizzled: the whole weapon was invisible.
+   * Explosions are the one cosmetic the wire carries, because the client cannot
+   * infer where a shot that hit nobody went off.
+   */
+  BLAST: 5,
+  /**
+   * A tile a fiery shot just charred, carried the same way and for the same
+   * reason as BLAST: the server mutates its grid and says nothing further, so
+   * without this the client keeps drawing a tree that is no longer there.
+   */
+  BURN: 6,
 } as const;
 
 export type EntityKind = (typeof EntityKind)[keyof typeof EntityKind];
+
+/**
+ * What `state` means on a PLAYER entity. A dead player stays in the snapshot so
+ * clients can draw the body waiting to respawn rather than have it vanish.
+ *
+ * On a PROJECTILE, `state` carries the team that fired it, so an arrow is drawn
+ * in its shooter's colour without the client having to remember whose it was.
+ */
+export const PlayerState = {
+  ALIVE: 0,
+  DEAD: 1,
+} as const;
+
+export type PlayerState = (typeof PlayerState)[keyof typeof PlayerState];
 
 /**
  * One entity in one snapshot. Every field is a number, and there are six of
@@ -124,6 +179,12 @@ export interface Snapshot {
   tick: number;
   entities: EntitySnapshot[];
   acks: InputAck[];
+  /**
+   * The running score. Two integers on every snapshot rather than a message per
+   * kill: a snapshot states what is true, so a client that missed one is
+   * corrected by the next instead of staying wrong. Costs about 20 bytes.
+   */
+  scores: TeamScores;
 }
 
 /** Where one player begins the match. Sent once, in MATCH_START. */
@@ -135,11 +196,71 @@ export interface PlayerStart {
   y: number;
 }
 
-/** How a match ended. Co-op reports the wave reached; deathmatch reports frags. */
+// ---------------------------------------------------------------------------
+// Win conditions
+// ---------------------------------------------------------------------------
+
+/**
+ * What ends a deathmatch. One or the other, never both and never neither, so it
+ * is a union rather than two nullable settings that could contradict each other.
+ */
+export type WinCondition =
+  | { kind: 'frags'; target: number }
+  | { kind: 'time'; minutes: number };
+
+/** Frag targets offered, lowest first. The host cycles through these. */
+export const FRAG_TARGETS = [10, 15, 20, 25, 30] as const;
+
+/** Time limits in minutes, lowest first. */
+export const TIME_LIMITS = [5, 6, 7, 8, 9, 10] as const;
+
+/** What a new room plays to until the host says otherwise. */
+export const DEFAULT_WIN_CONDITION: WinCondition = { kind: 'frags', target: FRAG_TARGETS[0] };
+
+/**
+ * Builds a win condition, refusing a value that is not on offer.
+ *
+ * The bounds are the rule, so they are enforced here rather than trusted at
+ * every call site: a frag target of 3 or a 90 minute round has to be
+ * unrepresentable, not merely discouraged.
+ */
+export function winCondition(kind: 'frags' | 'time', value: number): WinCondition | null {
+  if (kind === 'frags') {
+    return FRAG_TARGETS.includes(value as (typeof FRAG_TARGETS)[number])
+      ? { kind: 'frags', target: value }
+      : null;
+  }
+  return TIME_LIMITS.includes(value as (typeof TIME_LIMITS)[number])
+    ? { kind: 'time', minutes: value }
+    : null;
+}
+
+/** The next value on offer, wrapping. Used by the lobby to cycle a setting. */
+export function nextWinCondition(current: WinCondition, kind: 'frags' | 'time'): WinCondition {
+  if (kind === 'frags') {
+    const at = current.kind === 'frags' ? FRAG_TARGETS.indexOf(current.target as 10) : -1;
+    return { kind: 'frags', target: FRAG_TARGETS[(at + 1) % FRAG_TARGETS.length]! };
+  }
+  const at = current.kind === 'time' ? TIME_LIMITS.indexOf(current.minutes as 5) : -1;
+  return { kind: 'time', minutes: TIME_LIMITS[(at + 1) % TIME_LIMITS.length]! };
+}
+
+/** How the two sides stand. Carried on every snapshot so it cannot drift. */
+export interface TeamScores {
+  a: number;
+  b: number;
+}
+
+/**
+ * How a match ended. Co-op reports the wave reached; deathmatch reports frags.
+ *
+ * `winner` is null for a draw, which a time limit can produce and a frag target
+ * cannot. Leaving it out would mean a tie had to be encoded as one side winning.
+ */
 export type MatchResult =
   | { outcome: 'COOP_CLEARED'; wave: number }
   | { outcome: 'COOP_WIPED'; wave: number }
-  | { outcome: 'DEATHMATCH'; winner: PlayerTeam; scoreA: number; scoreB: number };
+  | { outcome: 'DEATHMATCH'; winner: PlayerTeam | null; scoreA: number; scoreB: number };
 
 /** Why the server rejected something. The client maps these to its own text. */
 export type ErrorCode =
@@ -150,7 +271,11 @@ export type ErrorCode =
   | 'ROOM_FULL'
   | 'ROOM_IN_MATCH'
   | 'NOT_IN_ROOM'
-  | 'NOT_HOST';
+  | 'NOT_HOST'
+  // No free room code turned up, or the server is at its room cap
+  | 'SERVER_FULL'
+  // Create or join arrived from a connection that already holds a seat
+  | 'ALREADY_IN_ROOM';
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -162,8 +287,16 @@ export type ErrorCode =
  * parseClientMessage before touching room state.
  */
 export type ClientMessage =
-  // Handshake, first message on the socket
-  | { type: 'HELLO'; v: typeof PROTOCOL_VERSION; name: string }
+  /**
+   * Handshake, first message on the socket.
+   *
+   * `v` is any number, not the current literal, so a client on the wrong
+   * version still parses and the server can answer VERSION_MISMATCH instead of
+   * dropping it silently. WELCOME stays strict in the other direction: the
+   * server owes a mismatched client an explanation, a mismatched server owes
+   * the client nothing it can act on.
+   */
+  | { type: 'HELLO'; v: number; name: string }
   // Lobby
   | { type: 'CREATE_ROOM' }
   | { type: 'JOIN_ROOM'; code: RoomCode }
@@ -172,6 +305,8 @@ export type ClientMessage =
   | { type: 'SET_READY'; ready: boolean }
   // Host only. The server rejects this from any other player with NOT_HOST.
   | { type: 'SET_MODE'; mode: GameMode }
+  // Host only. Cycles the frag target or the time limit, one or the other.
+  | { type: 'SET_WIN_CONDITION'; win: WinCondition }
   // Match. One INPUT per sim tick, 60 times a second.
   | { type: 'INPUT'; cmd: InputCommand }
   // Round-trip probe. `sent` is the client clock reading, echoed back untouched.
@@ -182,16 +317,33 @@ export type ClientMessage =
  * a server on a newer protocol cannot drive it into an unknown state.
  */
 export type ServerMessage =
-  // Handshake reply. `id` is this client's slot for the whole session.
-  | { type: 'WELCOME'; v: typeof PROTOCOL_VERSION; id: PlayerId }
-  // Full lobby state. Sent on every change, never as a delta.
-  | { type: 'ROOM_STATE'; code: RoomCode; mode: GameMode; host: PlayerId; slots: PlayerSlot[] }
+  /**
+   * Handshake reply. It carries no identity: a player has no id until they hold
+   * a seat, and a seat belongs to a room. ROOM_STATE.you supplies it from then
+   * on. Reconnect, which is what a durable session id would serve, is phase 4.
+   */
+  | { type: 'WELCOME'; v: typeof PROTOCOL_VERSION }
+  /**
+   * Full lobby state. Sent on every change, never as a delta.
+   *
+   * `you` is the recipient's own slot, so this message is built per recipient
+   * rather than broadcast verbatim. Without it a client cannot pick itself out
+   * of `slots`, since nothing else on the wire ties a seat to a connection.
+   * Lobby changes are rare, so the extra copies cost nothing.
+   */
+  | ({ type: 'ROOM_STATE'; you: PlayerId } & RoomView)
   | { type: 'ERROR'; code: ErrorCode; message: string }
   /**
    * Match begins. `seed` is the uint32 every client feeds to mapgen, which is
    * why the terrain never crosses the network: 4 bytes stand in for the grid.
    */
-  | { type: 'MATCH_START'; seed: number; mode: GameMode; starts: PlayerStart[] }
+  | {
+      type: 'MATCH_START';
+      seed: number;
+      mode: GameMode;
+      starts: PlayerStart[];
+      win: WinCondition;
+    }
   // Broadcast at 20 Hz while the match runs.
   | { type: 'SNAPSHOT'; snap: Snapshot }
   | { type: 'MATCH_END'; result: MatchResult }
@@ -227,7 +379,7 @@ const isOneOf = <T extends string>(allowed: readonly T[], v: unknown): v is T =>
 const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
   Array.isArray(v) && v.every(item);
 
-const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight'];
+const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
 const ERROR_CODES: readonly ErrorCode[] = [
   'VERSION_MISMATCH',
@@ -238,6 +390,8 @@ const ERROR_CODES: readonly ErrorCode[] = [
   'ROOM_IN_MATCH',
   'NOT_IN_ROOM',
   'NOT_HOST',
+  'SERVER_FULL',
+  'ALREADY_IN_ROOM',
 ];
 
 const ENTITY_KINDS: readonly EntityKind[] = Object.values(EntityKind);
@@ -298,11 +452,26 @@ const isEntitySnapshot = (v: unknown): v is EntitySnapshot =>
 const isInputAck = (v: unknown): v is InputAck =>
   isRec(v) && isPlayerId(v['id']) && isCount(v['seq']);
 
+const isTeamScores = (v: unknown): v is TeamScores =>
+  isRec(v) && isCount(v['a']) && isCount(v['b']);
+
 const isSnapshot = (v: unknown): v is Snapshot =>
   isRec(v) &&
   isCount(v['tick']) &&
   isArrayOf(v['entities'], isEntitySnapshot) &&
-  isArrayOf(v['acks'], isInputAck);
+  isArrayOf(v['acks'], isInputAck) &&
+  isTeamScores(v['scores']);
+
+/**
+ * Accepts only a value that is on offer, so a peer cannot ask for a two frag
+ * match or an hour-long round by sending one.
+ */
+const isWinCondition = (v: unknown): v is WinCondition => {
+  if (!isRec(v)) return false;
+  if (v['kind'] === 'frags') return winCondition('frags', v['target'] as number) !== null;
+  if (v['kind'] === 'time') return winCondition('time', v['minutes'] as number) !== null;
+  return false;
+};
 
 const isMatchResult = (v: unknown): v is MatchResult => {
   if (!isRec(v)) return false;
@@ -311,7 +480,12 @@ const isMatchResult = (v: unknown): v is MatchResult => {
     case 'COOP_WIPED':
       return isCount(v['wave']);
     case 'DEATHMATCH':
-      return isPlayerTeam(v['winner']) && isCount(v['scoreA']) && isCount(v['scoreB']);
+      // null is a draw, which a time limit can produce.
+      return (
+        (v['winner'] === null || isPlayerTeam(v['winner'])) &&
+        isCount(v['scoreA']) &&
+        isCount(v['scoreB'])
+      );
     default:
       return false;
   }
@@ -333,9 +507,10 @@ type ServerReaders = { [K in ServerMessage['type']]: Reader<ServerMessage, K> };
 
 const clientReaders: ClientReaders = {
   HELLO: (m) => {
+    const v = m['v'];
     const name = m['name'];
-    if (m['v'] !== PROTOCOL_VERSION || !isName(name)) return null;
-    return { type: 'HELLO', v: PROTOCOL_VERSION, name };
+    if (!isInt(v) || !isName(name)) return null;
+    return { type: 'HELLO', v, name };
   },
   CREATE_ROOM: () => ({ type: 'CREATE_ROOM' }),
   JOIN_ROOM: (m) => {
@@ -355,6 +530,10 @@ const clientReaders: ClientReaders = {
     const mode = m['mode'];
     return isMode(mode) ? { type: 'SET_MODE', mode } : null;
   },
+  SET_WIN_CONDITION: (m) => {
+    const win = m['win'];
+    return isWinCondition(win) ? { type: 'SET_WIN_CONDITION', win } : null;
+  },
   INPUT: (m) => {
     const cmd = m['cmd'];
     if (!isInputCommand(cmd)) return null;
@@ -367,19 +546,19 @@ const clientReaders: ClientReaders = {
 };
 
 const serverReaders: ServerReaders = {
-  WELCOME: (m) => {
-    const id = m['id'];
-    if (m['v'] !== PROTOCOL_VERSION || !isPlayerId(id)) return null;
-    return { type: 'WELCOME', v: PROTOCOL_VERSION, id };
-  },
+  WELCOME: (m) =>
+    m['v'] === PROTOCOL_VERSION ? { type: 'WELCOME', v: PROTOCOL_VERSION } : null,
   ROOM_STATE: (m) => {
     const code = m['code'];
     const mode = m['mode'];
     const host = m['host'];
     const slots = m['slots'];
-    if (!isRoomCode(code) || !isMode(mode) || !isPlayerId(host)) return null;
+    const you = m['you'];
+    const win = m['win'];
+    if (!isRoomCode(code) || !isMode(mode) || !isPlayerId(host) || !isPlayerId(you)) return null;
     if (!isArrayOf(slots, isPlayerSlot) || slots.length > MAX_PLAYERS) return null;
-    return { type: 'ROOM_STATE', code, mode, host, slots };
+    if (!isWinCondition(win)) return null;
+    return { type: 'ROOM_STATE', code, mode, host, slots, you, win };
   },
   ERROR: (m) => {
     const code = m['code'];
@@ -390,9 +569,11 @@ const serverReaders: ServerReaders = {
     const seed = m['seed'];
     const mode = m['mode'];
     const starts = m['starts'];
+    const win = m['win'];
     if (!isUint32(seed) || !isMode(mode)) return null;
     if (!isArrayOf(starts, isPlayerStart) || starts.length > MAX_PLAYERS) return null;
-    return { type: 'MATCH_START', seed, mode, starts };
+    if (!isWinCondition(win)) return null;
+    return { type: 'MATCH_START', seed, mode, starts, win };
   },
   SNAPSHOT: (m) => {
     const snap = m['snap'];

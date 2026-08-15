@@ -4,6 +4,7 @@ import { Button } from '../sim/input';
 import { Team } from '../sim/team';
 import {
   type ClientMessage,
+  DEFAULT_WIN_CONDITION,
   EntityKind,
   parseClientMessage,
   parseServerMessage,
@@ -18,7 +19,7 @@ const input: ClientMessage = {
   cmd: { seq: 42, buttons: Button.UP | Button.FIRE, aimAngle: 1.25 },
 };
 
-const welcome: ServerMessage = { type: 'WELCOME', v: PROTOCOL_VERSION, id: 0 };
+const welcome: ServerMessage = { type: 'WELCOME', v: PROTOCOL_VERSION };
 
 const snapshot: ServerMessage = {
   type: 'SNAPSHOT',
@@ -32,6 +33,7 @@ const snapshot: ServerMessage = {
       { id: 0, seq: 41 },
       { id: 1, seq: 39 },
     ],
+    scores: { a: 3, b: 5 },
   },
 };
 
@@ -56,9 +58,13 @@ describe('parseClientMessage', () => {
     for (const m of msgs) expect(parseClientMessage(m)).toEqual(m);
   });
 
-  it('rejects a HELLO on the wrong version', () => {
-    expect(parseClientMessage({ ...hello, v: PROTOCOL_VERSION + 1 })).toBeNull();
-    expect(parseClientMessage({ ...hello, v: PROTOCOL_VERSION - 1 })).toBeNull();
+  it('keeps a wrong HELLO version for the server to judge', () => {
+    // A wrong version still parses, so the server can answer VERSION_MISMATCH
+    // rather than drop the socket without a word. Only a non-integer is malformed.
+    expect(parseClientMessage({ ...hello, v: PROTOCOL_VERSION + 1 }))
+      .toEqual({ ...hello, v: PROTOCOL_VERSION + 1 });
+    expect(parseClientMessage({ ...hello, v: 'three' })).toBeNull();
+    expect(parseClientMessage({ ...hello, v: 1.5 })).toBeNull();
   });
 
   it('rejects a HELLO with no version', () => {
@@ -124,12 +130,15 @@ describe('parseServerMessage', () => {
         mode: 'coop',
         host: 0,
         slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.A }],
+        you: 0,
+        win: DEFAULT_WIN_CONDITION,
       },
       {
         type: 'MATCH_START',
         seed: 0xdeadbeef,
         mode: 'coop',
         starts: [{ id: 0, character: 'archer', team: Team.A, x: 64, y: 64 }],
+        win: DEFAULT_WIN_CONDITION,
       },
       { type: 'MATCH_END', result: { outcome: 'COOP_CLEARED', wave: 12 } },
       { type: 'MATCH_END', result: { outcome: 'DEATHMATCH', winner: Team.B, scoreA: 8, scoreB: 15 } },
@@ -157,8 +166,18 @@ describe('parseServerMessage', () => {
   });
 
   it('rejects a player id outside the room', () => {
-    expect(parseServerMessage({ ...welcome, id: 4 })).toBeNull();
-    expect(parseServerMessage({ ...welcome, id: -1 })).toBeNull();
+    const room = {
+      type: 'ROOM_STATE',
+      code: 'QRTZ',
+      mode: 'coop',
+      host: 0,
+      slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.A }],
+      you: 0,
+    };
+    expect(parseServerMessage({ ...room, host: 4 })).toBeNull();
+    expect(parseServerMessage({ ...room, host: -1 })).toBeNull();
+    expect(parseServerMessage({ ...room, you: 4 })).toBeNull();
+    expect(parseServerMessage({ ...room, you: -1 })).toBeNull();
   });
 
   it('rejects a slot on the enemy team', () => {
@@ -168,6 +187,7 @@ describe('parseServerMessage', () => {
       mode: 'coop',
       host: 0,
       slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.ENEMY }],
+      you: 0,
     };
     expect(parseServerMessage(msg)).toBeNull();
   });
@@ -180,17 +200,17 @@ describe('parseServerMessage', () => {
   });
 
   it('rejects a SNAPSHOT with a malformed entity', () => {
-    expect(parseServerMessage({ type: 'SNAPSHOT', snap: { tick: 1, entities: [], acks: [] } })).not.toBeNull();
+    expect(parseServerMessage({ type: 'SNAPSHOT', snap: { tick: 1, entities: [], acks: [], scores: { a: 0, b: 0 } } })).not.toBeNull();
     expect(
       parseServerMessage({
         type: 'SNAPSHOT',
-        snap: { tick: 1, entities: [{ id: 0, kind: 99, x: 0, y: 0, hp: 1, state: 0 }], acks: [] },
+        snap: { tick: 1, entities: [{ id: 0, kind: 99, x: 0, y: 0, hp: 1, state: 0 }], acks: [], scores: { a: 0, b: 0 } },
       }),
     ).toBeNull();
     expect(
       parseServerMessage({
         type: 'SNAPSHOT',
-        snap: { tick: 1, entities: [{ id: 0, kind: EntityKind.CROW, x: 0, y: 0 }], acks: [] },
+        snap: { tick: 1, entities: [{ id: 0, kind: EntityKind.CROW, x: 0, y: 0 }], acks: [], scores: { a: 0, b: 0 } },
       }),
     ).toBeNull();
     expect(parseServerMessage({ type: 'SNAPSHOT', snap: { tick: 1, entities: [] } })).toBeNull();

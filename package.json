@@ -5,13 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "tsx src/server/index.ts",
     "build": "vite build",
+    "build:server": "vite build --config vite.config.server.ts",
+    "start": "node dist-server/index.js",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.9",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",
     "vite-plugin-singlefile": "^2.3.3",
@@ -19,6 +24,7 @@
   },
   "dependencies": {
     "rot-js": "^2.2.1",
-    "simplex-noise": "^2.4.0"
+    "simplex-noise": "^2.4.0",
+    "ws": "^8.21.2"
   }
 }
