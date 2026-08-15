@@ -797,14 +797,41 @@ function initGame() {
   for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
 }
 
+/**
+ * How much tougher a crow spawned right now should be. Only waves mode
+ * escalates this way: brawl is a short sprint to ten kills and the boss, not
+ * an endless run, so it has no long climb to ramp against.
+ *
+ * Caps at 10x (reached around wave 25) rather than compounding forever,
+ * since waves is endless and an uncapped 10%/wave climb would eventually
+ * demand more hits than any weapon's ammo economy could supply.
+ */
+function waveCrowHpMult() {
+  if (gameMode !== 'waves') return 1;
+  return Math.min(10, Math.pow(1.1, wave - 1));
+}
+
+/**
+ * How much faster an aggro'd crow should close in right now. Same idea as
+ * waveCrowHpMult, on a slower every-3-waves cadence, and capped far lower
+ * (2x, around wave 22): HP just costs more hits, but a crow fast enough
+ * would stop being dodgeable at all, which is a different kind of hard.
+ */
+function waveCrowAggroMult() {
+  if (gameMode !== 'waves') return 1;
+  return Math.min(2, Math.pow(1.1, Math.floor((wave - 1) / 3)));
+}
+
 function spawnCrow() {
   const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
+  const maxHp = waveCrowHpMult();
   crows.push({
     x: CONFIG.canvasW + 20 + Math.random() * 80, y: baseY, baseY,
     state: 'passive', aggroTimer: 0, team: Team.ENEMY,
     wingPhase: Math.random() * Math.PI * 2, phaseOff: Math.random() * Math.PI * 2,
     entityPhase: Math.random() * Math.PI * 2,
     white: false, frozen: false,
+    hp: maxHp, maxHp, hitFlash: 0,
     path: null, pathTimer: 0   // rot.js A* path cache
   });
 }
@@ -909,7 +936,7 @@ function updatePlayer(dt) {
       const r2 = FEATHERS.pfRange() ** 2;
       for (let j = crows.length - 1; j >= 0; j--) {
         if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) {
-          killCrow(j);
+          damageCrow(j);
           if (!pfHitFlash) {
             pfHitFlash = true;
             const tipX = player.x + Math.cos(player.aimAngle) * 44;
@@ -948,7 +975,7 @@ function updatePlayer(dt) {
       const c = crows[j];
       if (dist2(tipX, tipY, c.x, c.y) < hitR2 || dist2(midX, midY, c.x, c.y) < hitR2) {
         if (fsActive) spawnFire(c.x, c.y);
-        killCrow(j);
+        damageCrow(j);
         events.emit({ type: 'MELEE_HIT', x: c.x, y: c.y, kind: 'spear', fire: fsActive });
       }
     }
@@ -977,7 +1004,7 @@ function updatePlayer(dt) {
       const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
       // Damage crows
       for (let j = crows.length - 1; j >= 0; j--)
-        if (dist2(player.x, player.y, crows[j].x, crows[j].y) < wr2) killCrow(j);
+        if (dist2(player.x, player.y, crows[j].x, crows[j].y) < wr2) damageCrow(j);
       // Damage boss
       if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < wr2) {
@@ -1143,7 +1170,7 @@ function fireLightningStorm() {
   // Damage enemies
   const r2 = STORM_R ** 2;
   for (let j = crows.length - 1; j >= 0; j--)
-    if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) killCrow(j);
+    if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(player.x, player.y, boss.x, boss.y) < r2) {
     damageBoss(CONFIG.stormBossDamage, player.x, player.y, 'storm', CONFIG.stormFlashDuration);
@@ -1211,7 +1238,7 @@ function updateArrows(dt) {
       let wizHitCrow = false;
       for (let j = crows.length-1; j >= 0; j--) {
         if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
-          killCrow(j);
+          damageCrow(j);
           arrows.splice(i,1);
           wizHitCrow = true;
           break;
@@ -1257,7 +1284,7 @@ function updateArrows(dt) {
       // Crow hits — pierces through up to pierceLeft enemies
       for (let j = crows.length - 1; j >= 0; j--) {
         if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
-          killCrow(j);
+          damageCrow(j);
           a.pierceLeft--;
           events.emit({ type: 'JAVELIN_BOUNCE', x: a.x, y: a.y });
           if (a.pierceLeft <= 0) { arrows.splice(i,1); break; }
@@ -1369,7 +1396,7 @@ function updateArrows(dt) {
     const hitR = a.hitRadius || CONFIG.arrowHitRadius;
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
-        killCrow(j); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageCrow(j); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
@@ -1405,7 +1432,7 @@ function updateFires(dt) {
     if (f.damageTimer <= 0) {
       f.damageTimer = CONFIG.fireArrowDamageInterval;
       for (let j = crows.length - 1; j >= 0; j--)
-        if (dist2(f.x, f.y, crows[j].x, crows[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) killCrow(j);
+        if (dist2(f.x, f.y, crows[j].x, crows[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) damageCrow(j);
     }
   }
 }
@@ -1413,6 +1440,22 @@ function updateFires(dt) {
 function onArrowMiss() {
   events.emit({ type: 'ARROW_MISS' }); aggroCrows(Math.random() < 0.5 ? 1 : 2);
   if (boss && appState === 'boss_fight' && boss.bstate === 'orbit') startBossCharge();
+}
+
+/**
+ * One hit landing on a crow. Every weapon deals a flat 1 regardless of type
+ * or character — waves mode's difficulty climb lives entirely in how much
+ * HP a crow was spawned with (waveCrowHpMult), not in rebalancing what any
+ * given weapon is worth, which is a different question this doesn't answer.
+ * Below wave 1's baseline of 1 HP, this behaves exactly as killCrow(j)
+ * always did: one hit, dead.
+ */
+function damageCrow(j, amount = 1) {
+  const c = crows[j];
+  if (!c) return;
+  c.hp -= amount;
+  if (c.hp > 0) { c.hitFlash = 0.15; return; }
+  killCrow(j);
 }
 
 function killCrow(j) {
@@ -1497,7 +1540,7 @@ function explodeExplosive(d, source) {
   }
 
   for (let j = crows.length - 1; j >= 0; j--)
-    if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) killCrow(j);
+    if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     damageBoss(CONFIG.dynamiteBossDamage, d.x, d.y, source, 0.25);
@@ -1575,6 +1618,7 @@ function updateCrows(dt) {
   pathScheduler.serve(player.x, player.y);
   for (let i = crows.length - 1; i >= 0; i--) {
     const c = crows[i];
+    if (c.hitFlash > 0) c.hitFlash = Math.max(0, c.hitFlash - dt);
     if (c.frozen) continue;
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
@@ -1591,7 +1635,7 @@ function updateCrows(dt) {
       c.aggroTimer -= dt;
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
-      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod();
+      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult();
       // Request a recompute when the cached path expires or runs out; the
       // scheduler serves it within a few frames. The crow keeps following its
       // stale path (or beelines when empty) until then.
@@ -3433,11 +3477,12 @@ function drawCrow(c) {
   const bobYAmp   = isWhite ? 1.2 : 0.8;
   const bobY      = bobYAmp * Math.sin(loopT * 3 + ep);
   const pulsePhase = loopT * 6;
+  const flashOn = c.hitFlash > 0 && Math.floor(c.hitFlash * 20) % 2 === 0;
 
   // Per-spec palettes
-  const bodyCol  = isWhite ? '#E8E8E8' : '#0A0A0A';
+  const bodyCol  = flashOn ? '#FFFFFF' : (isWhite ? '#E8E8E8' : '#0A0A0A');
   const edgeCol  = isWhite ? '#FFFFFF' : '#1F1F1F';
-  const wingCol  = isWhite ? '#E8E8E8' : '#0A0A0A';
+  const wingCol  = flashOn ? '#FFFFFF' : (isWhite ? '#E8E8E8' : '#0A0A0A');
   const beakCol  = isWhite ? '#FF1F1F' : '#FFB400';
   const eyeCol   = isWhite ? '#FF1F1F' : '#FFB400';
   const glintCol = isWhite ? '#FFFFFF' : '#FF1F1F';
@@ -3507,6 +3552,18 @@ function drawCrow(c) {
     ctx.strokeStyle = `rgba(255,31,31,${Math.max(0, pAlpha)})`; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(0, bobY, ringR, 0, Math.PI*2); ctx.stroke();
     ctx.shadowBlur = 0;
+  }
+
+  // HP pips — only once waves mode has actually made a crow tougher than
+  // one hit. A "1/1" pip under every ordinary crow would be noise, not
+  // information.
+  if (c.maxHp > 1) {
+    const pipW = 3, gap = 1, total = c.maxHp * pipW + (c.maxHp - 1) * gap;
+    const startX = -total / 2, pipY = bobY - 10;
+    for (let p = 0; p < c.maxHp; p++) {
+      ctx.fillStyle = p < c.hp ? '#FF1F1F' : 'rgba(255,255,255,0.25)';
+      ctx.fillRect(startX + p * (pipW + gap), pipY, pipW, 2);
+    }
   }
 
   ctx.restore();
