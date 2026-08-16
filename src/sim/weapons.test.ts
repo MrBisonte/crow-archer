@@ -6,9 +6,11 @@ import {
   CROSSBOW_BOLT_RADIUS,
   CROSSBOW_SPREAD_RADIANS,
   Crossbow,
+  DYNAMITE_DAMAGE,
   DynamitePouch,
   LightningStorm,
   SATCHEL_CARRIED,
+  SATCHEL_DAMAGE,
   Satchel,
   Whirlwind,
   primaryWeapon,
@@ -52,10 +54,15 @@ describe('Crossbow', () => {
 });
 
 describe('Satchel', () => {
-  it('rests where it lands instead of bouncing or vanishing', () => {
+  it('bounces off terrain like dynamite, but never explodes just from stopping', () => {
     const [effect] = new Satchel().use();
     if (!effect || effect.kind !== 'shot') throw new Error('expected a shot');
-    expect(effect.shot.onTerrain).toBe('rest');
+    expect(effect.shot.onTerrain).toBe('bounce');
+    expect(effect.shot.explodesAtRest).toBe(false);
+  });
+
+  it('hits softer than dynamite, the same cut the crossbow bolt takes', () => {
+    expect(SATCHEL_DAMAGE).toBeLessThan(DYNAMITE_DAMAGE);
   });
 
   it('sinks in water, the same rule every thrown weapon follows', () => {

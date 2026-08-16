@@ -123,6 +123,9 @@ const CONFIG = {
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
+  // 70% of dynamite's, same cut the crossbow bolt takes against the arrow. Blast
+  // radius stays shared with dynamiteBlastRadius; only boss damage is softer.
+  satchelBossDamage: 1,
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
 
@@ -1515,11 +1518,11 @@ function updateDynamites(dt) {
 
 /**
  * One explosive going off — dynamite's timer running out, or a satchel's
- * timer or the ranger's own bolt. Blast radius and boss damage are
- * dynamite's own CONFIG figures for both: nothing asked for the satchel to
- * hit harder or softer, and a second copy of the same number would only be
- * one more place for the two to quietly drift apart. `source` is carried
- * through to `damageBoss` only to tag which weapon the hit event names.
+ * timer or the ranger's own bolt. Blast radius is dynamite's own CONFIG
+ * figure for both, one copy rather than two numbers that could quietly drift
+ * apart. Boss damage is not: the satchel hits for less, `source` picks which
+ * CONFIG figure applies and is also carried through to `damageBoss` to tag
+ * which weapon the hit event names.
  */
 function explodeExplosive(d, source) {
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
@@ -1545,7 +1548,8 @@ function explodeExplosive(d, source) {
     if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
-    damageBoss(CONFIG.dynamiteBossDamage, d.x, d.y, source, 0.25);
+    const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage : CONFIG.dynamiteBossDamage;
+    damageBoss(bossDamage, d.x, d.y, source, 0.25);
   }
 }
 
@@ -1582,12 +1586,11 @@ function useSatchel() {
 /**
  * Flight and countdown for every satchel on the field.
  *
- * Terrain response is "rest", not dynamite's bounce: the satchel is meant to
- * be found sitting where it landed, so it decelerates to a stop on the first
- * thing it touches rather than ricocheting off it. `life` is doing double
- * duty by design, the same way it does for dynamite: before arming it counts
- * down the idle backstop (satchelIdleLife), and arming resets it to count
- * down the real fuse (satchelArmFuse) instead.
+ * Terrain response now matches dynamite's bounce, tumble and all, rather
+ * than stopping dead: `life` is doing double duty by design, the same way it
+ * does for dynamite, but only the fuse actually detonates it, never the
+ * slow-down that settles it — an unarmed satchel bounces to a stop and sits
+ * there inert, same as before, just livelier getting there.
  */
 function updateSatchels(dt) {
   for (let i = satchels.length - 1; i >= 0; i--) {
@@ -1597,17 +1600,18 @@ function updateSatchels(dt) {
 
     if (s.resting) continue;
 
+    s.angle += dt * 5;
+
     const nx = s.x + s.vx * dt, tx = tileAt(nx, s.y);
     if (tx === TILE.WATER) { events.emit({ type: 'SPLASH', x: s.x, y: s.y }); satchels.splice(i, 1); continue; }
-    if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) s.vx = 0; else s.x = nx;
+    if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) s.vx *= -0.65; else s.x = nx;
 
     const ny = s.y + s.vy * dt, ty = tileAt(s.x, ny);
     if (ty === TILE.WATER) { events.emit({ type: 'SPLASH', x: s.x, y: s.y }); satchels.splice(i, 1); continue; }
-    if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) s.vy = 0; else s.y = ny;
+    if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) s.vy *= -0.65; else s.y = ny;
 
-    // Settling drag — faster than dynamite's 0.985, so a thrown satchel rolls
-    // a short distance and stops rather than sliding the width of a room.
-    s.vx *= 0.9; s.vy *= 0.9;
+    // Same drag as dynamite, so it rolls and settles on the same rhythm.
+    s.vx *= 0.985; s.vy *= 0.985;
     if (Math.hypot(s.vx, s.vy) < 8) { s.vx = 0; s.vy = 0; s.resting = true; }
   }
 }

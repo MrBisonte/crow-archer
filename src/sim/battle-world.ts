@@ -712,25 +712,20 @@ export class BattleWorld implements World {
         }
         continue;
       }
-      // A thrown stick that has stopped goes off where it lies, against
-      // whatever stopped it, rather than waiting out a fuse in the open. Only
-      // dynamite bounces to a rest this way; a satchel that stops is meant to
-      // sit there inert, so this never fires for one.
+      // Both dynamite and a satchel bounce to a rest the same way; only what
+      // happens once they get there differs. Dynamite goes off where it
+      // stopped, a fuse running down is the point of it. A satchel does not,
+      // it is meant to be found sitting there, armed or not, but
+      // DYNAMITE_DRAG alone only ever approaches zero, so without this it
+      // would keep visibly creeping for seconds after the throw.
       if (
         shot.spec.onTerrain === 'bounce' &&
         Math.hypot(shot.vx, shot.vy) < DYNAMITE_REST_SPEED
       ) {
-        this.#explode(shot, kills);
-        continue;
-      }
-      // A satchel does not explode from slowing down, but it still needs to
-      // stop: DYNAMITE_DRAG alone only ever approaches zero, so in open
-      // ground with nothing to bounce off, an unarmed satchel would keep
-      // visibly creeping for seconds after the throw instead of landing.
-      if (
-        shot.spec.onTerrain === 'rest' &&
-        Math.hypot(shot.vx, shot.vy) < DYNAMITE_REST_SPEED
-      ) {
+        if (shot.spec.explodesAtRest) {
+          this.#explode(shot, kills);
+          continue;
+        }
         shot.vx = 0;
         shot.vy = 0;
       }
@@ -780,9 +775,9 @@ export class BattleWorld implements World {
    * Returns false when it is gone: only water does that, and only to something
    * thrown. `'bounce'` keeps its position and reverses the axis it was blocked
    * on, per axis, so a stick fired into a corner comes back out of it rather
-   * than sticking. `'rest'` does the same losing-speed-per-tick, but stops
-   * dead on that axis instead of reversing, so a thrown satchel lands and
-   * stays rather than ricocheting away.
+   * than sticking, the same for dynamite and a satchel alike. Whether it goes
+   * off once that bounce decays to a stop is `explodesAtRest`'s question, not
+   * this method's.
    */
   #carry(shot: Shot, dt: number): boolean {
     if (shot.spec.onTerrain === 'stop') {
@@ -795,16 +790,15 @@ export class BattleWorld implements World {
     // and a half.
     shot.vx *= DYNAMITE_DRAG;
     shot.vy *= DYNAMITE_DRAG;
-    const reflects = shot.spec.onTerrain === 'bounce';
 
     const nx = shot.x + shot.vx * dt;
     if (shot.spec.drownsInWater && this.terrain.drowns(nx, shot.y)) return false;
-    if (this.terrain.blocksShot(nx, shot.y)) shot.vx = reflects ? -shot.vx * DYNAMITE_BOUNCE : 0;
+    if (this.terrain.blocksShot(nx, shot.y)) shot.vx = -shot.vx * DYNAMITE_BOUNCE;
     else shot.x = nx;
 
     const ny = shot.y + shot.vy * dt;
     if (shot.spec.drownsInWater && this.terrain.drowns(shot.x, ny)) return false;
-    if (this.terrain.blocksShot(shot.x, ny)) shot.vy = reflects ? -shot.vy * DYNAMITE_BOUNCE : 0;
+    if (this.terrain.blocksShot(shot.x, ny)) shot.vy = -shot.vy * DYNAMITE_BOUNCE;
     else shot.y = ny;
     return true;
   }
