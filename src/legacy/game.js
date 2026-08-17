@@ -1204,11 +1204,19 @@ function updateArrows(dt) {
     if (a.wiz) {
       // Life expiry — must be checked here since we `continue` before the shared check below
       if (a.life <= 0) { arrows.splice(i, 1); continue; }
-      // Homing: steer toward nearest target
+      // Homing: the boss during a boss fight, otherwise the nearest crow. A
+      // boss fight is what the player is there for — a leftover passive crow
+      // stealing the bolt mid-fight is a bug, not a targeting choice, so the
+      // boss is checked first rather than only as a fallback when no crow
+      // exists at all.
       if (a.homing) {
-        let tgt = null, tDist2 = Infinity;
-        for (const c of crows) { const d = dist2(a.x,a.y,c.x,c.y); if (d<tDist2){tDist2=d;tgt=c;} }
-        if (!tgt && boss && appState==='boss_fight' && boss.bstate!=='dead') tgt = boss;
+        let tgt = null;
+        if (boss && appState==='boss_fight' && boss.bstate!=='dead') {
+          tgt = boss;
+        } else {
+          let tDist2 = Infinity;
+          for (const c of crows) { const d = dist2(a.x,a.y,c.x,c.y); if (d<tDist2){tDist2=d;tgt=c;} }
+        }
         if (tgt) {
           const tA = Math.atan2(tgt.y - a.y, tgt.x - a.x);
           const cA = Math.atan2(a.vy, a.vx);
