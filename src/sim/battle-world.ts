@@ -24,7 +24,7 @@ import {
 } from '../net/protocol';
 import { SECONDARY_AMMO_MAX, ShotFlavourCode, packPlayerState, packShotState } from '../net/entity-state';
 import { ARENA_H, ARENA_W, CHARACTER_STATS, PLAYER_RADIUS, direction } from './arena';
-import { Terrain, type NoiseFactory } from './arena-map';
+import { Terrain, type MapKind, type NoiseFactory } from './arena-map';
 import { slide } from './collide';
 import { advanceCrow, spawnCrow, CROW_HIT_RADIUS, CROW_INTERVAL_TICKS, MAX_CROWS, type Crow } from './crows';
 import { Button, type InputCommand } from './input';
@@ -219,6 +219,12 @@ export interface BattleWorldOptions {
   mode: GameMode;
   noise: NoiseFactory;
   /**
+   * Which arena to generate. Optional and defaulted, like Terrain.fromSeed's
+   * own kind parameter: most tests care about who hit whom, not which map it
+   * happened on, the same reason `terrain` below exists.
+   */
+  mapKind?: MapKind;
+  /**
    * Terrain to fight on, instead of the one the seed describes.
    *
    * Injected for the same reason the server injects its world factory: a test
@@ -250,7 +256,7 @@ export class BattleWorld implements World {
 
   constructor(options: BattleWorldOptions) {
     this.#mode = options.mode;
-    this.terrain = options.terrain ?? Terrain.fromSeed(options.seed, options.noise);
+    this.terrain = options.terrain ?? Terrain.fromSeed(options.seed, options.noise, options.mapKind);
     // A second stream, offset from the map's, so terrain and crows do not
     // march in step on every match played from the same seed.
     this.#rng = mulberry32(options.seed ^ 0x9e3779b9);

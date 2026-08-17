@@ -7,6 +7,7 @@ import {
   nextWinCondition,
   type CharacterKind,
   type GameMode,
+  type MapKind,
   type PlayerId,
   type RoomCode,
   type RoomView,
@@ -44,6 +45,7 @@ export type LobbyAction =
   | { type: 'PICK_CHARACTER'; char: CharacterKind }
   | { type: 'TOGGLE_READY' }
   | { type: 'SET_MODE'; mode: GameMode }
+  | { type: 'SET_MAP'; mapKind: MapKind }
   /**
    * Cycles the frag target or the time limit. The kind is what the user chose;
    * the value comes from the list on offer, so the two settings cannot both be
@@ -63,6 +65,7 @@ export type LobbyOutbound =
   | { type: 'SET_CHARACTER'; character: CharacterKind }
   | { type: 'SET_READY'; ready: boolean }
   | { type: 'SET_MODE'; mode: GameMode }
+  | { type: 'SET_MAP'; mapKind: MapKind }
   | { type: 'SET_WIN_CONDITION'; win: WinCondition }
   | { type: 'LEAVE_ROOM' };
 
@@ -136,6 +139,16 @@ export function transitionLobby(
       return {
         state,
         send: [{ type: 'SET_MODE', mode: action.mode }],
+      };
+    }
+
+    case 'SET_MAP': {
+      if (state.screen !== 'lobby' || !state.roomView) return { state, send: [] };
+      // Only host can change the map; others ignore
+      if (state.userSlot !== state.roomView.host) return { state, send: [] };
+      return {
+        state,
+        send: [{ type: 'SET_MAP', mapKind: action.mapKind }],
       };
     }
 

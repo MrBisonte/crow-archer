@@ -65,7 +65,7 @@ describe('Transport', () => {
     await t.connect();
     expect(t.state).toBe('connected');
 
-    t.injectResponses({ type: 'ROOM_STATE', code: 'AAAA', mode: 'coop', host: 0, slots: [], you: 0, win: DEFAULT_WIN_CONDITION });
+    t.injectResponses({ type: 'ROOM_STATE', code: 'AAAA', mode: 'coop', mapKind: 'forest', host: 0, slots: [], you: 0, win: DEFAULT_WIN_CONDITION });
     t.send({ type: 'CREATE_ROOM' });
 
     expect(t.recv()).toMatchObject({ type: 'ROOM_STATE' });

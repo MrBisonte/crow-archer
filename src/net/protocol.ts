@@ -13,8 +13,13 @@
  * types later with no change here.
  */
 
+import type { MapKind } from '../sim/arena-map';
 import { Button, type InputCommand } from '../sim/input';
 import { Team } from '../sim/team';
+
+// Re-exported so every consumer of the wire protocol gets it from here, the
+// same as GameMode and CharacterKind, rather than reaching into sim/ directly.
+export type { MapKind };
 
 /**
  * Protocol revision. Bump it on any change to a message shape, and on any
@@ -91,6 +96,8 @@ export interface PlayerSlot {
 export interface RoomView {
   code: RoomCode;
   mode: GameMode;
+  /** Which arena the match will use. Set by the host, shown to everyone. */
+  mapKind: MapKind;
   host: PlayerId;
   slots: PlayerSlot[];
   /** What the match will play to. Set by the host, shown to everyone. */
@@ -305,6 +312,8 @@ export type ClientMessage =
   | { type: 'SET_READY'; ready: boolean }
   // Host only. The server rejects this from any other player with NOT_HOST.
   | { type: 'SET_MODE'; mode: GameMode }
+  // Host only. Same rejection as SET_MODE.
+  | { type: 'SET_MAP'; mapKind: MapKind }
   // Host only. Cycles the frag target or the time limit, one or the other.
   | { type: 'SET_WIN_CONDITION'; win: WinCondition }
   // Match. One INPUT per sim tick, 60 times a second.
@@ -341,6 +350,7 @@ export type ServerMessage =
       type: 'MATCH_START';
       seed: number;
       mode: GameMode;
+      mapKind: MapKind;
       starts: PlayerStart[];
       win: WinCondition;
     }
@@ -381,6 +391,7 @@ const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
 
 const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
+const MAPS: readonly MapKind[] = ['forest', 'castle'];
 const ERROR_CODES: readonly ErrorCode[] = [
   'VERSION_MISMATCH',
   'BAD_MESSAGE',
@@ -409,6 +420,8 @@ const isName = (v: unknown): v is string =>
 const isCharacter = (v: unknown): v is CharacterKind => isOneOf(CHARACTERS, v);
 
 const isMode = (v: unknown): v is GameMode => isOneOf(MODES, v);
+
+const isMapKind = (v: unknown): v is MapKind => isOneOf(MAPS, v);
 
 const isErrorCode = (v: unknown): v is ErrorCode => isOneOf(ERROR_CODES, v);
 
@@ -530,6 +543,10 @@ const clientReaders: ClientReaders = {
     const mode = m['mode'];
     return isMode(mode) ? { type: 'SET_MODE', mode } : null;
   },
+  SET_MAP: (m) => {
+    const mapKind = m['mapKind'];
+    return isMapKind(mapKind) ? { type: 'SET_MAP', mapKind } : null;
+  },
   SET_WIN_CONDITION: (m) => {
     const win = m['win'];
     return isWinCondition(win) ? { type: 'SET_WIN_CONDITION', win } : null;
@@ -551,14 +568,16 @@ const serverReaders: ServerReaders = {
   ROOM_STATE: (m) => {
     const code = m['code'];
     const mode = m['mode'];
+    const mapKind = m['mapKind'];
     const host = m['host'];
     const slots = m['slots'];
     const you = m['you'];
     const win = m['win'];
-    if (!isRoomCode(code) || !isMode(mode) || !isPlayerId(host) || !isPlayerId(you)) return null;
+    if (!isRoomCode(code) || !isMode(mode) || !isMapKind(mapKind)) return null;
+    if (!isPlayerId(host) || !isPlayerId(you)) return null;
     if (!isArrayOf(slots, isPlayerSlot) || slots.length > MAX_PLAYERS) return null;
     if (!isWinCondition(win)) return null;
-    return { type: 'ROOM_STATE', code, mode, host, slots, you, win };
+    return { type: 'ROOM_STATE', code, mode, mapKind, host, slots, you, win };
   },
   ERROR: (m) => {
     const code = m['code'];
@@ -568,12 +587,13 @@ const serverReaders: ServerReaders = {
   MATCH_START: (m) => {
     const seed = m['seed'];
     const mode = m['mode'];
+    const mapKind = m['mapKind'];
     const starts = m['starts'];
     const win = m['win'];
-    if (!isUint32(seed) || !isMode(mode)) return null;
+    if (!isUint32(seed) || !isMode(mode) || !isMapKind(mapKind)) return null;
     if (!isArrayOf(starts, isPlayerStart) || starts.length > MAX_PLAYERS) return null;
     if (!isWinCondition(win)) return null;
-    return { type: 'MATCH_START', seed, mode, starts, win };
+    return { type: 'MATCH_START', seed, mode, mapKind, starts, win };
   },
   SNAPSHOT: (m) => {
     const snap = m['snap'];

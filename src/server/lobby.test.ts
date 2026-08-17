@@ -84,6 +84,7 @@ describe('Lobby', () => {
         type: 'ROOM_STATE',
         code: 'AAAA',
         mode: 'deathmatch',
+        mapKind: 'forest',
         host: 0,
         you: 0,
         win: DEFAULT_WIN_CONDITION,
@@ -196,12 +197,21 @@ describe('Lobby', () => {
         .filter((m) => m.type === 'MATCH_START');
       expect(starts).toHaveLength(2);
       expect(starts[0]).toEqual(starts[1]);          // one message, two recipients
-      expect(starts[0]).toMatchObject({ seed: 0xdeadbeef, mode: 'deathmatch',
+      expect(starts[0]).toMatchObject({ seed: 0xdeadbeef, mode: 'deathmatch', mapKind: 'forest',
         starts: [
           { id: 0, character: 'archer', team: Team.A },
           { id: 1, character: 'archer', team: Team.B },
         ],
       });
+    });
+
+    it('carries the chosen map into MATCH_START', () => {
+      lobby.receive(1, { type: 'SET_MAP', mapKind: 'castle' });
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      const out = lobby.receive(2, { type: 'SET_READY', ready: true });
+      const start = out.map((o) => o.message).find((m) => m.type === 'MATCH_START');
+
+      expect(start).toMatchObject({ mapKind: 'castle' });
     });
 
     it('spawns the two seats apart', () => {

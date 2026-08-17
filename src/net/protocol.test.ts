@@ -53,6 +53,7 @@ describe('parseClientMessage', () => {
       { type: 'SET_CHARACTER', character: 'wizard' },
       { type: 'SET_READY', ready: true },
       { type: 'SET_MODE', mode: 'deathmatch' },
+      { type: 'SET_MAP', mapKind: 'castle' },
       { type: 'PING', sent: 1000 },
     ];
     for (const m of msgs) expect(parseClientMessage(m)).toEqual(m);
@@ -98,9 +99,10 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage({ ...hello, name: 'x'.repeat(17) })).toBeNull();
   });
 
-  it('rejects an unknown character and an unknown mode', () => {
+  it('rejects an unknown character, mode, and map', () => {
     expect(parseClientMessage({ type: 'SET_CHARACTER', character: 'bard' })).toBeNull();
     expect(parseClientMessage({ type: 'SET_MODE', mode: 'ctf' })).toBeNull();
+    expect(parseClientMessage({ type: 'SET_MAP', mapKind: 'volcano' })).toBeNull();
   });
 
   it('rejects an INPUT with a bad command', () => {
@@ -128,6 +130,7 @@ describe('parseServerMessage', () => {
         type: 'ROOM_STATE',
         code: 'QRTZ',
         mode: 'coop',
+        mapKind: 'forest',
         host: 0,
         slots: [{ id: 0, name: 'crow', character: 'archer', ready: false, team: Team.A }],
         you: 0,
@@ -137,6 +140,7 @@ describe('parseServerMessage', () => {
         type: 'MATCH_START',
         seed: 0xdeadbeef,
         mode: 'coop',
+        mapKind: 'castle',
         starts: [{ id: 0, character: 'archer', team: Team.A, x: 64, y: 64 }],
         win: DEFAULT_WIN_CONDITION,
       },

@@ -108,7 +108,7 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
   // crow that wanders through it.
   const makeWorld: WorldFactory =
     options.makeWorld ??
-    ((seed, starts, mode) => new BattleWorld({ seed, starts, mode, noise: noiseFor }));
+    ((seed, starts, mode, mapKind) => new BattleWorld({ seed, starts, mode, mapKind, noise: noiseFor }));
 
   const lobby = new Lobby({
     rooms,
@@ -181,7 +181,7 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
         if (view && !matches.has(view.code)) {
           matches.set(
             view.code,
-            new Match(view, makeWorld(message.seed, message.starts, message.mode)),
+            new Match(view, makeWorld(message.seed, message.starts, message.mode, message.mapKind)),
           );
           startTickLoop();
         }

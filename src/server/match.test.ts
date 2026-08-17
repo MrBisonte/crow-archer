@@ -11,6 +11,7 @@ import { DEFAULT_WIN_CONDITION } from '../net/protocol';
 const room: RoomView = {
   code: 'AAAA',
   mode: 'coop',
+  mapKind: 'forest',
   host: 0,
   win: DEFAULT_WIN_CONDITION,
   slots: [

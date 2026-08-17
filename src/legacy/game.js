@@ -7,12 +7,13 @@ import { FOV, Path } from 'rot-js';
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
 import { generateGrid } from '../sim/mapgen';
+import { MAP_GEN } from '../sim/arena-map';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { ScreenShake } from '../render/shake';
-import { StaticTileLayer, AnimatedTileOverlay, makeVignette } from '../render/tiles';
+import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
@@ -359,14 +360,26 @@ const tileMap = new TileMap(CONFIG.rows, CONFIG.cols);
 let waterPhase = false, waterLastTs = 0;
 
 let mapSeed = 0;
+let mapKind = 'forest';
 
-function generateMap() {
+/**
+ * Generates the map, defaulting to 'forest', today's only map in real play,
+ * so every existing call site is unaffected by a second one existing. `kind`
+ * is only ever 'castle' from the dev harness right now — nothing in real
+ * gameplay picks it yet, that is brawl mode's second stage.
+ */
+function generateMap(kind = 'forest') {
+  mapKind = kind;
   mapSeed = (Math.random() * 2 ** 32) >>> 0;
   const rng = mulberry32(mapSeed);
   // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
   const sn = new SimplexNoise(rng);
   tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
-    (x, y) => sn.noise2D(x, y)));
+    (x, y) => sn.noise2D(x, y), MAP_GEN[kind].density));
+  // tileLayer/tileOverlay are built once at startup, so the theme has to be
+  // set here too, not just the tiles. Once a game start, not a hot path.
+  tileLayer.setPainters(TILE_THEMES[kind]);
+  tileOverlay.setPalette(ANIMATED_THEMES[kind]);
 }
 
 function tileAt(wx, wy) {
@@ -4708,6 +4721,8 @@ window.__game = {
   state: () => appState,
   multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
+  mapKind: () => mapKind,
+  generateMap(kind) { generateMap(kind); },
   player: () => player,
   crows: () => crows,
   mouse: () => mouse,
