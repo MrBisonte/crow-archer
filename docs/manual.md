@@ -50,10 +50,8 @@ flowchart LR
     P -- no --> A[Attack window]
     A --> D{Crow King down?}
     D -- no --> P
-    D -- yes --> C[Castle stage: skeletons spawn]
-    C --> SK{10 kills?}
-    SK -- no --> C
-    SK -- yes --> DA[Dark Archer entrance and fight]
+    D -- yes --> C[Castle stage: 9 skeleton waves]
+    C --> DA[Dark Archer entrance and fight]
     DA --> DK[Dark Knight entrance and fight]
     DK --> W[Win]
 ```
@@ -63,11 +61,21 @@ Crow King shield phases:
 - 5 s open window: attack freely
 - Randomly re-shields for 5 s (purple ring), up to 3 times per 30-second window
 
-The Crow King's death loads the castle map and starts a second gauntlet:
-skeletons instead of crows, another ten kills, then two bosses in a row with
-no shield phase of their own, every hit lands. The dark archer keeps its
-distance and fires three-bolt volleys; the dark knight closes the gap fast
-and charges often. Beating both ends the run at the win screen.
+The Crow King's death loads the castle map and starts a nine-wave gauntlet,
+three waves each of three skeleton kinds, sized 3 then 4 then 5 within each
+kind so every new threat starts light and ends heavy:
+
+| Waves | Kind | Behavior |
+|---|---|---|
+| 1-3 | Normal | Walks straight at you, one contact hit |
+| 4-6 | Fire | Same approach, explodes for 1 damage in a 50px radius on death |
+| 7-9 | Ice | Same approach, plus one ice bolt every 3 s aimed at you: 1 damage and a 3-second freeze that locks out all movement, aiming and attacks on a hit |
+
+There is no kill target. Clearing a wave's last skeleton starts the next
+one; clearing wave 9 starts the Dark Archer's entrance. Both dark bosses
+skip the Crow King's shield entirely, every hit lands. The dark archer
+keeps its distance and fires three-bolt volleys; the dark knight closes the
+gap fast and charges often. Beating both ends the run at the win screen.
 
 ### Multiplayer
 

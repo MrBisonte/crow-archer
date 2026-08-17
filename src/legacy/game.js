@@ -97,8 +97,16 @@ const CONFIG = {
   // crow's 200 (matching player speed) on purpose, a threat that is always
   // closing is not meant to also be unescapable.
   skeletonSpeed: 130, skeletonContactDamage: 1,
-  killsToTriggerDarkBoss: 10,
-  skeletonStartCount: 5, skeletonMax: 10,
+
+  // Fire skeleton: same movement and contact damage as normal, but its
+  // death is a small blast that punishes standing next to it when it pops.
+  fireSkeletonBlastRadius: 50, fireSkeletonBlastDamage: 1,
+
+  // Ice skeleton: same movement, plus a shot on a timer aimed at wherever
+  // the player is right now. A hit chips 1 HP and locks out all input for
+  // the freeze duration, so a wave of them punishes standing still.
+  iceSkeletonShotInterval: 3, iceSkeletonBoltSpeed: 300,
+  iceSkeletonBoltDamage: 1, iceSkeletonFreezeSecs: 3,
 
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
@@ -282,6 +290,7 @@ let score = 0, wave = 1, gameTime = 0, escalationTimer = 0;
 let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
 let waveAnnounce = 0;            // countdown timer for wave banner display
+let waveAnnounceText = '';       // what the banner says while it is up
 let menuSelection = 0;
 
 /**
@@ -331,9 +340,17 @@ const CHAR_PANELS = [
 ];
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
+// Set by an ice skeleton's bolt landing. Counts down in updatePlayer, which
+// returns before reading input while it is positive, so movement, aiming
+// and every weapon lock out together for the duration.
+let playerFrozenTimer = 0;
 // Its own counter, deliberately not sharing killCount: see the comment above
 // the SKELETONS section for why that separation is load-bearing.
 let skeletonKillCount = 0;
+// The castle stage's own gauntlet: 0 before it starts, 1-9 during it. See
+// startCastleWave. Distinct from `wave`, which is waves-mode's own counter
+// and never advances during brawl mode.
+let castleWave = 0;
 // Which boss brawl mode is on: 1 = crow king (forest), 2 = dark archer,
 // 3 = dark knight (both castle). Read by spawnBoss(); advanced by
 // updateBossDeath() when a non-final boss dies.
@@ -560,10 +577,11 @@ let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamite
 // The castle stage's critter. A parallel array to crows, not a variant of it —
 // see damageSkeleton/killSkeleton and updateSkeletons for why.
 let skeletons = [];
-// The dark archer's volleys. A boss-owned projectile, not a variant of the
-// player's arrows array — it has none of that array's ammo/pierce/ricochet
-// concerns, only "fly straight, hit the player."
-let bossBolts = [];
+// Enemy-owned projectiles that hit the player: the dark archer's volleys and
+// the ice skeleton's shots. Not a variant of the player's arrows array — it
+// has none of that array's ammo/pierce/ricochet concerns, only "fly
+// straight, hit the player," optionally freezing on contact.
+let hostileBolts = [];
 
 // Local player input. Produces one InputCommand per tick from keyboard + mouse.
 // The command shape matches the network input packet, so phase 2 sends the same
@@ -618,13 +636,40 @@ events.on(e => {
       floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
       break;
 
-    case 'SKELETON_KILLED':
+    case 'SKELETON_KILLED': {
       playSound(sndHitCrow);
+      const skelColors = e.kind === 'fire' ? ['#D86A40','#7A2A10','#FF6020','#FFFFFF']
+                        : e.kind === 'ice'  ? ['#A8D8F0','#4878A0','#40D0F0','#FFFFFF']
+                        : ['#D8D0C0','#8A8070','#B040E0','#FFFFFF'];
+      const skelGlow = e.kind === 'fire' ? '#FF6020' : e.kind === 'ice' ? '#40D0F0' : '#B040E0';
       burst(e.x, e.y, {
-        count: 14, colors: ['#D8D0C0','#8A8070','#B040E0','#FFFFFF'],
+        count: 14, colors: skelColors,
         speedMin: 40, speedMax: 120, decay: 1.8,
         shapeMix: [['circle', 0.7], ['spark', 0.3]],
-        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#B040E0'
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: skelGlow
+      });
+      break;
+    }
+
+    case 'FIRE_SKELETON_BLAST':
+      playSound(sndExplosion); triggerShake(6, 250);
+      burst(e.x, e.y, {
+        count: 20, colors: ['#FFB400','#FF6020','#FFFFFF','#8A1010'],
+        speedMin: 80, speedMax: 220, decay: 2.0,
+        shape: 'circle', sizeMin: 2, sizeMax: 4, shadowBlur: 10, shadowColor: '#FF6020'
+      });
+      break;
+
+    case 'ICE_BOLT_FIRED':
+      playSound(sndWizBolt);
+      break;
+
+    case 'PLAYER_FROZEN':
+      triggerShake(4, 200);
+      burst(e.x, e.y, {
+        count: 12, colors: ['#40D0F0','#A0E8FF','#FFFFFF'],
+        speedMin: 30, speedMax: 90, decay: 2.2, shape: 'spark',
+        shadowBlur: 8, shadowColor: '#40D0F0'
       });
       break;
 
@@ -860,7 +905,8 @@ function initGame() {
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
-  boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; bossBolts = [];
+  boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
+  castleWave = 0; playerFrozenTimer = 0;
   fovMap.invalidate(); // force FOV recompute on next player move
   FEATHERS.applyToGame();
   resetInv();
@@ -962,6 +1008,10 @@ function dist2(ax, ay, bx, by) { return (ax-bx)**2 + (ay-by)**2; }
 
 function updatePlayer(dt) {
   if (appState === 'boss_entrance') return;
+  // An ice bolt's freeze locks out everything below, movement, aiming and
+  // every weapon's cooldown tick, for its full duration. Nothing else can
+  // read player input while this is positive.
+  if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
   sniperMode = hasButton(cmd, Button.SNIPE);
@@ -1624,15 +1674,18 @@ function killCrow(j) {
 // first skeleton kill from instantly re-triggering the Crow King's own
 // boss_entrance the moment the stage changes.
 
-function spawnSkeleton() {
+function spawnSkeleton(kind = 'normal') {
   const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
   skeletons.push({
     x: CONFIG.canvasW + 20, y: baseY,
+    kind, // 'normal' | 'fire' | 'ice' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
     hp: 1, maxHp: 1, hitFlash: 0,
     walkPhase: Math.random() * Math.PI * 2,
     path: null, pathTimer: 0,
+    // Staggered so a whole wave of ice skeletons does not fire in sync.
+    shotCD: kind === 'ice' ? CONFIG.iceSkeletonShotInterval * Math.random() : 0,
   });
 }
 
@@ -1648,14 +1701,44 @@ function killSkeleton(j) {
   const s = skeletons[j];
   score++; skeletonKillCount++;
   STREAK.onKill();
-  events.emit({ type: 'SKELETON_KILLED', x: s.x, y: s.y });
+  events.emit({ type: 'SKELETON_KILLED', x: s.x, y: s.y, kind: s.kind });
+  if (s.kind === 'fire') {
+    events.emit({ type: 'FIRE_SKELETON_BLAST', x: s.x, y: s.y });
+    if (dist2(s.x, s.y, player.x, player.y) < CONFIG.fireSkeletonBlastRadius ** 2) {
+      damagePlayer(CONFIG.fireSkeletonBlastDamage);
+    }
+  }
   const dropChance = 0.25 + HANDICAP.dropBoost();
   dropStreak++;
   if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(s.x, s.y); }
   skeletons.splice(j, 1);
-  if (gameMode === 'brawl' && skeletonKillCount >= CONFIG.killsToTriggerDarkBoss && appState === 'playing') {
-    transitionTo('boss_entrance');
+  // No kill count here: the gauntlet is nine waves, cleared one at a time.
+  // The last skeleton of a wave dying is what starts the next one, or, past
+  // wave 9, the dark archer's entrance.
+  if (gameMode === 'brawl' && appState === 'playing' && skeletons.length === 0) {
+    if (castleWave < CASTLE_TOTAL_WAVES) startCastleWave(castleWave + 1);
+    else transitionTo('boss_entrance');
   }
+}
+
+// Three groups of three: normal, then fire, then ice, each group sized
+// 3/4/5 so every new enemy kind starts easy and ends hard before the next
+// group's first, harder kind takes over.
+const CASTLE_TOTAL_WAVES = 9;
+function castleWaveKind(n) { return n <= 3 ? 'normal' : n <= 6 ? 'fire' : 'ice'; }
+function castleWaveSize(n) { return 3 + ((n - 1) % 3); }
+function castleWaveBannerText(n) {
+  const kind = castleWaveKind(n);
+  const label = kind === 'fire' ? 'FIRE SKELETONS' : kind === 'ice' ? 'ICE SKELETONS' : 'SKELETONS';
+  return `── WAVE ${n}/${CASTLE_TOTAL_WAVES}: ${label} ──`;
+}
+
+function startCastleWave(n) {
+  castleWave = n;
+  const kind = castleWaveKind(n);
+  for (let i = 0; i < castleWaveSize(n); i++) spawnSkeleton(kind);
+  waveAnnounce = 2.2;
+  waveAnnounceText = castleWaveBannerText(n);
 }
 
 /**
@@ -1688,6 +1771,11 @@ function updateSkeletons(dt) {
       s.x += (dx / dist) * spd * dt; s.y += (dy / dist) * spd * dt; moved = true;
     }
     if (moved) s.walkPhase += dt * 8;
+
+    if (s.kind === 'ice') {
+      s.shotCD -= dt;
+      if (s.shotCD <= 0) { s.shotCD = CONFIG.iceSkeletonShotInterval; fireIceBolt(s); }
+    }
   }
 }
 
@@ -1950,17 +2038,15 @@ function checkPickupCollection() {
 function updateEscalation(dt) {
   escalationTimer += dt;
   if (waveAnnounce > 0) waveAnnounce -= dt;
+  // The castle stage's population is entirely wave-driven (startCastleWave),
+  // not this timer — see killSkeleton. Only waveAnnounce still needs to
+  // count down here so a castle-wave banner fades on schedule.
+  if (mapKind === 'castle') return;
   if (escalationTimer >= CONFIG.crowEscalationInterval) {
     escalationTimer -= CONFIG.crowEscalationInterval;
     wave++;
-    if (gameMode === 'waves') waveAnnounce = 2.2; // banner only in waves mode
-    // The castle stage has no crows to escalate — it escalates skeletons
-    // instead, on the same cadence.
-    if (mapKind === 'castle') {
-      if (skeletons.length < CONFIG.skeletonMax) spawnSkeleton();
-    } else if (crows.length < CONFIG.crowMax) {
-      spawnCrow();
-    }
+    if (gameMode === 'waves') { waveAnnounce = 2.2; waveAnnounceText = `── WAVE ${wave} ──`; }
+    if (crows.length < CONFIG.crowMax) spawnCrow();
   }
 }
 
@@ -2313,37 +2399,57 @@ function updateBoss(dt) {
 
 /**
  * The dark archer's ranged attack: a narrow spread of magic bolts aimed at
- * the player's current position. A boss-owned array, not the player's arrows
- * — see the bossBolts declaration for why.
+ * the player's current position. Pushed onto the shared hostileBolts array
+ * — see its declaration for why that is not the player's arrows.
  */
 function fireBossVolley() {
   const ang = Math.atan2(player.y - boss.y, player.x - boss.x);
   const count = CONFIG.darkArcherVolleyCount, half = (count - 1) / 2;
   for (let i = 0; i < count; i++) {
     const a = ang + (i - half) * CONFIG.darkArcherVolleySpread;
-    bossBolts.push({
+    hostileBolts.push({
       x: boss.x, y: boss.y,
       vx: Math.cos(a) * CONFIG.darkArcherBoltSpeed,
       vy: Math.sin(a) * CONFIG.darkArcherBoltSpeed,
-      life: 2.5,
+      life: 2.5, damage: CONFIG.darkArcherBoltDamage, freezeSecs: 0,
     });
   }
   events.emit({ type: 'BOSS_VOLLEY', x: boss.x, y: boss.y });
 }
 
-/** Moves the dark archer's bolts and resolves them against the player. */
-function updateBossBolts(dt) {
-  for (let i = bossBolts.length - 1; i >= 0; i--) {
-    const b = bossBolts[i];
+/**
+ * The ice skeleton's own shot: a single bolt aimed at the player, same
+ * physics as the dark archer's volley, but it freezes on a hit instead of
+ * just damaging.
+ */
+function fireIceBolt(s) {
+  const ang = Math.atan2(player.y - s.y, player.x - s.x);
+  hostileBolts.push({
+    x: s.x, y: s.y,
+    vx: Math.cos(ang) * CONFIG.iceSkeletonBoltSpeed,
+    vy: Math.sin(ang) * CONFIG.iceSkeletonBoltSpeed,
+    life: 2.5, damage: CONFIG.iceSkeletonBoltDamage, freezeSecs: CONFIG.iceSkeletonFreezeSecs,
+  });
+  events.emit({ type: 'ICE_BOLT_FIRED', x: s.x, y: s.y });
+}
+
+/** Moves every hostile bolt and resolves it against the player. */
+function updateHostileBolts(dt) {
+  for (let i = hostileBolts.length - 1; i >= 0; i--) {
+    const b = hostileBolts[i];
     b.life -= dt;
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (b.life <= 0 || b.x < 0 || b.x >= CONFIG.canvasW || b.y < 0 ||
         b.y >= CONFIG.rows * CONFIG.tileSize || !tilePassable(tileAt(b.x, b.y))) {
-      bossBolts.splice(i, 1); continue;
+      hostileBolts.splice(i, 1); continue;
     }
     if (dist2(b.x, b.y, player.x, player.y) < CONFIG.arrowHitRadius * CONFIG.arrowHitRadius) {
-      damagePlayer(CONFIG.darkArcherBoltDamage);
-      bossBolts.splice(i, 1);
+      damagePlayer(b.damage);
+      if (b.freezeSecs > 0) {
+        playerFrozenTimer = Math.max(playerFrozenTimer, b.freezeSecs);
+        events.emit({ type: 'PLAYER_FROZEN', x: player.x, y: player.y });
+      }
+      hostileBolts.splice(i, 1);
     }
   }
 }
@@ -2399,7 +2505,7 @@ function updateBossDeath(dt) {
   if (s.timer >= 1.2) {
     bossDeathSeq = null;
     const deadKind = boss.kind;
-    boss = null; bossBolts = [];
+    boss = null; hostileBolts = [];
     if (deadKind === 'crowking') {
       // Stage 1 done. The run continues into the castle stage: reload the
       // map, reposition on the same corner initGame() always starts from
@@ -2411,12 +2517,12 @@ function updateBossDeath(dt) {
       generateMap('castle');
       player.x = 2.5 * CONFIG.tileSize; player.y = (CONFIG.rows / 2) * CONFIG.tileSize;
       skeletons = []; skeletonKillCount = 0;
-      for (let i = 0; i < CONFIG.skeletonStartCount; i++) spawnSkeleton();
+      startCastleWave(1);
       // Not transitionTo('playing'): that path calls initGame() for every
       // other 'playing' entry, which would wipe the run that just cleared
-      // stage 1. Skeleton-killing plays out in 'playing' like a normal
-      // brawl; killSkeleton's own threshold check is what starts the dark
-      // archer's entrance once skeletonKillCount catches up.
+      // stage 1. The nine-wave gauntlet plays out in 'playing' like a normal
+      // brawl; killSkeleton's own wave-clear check is what starts the next
+      // wave, or the dark archer's entrance once wave 9 clears.
       appState = 'playing';
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
@@ -3012,6 +3118,29 @@ function drawWizard() {
     ctx.fillStyle='#8888FF'; ctx.fillText('STORM',px,py-35);
     ctx.restore();
   }
+}
+
+/**
+ * Drawn over whichever character is selected, while playerFrozenTimer is up.
+ * A separate pass rather than a branch inside drawPlayer/drawWizard/
+ * drawKnight/drawRanger, so the freeze reads the same on every character
+ * without touching four separate draw functions for one shared status.
+ */
+function drawPlayerFrozenOverlay() {
+  const px = player.x, py = player.y + CONFIG.hudHeight;
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 5);
+  ctx.save(); ctx.translate(px, py);
+  ctx.shadowColor = '#40D0F0'; ctx.shadowBlur = 10 + 4 * pulse;
+  ctx.strokeStyle = `rgba(64,208,240,${(0.6 + 0.3*pulse).toFixed(2)})`; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, -2, 15 + pulse, 0, Math.PI*2); ctx.stroke();
+  ctx.shadowBlur = 0;
+  for (let k = 0; k < 5; k++) {
+    const a = (k / 5) * Math.PI * 2 + loopT * 1.5;
+    const sx = Math.cos(a) * 15, sy = -2 + Math.sin(a) * 15;
+    ctx.fillStyle = '#A0E8FF';
+    ctx.fillRect(sx - 1, sy - 1, 2, 2);
+  }
+  ctx.restore();
 }
 
 function drawPlayer() {
@@ -3905,15 +4034,24 @@ function drawCrow(c) {
   ctx.restore();
 }
 
+// One palette per wave kind. `aura` is null for a normal skeleton so the
+// elemental glow below only ever draws for fire and ice.
+const SKELETON_PALETTES = {
+  normal: { bone: '#D8D0C0', edge: '#8A8070', eye: '#B040E0', aura: null },
+  fire:   { bone: '#D86A40', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
+  ice:    { bone: '#A8D8F0', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
+};
+
 // Ground-based, so a walk cycle (legs swinging on s.walkPhase) replaces a
 // crow's wing-flap. Reuses drawCrow's ground-shadow and glow-stamped-eye
 // techniques, not its geometry — always aggro, so no state-transition ring.
 function drawSkeleton(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
   const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
-  const boneCol = flashOn ? '#FFFFFF' : '#D8D0C0';
-  const edgeCol = '#8A8070';
-  const eyeCol  = '#B040E0';
+  const palette = SKELETON_PALETTES[s.kind] || SKELETON_PALETTES.normal;
+  const boneCol = flashOn ? '#FFFFFF' : palette.bone;
+  const edgeCol = palette.edge;
+  const eyeCol  = palette.eye;
   const legSwing = Math.sin(s.walkPhase) * 6;
 
   ctx.save(); ctx.translate(cx, cy);
@@ -3922,6 +4060,16 @@ function drawSkeleton(s) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI*2); ctx.fill();
+
+  // Elemental aura — fire and ice only, a small pulsing glow behind the ribs
+  if (palette.aura && !flashOn) {
+    const pulse = 0.5 + 0.5 * Math.sin(loopT * 6 + s.walkPhase);
+    ctx.globalAlpha = 0.25 + 0.15 * pulse;
+    ctx.shadowColor = palette.aura; ctx.shadowBlur = 8 + 5 * pulse;
+    ctx.fillStyle = palette.aura;
+    ctx.beginPath(); ctx.arc(0, -3, 11, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  }
 
   // 2. Legs — alternating swing, opposite phase
   ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
@@ -3953,13 +4101,17 @@ function drawSkeleton(s) {
   ctx.restore();
 }
 
-/** The dark archer's volley bolts — a glowing shard oriented along its flight. */
-function drawBossBolts() {
-  for (const b of bossBolts) {
+/**
+ * Every hostile bolt in flight — a glowing shard oriented along its flight,
+ * purple for the dark archer's, icy blue for a freezing one.
+ */
+function drawHostileBolts() {
+  for (const b of hostileBolts) {
     const ang = Math.atan2(b.vy, b.vx);
+    const col = b.freezeSecs > 0 ? '#40D0F0' : '#B040E0';
     ctx.save(); ctx.translate(b.x, b.y + CONFIG.hudHeight); ctx.rotate(ang);
-    ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
-    ctx.strokeStyle = '#B040E0'; ctx.lineWidth = 2;
+    ctx.shadowColor = col; ctx.shadowBlur = 6;
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.restore();
@@ -4990,7 +5142,9 @@ function render(t) {
     drawTiles(); FORESHADOW.drawSkyTint(); drawPickups(); drawFires(); drawParticles();
     crows.forEach(drawCrow);
     skeletons.forEach(drawSkeleton);
-    drawArrows(); drawDynamites(); drawSatchels(); drawBossBolts(); drawPlayer(); drawBoss(); drawFloaters();
+    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
+    if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
+    drawBoss(); drawFloaters();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -5012,7 +5166,7 @@ function render(t) {
       ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4 + 4 * Math.sin(loopT * 4);
       ctx.fillStyle = '#39FF14'; ctx.font = 'bold 22px "Courier New", monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(`── WAVE ${wave} ──`, CONFIG.canvasW/2, CONFIG.canvasH/2);
+      ctx.fillText(waveAnnounceText, CONFIG.canvasW/2, CONFIG.canvasH/2);
       ctx.shadowBlur = 0;
       ctx.restore();
     }
@@ -5156,6 +5310,7 @@ function stepGame(dt) {
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
+      updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -5169,7 +5324,7 @@ function stepGame(dt) {
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
-      if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateBossBolts(dt); }
+      if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -5261,14 +5416,17 @@ window.__game = {
   boss: () => boss,
   bossStage: () => bossStage,
   setBossStage(n) { bossStage = n; },
-  bossBolts: () => bossBolts,
+  hostileBolts: () => hostileBolts,
+  castleWave: () => castleWave,
+  startCastleWave(n) { startCastleWave(n); },
+  frozenTimer: () => playerFrozenTimer,
   // Tap the event bus, for verifying which gameplay events fire.
   onEvent: fn => events.on(fn),
   // Drive a real state transition, and pick a character, for scripted runs.
   go(s) { transitionTo(s); },
   pick(c) { selectedChar = c; },
   spawnCrow() { spawnCrow(); },
-  spawnSkeleton() { spawnSkeleton(); },
+  spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },
   key(k) {
     const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
     window.dispatchEvent(e); document.dispatchEvent(e);
