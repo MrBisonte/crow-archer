@@ -6,6 +6,7 @@ Full mechanics reference. See the [README](../README.md) for the quick start.
 - [Game loop](#game-loop)
 - [Systems](#systems)
 - [Map](#map)
+- [Bosses](#bosses)
 - [Multiplayer](#multiplayer)
 
 ## Characters
@@ -42,20 +43,31 @@ Skirmisher with a rapid-fire crossbow.
 flowchart LR
     S[Waves of crows spawn] --> K{10 kills?}
     K -- no --> S
-    K -- yes --> E[Boss entrance cinematic]
+    K -- yes --> E[Crow King entrance]
     E --> P{Shield up?}
     P -- yes --> H[Hold out, dodge]
     H --> P
     P -- no --> A[Attack window]
-    A --> D{Boss down?}
+    A --> D{Crow King down?}
     D -- no --> P
-    D -- yes --> W[Win]
+    D -- yes --> C[Castle stage: skeletons spawn]
+    C --> SK{10 kills?}
+    SK -- no --> C
+    SK -- yes --> DA[Dark Archer entrance and fight]
+    DA --> DK[Dark Knight entrance and fight]
+    DK --> W[Win]
 ```
 
-Boss shield phases:
+Crow King shield phases:
 - First 10 s: blue rotating shield, fully immune
 - 5 s open window: attack freely
 - Randomly re-shields for 5 s (purple ring), up to 3 times per 30-second window
+
+The Crow King's death loads the castle map and starts a second gauntlet:
+skeletons instead of crows, another ten kills, then two bosses in a row with
+no shield phase of their own, every hit lands. The dark archer keeps its
+distance and fires three-bolt volleys; the dark knight closes the gap fast
+and charges often. Beating both ends the run at the win screen.
 
 ### Multiplayer
 
@@ -90,12 +102,30 @@ flowchart LR
 - Player spawns in a guaranteed clear zone, crows enter from the right corridor
 - Trees burn to ash on boss arrival, opening the arena
 - Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles permanently
+- Two themes, forest and castle. Same tile grid and the same rules (ROCK
+  still blocks shots and movement, WATER still stops you but not arrows),
+  different art: stone floor and walls, pillars instead of boulders and
+  trees. Single-player's castle stage always uses it; multiplayer's host
+  picks either one for the match
+
+## Bosses
+
+| | Movement | Attack | Shield |
+|---|---|---|---|
+| **Crow King** | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
+| **Dark Archer** | Orbits at range, never closes in | Three-bolt volley every couple of seconds | None, every hit lands |
+| **Dark Knight** | Short lead-in, then charges often | Higher contact damage than the Crow King's charge | None, every hit lands |
+
+The two dark bosses are corrupted echoes of the Archer and the Knight: the
+archer's silhouette keeps a bow drawn on you, the knight's keeps a spear that
+extends on each charge. Fire weapons still ignite either of them the way
+they ignite the Crow King.
 
 ## Multiplayer
 
 Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
 
-Every match uses a fresh generated map (rock, trees, water and huts) built on both machines from the four-byte seed rather than sent over the wire. Terrain stops you and stops arrows; water stops you but not arrows; dynamite burns a hut down to ash you can then walk over.
+Every match uses a fresh generated map built on both machines from the four-byte seed rather than sent over the wire. Terrain stops you and stops arrows; water stops you but not arrows; dynamite burns a hut down to ash you can then walk over. The host picks which of the two themes, forest or castle, before starting; see [Map](#map).
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
@@ -107,7 +137,7 @@ Every fifteen seconds or so a **crow** drifts across. It dies to one hit and dro
 
 1. Open the server's URL and press **M**.
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
-3. The host sets the mode with **D** for deathmatch or **C** for co-op, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes). Pick one, not both. Everyone presses **R**, and it starts once the last player is ready.
+3. The host sets the mode with **D** for deathmatch or **C** for co-op, the map with **G** for forest or **V** for castle, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes). Pick one win condition, not both. Everyone presses **R**, and it starts once the last player is ready.
 
 Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or Q** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight) or **X** (ranger). They play differently.
 

@@ -3,6 +3,7 @@
  * blitted per frame. Only water, tree flicker, and ash embers draw live on top.
  */
 
+import type { MapKind } from '../sim/arena-map';
 import { TILE, type TileId, type TileMap } from '../sim/tilemap';
 
 /** Grid geometry the renderer needs. Injected so render code has no global config. */
@@ -122,6 +123,98 @@ export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
 };
 
 /**
+ * The castle map's own art for the same tile ids. ROCK keeps meaning "blocks
+ * shots and movement" and TREE keeps meaning "burns to ash" — only what they
+ * look like changes, so none of Terrain's collision or destruction code has
+ * to know a theme exists.
+ */
+export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
+  [TILE.EMPTY](g, x, y, seed, { tileSize: ts }) {
+    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
+    g.strokeStyle = '#2c2c2e'; g.lineWidth = 1; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+    if (seed % 5 === 0) { g.fillStyle = '#333335'; g.fillRect(x+(seed%14)+3, y+(seed%11)+3, 5, 3); }
+    if (seed % 8 === 0) { g.fillStyle = '#424244'; g.fillRect(x+(seed%16)+4, y+(seed%13)+6, 4, 4); }
+  },
+  // A pillar, not a boulder: a vertical shaft with a capital and a base.
+  [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
+    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
+    g.fillStyle = '#6a6a6e'; g.fillRect(x+7, y+3, ts-14, ts-6);
+    g.fillStyle = '#84848a';
+    g.fillRect(x+4+(seed%2), y+2, ts-8-(seed%2), 4);
+    g.fillRect(x+4+(seed%2), y+ts-6, ts-8-(seed%2), 4);
+    g.strokeStyle = '#26262a'; g.lineWidth = 1; g.strokeRect(x+7.5, y+3.5, ts-15, ts-7);
+  },
+  // A still, dark pool, not a sunlit pond.
+  [TILE.WATER](g, x, y, _seed, { tileSize: ts }) {
+    g.fillStyle = '#0e2a3a'; g.fillRect(x, y, ts, ts);
+  },
+  // A stacked wooden crate, so "burns to ash" still makes sense here.
+  [TILE.TREE](g, x, y, _seed, { tileSize: ts }) {
+    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
+    g.fillStyle = 'rgba(0,0,0,0.30)';
+    g.beginPath(); g.ellipse(x+16, y+27, 10, 4, 0, 0, Math.PI*2); g.fill();
+    g.fillStyle = '#5c4326'; g.fillRect(x+6, y+9, ts-12, ts-14);
+    g.strokeStyle = '#3a2a16'; g.lineWidth = 1; g.strokeRect(x+6.5, y+9.5, ts-13, ts-15);
+    g.beginPath();
+    g.moveTo(x+6, y+9); g.lineTo(x+ts-6, y+ts-5);
+    g.moveTo(x+ts-6, y+9); g.lineTo(x+6, y+ts-5);
+    g.stroke();
+  },
+  [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
+    g.fillStyle = '#242224'; g.fillRect(x, y, ts, ts);
+    g.fillStyle = '#302c2a';
+    if (seed % 5 === 0) g.fillRect(x+(seed%14)+4, y+(seed%11)+4, 5, 3);
+    if (seed % 7 === 0) g.fillRect(x+(seed%18)+2, y+(seed%13)+8, 3, 5);
+    if (seed % 3 === 0) g.fillRect(x+(seed%22)+3, y+(seed%9)+12, 4, 2);
+    g.strokeStyle = '#1a1818'; g.lineWidth = 0.5; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+  },
+  // A shrine, not a hut: same 2x2/neighbour-aware silhouette (peak, archway,
+  // sconce in place of roof, door, window), stone instead of clay.
+  [TILE.HUT](g, x, y, _seed, { tileSize: ts }, hutAbove, hutLeft) {
+    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
+    g.fillStyle = '#54545a'; g.fillRect(x+1, y+1, ts-2, ts-2);
+    g.strokeStyle = '#38383c'; g.lineWidth = 1;
+    for (let my = 0; my < 3; my++) {
+      const ly = y + 7 + my * 8;
+      g.beginPath(); g.moveTo(x+1, ly); g.lineTo(x+ts-1, ly); g.stroke();
+    }
+    for (let my = 0; my < 4; my++) {
+      const lx = x + (my % 2 === 0 ? 9 : 17);
+      const ly0 = y + 1 + my * 8;
+      g.beginPath(); g.moveTo(lx, ly0); g.lineTo(lx, ly0 + 8); g.stroke();
+    }
+    if (!hutAbove) {
+      g.fillStyle = '#3a2050';
+      g.beginPath();
+      g.moveTo(x, y+7); g.lineTo(x+ts/2, y); g.lineTo(x+ts, y+7);
+      g.closePath(); g.fill();
+      g.strokeStyle = '#7a50a8'; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(x+3, y+6); g.lineTo(x+ts/2, y+1); g.lineTo(x+ts-3, y+6); g.stroke();
+    }
+    if (!hutLeft && hutAbove) {
+      g.fillStyle = '#181418'; g.fillRect(x+10, y+14, 12, 18);
+      g.fillStyle = '#2c2430'; g.fillRect(x+11, y+15, 10, 16);
+    }
+    if (hutAbove && hutLeft) {
+      g.fillStyle = '#181418'; g.fillRect(x+8, y+10, 16, 12);
+      g.fillStyle = '#7a50a8'; g.fillRect(x+9, y+11, 14, 10);
+      g.strokeStyle = '#181418'; g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(x+16, y+11); g.lineTo(x+16, y+21);
+      g.moveTo(x+9,  y+16); g.lineTo(x+23, y+16);
+      g.stroke();
+    }
+    g.strokeStyle = '#26262a'; g.lineWidth = 1; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+  },
+};
+
+/** Which painter table draws each map's tiles. One row per MapKind. */
+export const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>> = {
+  forest: TILE_PAINTERS,
+  castle: CASTLE_TILE_PAINTERS,
+};
+
+/**
  * Offscreen canvas holding the static art of every tile. Repaints only what a
  * TileMap change invalidates. The per-frame cost is a single drawImage.
  */
@@ -130,10 +223,12 @@ export class StaticTileLayer {
   private map: TileMap;
   private layout: TileLayout;
   private g: CanvasRenderingContext2D | null;
+  private painters: Partial<Record<TileId, TilePainter>>;
 
-  constructor(map: TileMap, layout: TileLayout) {
+  constructor(map: TileMap, layout: TileLayout, painters: Partial<Record<TileId, TilePainter>> = TILE_PAINTERS) {
     this.map = map;
     this.layout = layout;
+    this.painters = painters;
     this.canvas = document.createElement('canvas');
     this.canvas.width = map.cols * layout.tileSize;
     this.canvas.height = map.rows * layout.tileSize;
@@ -146,6 +241,17 @@ export class StaticTileLayer {
   repaintAll(): void {
     for (let r = 0; r < this.map.rows; r++)
       for (let c = 0; c < this.map.cols; c++) this.paintTile(r, c);
+  }
+
+  /**
+   * Switches which art draws this map's tiles, for a layer built once at
+   * startup rather than per match, single player's own tileLayer. A repaint
+   * is not optional here: without one the canvas keeps showing the old theme
+   * until the next unrelated tile change happens to touch it.
+   */
+  setPainters(painters: Partial<Record<TileId, TilePainter>>): void {
+    this.painters = painters;
+    this.repaintAll();
   }
 
   repaintWindow(r: number, c: number): void {
@@ -163,7 +269,7 @@ export class StaticTileLayer {
     g.clearRect(x, y, ts, ts);
     const tile = this.map.get(r, c);
     if (tile === undefined) return;
-    const painter = TILE_PAINTERS[tile];
+    const painter = this.painters[tile];
     if (!painter) return;
     const hutAbove = r > 0 && this.map.get(r - 1, c) === TILE.HUT;
     const hutLeft = c > 0 && this.map.get(r, c - 1) === TILE.HUT;
@@ -181,6 +287,33 @@ interface AnimatedTile {
   seed: number;
 }
 
+/** The live-animated colours a theme needs: water's two-phase base and its
+ * ripple bands, and the tint the TREE tile's slot flickers (a canopy
+ * highlight in the forest, embers on a crate elsewhere). Ash keeps one look
+ * across themes — charred rubble reads the same regardless of what burned. */
+export interface AnimatedPalette {
+  waterBase: readonly [string, string];
+  waterRipple: readonly [string, string];
+  treeFlicker: (alpha: number) => string;
+}
+
+const FOREST_PALETTE: AnimatedPalette = {
+  waterBase: ['#1a4a8a', '#2356a0'],
+  waterRipple: ['#2d62b0', '#1a3e7a'],
+  treeFlicker: (a) => `rgba(80,200,80,${a.toFixed(2)})`,
+};
+
+const CASTLE_PALETTE: AnimatedPalette = {
+  waterBase: ['#0e2a3a', '#123244'],
+  waterRipple: ['#1a4256', '#0a1e2a'],
+  treeFlicker: (a) => `rgba(200,150,60,${a.toFixed(2)})`,
+};
+
+export const ANIMATED_THEMES: Record<MapKind, AnimatedPalette> = {
+  forest: FOREST_PALETTE,
+  castle: CASTLE_PALETTE,
+};
+
 /**
  * Live pass for the few tiles that animate. Keeps flat coordinate lists, so the
  * per-frame loop touches only animated tiles, never the whole grid.
@@ -191,10 +324,12 @@ export class AnimatedTileOverlay {
   ash: AnimatedTile[] = [];
   private map: TileMap;
   private layout: TileLayout;
+  private palette: AnimatedPalette;
 
-  constructor(map: TileMap, layout: TileLayout) {
+  constructor(map: TileMap, layout: TileLayout, palette: AnimatedPalette = FOREST_PALETTE) {
     this.map = map;
     this.layout = layout;
+    this.palette = palette;
     map.onReset(() => this.rebuild());
     map.onChange(() => this.rebuild());
   }
@@ -214,22 +349,33 @@ export class AnimatedTileOverlay {
       }
   }
 
+  /**
+   * Switches which colours the live pass animates with. No rebuild needed:
+   * draw() reads the palette fresh every call, rebuild() only maintains the
+   * water/trees/ash coordinate lists, which do not depend on it.
+   */
+  setPalette(palette: AnimatedPalette): void {
+    this.palette = palette;
+  }
+
   draw(target: CanvasRenderingContext2D, t: number, phase: boolean): void {
     const ts = this.layout.tileSize;
+    const [base0, base1] = this.palette.waterBase;
+    const [ripple0, ripple1] = this.palette.waterRipple;
     // Water: phase-flipped base plus three ripple bands per tile
-    target.fillStyle = phase ? '#1a4a8a' : '#2356a0';
+    target.fillStyle = phase ? base0 : base1;
     for (const w of this.water) target.fillRect(w.x, w.y, ts, ts);
-    target.fillStyle = phase ? '#2d62b0' : '#1a3e7a';
+    target.fillStyle = phase ? ripple0 : ripple1;
     for (const w of this.water) {
       const wp = t * 1.8 + (w.seed % 10) * 0.7;
       target.fillRect(w.x + 4 + Math.round(2*Math.sin(wp)),     w.y + 8  + Math.round(Math.sin(wp*0.7)),    11, 2);
       target.fillRect(w.x + 18 + Math.round(2*Math.sin(wp+1.5)),w.y + 17 + Math.round(Math.sin(wp*0.9+.5)), 8,  2);
       target.fillRect(w.x + 7 + Math.round(2*Math.sin(wp+2.8)), w.y + 23 + Math.round(Math.sin(wp*0.6+1)),  13, 2);
     }
-    // Tree canopy highlight flicker
+    // Tree slot's flicker: a canopy highlight in the forest, ember glow elsewhere
     for (const tr of this.trees) {
       const tfl = 0.7 + 0.3 * Math.sin(t * 2.5 + tr.seed * 0.8);
-      target.fillStyle = `rgba(80,200,80,${(tfl * 0.18).toFixed(2)})`;
+      target.fillStyle = this.palette.treeFlicker(tfl * 0.18);
       target.beginPath();
       target.arc(tr.x + 14, tr.y + 10, 5, 0, Math.PI * 2);
       target.fill();

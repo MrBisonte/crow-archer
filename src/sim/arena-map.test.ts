@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAP_COLS, MAP_ROWS, TILE_SIZE, Terrain } from './arena-map';
+import { MAP_COLS, MAP_GEN, MAP_ROWS, TILE_SIZE, Terrain } from './arena-map';
 import { pickSpawns } from './spawns';
 import { TILE, TileMap } from './tilemap';
 
@@ -31,6 +31,25 @@ describe('Terrain', () => {
       const t = Terrain.fromSeed(7, flat);
       expect(t.map.rows).toBe(MAP_ROWS);
       expect(t.map.cols).toBe(MAP_COLS);
+    });
+
+    it('defaults to the forest map, unchanged for every existing caller', () => {
+      const a = Terrain.fromSeed(7, flat);
+      const b = Terrain.fromSeed(7, flat, 'forest');
+      expect(a.map.grid).toEqual(b.map.grid);
+    });
+
+    it('gives a different map for a different kind, same seed', () => {
+      const forest = Terrain.fromSeed(7, flat, 'forest');
+      const castle = Terrain.fromSeed(7, flat, 'castle');
+      expect(forest.map.grid).not.toEqual(castle.map.grid);
+    });
+  });
+
+  describe('MAP_GEN', () => {
+    it('has a density for every MapKind', () => {
+      expect(MAP_GEN.forest.density).toBeGreaterThan(0);
+      expect(MAP_GEN.castle.density).toBeGreaterThan(0);
     });
   });
 

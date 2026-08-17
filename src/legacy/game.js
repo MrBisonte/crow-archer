@@ -7,12 +7,13 @@ import { FOV, Path } from 'rot-js';
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
 import { generateGrid } from '../sim/mapgen';
+import { MAP_GEN } from '../sim/arena-map';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { ScreenShake } from '../render/shake';
-import { StaticTileLayer, AnimatedTileOverlay, makeVignette } from '../render/tiles';
+import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
@@ -91,6 +92,14 @@ const CONFIG = {
   playerMaxHP: 10, playerHitFlashSecs: 0.3,
   killsToTriggerBoss: 10,
 
+  // Castle stage (brawl mode's second act). Persistently hostile, so no
+  // passive-speed figure the way a crow has one; slower than an aggro'd
+  // crow's 200 (matching player speed) on purpose, a threat that is always
+  // closing is not meant to also be unescapable.
+  skeletonSpeed: 130, skeletonContactDamage: 1,
+  killsToTriggerDarkBoss: 10,
+  skeletonStartCount: 5, skeletonMax: 10,
+
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
   // Crow density and the player's ability to answer it. Every value here is
@@ -120,6 +129,18 @@ const CONFIG = {
   bossBurnSlowdown: 0.3,          // fraction of speed removed while he burns
   bossBurnDamage: 0.5,            // extra damage the burn deals, as a fraction of the igniting hit
   bossBurnEmberInterval: 0.12,    // seconds between ember puffs while burning
+
+  // Dark bosses (castle stage 2/3). They reuse the crow king's orbit/charge
+  // engine and burn/knockback handling; the shield-window mechanic is
+  // dropped on purpose, so neither fight is another parry-timing puzzle.
+  darkArcherHP: 6, darkArcherHPWizard: 16, darkArcherHPKnight: 14,
+  darkArcherContactDamage: 1,     // weak up close — an archer that got caught
+  darkArcherVolleyInterval: 2.2, darkArcherVolleyCount: 3,
+  darkArcherVolleySpread: Math.PI / 14, darkArcherBoltSpeed: 380, darkArcherBoltDamage: 1,
+  darkKnightHP: 8, darkKnightHPWizard: 20, darkKnightHPKnight: 18,
+  darkKnightOrbitDuration: 1.2,   // short lead-in, spends most of its time charging
+  darkKnightChargeSpeed: 460, darkKnightContactDamage: 3,
+
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
@@ -239,7 +260,13 @@ applyPace(new URLSearchParams(location.search).get('pace') ?? CONFIG.pace);
 
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
-const BOSS_ENTRY_TEXT = '⚠  THE CROWS SUMMONED THEIR KING  ⚠';
+// Keyed by bossStage (1 = crow king, 2 = dark archer, 3 = dark knight), not
+// boss.kind — the entrance banner starts typing before spawnBoss() has run.
+const BOSS_ENTRY_TEXT = {
+  1: '⚠  THE CROWS SUMMONED THEIR KING  ⚠',
+  2: '⚠  A DARK ARCHER STIRS IN THE DEPTHS  ⚠',
+  3: '⚠  THE LAST DARK KNIGHT RISES  ⚠',
+};
 
 // Above this capacity the HUD shows a count instead of one icon per unit.
 // 12 icons at 13 px still fit beside the boss HP bar; more do not.
@@ -304,8 +331,15 @@ const CHAR_PANELS = [
 ];
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
+// Its own counter, deliberately not sharing killCount: see the comment above
+// the SKELETONS section for why that separation is load-bearing.
+let skeletonKillCount = 0;
+// Which boss brawl mode is on: 1 = crow king (forest), 2 = dark archer,
+// 3 = dark knight (both castle). Read by spawnBoss(); advanced by
+// updateBossDeath() when a non-final boss dies.
+let bossStage = 1;
 let boss = null, bossDeathSeq = null, entrance = null;
-let winScore = 0, winKills = 0, winHP = 0;
+let winScore = 0, winKills = 0, winSkeletons = 0, winHP = 0;
 let sniperMode = false;
 
 // Character selection — persists for the session, reset only on new run
@@ -352,7 +386,7 @@ function transitionTo(next) {
     treesBurned: false
   };
   if (next === 'boss_fight' && prev !== 'paused') { boss.screchCD = CONFIG.bossScreechInterval; bossDeathSeq = null; }
-  if (next === 'win')      { winScore = score; winKills = killCount; winHP = playerHP; }
+  if (next === 'win')      { winScore = score; winKills = killCount; winSkeletons = skeletonKillCount; winHP = playerHP; }
   if (next === 'gameover') events.emit({ type: 'GAME_OVER' });
 }
 
@@ -362,14 +396,26 @@ const tileMap = new TileMap(CONFIG.rows, CONFIG.cols);
 let waterPhase = false, waterLastTs = 0;
 
 let mapSeed = 0;
+let mapKind = 'forest';
 
-function generateMap() {
+/**
+ * Generates the map, defaulting to 'forest', today's only map in real play,
+ * so every existing call site is unaffected by a second one existing. `kind`
+ * is only ever 'castle' from the dev harness right now — nothing in real
+ * gameplay picks it yet, that is brawl mode's second stage.
+ */
+function generateMap(kind = 'forest') {
+  mapKind = kind;
   mapSeed = (Math.random() * 2 ** 32) >>> 0;
   const rng = mulberry32(mapSeed);
   // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
   const sn = new SimplexNoise(rng);
   tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
-    (x, y) => sn.noise2D(x, y)));
+    (x, y) => sn.noise2D(x, y), MAP_GEN[kind].density));
+  // tileLayer/tileOverlay are built once at startup, so the theme has to be
+  // set here too, not just the tiles. Once a game start, not a hot path.
+  tileLayer.setPainters(TILE_THEMES[kind]);
+  tileOverlay.setPalette(ANIMATED_THEMES[kind]);
 }
 
 function tileAt(wx, wy) {
@@ -511,6 +557,13 @@ canvas.addEventListener('click', e => {
 // ── ENTITIES ──────────────────────────────────────────────────────────────────
 
 let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamites = [], satchels = [];
+// The castle stage's critter. A parallel array to crows, not a variant of it —
+// see damageSkeleton/killSkeleton and updateSkeletons for why.
+let skeletons = [];
+// The dark archer's volleys. A boss-owned projectile, not a variant of the
+// player's arrows array — it has none of that array's ammo/pierce/ricochet
+// concerns, only "fly straight, hit the player."
+let bossBolts = [];
 
 // Local player input. Produces one InputCommand per tick from keyboard + mouse.
 // The command shape matches the network input packet, so phase 2 sends the same
@@ -563,6 +616,16 @@ events.on(e => {
       });
       floaters.push({ x: e.x, y: e.y, alpha: 1.0, vy: -42 });
       floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
+      break;
+
+    case 'SKELETON_KILLED':
+      playSound(sndHitCrow);
+      burst(e.x, e.y, {
+        count: 14, colors: ['#D8D0C0','#8A8070','#B040E0','#FFFFFF'],
+        speedMin: 40, speedMax: 120, decay: 1.8,
+        shapeMix: [['circle', 0.7], ['spark', 0.3]],
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#B040E0'
+      });
       break;
 
     case 'MELEE_HIT':
@@ -727,6 +790,13 @@ events.on(e => {
       playSound(sndAggro);
       break;
 
+    case 'BOSS_VOLLEY':
+      playSound(sndCrossbow);
+      burst(e.x, e.y, { count: 8, colors: ['#B040E0','#7A2AA0','#FFFFFF'],
+        speedMin: 40, speedMax: 120, decay: 2.5, shape: 'spark',
+        shadowBlur: 8, shadowColor: '#B040E0' });
+      break;
+
     case 'BOSS_CHARGE':
       playSound(sndChargeWhoosh);
       break;
@@ -788,15 +858,16 @@ function initGame() {
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
-  playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; dropStreak = 0; playerShield = false;
+  playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
-  boss = null; bossDeathSeq = null; entrance = null;
+  boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; bossBolts = [];
   fovMap.invalidate(); // force FOV recompute on next player move
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
   player = { x: 2.5 * CONFIG.tileSize, y: (CONFIG.rows / 2) * CONFIG.tileSize, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
+  skeletons = []; // only populated once brawl mode reaches its castle stage
   for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
 }
 
@@ -948,6 +1019,17 @@ function updatePlayer(dt) {
           }
         }
       }
+      for (let j = skeletons.length - 1; j >= 0; j--) {
+        if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) {
+          damageSkeleton(j);
+          if (!pfHitFlash) {
+            pfHitFlash = true;
+            const tipX = player.x + Math.cos(player.aimAngle) * 44;
+            const tipY = player.y + Math.sin(player.aimAngle) * 44;
+            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: 'pitchfork', fire: false });
+          }
+        }
+      }
       if (!pfBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
         pfBossHit = true;
@@ -982,6 +1064,14 @@ function updatePlayer(dt) {
         events.emit({ type: 'MELEE_HIT', x: c.x, y: c.y, kind: 'spear', fire: fsActive });
       }
     }
+    for (let j = skeletons.length - 1; j >= 0; j--) {
+      const s = skeletons[j];
+      if (dist2(tipX, tipY, s.x, s.y) < hitR2 || dist2(midX, midY, s.x, s.y) < hitR2) {
+        if (fsActive) spawnFire(s.x, s.y);
+        damageSkeleton(j);
+        events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: fsActive });
+      }
+    }
     // Boss: hit once in first half (phase 1), reset and hit again in second half (phase 2)
     const canHitBoss = boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
         (dist2(tipX, tipY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2 ||
@@ -1008,6 +1098,8 @@ function updatePlayer(dt) {
       // Damage crows
       for (let j = crows.length - 1; j >= 0; j--)
         if (dist2(player.x, player.y, crows[j].x, crows[j].y) < wr2) damageCrow(j);
+      for (let j = skeletons.length - 1; j >= 0; j--)
+        if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < wr2) damageSkeleton(j);
       // Damage boss
       if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < wr2) {
@@ -1176,6 +1268,8 @@ function fireLightningStorm() {
   const r2 = STORM_R ** 2;
   for (let j = crows.length - 1; j >= 0; j--)
     if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
+  for (let j = skeletons.length - 1; j >= 0; j--)
+    if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(player.x, player.y, boss.x, boss.y) < r2) {
     damageBoss(CONFIG.stormBossDamage, player.x, player.y, 'storm', CONFIG.stormFlashDuration);
@@ -1250,6 +1344,16 @@ function updateArrows(dt) {
         }
       }
       if (wizHitCrow) continue;
+      let wizHitSkeleton = false;
+      for (let j = skeletons.length-1; j >= 0; j--) {
+        if (dist2(a.x,a.y,skeletons[j].x,skeletons[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
+          damageSkeleton(j);
+          arrows.splice(i,1);
+          wizHitSkeleton = true;
+          break;
+        }
+      }
+      if (wizHitSkeleton) continue;
       continue; // done with wizard bolt — skip archer logic below
     }
 
@@ -1293,6 +1397,18 @@ function updateArrows(dt) {
           a.pierceLeft--;
           events.emit({ type: 'JAVELIN_BOUNCE', x: a.x, y: a.y });
           if (a.pierceLeft <= 0) { arrows.splice(i,1); break; }
+        }
+      }
+      // Skeleton hits — shares the same pierce budget, so a spent javelin
+      // above never reaches here.
+      if (a.pierceLeft > 0) {
+        for (let j = skeletons.length - 1; j >= 0; j--) {
+          if (dist2(a.x,a.y,skeletons[j].x,skeletons[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
+            damageSkeleton(j);
+            a.pierceLeft--;
+            events.emit({ type: 'JAVELIN_BOUNCE', x: a.x, y: a.y });
+            if (a.pierceLeft <= 0) { arrows.splice(i,1); break; }
+          }
         }
       }
       continue;
@@ -1406,6 +1522,13 @@ function updateArrows(dt) {
       }
     }
     if (hit) continue;
+    for (let j = skeletons.length - 1; j >= 0; j--) {
+      if (dist2(a.x, a.y, skeletons[j].x, skeletons[j].y) < hitR*hitR) {
+        damageSkeleton(j); if (a.type === 'fire') spawnFire(a.x, a.y);
+        arrows.splice(i, 1); hit = true; break;
+      }
+    }
+    if (hit) continue;
   }
 }
 
@@ -1438,6 +1561,8 @@ function updateFires(dt) {
       f.damageTimer = CONFIG.fireArrowDamageInterval;
       for (let j = crows.length - 1; j >= 0; j--)
         if (dist2(f.x, f.y, crows[j].x, crows[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) damageCrow(j);
+      for (let j = skeletons.length - 1; j >= 0; j--)
+        if (dist2(f.x, f.y, skeletons[j].x, skeletons[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) damageSkeleton(j);
     }
   }
 }
@@ -1479,6 +1604,83 @@ function killCrow(j) {
   crows.splice(j, 1);
   // boss only triggers in brawl mode
   if (gameMode === 'brawl' && killCount >= CONFIG.killsToTriggerBoss && appState === 'playing') transitionTo('boss_entrance');
+}
+
+// ── SKELETONS (castle stage) ────────────────────────────────────────────────
+//
+// A parallel system to crows, not a variant of one: a skeleton is ground-based
+// and persistently hostile, where a passive crow flies and ignores terrain
+// outright. Reused as-is: PathScheduler/FovMap, Team, tilePassable/TileMap,
+// dist2, spawnPickup. Its own: movement, damage/death, and SKELETON_KILLED —
+// it does not touch killCount or FEATHERS.onCrowKill, which is what keeps the
+// first skeleton kill from instantly re-triggering the Crow King's own
+// boss_entrance the moment the stage changes.
+
+function spawnSkeleton() {
+  const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
+  skeletons.push({
+    x: CONFIG.canvasW + 20, y: baseY,
+    state: 'aggro', // always hostile — the only state a skeleton has, and
+                     // what pathScheduler.serve() requires to path it at all
+    hp: 1, maxHp: 1, hitFlash: 0,
+    walkPhase: Math.random() * Math.PI * 2,
+    path: null, pathTimer: 0,
+  });
+}
+
+function damageSkeleton(j, amount = 1) {
+  const s = skeletons[j];
+  if (!s) return;
+  s.hp -= amount;
+  if (s.hp > 0) { s.hitFlash = 0.15; return; }
+  killSkeleton(j);
+}
+
+function killSkeleton(j) {
+  const s = skeletons[j];
+  score++; skeletonKillCount++;
+  STREAK.onKill();
+  events.emit({ type: 'SKELETON_KILLED', x: s.x, y: s.y });
+  const dropChance = 0.25 + HANDICAP.dropBoost();
+  dropStreak++;
+  if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(s.x, s.y); }
+  skeletons.splice(j, 1);
+  if (gameMode === 'brawl' && skeletonKillCount >= CONFIG.killsToTriggerDarkBoss && appState === 'playing') {
+    transitionTo('boss_entrance');
+  }
+}
+
+/**
+ * Ground movement toward the player, using the same A* pathScheduler crows
+ * use in their own aggro state — the only state a skeleton has. Unlike a
+ * passive crow's flight, this respects tilePassable the way the player's own
+ * movement does, so nothing here drifts through a pillar.
+ */
+function updateSkeletons(dt) {
+  if (bossDeathSeq) return;
+  // Requests go on the same queue crows use — updateCrows.serve() drains it
+  // every tick regardless of whether any crows exist, so this only ever
+  // needs to .request(), never .serve(). Relies on updateCrows still running
+  // alongside this one in stepGame.
+  for (let i = skeletons.length - 1; i >= 0; i--) {
+    const s = skeletons[i];
+    if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
+    const dx = player.x - s.x, dy = player.y - s.y, dist = Math.hypot(dx, dy);
+    if (dist < 14) { damagePlayer(CONFIG.skeletonContactDamage); continue; }
+    const spd = CONFIG.skeletonSpeed;
+    s.pathTimer -= dt;
+    if (!s.path || s.path.length === 0 || s.pathTimer <= 0) pathScheduler.request(s);
+    let moved = false;
+    if (s.path && s.path.length > 0) {
+      const wp = s.path[0];
+      const wdx = wp.x - s.x, wdy = wp.y - s.y, wdist = Math.hypot(wdx, wdy);
+      if (wdist < 6) { s.path.shift(); }
+      else { s.x += (wdx / wdist) * spd * dt; s.y += (wdy / wdist) * spd * dt; moved = true; }
+    } else {
+      s.x += (dx / dist) * spd * dt; s.y += (dy / dist) * spd * dt; moved = true;
+    }
+    if (moved) s.walkPhase += dt * 8;
+  }
 }
 
 // ── DYNAMITES ─────────────────────────────────────────────────────────────────
@@ -1546,6 +1748,8 @@ function explodeExplosive(d, source) {
 
   for (let j = crows.length - 1; j >= 0; j--)
     if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
+  for (let j = skeletons.length - 1; j >= 0; j--)
+    if (dist2(d.x, d.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
   if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage : CONFIG.dynamiteBossDamage;
@@ -1742,7 +1946,13 @@ function updateEscalation(dt) {
     escalationTimer -= CONFIG.crowEscalationInterval;
     wave++;
     if (gameMode === 'waves') waveAnnounce = 2.2; // banner only in waves mode
-    if (crows.length < CONFIG.crowMax) spawnCrow();
+    // The castle stage has no crows to escalate — it escalates skeletons
+    // instead, on the same cadence.
+    if (mapKind === 'castle') {
+      if (skeletons.length < CONFIG.skeletonMax) spawnSkeleton();
+    } else if (crows.length < CONFIG.crowMax) {
+      spawnCrow();
+    }
   }
 }
 
@@ -1775,7 +1985,7 @@ function updateBossEntrance(dt) {
   if (!e.flash2 && t >= 0.08) { e.flash2 = true; events.emit({ type: 'BOSS_ENTRANCE_FLASH' }); }
   if (t >= 0.2 && !e.fadeOut) e.overlayAlpha = Math.min(0.8, e.overlayAlpha + dt * 5);
   if (t >= 0.3) {
-    const BOSS_TEXT = BOSS_ENTRY_TEXT;
+    const BOSS_TEXT = BOSS_ENTRY_TEXT[bossStage];
     e.textProgress = Math.min(BOSS_TEXT.length, (t - 0.3) * 30);
   }
   if (!e.screchPlayed && t >= 1.3) { e.screchPlayed = true; events.emit({ type: 'BOSS_SCREECH' }); }
@@ -1805,27 +2015,55 @@ function updateBossEntrance(dt) {
   if (t >= 2.5) { if (boss) boss.bstate = 'orbit'; transitionTo('boss_fight'); }
 }
 
+// Stage order for brawl mode's full run. Index 0 is always the forest fight;
+// 1 and 2 are the castle stage's two dark bosses, fought in sequence.
+const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight'];
+
+// Which CONFIG keys hold a kind's HP for each character, so bossHpFor has one
+// home instead of a third near-identical ternary chain pasted next to the
+// two dark bosses already need.
+const BOSS_HP_KEYS = {
+  crowking:    ['bossHP', 'bossHPWizard', 'bossHPKnight'],
+  dark_archer: ['darkArcherHP', 'darkArcherHPWizard', 'darkArcherHPKnight'],
+  dark_knight: ['darkKnightHP', 'darkKnightHPWizard', 'darkKnightHPKnight'],
+};
+
+function bossHpFor(kind) {
+  const [normal, wizard, knight] = BOSS_HP_KEYS[kind];
+  const key = selectedChar === 'wizard' ? wizard : selectedChar === 'knight' ? knight : normal;
+  return CONFIG[key];
+}
+
 function spawnBoss() {
-  const hpMax = selectedChar === 'wizard' ? CONFIG.bossHPWizard
-              : selectedChar === 'knight' ? CONFIG.bossHPKnight
-              : CONFIG.bossHP;
-  boss = {
+  const kind = BOSS_STAGES[bossStage - 1];
+  const hpMax = bossHpFor(kind);
+  const common = {
+    kind,
     x: CONFIG.canvasW + 40, y: (CONFIG.rows / 2) * CONFIG.tileSize,
     hp: hpMax, hpMax,
     bstate: 'entering', stateTimer: 0,
     orbitAngle: 0, chargeTarget: null,
-    wingPhase: 0, hitFlash: 0, screchCD: CONFIG.bossScreechInterval,
-    batCD: CONFIG.bossBatCD, facing: 1,
+    wingPhase: 0, hitFlash: 0, facing: 1,
     knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
     burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him and drains HP
     burnDps: 0,                     // damage per second for the burn now running
-    // Shield state machine
-    shield: true,
-    shieldPhase: 'initial',           // 'initial' | 'open' | 'shielded'
-    shieldTimer: CONFIG.bossShieldInitialDuration,
-    shieldCount: 0,                   // random re-shields used this window
-    shieldWindowTimer: CONFIG.bossShieldWindowDuration,
   };
+  if (kind === 'crowking') {
+    boss = {
+      ...common,
+      screchCD: CONFIG.bossScreechInterval, batCD: CONFIG.bossBatCD,
+      // Shield state machine — crow king only, see updateBoss.
+      shield: true,
+      shieldPhase: 'initial',           // 'initial' | 'open' | 'shielded'
+      shieldTimer: CONFIG.bossShieldInitialDuration,
+      shieldCount: 0,                   // random re-shields used this window
+      shieldWindowTimer: CONFIG.bossShieldWindowDuration,
+    };
+    return;
+  }
+  // Dark bosses skip the shield window entirely — shield stays permanently
+  // down, so every hit lands the instant the entrance ends.
+  boss = { ...common, shield: false, volleyCD: CONFIG.darkArcherVolleyInterval };
 }
 
 /**
@@ -1973,50 +2211,61 @@ function updateBoss(dt) {
   // Update facing toward player
   boss.facing = player.x > boss.x ? -1 : 1;
 
-  // ── Shield phase machine ─────────────────────────────────────────────────
+  // ── Shield phase machine — crow king only ────────────────────────────────
   // Rolling 30s window: reset shield-use counter each window
-  boss.shieldWindowTimer -= dt;
-  if (boss.shieldWindowTimer <= 0) {
-    boss.shieldWindowTimer = CONFIG.bossShieldWindowDuration;
-    boss.shieldCount = 0;
-  }
-  boss.shieldTimer -= dt;
-  if (boss.shieldTimer <= 0) {
-    if (boss.shieldPhase === 'initial' || boss.shieldPhase === 'shielded') {
-      // Shield just expired → open window
-      boss.shieldPhase = 'open';
-      boss.shield = false;
-      boss.shieldTimer = CONFIG.bossShieldOpenDuration;
-    } else {
-      // Open window expired → maybe re-shield
-      const canShield = boss.shieldCount < CONFIG.bossShieldMaxPerWindow;
-      if (canShield && Math.random() < CONFIG.bossShieldChance) {
-        boss.shieldPhase = 'shielded';
-        boss.shield = true;
-        boss.shieldTimer = CONFIG.bossShieldRandomDuration;
-        boss.shieldCount++;
-      } else {
-        // Stay open; check again after another open window
+  if (boss.kind === 'crowking') {
+    boss.shieldWindowTimer -= dt;
+    if (boss.shieldWindowTimer <= 0) {
+      boss.shieldWindowTimer = CONFIG.bossShieldWindowDuration;
+      boss.shieldCount = 0;
+    }
+    boss.shieldTimer -= dt;
+    if (boss.shieldTimer <= 0) {
+      if (boss.shieldPhase === 'initial' || boss.shieldPhase === 'shielded') {
+        // Shield just expired → open window
+        boss.shieldPhase = 'open';
+        boss.shield = false;
         boss.shieldTimer = CONFIG.bossShieldOpenDuration;
+      } else {
+        // Open window expired → maybe re-shield
+        const canShield = boss.shieldCount < CONFIG.bossShieldMaxPerWindow;
+        if (canShield && Math.random() < CONFIG.bossShieldChance) {
+          boss.shieldPhase = 'shielded';
+          boss.shield = true;
+          boss.shieldTimer = CONFIG.bossShieldRandomDuration;
+          boss.shieldCount++;
+        } else {
+          // Stay open; check again after another open window
+          boss.shieldTimer = CONFIG.bossShieldOpenDuration;
+        }
       }
     }
   }
   // ────────────────────────────────────────────────────────────────────────
 
   if (boss.bstate === 'orbit' || boss.bstate === 'charge') {
-    boss.screchCD -= dt;
-    boss.batCD -= dt;
-    if (boss.batCD <= 0) {
-      boss.batCD = CONFIG.bossBatCD;
-      spawnBossBats();
-    }
-    if (boss.screchCD <= 0) {
-      boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
-      boss.stateTimer = CONFIG.bossScreechHalt;
-      events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
-      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
+    if (boss.kind === 'crowking') {
+      boss.screchCD -= dt;
+      boss.batCD -= dt;
+      if (boss.batCD <= 0) {
+        boss.batCD = CONFIG.bossBatCD;
+        spawnBossBats();
+      }
+      if (boss.screchCD <= 0) {
+        boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
+        boss.stateTimer = CONFIG.bossScreechHalt;
+        events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
+        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
+      }
+    } else if (boss.kind === 'dark_archer' && boss.bstate === 'orbit') {
+      boss.volleyCD -= dt;
+      if (boss.volleyCD <= 0) { boss.volleyCD = CONFIG.darkArcherVolleyInterval; fireBossVolley(); }
     }
   }
+
+  const contactDamage = boss.kind === 'dark_archer' ? CONFIG.darkArcherContactDamage
+                       : boss.kind === 'dark_knight' ? CONFIG.darkKnightContactDamage
+                       : CONFIG.bossContactDamage;
 
   if (boss.bstate === 'orbit') {
     boss.stateTimer += dt;
@@ -2024,8 +2273,12 @@ function updateBoss(dt) {
     boss.orbitAngle += angSpd * dt;
     boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * CONFIG.bossOrbitRadius));
     boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * CONFIG.bossOrbitRadius));
-    if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(CONFIG.bossContactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
-    if (boss.stateTimer >= CONFIG.bossOrbitDuration) startBossCharge();
+    if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
+    // The dark archer keeps its distance and never charges; the crow king
+    // and dark knight both do once their lead-in expires (the knight's is
+    // short on purpose, so it spends most of the fight charging).
+    const orbitDuration = boss.kind === 'dark_knight' ? CONFIG.darkKnightOrbitDuration : CONFIG.bossOrbitDuration;
+    if (boss.kind !== 'dark_archer' && boss.stateTimer >= orbitDuration) startBossCharge();
 
   } else if (boss.bstate === 'charge') {
     if (!boss.chargeTarget) { boss.bstate = 'orbit'; boss.stateTimer = 0; return; }
@@ -2034,10 +2287,11 @@ function updateBoss(dt) {
     if (dist < 12) {
       boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
     } else {
-      const spd = CONFIG.bossChargeSpeed * bossSpeedMod() * dt;
+      const chargeSpeed = boss.kind === 'dark_knight' ? CONFIG.darkKnightChargeSpeed : CONFIG.bossChargeSpeed;
+      const spd = chargeSpeed * bossSpeedMod() * dt;
       boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
       if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
-        damagePlayer(CONFIG.bossContactDamage); events.emit({ type: 'BOSS_CONTACT' });
+        damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' });
         boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
       }
     }
@@ -2047,6 +2301,43 @@ function updateBoss(dt) {
   }
 
   applyBossKnockback(dt);
+}
+
+/**
+ * The dark archer's ranged attack: a narrow spread of magic bolts aimed at
+ * the player's current position. A boss-owned array, not the player's arrows
+ * — see the bossBolts declaration for why.
+ */
+function fireBossVolley() {
+  const ang = Math.atan2(player.y - boss.y, player.x - boss.x);
+  const count = CONFIG.darkArcherVolleyCount, half = (count - 1) / 2;
+  for (let i = 0; i < count; i++) {
+    const a = ang + (i - half) * CONFIG.darkArcherVolleySpread;
+    bossBolts.push({
+      x: boss.x, y: boss.y,
+      vx: Math.cos(a) * CONFIG.darkArcherBoltSpeed,
+      vy: Math.sin(a) * CONFIG.darkArcherBoltSpeed,
+      life: 2.5,
+    });
+  }
+  events.emit({ type: 'BOSS_VOLLEY', x: boss.x, y: boss.y });
+}
+
+/** Moves the dark archer's bolts and resolves them against the player. */
+function updateBossBolts(dt) {
+  for (let i = bossBolts.length - 1; i >= 0; i--) {
+    const b = bossBolts[i];
+    b.life -= dt;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.life <= 0 || b.x < 0 || b.x >= CONFIG.canvasW || b.y < 0 ||
+        b.y >= CONFIG.rows * CONFIG.tileSize || !tilePassable(tileAt(b.x, b.y))) {
+      bossBolts.splice(i, 1); continue;
+    }
+    if (dist2(b.x, b.y, player.x, player.y) < CONFIG.arrowHitRadius * CONFIG.arrowHitRadius) {
+      damagePlayer(CONFIG.darkArcherBoltDamage);
+      bossBolts.splice(i, 1);
+    }
+  }
 }
 
 function spawnBossBats() {
@@ -2097,7 +2388,38 @@ function updateBossDeath(dt) {
   if (!s.burstC && s.timer >= 0.16) { s.burstC = true; events.emit({ type: 'BOSS_DEATH_BURST', x: s.bx, y: s.by, phase: 'c' }); }
   for (const f of s.fragments) { f.x += f.vx*dt; f.y += f.vy*dt; f.alpha -= dt * 1.67; }
   if (s.timer >= 0.7) s.frozenAlpha = Math.max(0, s.frozenAlpha - dt * 3.33);
-  if (s.timer >= 1.2) { bossDeathSeq = null; boss = null; crows = []; transitionTo('win'); }
+  if (s.timer >= 1.2) {
+    bossDeathSeq = null;
+    const deadKind = boss.kind;
+    boss = null; bossBolts = [];
+    if (deadKind === 'crowking') {
+      // Stage 1 done. The run continues into the castle stage: reload the
+      // map, reposition on the same corner initGame() always starts from
+      // (the fresh random layout gives no guarantee the player's current
+      // spot, wherever the crow king died, is still open ground), and seed
+      // the first batch of skeletons.
+      crows = [];
+      bossStage = 2;
+      generateMap('castle');
+      player.x = 2.5 * CONFIG.tileSize; player.y = (CONFIG.rows / 2) * CONFIG.tileSize;
+      skeletons = []; skeletonKillCount = 0;
+      for (let i = 0; i < CONFIG.skeletonStartCount; i++) spawnSkeleton();
+      // Not transitionTo('playing'): that path calls initGame() for every
+      // other 'playing' entry, which would wipe the run that just cleared
+      // stage 1. Skeleton-killing plays out in 'playing' like a normal
+      // brawl; killSkeleton's own threshold check is what starts the dark
+      // archer's entrance once skeletonKillCount catches up.
+      appState = 'playing';
+    } else if (deadKind === 'dark_archer') {
+      // Both dark bosses share the castle stage, so no map reload here.
+      skeletons = [];
+      bossStage = 3;
+      transitionTo('boss_entrance');
+    } else {
+      skeletons = [];
+      transitionTo('win');
+    }
+  }
 }
 
 // ── AUDIO ─────────────────────────────────────────────────────────────────────
@@ -3575,6 +3897,67 @@ function drawCrow(c) {
   ctx.restore();
 }
 
+// Ground-based, so a walk cycle (legs swinging on s.walkPhase) replaces a
+// crow's wing-flap. Reuses drawCrow's ground-shadow and glow-stamped-eye
+// techniques, not its geometry — always aggro, so no state-transition ring.
+function drawSkeleton(s) {
+  const cx = s.x, cy = s.y + CONFIG.hudHeight;
+  const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
+  const boneCol = flashOn ? '#FFFFFF' : '#D8D0C0';
+  const edgeCol = '#8A8070';
+  const eyeCol  = '#B040E0';
+  const legSwing = Math.sin(s.walkPhase) * 6;
+
+  ctx.save(); ctx.translate(cx, cy);
+
+  // 1. Ground shadow
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI*2); ctx.fill();
+
+  // 2. Legs — alternating swing, opposite phase
+  ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-2, 2); ctx.lineTo(-2 + legSwing * 0.3, 9); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(2, 2); ctx.lineTo(2 - legSwing * 0.3, 9); ctx.stroke();
+
+  // 3. Ribcage
+  ctx.fillStyle = boneCol;
+  ctx.fillRect(-4, -6, 8, 9);
+  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
+  for (let ry = -5; ry <= 1; ry += 2) { ctx.beginPath(); ctx.moveTo(-4, ry); ctx.lineTo(4, ry); ctx.stroke(); }
+
+  // 4. Arms — swing opposite the legs
+  ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-4, -4); ctx.lineTo(-6 - legSwing * 0.2, 1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4, -4); ctx.lineTo(6 + legSwing * 0.2, 1); ctx.stroke();
+
+  // 5. Skull
+  ctx.fillStyle = boneCol;
+  ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI*2); ctx.stroke();
+
+  // 6. Eye sockets — stamped glow, same technique as the crow's eye
+  const eyeStamp = glowDotStamp(eyeCol, 1, 3);
+  ctx.drawImage(eyeStamp, -3 - eyeStamp.width/2, -10 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, 1 - eyeStamp.width/2, -10 - eyeStamp.height/2);
+
+  ctx.restore();
+}
+
+/** The dark archer's volley bolts — a glowing shard oriented along its flight. */
+function drawBossBolts() {
+  for (const b of bossBolts) {
+    const ang = Math.atan2(b.vy, b.vx);
+    ctx.save(); ctx.translate(b.x, b.y + CONFIG.hudHeight); ctx.rotate(ang);
+    ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
+    ctx.strokeStyle = '#B040E0'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+}
+
 function drawPickups() {
   for (const p of pickups) {
     const ep         = p.bobPhase || 0;
@@ -3729,6 +4112,8 @@ function drawBoss() {
     }
   }
   if (!boss || boss.bstate === 'dead') return;
+  if (boss.kind === 'dark_archer') { drawDarkArcher(); return; }
+  if (boss.kind === 'dark_knight') { drawDarkKnight(); return; }
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const fl = boss.hitFlash > 0;
   const bossPulse = 0.5 + 0.5 * Math.sin(loopT * 2);
@@ -3866,6 +4251,166 @@ function drawBoss() {
   ctx.restore();
 }
 
+/**
+ * Castle stage boss 1: a corrupted echo of the player's own Archer, reusing
+ * that character's bow-arc-and-string drawing technique (see drawPlayer)
+ * scaled up and aimed continuously at the player, plus the corona-pulse and
+ * hit-flash techniques from the crow king. New geometry, not new drawing
+ * tricks.
+ */
+function drawDarkArcher() {
+  const bx = boss.x, by = boss.y + CONFIG.hudHeight;
+  const bobY = 1.2 * Math.sin(loopT * 1.2);
+  const aimAngle = Math.atan2(player.y - boss.y, player.x - boss.x);
+
+  ctx.save(); ctx.translate(bx, by);
+
+  // Ground shadow
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath(); ctx.ellipse(0, 24, 20, 5, 0, 0, Math.PI*2); ctx.fill();
+
+  // Corona — dark magic aura
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 2);
+  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 20 + 8 * pulse;
+  ctx.fillStyle = `rgba(176,64,224,${(0.16 + 0.10*pulse).toFixed(2)})`;
+  ctx.beginPath(); ctx.arc(0, bobY, 30 + 4*pulse, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+
+  if (boss.hitFlash > 0) {
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.ellipse(0, bobY, 16, 26, 0, 0, Math.PI*2); ctx.fill();
+    ctx.restore(); return;
+  }
+
+  // Cloak
+  ctx.fillStyle = '#241030';
+  ctx.beginPath();
+  ctx.moveTo(-11, bobY - 6);
+  ctx.bezierCurveTo(-19, bobY, -19, bobY + 8, -15, bobY + 17);
+  ctx.lineTo(15, bobY + 13);
+  ctx.bezierCurveTo(19, bobY + 8, 19, bobY, 11, bobY - 6);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 5;
+  ctx.strokeStyle = '#B040E0'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Body
+  ctx.fillStyle = '#382048'; ctx.fillRect(-10, bobY - 6, 20, 22);
+
+  // Head + hood
+  ctx.fillStyle = '#1A0E22';
+  ctx.beginPath(); ctx.arc(0, bobY - 14, 10, 0, Math.PI*2); ctx.fill();
+  ctx.fillRect(-10, bobY - 24, 20, 6);
+
+  // Eyes — same glow-stamp technique as the skeleton's
+  const eyeStamp = glowDotStamp('#B040E0', 1.4, 4);
+  ctx.drawImage(eyeStamp, -5 - eyeStamp.width/2, bobY - 15 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, 1 - eyeStamp.width/2, bobY - 15 - eyeStamp.height/2);
+
+  // Bow arm, drawn toward the player
+  const gx = Math.cos(aimAngle) * 16, gy = bobY + Math.sin(aimAngle) * 16;
+  ctx.strokeStyle = '#1A0E22'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, bobY - 2); ctx.lineTo(gx, gy); ctx.stroke();
+
+  // Bow
+  ctx.strokeStyle = '#0A0510'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(gx, gy, 14, aimAngle - Math.PI/2, aimAngle + Math.PI/2); ctx.stroke();
+
+  // Bowstring — glowing, permanently drawn taut
+  const topX = gx + Math.cos(aimAngle - Math.PI/2)*14, topY = gy + Math.sin(aimAngle - Math.PI/2)*14;
+  const botX = gx + Math.cos(aimAngle + Math.PI/2)*14, botY = gy + Math.sin(aimAngle + Math.PI/2)*14;
+  const nockX = gx - Math.cos(aimAngle) * 6, nockY = gy - Math.sin(aimAngle) * 6;
+  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
+  ctx.strokeStyle = '#D080F0'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(topX, topY); ctx.lineTo(nockX, nockY); ctx.lineTo(botX, botY); ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+}
+
+/**
+ * Castle stage boss 2: a corrupted echo of the player's own Knight, reusing
+ * that character's plate-armor silhouette and the world-to-local angle
+ * remap it thrusts its spear with (see drawKnight), scaled up, plus the
+ * corona-pulse and hit-flash techniques from the crow king.
+ */
+function drawDarkKnight() {
+  const bx = boss.x, by = boss.y + CONFIG.hudHeight;
+  const bobY = 1.2 * Math.sin(loopT * 1.2);
+  const facing = boss.facing || 1;
+  const charging = boss.bstate === 'charge';
+  const aimAngle = charging && boss.chargeTarget
+    ? Math.atan2(boss.chargeTarget.y - boss.y, boss.chargeTarget.x - boss.x)
+    : Math.atan2(player.y - boss.y, player.x - boss.x);
+
+  ctx.save(); ctx.translate(bx, by); ctx.scale(facing, 1);
+
+  // Ground shadow
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath(); ctx.ellipse(0, 26, 22, 6, 0, 0, Math.PI*2); ctx.fill();
+
+  // Corona — dark magic aura, redder than the archer's
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 2);
+  ctx.shadowColor = '#FF1F1F'; ctx.shadowBlur = 20 + 8 * pulse;
+  ctx.fillStyle = `rgba(140,20,20,${(0.18 + 0.12*pulse).toFixed(2)})`;
+  ctx.beginPath(); ctx.arc(0, bobY, 32 + 4*pulse, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+
+  if (boss.hitFlash > 0) {
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.ellipse(0, bobY, 20, 28, 0, 0, Math.PI*2); ctx.fill();
+    ctx.restore(); return;
+  }
+
+  // Legs
+  ctx.fillStyle = '#141018';
+  ctx.fillRect(-13, bobY + 8, 11, 16);
+  ctx.fillRect(2,   bobY + 8, 11, 16);
+
+  // Torso
+  ctx.fillStyle = '#241820';
+  ctx.fillRect(-15, bobY - 16, 30, 26);
+  ctx.fillStyle = '#3A2030';
+  ctx.fillRect(-12, bobY - 14, 10, 9);
+
+  // Pauldrons
+  ctx.fillStyle = '#1A1018';
+  ctx.fillRect(-20, bobY - 16, 8, 11);
+  ctx.fillRect(12,  bobY - 16, 8, 11);
+
+  // Great helm
+  ctx.fillStyle = '#1A1018';
+  ctx.fillRect(-10, bobY - 34, 20, 18);
+  ctx.beginPath(); ctx.arc(0, bobY - 34, 10, Math.PI, 0); ctx.fill();
+
+  // Visor slits — glowing, same accent as the skeleton and dark archer
+  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
+  ctx.fillStyle = '#B040E0';
+  ctx.fillRect(-8, bobY - 28, 16, 2.5);
+  ctx.fillRect(-6, bobY - 23, 11, 2.5);
+  ctx.shadowBlur = 0;
+
+  // Crest
+  ctx.fillStyle = '#5A1030';
+  ctx.beginPath();
+  ctx.moveTo(-4, bobY - 34); ctx.lineTo(0, bobY - 44); ctx.lineTo(4, bobY - 34);
+  ctx.closePath(); ctx.fill();
+
+  // Spear — extends forward on a charge
+  ctx.save();
+  ctx.rotate(Math.atan2(Math.sin(aimAngle), facing * Math.cos(aimAngle)));
+  ctx.translate(charging ? 14 : 0, 0);
+  ctx.strokeStyle = '#2A2018'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(30, 0); ctx.stroke();
+  ctx.fillStyle = '#B0B0C0';
+  ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(22, -5); ctx.lineTo(22, 5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+}
+
 function drawBossEntrance() {
   if (!entrance) return;
   const e = entrance, t = e.timer;
@@ -3875,7 +4420,7 @@ function drawBossEntrance() {
   if (flashA > 0) { ctx.fillStyle = `rgba(255,255,255,${flashA})`; ctx.fillRect(0,0,CONFIG.canvasW,CONFIG.canvasH); }
   if (e.overlayAlpha > 0) { ctx.fillStyle = `rgba(0,0,0,${e.overlayAlpha})`; ctx.fillRect(0,0,CONFIG.canvasW,CONFIG.canvasH); }
   if (e.textProgress > 0) {
-    const BOSS_TEXT = BOSS_ENTRY_TEXT;
+    const BOSS_TEXT = BOSS_ENTRY_TEXT[bossStage];
     ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4 + 4 * Math.sin(loopT * 4);
     ctx.fillStyle = '#39FF14'; ctx.font = '24px monospace';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -4414,15 +4959,16 @@ function drawWin(t) {
   ctx.font = '20px "Courier New", monospace';
   ctx.fillText(`FINAL SCORE:   ${String(winScore).padStart(3,'0')}`, CONFIG.canvasW/2, 260);
   ctx.fillText(`CROWS KILLED:  ${winKills}`, CONFIG.canvasW/2, 294);
+  ctx.fillText(`SKELETONS SLAIN: ${winSkeletons}`, CONFIG.canvasW/2, 322);
   let hp = '';
   for (let i = 0; i < CONFIG.playerMaxHP; i++) hp += i < winHP ? '♥' : '♡';
-  ctx.fillText(`HP REMAINING:  ${hp}`, CONFIG.canvasW/2, 328);
+  ctx.fillText(`HP REMAINING:  ${hp}`, CONFIG.canvasW/2, 350);
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#0a3a06'; ctx.font = '13px "Courier New", monospace';
-  ctx.fillText(`[ ${gameMode.toUpperCase()} MODE ]`, CONFIG.canvasW/2, 358);
+  ctx.fillText(`[ ${gameMode.toUpperCase()} MODE ]`, CONFIG.canvasW/2, 378);
 
   ctx.fillStyle = '#1a7a08'; ctx.font = '18px "Courier New", monospace';
-  ctx.fillText(`[R] PLAY AGAIN${Math.floor(t*2)%2===0 ? '_' : ' '}   [M] MENU`, CONFIG.canvasW/2, 400);
+  ctx.fillText(`[R] PLAY AGAIN${Math.floor(t*2)%2===0 ? '_' : ' '}   [M] MENU`, CONFIG.canvasW/2, 410);
 }
 
 const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
@@ -4435,7 +4981,8 @@ function render(t) {
     ctx.save(); ctx.translate(so.x, so.y);
     drawTiles(); FORESHADOW.drawSkyTint(); drawPickups(); drawFires(); drawParticles();
     crows.forEach(drawCrow);
-    drawArrows(); drawDynamites(); drawSatchels(); drawPlayer(); drawBoss(); drawFloaters();
+    skeletons.forEach(drawSkeleton);
+    drawArrows(); drawDynamites(); drawSatchels(); drawBossBolts(); drawPlayer(); drawBoss(); drawFloaters();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -4600,7 +5147,7 @@ function stepGame(dt) {
     case 'playing':
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
-      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt);
+      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -4612,9 +5159,9 @@ function stepGame(dt) {
     case 'boss_fight':
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
-      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt);
+      updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
-      if (bossDeathSeq) updateBossDeath(dt); else updateBoss(dt);
+      if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateBossBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -4692,6 +5239,11 @@ window.__game = {
   },
   // Dev triggers that drive real sim paths, for headless event-bus checks.
   kill(i = 0) { if (i >= 0 && i < crows.length) killCrow(i); },
+  killSkel(i = 0) { if (i >= 0 && i < skeletons.length) killSkeleton(i); },
+  // Drives the same death path a real kill shot would, so the crowking →
+  // dark_archer → dark_knight → win chain can be walked without grinding
+  // out every stage's HP bar by hand.
+  killBoss() { if (boss && boss.bstate !== 'dead') startBossDeath(); },
   blast(x, y) { explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'dynamite'); },
   floaters: () => floaters,
   arrows: () => arrows,
@@ -4699,12 +5251,16 @@ window.__game = {
   dynamites: () => dynamites,
   satchels: () => satchels,
   boss: () => boss,
+  bossStage: () => bossStage,
+  setBossStage(n) { bossStage = n; },
+  bossBolts: () => bossBolts,
   // Tap the event bus, for verifying which gameplay events fire.
   onEvent: fn => events.on(fn),
   // Drive a real state transition, and pick a character, for scripted runs.
   go(s) { transitionTo(s); },
   pick(c) { selectedChar = c; },
   spawnCrow() { spawnCrow(); },
+  spawnSkeleton() { spawnSkeleton(); },
   key(k) {
     const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
     window.dispatchEvent(e); document.dispatchEvent(e);
@@ -4712,8 +5268,11 @@ window.__game = {
   state: () => appState,
   multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
+  mapKind: () => mapKind,
+  generateMap(kind) { generateMap(kind); },
   player: () => player,
   crows: () => crows,
+  skeletons: () => skeletons,
   mouse: () => mouse,
-  counts: () => ({ crows: crows.length, particles: particles.length, hp: playerHP }),
+  counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, hp: playerHP }),
 };

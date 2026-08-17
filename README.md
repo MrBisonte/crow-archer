@@ -15,7 +15,7 @@
         A R C H E R
 ```
 
-Survive the flock, kill the Crow King. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. Download [`dist/index.html`](dist/index.html) and play, offline, no install.
+Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. Download [`dist/index.html`](dist/index.html) and play, offline, no install.
 
 ![Gameplay: arrow kills, boss entrance cinematic, boss fight](media/gameplay.gif)
 
@@ -49,7 +49,7 @@ Up to four players in a room, co-op or 2v2, on a fresh generated map every match
 
 1. Open the server's URL and press **M**.
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
-3. The host picks a mode and a win condition, everyone readies up with **R**, and the match starts.
+3. The host picks a map, a mode, and a win condition, everyone readies up with **R**, and the match starts.
 
 To run it locally:
 
@@ -89,7 +89,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 
 | Doc | For |
 |---|---|
-| [Game manual](docs/manual.md) | Full character kits, systems, map, game loop, hosting and deploying |
+| [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
 
 ## License

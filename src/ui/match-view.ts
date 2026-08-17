@@ -12,6 +12,7 @@ import {
   PlayerState,
   type EntitySnapshot,
   type GameMode,
+  type MapKind,
   type PlayerStart,
   type Snapshot,
   type WinCondition,
@@ -19,7 +20,7 @@ import {
 import { SECONDARY_AMMO_MAX, unpackPlayerState, unpackShotState, ShotFlavourCode } from '../net/entity-state';
 import { Terrain, TILE_SIZE } from '../sim/arena-map';
 import { noiseFor } from '../sim/noise';
-import { StaticTileLayer } from '../render/tiles';
+import { StaticTileLayer, TILE_THEMES } from '../render/tiles';
 import { drawCharacter } from '../render/characters';
 import { drawCrow, drawPickup, drawShot, type ShotFlavour } from '../render/entities';
 import { teamColour } from '../render/palette';
@@ -143,6 +144,8 @@ export interface MatchViewOptions {
   win: WinCondition;
   /** The map seed, which is how the client builds the same ground the server has. */
   seed: number;
+  /** Which arena, so the client paints the same theme the server generated. */
+  mapKind: MapKind;
   /** Injected so the interpolation clock is the same one the tests drive. */
   now?: () => number;
 }
@@ -211,11 +214,12 @@ export class MatchView {
     });
     // Built from the seed, not received: four bytes stand in for 693 tiles, and
     // this is the exact grid the server is deciding collisions against.
-    this.#terrain = Terrain.fromSeed(options.seed, noiseFor);
-    this.#tiles = new StaticTileLayer(this.#terrain.map, {
-      tileSize: TILE_SIZE,
-      hudHeight: HUD_HEIGHT,
-    });
+    this.#terrain = Terrain.fromSeed(options.seed, noiseFor, options.mapKind);
+    this.#tiles = new StaticTileLayer(
+      this.#terrain.map,
+      { tileSize: TILE_SIZE, hudHeight: HUD_HEIGHT },
+      TILE_THEMES[options.mapKind],
+    );
     this.#tiles.repaintAll();
     const mine = options.starts.find((s) => s.id === options.you);
     this.#secondary = secondaryWeapon(mine?.character ?? 'archer', options.mode);

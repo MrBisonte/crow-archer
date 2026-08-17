@@ -8,6 +8,7 @@ import { Team } from '../sim/team';
 import type {
   CharacterKind,
   GameMode,
+  MapKind,
   MatchResult,
   PlayerStart,
   ServerMessage,
@@ -53,6 +54,15 @@ const KEY_TO_CHARACTER = new Map<string, CharacterKind>(
 const CHARACTER_LEGEND = (Object.entries(CHARACTER_KEYS) as [CharacterKind, string][])
   .map(([kind, key]) => `[${key.toUpperCase()}] ${kind.toUpperCase()}`)
   .join('  ');
+
+/** What MATCH_START hands off to the harness. One home, so a new field is one edit, not two. */
+export interface MatchStartInfo {
+  seed: number;
+  mode: GameMode;
+  mapKind: MapKind;
+  starts: PlayerStart[];
+  win: WinCondition;
+}
 
 export class LobbyController {
   #transport: Transport;
@@ -108,7 +118,13 @@ export class LobbyController {
           this.#codeBuffer = '';
         }
       } else if (msg.type === 'MATCH_START') {
-        this.#matchStart = { seed: msg.seed, mode: msg.mode, starts: msg.starts, win: msg.win };
+        this.#matchStart = {
+          seed: msg.seed,
+          mode: msg.mode,
+          mapKind: msg.mapKind,
+          starts: msg.starts,
+          win: msg.win,
+        };
         this.#lastResult = null;
       } else if (msg.type === 'MATCH_END') {
         // Cleared with it, or matchStart() would keep describing the match that
@@ -222,6 +238,26 @@ export class LobbyController {
           return true;
         }
       }
+      // Map toggle: G for forest, V for castle (host only). Neither map's own
+      // first letter is free: C is coop, F is frags.
+      if (this.#state.userSlot === this.#state.roomView?.host) {
+        if (key.toLowerCase() === 'g') {
+          const { state: next, send } = transitionLobby(this.#state, {
+            type: 'SET_MAP',
+            mapKind: 'forest',
+          });
+          this.#setState(next, send);
+          return true;
+        }
+        if (key.toLowerCase() === 'v') {
+          const { state: next, send } = transitionLobby(this.#state, {
+            type: 'SET_MAP',
+            mapKind: 'castle',
+          });
+          this.#setState(next, send);
+          return true;
+        }
+      }
     }
 
     return false;
@@ -241,7 +277,7 @@ export class LobbyController {
    * Has the game started? Once MATCH_START arrives, the harness should hand
    * off to the game. Returns null until then.
    */
-  matchStart(): { seed: number; mode: GameMode; starts: PlayerStart[]; win: WinCondition } | null {
+  matchStart(): MatchStartInfo | null {
     return this.#matchStart;
   }
 
@@ -250,8 +286,7 @@ export class LobbyController {
     return this.#lastResult;
   }
 
-  #matchStart: { seed: number; mode: GameMode; starts: PlayerStart[]; win: WinCondition } | null =
-    null;
+  #matchStart: MatchStartInfo | null = null;
   #lastResult: MatchResult | null = null;
   readonly #snapshots: Snapshot[] = [];
 
@@ -367,6 +402,11 @@ export class LobbyController {
     const isHost = this.#state.userSlot === this.#state.roomView.host;
     const modeText = `MODE: ${this.#state.roomView.mode.toUpperCase()}${isHost ? ' [C/D]' : ''}`;
     this.#ctx.fillText(modeText, x, y);
+    y += 30;
+
+    // The arena. Same host-only pattern as mode, one line below it.
+    const mapText = `MAP: ${this.#state.roomView.mapKind.toUpperCase()}${isHost ? ' [G/V]' : ''}`;
+    this.#ctx.fillText(mapText, x, y);
     y += 30;
 
     // What ends the match. One or the other, so only the chosen one is shown as

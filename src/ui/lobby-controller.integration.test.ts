@@ -30,6 +30,7 @@ describe('Phase 1 E2E: lobby state flow', () => {
       view: {
         code: 'QRTZ',
         mode: 'coop',
+        mapKind: 'forest',
         host: 0,
         you: 0,
         win: DEFAULT_WIN_CONDITION,
@@ -63,6 +64,7 @@ describe('Phase 1 E2E: lobby state flow', () => {
       view: {
         code: 'QRTZ',
         mode: 'coop',
+        mapKind: 'forest',
         host: 0,
         you: 0,
         win: DEFAULT_WIN_CONDITION,

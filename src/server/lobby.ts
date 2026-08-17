@@ -17,6 +17,7 @@ import {
   parseClientMessage,
   type ClientMessage,
   type ErrorCode,
+  type MapKind,
   type PlayerStart,
   type RoomCode,
   type ServerMessage,
@@ -49,16 +50,22 @@ export interface LobbyOptions {
 }
 
 /**
- * Where each seat starts, worked out from the map the seed describes.
+ * Where each seat starts, worked out from the map the seed and kind describe.
  *
  * It is a function rather than a table because the map is generated: a fixed
  * point is a point that will eventually be inside a rock. Injected so a test
- * can place players without generating terrain first.
+ * can place players without generating terrain first. Takes the map kind too,
+ * so spawns land on the terrain the match actually uses, not always the
+ * default one.
  */
-export type SpawnPicker = (seed: number, count: number) => { x: number; y: number }[];
+export type SpawnPicker = (
+  seed: number,
+  count: number,
+  mapKind: MapKind,
+) => { x: number; y: number }[];
 
-const terrainSpawns: SpawnPicker = (seed, count) =>
-  pickSpawns(Terrain.fromSeed(seed, noiseFor), count);
+const terrainSpawns: SpawnPicker = (seed, count, mapKind) =>
+  pickSpawns(Terrain.fromSeed(seed, noiseFor, mapKind), count);
 
 /** What the server knows about a connection once it has said hello. */
 interface Session {
@@ -141,6 +148,8 @@ export class Lobby {
         return this.#ready(conn, msg.ready ? Readiness.READY : Readiness.NOT_READY);
       case 'SET_MODE':
         return this.#answer(conn, this.#rooms.setMode(conn, msg.mode));
+      case 'SET_MAP':
+        return this.#answer(conn, this.#rooms.setMap(conn, msg.mapKind));
       case 'SET_WIN_CONDITION':
         return this.#answer(conn, this.#rooms.setWinCondition(conn, msg.win));
       case 'PING':
@@ -174,7 +183,7 @@ export class Lobby {
     // inside a rock, and would put the client's prediction somewhere the server
     // never had it.
     const seed = this.#newSeed();
-    const spawns = this.#spawnsFor(seed, view.slots.length);
+    const spawns = this.#spawnsFor(seed, view.slots.length, view.mapKind);
     const starts: PlayerStart[] = view.slots.map((slot, i) => ({
       id: slot.id,
       character: slot.character,
@@ -185,6 +194,7 @@ export class Lobby {
       type: 'MATCH_START',
       seed,
       mode: view.mode,
+      mapKind: view.mapKind,
       starts,
       win: view.win,
     };

@@ -14,6 +14,7 @@
 import type {
   EntitySnapshot,
   GameMode,
+  MapKind,
   PlayerId,
   PlayerStart,
   PlayerTeam,
@@ -84,4 +85,5 @@ export type WorldFactory = (
   seed: number,
   starts: readonly PlayerStart[],
   mode: GameMode,
+  mapKind: MapKind,
 ) => World;

@@ -15,6 +15,7 @@ import {
   type CharacterKind,
   type ErrorCode,
   type GameMode,
+  type MapKind,
   type PlayerId,
   type PlayerSlot,
   type PlayerTeam,
@@ -84,6 +85,7 @@ interface Seat {
 interface Room {
   code: RoomCode;
   mode: GameMode;
+  mapKind: MapKind;
   phase: RoomPhase;
   host: PlayerId;
   win: WinCondition;
@@ -117,7 +119,14 @@ function viewOfRoom(room: Room): RoomView {
       team: teamFor(id, room.mode),
     });
   });
-  return { code: room.code, mode: room.mode, host: room.host, slots, win: room.win };
+  return {
+    code: room.code,
+    mode: room.mode,
+    mapKind: room.mapKind,
+    host: room.host,
+    slots,
+    win: room.win,
+  };
 }
 
 export class RoomStore {
@@ -150,6 +159,8 @@ export class RoomStore {
       // room where nothing could happen: no damage, and dynamite for the archer
       // alone. Co-op is still one keypress away for anyone who wants a walk.
       mode: 'deathmatch',
+      // Forest, today's only other option, until a room's host says otherwise.
+      mapKind: 'forest',
       phase: RoomPhase.LOBBY,
       host: 0,
       win: DEFAULT_WIN_CONDITION,
@@ -212,6 +223,17 @@ export class RoomStore {
     if (room.host !== slot) return err('NOT_HOST');
 
     room.mode = mode;
+    return okay(viewOfRoom(room));
+  }
+
+  /** Host only. Which arena the next match uses. */
+  setMap(conn: ConnectionId, mapKind: MapKind): RoomResult<RoomView> {
+    const found = this.#locate(conn);
+    if (!found) return err('NOT_IN_ROOM');
+    const { room, slot } = found;
+    if (room.host !== slot) return err('NOT_HOST');
+
+    room.mapKind = mapKind;
     return okay(viewOfRoom(room));
   }
 

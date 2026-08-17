@@ -30,6 +30,7 @@ describe('RoomStore', () => {
       expect(view.host).toBe(0);
       // Deathmatch is the default now: co-op has nothing in it to fight yet.
       expect(view.mode).toBe('deathmatch');
+      expect(view.mapKind).toBe('forest');
       expect(view.slots).toHaveLength(1);
       expect(view.slots[0]).toEqual({
         id: 0, name: 'alex', character: 'archer', ready: false, team: Team.A,
@@ -147,6 +148,27 @@ describe('RoomStore', () => {
       expect(store.setCharacter(999, 'wizard')).toEqual({ ok: false, error: 'NOT_IN_ROOM' });
       expect(store.setReady(999, Readiness.READY)).toEqual({ ok: false, error: 'NOT_IN_ROOM' });
       expect(store.setMode(999, 'deathmatch')).toEqual({ ok: false, error: 'NOT_IN_ROOM' });
+      expect(store.setMap(999, 'castle')).toEqual({ ok: false, error: 'NOT_IN_ROOM' });
+    });
+  });
+
+  describe('map selection', () => {
+    beforeEach(() => {
+      ok(store.create(10, 'alex'));
+      ok(store.join(11, 'AAAA', 'sam'));
+    });
+
+    it('changes the room to the chosen map', () => {
+      expect(ok(store.setMap(10, 'castle')).mapKind).toBe('castle');
+    });
+
+    it('lets only the host set the map', () => {
+      expect(store.setMap(11, 'castle')).toEqual({ ok: false, error: 'NOT_HOST' });
+    });
+
+    it('lets the new host set the map after the old one leaves', () => {
+      store.leave(10);
+      expect(ok(store.setMap(11, 'castle')).mapKind).toBe('castle');
     });
   });
 

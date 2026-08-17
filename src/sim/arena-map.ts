@@ -16,8 +16,29 @@ import { generateGrid, type Noise2D } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
 
-/** How much of single player's clutter a duel arena keeps. */
-export const BATTLE_DENSITY = 0.45;
+/**
+ * A distinct, named map. The set is meant to grow, and every map shares a
+ * real generation shape (below) and a visual theme (TILE_THEMES in
+ * render/tiles.ts) — the same reason CharacterKind became a table instead of
+ * a branch, not the reason GameMode stayed one.
+ */
+export type MapKind = 'forest' | 'castle';
+
+/**
+ * Generation tuning per map, one row per MapKind so a third map fails to
+ * compile until it has a density.
+ *
+ * forest's 0.45 is single player's own clutter thinned for a duel: that map
+ * was drawn for crows flying a corridor, and measured, a third of its tiles
+ * stop an arrow — two players 400 px apart almost never have a clear line
+ * otherwise. castle's density is a starting point, tuned for readable
+ * pillars over a thicket; adjust freely, nothing downstream depends on the
+ * exact number.
+ */
+export const MAP_GEN: Record<MapKind, { density: number }> = {
+  forest: { density: 0.45 },
+  castle: { density: 0.5 },
+};
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
 export const TILE_SIZE = 32;
@@ -48,16 +69,13 @@ export class Terrain {
   }
 
   /**
-   * Builds the terrain a seed describes. The same seed always gives this map.
-   *
-   * The clutter is thinned from what single player uses. That map was drawn for
-   * crows flying a corridor, and measured, a third of its tiles stop an arrow:
-   * two players 400 px apart almost never have a clear line. Cover is worth
-   * having and a thicket is not.
+   * Builds the terrain a seed describes. The same seed and kind always give
+   * the same map. Defaults to 'forest', today's only map, so every existing
+   * caller is unaffected by a kind existing at all.
    */
-  static fromSeed(seed: number, noise: NoiseFactory): Terrain {
+  static fromSeed(seed: number, noise: NoiseFactory, kind: MapKind = 'forest'): Terrain {
     const map = new TileMap(MAP_ROWS, MAP_COLS);
-    map.reset(generateGrid(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed), BATTLE_DENSITY));
+    map.reset(generateGrid(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed), MAP_GEN[kind].density));
     return new Terrain(map);
   }
 

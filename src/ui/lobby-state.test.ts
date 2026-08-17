@@ -32,6 +32,7 @@ describe('Lobby state machine', () => {
         view: {
           code: 'QRTZ',
           mode: 'coop',
+          mapKind: 'forest',
           host: 0,
           you: 0,
           win: DEFAULT_WIN_CONDITION,
@@ -79,6 +80,7 @@ describe('Lobby state machine', () => {
     const roomView = {
       code: 'AAAA' as const,
       mode: 'coop' as const,
+      mapKind: 'forest' as const,
       host: 0,
       you: 0,
       win: DEFAULT_WIN_CONDITION,
@@ -173,6 +175,27 @@ describe('Lobby state machine', () => {
       const { send: guestSend } = transitionLobby(guestState, {
         type: 'SET_MODE',
         mode: 'deathmatch',
+      });
+      expect(guestSend).toEqual([]);
+    });
+
+    it('only host can change the map', () => {
+      const hostState = {
+        ...initialLobbyState(),
+        screen: 'lobby' as const,
+        roomView,
+        userSlot: 0,
+      };
+      const { send: hostSend } = transitionLobby(hostState, {
+        type: 'SET_MAP',
+        mapKind: 'castle',
+      });
+      expect(hostSend).toEqual([{ type: 'SET_MAP', mapKind: 'castle' }]);
+
+      const guestState = { ...hostState, userSlot: 1 };
+      const { send: guestSend } = transitionLobby(guestState, {
+        type: 'SET_MAP',
+        mapKind: 'castle',
       });
       expect(guestSend).toEqual([]);
     });
