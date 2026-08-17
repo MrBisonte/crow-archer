@@ -46,6 +46,12 @@ export interface ShotSpec {
   homingRate: number;
   /** Whether hitting something solid ends it or turns it around. */
   onTerrain: TerrainResponse;
+  /**
+   * Whether slowing to a stop sets it off. True for dynamite, a fuse running
+   * down is the point of it. False for the satchel, which is meant to be
+   * found sitting there, inert, until armed or struck.
+   */
+  explodesAtRest: boolean;
   /** Whether water puts it out. Only a thrown thing sinks. */
   drownsInWater: boolean;
   /**
@@ -66,12 +72,11 @@ export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite' | 'satchel';
  * different value here and not another `if` in the world's step.
  *
  * `'stop'` ends on contact, gone, the way an arrow does. `'bounce'` reflects
- * at reduced speed, the way a thrown stick of dynamite does. `'rest'` also
- * loses speed on contact, but stops dead rather than reflecting, and stays:
- * the satchel is meant to be found sitting where it landed, not to vanish
- * like an arrow or ricochet away like dynamite.
+ * at reduced speed, the way a thrown stick of dynamite, or a satchel, does.
+ * Whether it also explodes once that bounce decays to a stop is a separate
+ * question, `explodesAtRest` answers it, not this.
  */
-export type TerrainResponse = 'stop' | 'bounce' | 'rest';
+export type TerrainResponse = 'stop' | 'bounce';
 
 /**
  * An area effect centred on whoever cast it, not a projectile: nothing
@@ -257,12 +262,12 @@ export const CROSSBOW_SPREAD_RADIANS = Math.PI / 60; // 3 degrees
 export const SATCHEL_TRIGGER_RADIUS = BOLT_RADIUS;
 
 /**
- * Damage of a satchel's blast. Same as dynamite's: nothing asked for it to
- * hit harder or softer, and the world's `#explode` does not distinguish
- * blast radius by flavour at all, so the two already share `DYNAMITE_BLAST_RADIUS`
- * without needing a second constant for the same number.
+ * Damage of a satchel's blast: 70% of dynamite's, rounded, the same cut the
+ * ranger's crossbow bolt already takes against the archer's arrow. The blast
+ * radius stays shared with dynamite's own `DYNAMITE_BLAST_RADIUS`; only the
+ * damage is softer.
  */
-export const SATCHEL_DAMAGE = DYNAMITE_DAMAGE;
+export const SATCHEL_DAMAGE = Math.round(DYNAMITE_DAMAGE * 0.7);
 
 /** Fixed throw speed. The satchel has no charge-and-hold: one click is one
  * throw, always at this speed. Reuses dynamite's own already-slowed figure
@@ -314,6 +319,7 @@ export class Bow implements Weapon {
           radius: ARROW_RADIUS,
           homingRate: 0,
           onTerrain: 'stop',
+          explodesAtRest: false,
           drownsInWater: false,
         },
       },
@@ -345,6 +351,7 @@ export class Staff implements Weapon {
           radius: BOLT_RADIUS,
           homingRate: 4.5,       // wizBoltTurnRate
           onTerrain: 'stop',
+          explodesAtRest: false,
           drownsInWater: false,
         },
       },
@@ -404,6 +411,7 @@ export class Crossbow implements Weapon {
         radius: CROSSBOW_BOLT_RADIUS,
         homingRate: 0,
         onTerrain: 'stop' as const,
+        explodesAtRest: false,
         drownsInWater: false,
         angleOffset: (i - half) * CROSSBOW_SPREAD_RADIANS,
       },
@@ -436,6 +444,7 @@ export class DynamitePouch {
           homingRate: 0,
           // Off walls and trees, and out in water.
           onTerrain: 'bounce',
+          explodesAtRest: true,
           drownsInWater: true,
         },
       },
@@ -467,7 +476,10 @@ export class Satchel implements Weapon {
           lifeTicks: SATCHEL_IDLE_TICKS,
           radius: SATCHEL_TRIGGER_RADIUS,
           homingRate: 0,
-          onTerrain: 'rest',
+          // Bounces like dynamite; explodesAtRest:false is what keeps it from
+          // going off just because it slowed to a stop.
+          onTerrain: 'bounce',
+          explodesAtRest: false,
           drownsInWater: true,
         },
       },
