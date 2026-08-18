@@ -123,6 +123,10 @@ const CONFIG = {
   waterShimmerMs: 800,
 
   bossHP: 5, bossHPWizard: 14, bossOrbitRadius: 180, bossOrbitSpeed: 80, bossOrbitDuration: 3,
+  // Time constant for orbitRadius easing back to bossOrbitRadius after any
+  // interrupt (charge, screech, whirlwind) — see enterOrbit(). Keeps the
+  // boss gliding back out instead of popping straight onto the circle.
+  bossOrbitRadiusEaseTau: 0.35,
   bossChargeSpeed: 350, bossScreechInterval: 8, bossScreechHalt: 0.4, bossScreechRange: 200,
   bossBatCD: 2.5, bossBatsPerSummon: 5,
   bossShieldInitialDuration: 10,  // seconds of mandatory opening shield
@@ -145,9 +149,22 @@ const CONFIG = {
   darkArcherContactDamage: 1,     // weak up close — an archer that got caught
   darkArcherVolleyInterval: 2.2, darkArcherVolleyCount: 3,
   darkArcherVolleySpread: Math.PI / 14, darkArcherBoltSpeed: 380, darkArcherBoltDamage: 1,
+  // Secondary, on its own cooldown alongside the volley: a lobbed bomb that
+  // detonates in a radius, the same bow-and-dynamite split the real archer
+  // carries.
+  darkArcherBombInterval: 4.5, darkArcherBombFuse: 1.1, darkArcherBombSpeed: 220,
+  darkArcherBombDamage: 2, darkArcherBombRadius: 55,
+  darkArcherSkeletonInterval: 7,  // summons one ice skeleton on this cadence
+
   darkKnightHP: 8, darkKnightHPWizard: 20, darkKnightHPKnight: 18,
   darkKnightOrbitDuration: 1.2,   // short lead-in, spends most of its time charging
   darkKnightChargeSpeed: 460, darkKnightContactDamage: 3,
+  // Secondary, on its own cooldown: a whirlwind halt between charges, the
+  // same spear-and-whirlwind split the real knight carries.
+  darkKnightWhirlwindInterval: 6, darkKnightWhirlwindDuration: 1.4,
+  darkKnightWhirlwindTickRate: 0.25, darkKnightWhirlwindRadius: 70,
+  darkKnightWhirlwindDamage: 1,
+  darkKnightSkeletonInterval: 7,  // summons one fire skeleton on this cadence
 
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
@@ -2106,7 +2123,7 @@ function updateBossEntrance(dt) {
     boss.x = Math.max(targetX, boss.x - 300 * dt);
   }
   if (t >= 2.3) { e.fadeOut = true; e.overlayAlpha = Math.max(0, e.overlayAlpha - dt * 5); }
-  if (t >= 2.5) { if (boss) boss.bstate = 'orbit'; transitionTo('boss_fight'); }
+  if (t >= 2.5) { if (boss) enterOrbit(); transitionTo('boss_fight'); }
 }
 
 // Stage order for brawl mode's full run. Index 0 is always the forest fight;
@@ -2136,7 +2153,7 @@ function spawnBoss() {
     x: CONFIG.canvasW + 40, y: (CONFIG.rows / 2) * CONFIG.tileSize,
     hp: hpMax, hpMax,
     bstate: 'entering', stateTimer: 0,
-    orbitAngle: 0, chargeTarget: null,
+    orbitAngle: 0, orbitRadius: CONFIG.bossOrbitRadius, chargeTarget: null,
     wingPhase: 0, hitFlash: 0, facing: 1,
     knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
     burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him and drains HP
@@ -2156,8 +2173,23 @@ function spawnBoss() {
     return;
   }
   // Dark bosses skip the shield window entirely — shield stays permanently
-  // down, so every hit lands the instant the entrance ends.
-  boss = { ...common, shield: false, volleyCD: CONFIG.darkArcherVolleyInterval };
+  // down, so every hit lands the instant the entrance ends. Each also carries
+  // its own secondary-attack cooldown and a skeleton-summon cooldown; see
+  // updateBoss for how they fire.
+  if (kind === 'dark_archer') {
+    boss = {
+      ...common, shield: false,
+      volleyCD: CONFIG.darkArcherVolleyInterval,
+      bombCD: CONFIG.darkArcherBombInterval,
+      skeletonCD: CONFIG.darkArcherSkeletonInterval,
+    };
+  } else {
+    boss = {
+      ...common, shield: false,
+      whirlwindCD: CONFIG.darkKnightWhirlwindInterval, whirlwindTick: 0,
+      skeletonCD: CONFIG.darkKnightSkeletonInterval,
+    };
+  }
 }
 
 /**
@@ -2294,6 +2326,24 @@ function applyBossKnockback(dt) {
   if (Math.hypot(boss.knockX, boss.knockY) < 0.5) { boss.knockX = 0; boss.knockY = 0; }
 }
 
+/**
+ * Puts the boss into orbit starting from wherever it actually is right now,
+ * instead of onto the orbit circle at whatever stale angle and radius were
+ * left over from before the interruption. Every return to 'orbit' — charge
+ * ending, screech ending, whirlwind ending, the entrance handing off to the
+ * fight — routes through here. orbitRadius then eases toward bossOrbitRadius
+ * in updateBoss's orbit branch rather than snapping to it, so the boss glides
+ * back out instead of popping 150+px in one frame. This is what "teleporting"
+ * was: orbit always computed position from the fixed bossOrbitRadius, so
+ * re-entering it after being close to the player (mid-charge, mid-whirlwind)
+ * always snapped straight back out to the full radius.
+ */
+function enterOrbit() {
+  boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
+  boss.orbitAngle = Math.atan2(boss.y - player.y, boss.x - player.x);
+  boss.orbitRadius = Math.hypot(boss.x - player.x, boss.y - player.y);
+}
+
 function updateBoss(dt) {
   if (!boss || boss.bstate === 'dead') return;
   boss.wingPhase += dt * 8;
@@ -2354,6 +2404,20 @@ function updateBoss(dt) {
     } else if (boss.kind === 'dark_archer' && boss.bstate === 'orbit') {
       boss.volleyCD -= dt;
       if (boss.volleyCD <= 0) { boss.volleyCD = CONFIG.darkArcherVolleyInterval; fireBossVolley(); }
+      boss.bombCD -= dt;
+      if (boss.bombCD <= 0) { boss.bombCD = CONFIG.darkArcherBombInterval; fireBossBomb(); }
+      boss.skeletonCD -= dt;
+      if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkArcherSkeletonInterval; spawnSkeleton('ice'); }
+    } else if (boss.kind === 'dark_knight') {
+      boss.whirlwindCD -= dt;
+      if (boss.whirlwindCD <= 0) {
+        boss.whirlwindCD = CONFIG.darkKnightWhirlwindInterval;
+        boss.bstate = 'whirlwind'; boss.stateTimer = CONFIG.darkKnightWhirlwindDuration;
+        boss.whirlwindTick = 0; boss.chargeTarget = null;
+        events.emit({ type: 'WHIRLWIND_START', x: boss.x, y: boss.y });
+      }
+      boss.skeletonCD -= dt;
+      if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkKnightSkeletonInterval; spawnSkeleton('fire'); }
     }
   }
 
@@ -2365,8 +2429,11 @@ function updateBoss(dt) {
     boss.stateTimer += dt;
     const angSpd = CONFIG.bossOrbitSpeed * bossSpeedMod() / CONFIG.bossOrbitRadius;
     boss.orbitAngle += angSpd * dt;
-    boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * CONFIG.bossOrbitRadius));
-    boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * CONFIG.bossOrbitRadius));
+    // Close the gap to the target radius instead of snapping onto it — see enterOrbit.
+    const radiusDecay = Math.exp(-dt / CONFIG.bossOrbitRadiusEaseTau);
+    boss.orbitRadius = CONFIG.bossOrbitRadius + (boss.orbitRadius - CONFIG.bossOrbitRadius) * radiusDecay;
+    boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * boss.orbitRadius));
+    boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * boss.orbitRadius));
     if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
     // The dark archer keeps its distance and never charges; the crow king
     // and dark knight both do once their lead-in expires (the knight's is
@@ -2375,23 +2442,37 @@ function updateBoss(dt) {
     if (boss.kind !== 'dark_archer' && boss.stateTimer >= orbitDuration) startBossCharge();
 
   } else if (boss.bstate === 'charge') {
-    if (!boss.chargeTarget) { boss.bstate = 'orbit'; boss.stateTimer = 0; return; }
+    if (!boss.chargeTarget) { enterOrbit(); return; }
     const dx = boss.chargeTarget.x - boss.x, dy = boss.chargeTarget.y - boss.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 12) {
-      boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
+      enterOrbit();
     } else {
       const chargeSpeed = boss.kind === 'dark_knight' ? CONFIG.darkKnightChargeSpeed : CONFIG.bossChargeSpeed;
       const spd = chargeSpeed * bossSpeedMod() * dt;
       boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
       if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
         damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' });
-        boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
+        enterOrbit();
       }
     }
   } else if (boss.bstate === 'screech') {
     boss.stateTimer -= dt;
-    if (boss.stateTimer <= 0) { boss.bstate = 'orbit'; boss.stateTimer = 0; }
+    if (boss.stateTimer <= 0) enterOrbit();
+  } else if (boss.bstate === 'whirlwind') {
+    boss.stateTimer -= dt;
+    boss.whirlwindTick -= dt;
+    if (boss.whirlwindTick <= 0) {
+      boss.whirlwindTick = CONFIG.darkKnightWhirlwindTickRate;
+      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.darkKnightWhirlwindRadius ** 2) {
+        damagePlayer(CONFIG.darkKnightWhirlwindDamage);
+      }
+      events.emit({ type: 'WHIRLWIND_TICK', x: boss.x, y: boss.y });
+    }
+    if (boss.stateTimer <= 0) {
+      events.emit({ type: 'WHIRLWIND_END', x: boss.x, y: boss.y });
+      enterOrbit();
+    }
   }
 
   applyBossKnockback(dt);
@@ -2411,10 +2492,28 @@ function fireBossVolley() {
       x: boss.x, y: boss.y,
       vx: Math.cos(a) * CONFIG.darkArcherBoltSpeed,
       vy: Math.sin(a) * CONFIG.darkArcherBoltSpeed,
-      life: 2.5, damage: CONFIG.darkArcherBoltDamage, freezeSecs: 0,
+      life: 2.5, damage: CONFIG.darkArcherBoltDamage, freezeSecs: 0, blastRadius: 0,
     });
   }
   events.emit({ type: 'BOSS_VOLLEY', x: boss.x, y: boss.y });
+}
+
+/**
+ * The dark archer's secondary: a slow lobbed bomb that detonates in a radius
+ * at the end of its fuse, on its own cooldown alongside the volley — the
+ * same bow-and-dynamite split the real archer's kit has. Aimed at the
+ * player's position at throw time, same as the volley and the ice bolt;
+ * it does not lead the target.
+ */
+function fireBossBomb() {
+  const ang = Math.atan2(player.y - boss.y, player.x - boss.x);
+  hostileBolts.push({
+    x: boss.x, y: boss.y,
+    vx: Math.cos(ang) * CONFIG.darkArcherBombSpeed,
+    vy: Math.sin(ang) * CONFIG.darkArcherBombSpeed,
+    life: CONFIG.darkArcherBombFuse, damage: CONFIG.darkArcherBombDamage, freezeSecs: 0,
+    blastRadius: CONFIG.darkArcherBombRadius,
+  });
 }
 
 /**
@@ -2428,9 +2527,25 @@ function fireIceBolt(s) {
     x: s.x, y: s.y,
     vx: Math.cos(ang) * CONFIG.iceSkeletonBoltSpeed,
     vy: Math.sin(ang) * CONFIG.iceSkeletonBoltSpeed,
-    life: 2.5, damage: CONFIG.iceSkeletonBoltDamage, freezeSecs: CONFIG.iceSkeletonFreezeSecs,
+    life: 2.5, damage: CONFIG.iceSkeletonBoltDamage, freezeSecs: CONFIG.iceSkeletonFreezeSecs, blastRadius: 0,
   });
   events.emit({ type: 'ICE_BOLT_FIRED', x: s.x, y: s.y });
+}
+
+/**
+ * A lobbed bomb reaching the end of its fuse, or a wall/edge/water tile
+ * stopping it early: either way it goes off right where it is, rather than
+ * bouncing like the player's own dynamite does — dark bosses reimplement a
+ * character's kit thematically, not physics-for-physics (see fireBossVolley
+ * and the charge/spear comment on drawDarkKnight). Reuses the same EXPLOSION
+ * event a dynamite going off already emits, so render/audio need nothing new.
+ */
+function detonateHostileBomb(b) {
+  const onWater = tileAt(b.x, b.y) === TILE.WATER;
+  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater });
+  if (dist2(b.x, b.y, player.x, player.y) < b.blastRadius * b.blastRadius) {
+    damagePlayer(b.damage);
+  }
 }
 
 /** Moves every hostile bolt and resolves it against the player. */
@@ -2441,9 +2556,14 @@ function updateHostileBolts(dt) {
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (b.life <= 0 || b.x < 0 || b.x >= CONFIG.canvasW || b.y < 0 ||
         b.y >= CONFIG.rows * CONFIG.tileSize || !tilePassable(tileAt(b.x, b.y))) {
+      if (b.blastRadius > 0) detonateHostileBomb(b);
       hostileBolts.splice(i, 1); continue;
     }
     if (dist2(b.x, b.y, player.x, player.y) < CONFIG.arrowHitRadius * CONFIG.arrowHitRadius) {
+      if (b.blastRadius > 0) {
+        detonateHostileBomb(b);
+        hostileBolts.splice(i, 1); continue;
+      }
       damagePlayer(b.damage);
       if (b.freezeSecs > 0) {
         playerFrozenTimer = Math.max(playerFrozenTimer, b.freezeSecs);
@@ -4107,6 +4227,18 @@ function drawSkeleton(s) {
  */
 function drawHostileBolts() {
   for (const b of hostileBolts) {
+    if (b.blastRadius > 0) {
+      // Lobbed bomb: a pulsing orb, not a directional dart — it threatens an
+      // area once it lands, not a line, so it should not read as aimed.
+      const pulse = 0.5 + 0.5 * Math.sin(loopT * 12);
+      ctx.save(); ctx.translate(b.x, b.y + CONFIG.hudHeight);
+      ctx.shadowColor = '#FF8020'; ctx.shadowBlur = 10 + 4 * pulse;
+      ctx.fillStyle = '#FF8020';
+      ctx.beginPath(); ctx.arc(0, 0, 5 + 1.5 * pulse, 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      continue;
+    }
     const ang = Math.atan2(b.vy, b.vx);
     const col = b.freezeSecs > 0 ? '#40D0F0' : '#B040E0';
     ctx.save(); ctx.translate(b.x, b.y + CONFIG.hudHeight); ctx.rotate(ang);
@@ -4505,6 +4637,27 @@ function drawDarkKnight() {
     : Math.atan2(player.y - boss.y, player.x - boss.x);
 
   ctx.save(); ctx.translate(bx, by); ctx.scale(facing, 1);
+
+  // Whirlwind visual (behind the body) — same three-rotating-arcs technique
+  // as the player's own whirlwind (see drawKnight), in the dark knight's own
+  // red/purple palette instead of the player's steel blue.
+  if (boss.bstate === 'whirlwind') {
+    const wAlpha = Math.min(1, boss.stateTimer / 0.4);
+    for (let i = 0; i < 3; i++) {
+      const baseA = loopT * 9 + (i / 3) * Math.PI * 2;
+      ctx.save();
+      ctx.globalAlpha = wAlpha * (0.45 + 0.3 * Math.sin(loopT * 14 + i * 2.1));
+      ctx.strokeStyle = '#FF1F1F';
+      ctx.shadowColor  = '#B040E0';
+      ctx.shadowBlur   = 10;
+      ctx.lineWidth    = 3;
+      const r = CONFIG.darkKnightWhirlwindRadius;
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.42, baseA,        baseA + 1.15); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.72, baseA + 0.38, baseA + 1.55); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.93, baseA + 0.65, baseA + 1.80); ctx.stroke();
+      ctx.restore();
+    }
+  }
 
   // Ground shadow
   ctx.shadowBlur = 0;

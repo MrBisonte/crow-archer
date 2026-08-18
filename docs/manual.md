@@ -74,8 +74,11 @@ kind so every new threat starts light and ends heavy:
 There is no kill target. Clearing a wave's last skeleton starts the next
 one; clearing wave 9 starts the Dark Archer's entrance. Both dark bosses
 skip the Crow King's shield entirely, every hit lands. The dark archer
-keeps its distance and fires three-bolt volleys; the dark knight closes the
-gap fast and charges often. Beating both ends the run at the win screen.
+keeps its distance, firing three-bolt volleys and lobbing an occasional
+bomb that explodes in a radius; the dark knight closes the gap fast,
+charging often and sometimes halting into a whirlwind between charges.
+Both summon one skeleton every so often too, ice from the archer and fire
+from the knight. Beating both ends the run at the win screen.
 
 ### Multiplayer
 
@@ -121,8 +124,8 @@ flowchart LR
 | | Movement | Attack | Shield |
 |---|---|---|---|
 | **Crow King** | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
-| **Dark Archer** | Orbits at range, never closes in | Three-bolt volley every couple of seconds | None, every hit lands |
-| **Dark Knight** | Short lead-in, then charges often | Higher contact damage than the Crow King's charge | None, every hit lands |
+| **Dark Archer** | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
+| **Dark Knight** | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
 
 The two dark bosses are corrupted echoes of the Archer and the Knight: the
 archer's silhouette keeps a bow drawn on you, the knight's keeps a spear that
