@@ -521,6 +521,22 @@ function initAudio() {
 
 const inGame = () => appState === 'playing' || appState === 'boss_fight';
 
+/**
+ * Hides the OS cursor once aiming actually matters, since drawReticle()
+ * draws the per-character indicator in its place; restores it the moment
+ * aiming stops (menus, pause, boss entrance, castle intro), so a screen
+ * with a clickable row, like controls remapping, still shows a real one.
+ * A style write is cheap but not free, so this only fires on the frame
+ * inGame() actually flips rather than every frame.
+ */
+let cursorHidden = false;
+function syncCursor() {
+  const hide = inGame();
+  if (hide === cursorHidden) return;
+  cursorHidden = hide;
+  canvas.style.cursor = hide ? 'none' : 'crosshair';
+}
+
 function startCharge() {
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
@@ -5317,9 +5333,103 @@ function drawCastleIntro(t) {
   ctx.globalAlpha = 1;
 }
 
+/**
+ * Per-character aim reticle, drawn at the mouse position in place of the
+ * system cursor (see syncCursor). One row per CHAR_PANELS entry, reusing
+ * that table's own color for each so the reticle always matches the
+ * character-select swatch, and a fifth character gets a row here instead
+ * of a growing if/else chain.
+ */
+const RETICLE_PAINTERS = {
+  archer: drawArcherReticle,
+  wizard: drawWizardReticle,
+  knight: drawKnightReticle,
+  ranger: drawRangerReticle,
+};
+
+function drawReticle() {
+  ctx.save();
+  ctx.translate(mouse.x, mouse.y + CONFIG.hudHeight);
+  (RETICLE_PAINTERS[selectedChar] || drawRangerReticle)();
+  ctx.restore();
+}
+
+/** Ranger: a plain crosshair, the natural read for the crossbow's straight bolts. */
+function drawRangerReticle() {
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  ctx.globalAlpha = 0.25 + 0.55 * pulse;
+  ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1.5;
+  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 5 + 3 * pulse;
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.moveTo(dx * 4, dy * 4); ctx.lineTo(dx * 11, dy * 11); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#FFCC00';
+  ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/** Archer: a scope ring with the cross peeking through it, for a longbow's precision. */
+function drawArcherReticle() {
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  const R = 9;
+  ctx.globalAlpha = 0.25 + 0.5 * pulse;
+  ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1.4;
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 5 + 3 * pulse;
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.moveTo(dx * (R - 4), dy * (R - 4)); ctx.lineTo(dx * (R + 4), dy * (R + 4)); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#39FF14';
+  ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Knight: a small spearhead rotated onto player.aimAngle, so it points the
+ * same way the real spear would thrust rather than sitting axis-aligned.
+ */
+function drawKnightReticle() {
+  ctx.rotate(player.aimAngle);
+  ctx.globalAlpha = 0.75;
+  ctx.shadowColor = '#C8C8E8'; ctx.shadowBlur = 5;
+  ctx.fillStyle = '#C8C8E8';
+  ctx.beginPath();
+  ctx.moveTo(10, 0); ctx.lineTo(0, -4); ctx.lineTo(-3, 0); ctx.lineTo(0, 4);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#8C8CA8'; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(-10, 0); ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Wizard: a small wand rotated onto player.aimAngle, its tip sparking with
+ * the same pulse-and-glow technique the character panels' magic accents use.
+ */
+function drawWizardReticle() {
+  ctx.rotate(player.aimAngle);
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 6);
+  ctx.globalAlpha = 0.75;
+  ctx.strokeStyle = '#5A3C22'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(4, 0); ctx.stroke();
+  ctx.shadowColor = '#8888FF'; ctx.shadowBlur = 6 + 4 * pulse;
+  ctx.fillStyle = '#8888FF';
+  ctx.beginPath(); ctx.arc(6, 0, 2 + pulse, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#C8C8FF'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(2, 0); ctx.lineTo(10, 0);
+  ctx.moveTo(6, -4); ctx.lineTo(6, 4);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
 const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
 
 function render(t) {
+  syncCursor();
   const gameVisible = GAME_VISIBLE_STATES.has(appState);
   if (gameVisible) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
@@ -5367,6 +5477,7 @@ function render(t) {
     }
     if (appState === 'paused')        drawPause();
     if (appState === 'boss_entrance') drawBossEntrance();
+    if (inGame()) drawReticle();
   } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys, { x: mouse.x, y: mouse.y, fire: mouseLeftHeld, special: mouseRightHeld });
   } else if (appState === 'menu')       { drawMenu(t);
   } else if (appState === 'charselect') { drawCharSelect(t);
