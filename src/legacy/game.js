@@ -552,7 +552,14 @@ let mouseRightHeld = false;
 let mouseLeftHeld = false;
 canvas.addEventListener('mousedown', e => {
   initAudio();
-  if (e.button === 0) { mouseLeftHeld = true; if (inGame()) shootPressed = true; }
+  if (e.button === 0) {
+    mouseLeftHeld = true;
+    if (inGame()) shootPressed = true;
+    // The castle-intro black screen waits for exactly this: one click, no
+    // key, since it is shown mid-run with the keyboard already busy with
+    // movement held down.
+    else if (appState === 'castle_intro') appState = 'playing';
+  }
   if (e.button === 2) { mouseRightHeld = true; startCharge(); }
 });
 canvas.addEventListener('mouseup',    e => {
@@ -2642,8 +2649,11 @@ function updateBossDeath(dt) {
       // other 'playing' entry, which would wipe the run that just cleared
       // stage 1. The nine-wave gauntlet plays out in 'playing' like a normal
       // brawl; killSkeleton's own wave-clear check is what starts the next
-      // wave, or the dark archer's entrance once wave 9 clears.
-      appState = 'playing';
+      // wave, or the dark archer's entrance once wave 9 clears. The castle
+      // is already fully set up at this point; castle_intro just holds a
+      // black screen in front of it until the player clicks, since cutting
+      // straight from the death burst into the new map read as too fast.
+      appState = 'castle_intro';
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
       skeletons = [];
@@ -5284,6 +5294,29 @@ function drawWin(t) {
   ctx.fillText(`[R] PLAY AGAIN${Math.floor(t*2)%2===0 ? '_' : ' '}   [M] MENU`, CONFIG.canvasW/2, 410);
 }
 
+/**
+ * Shown once, between the Crow King's death and the castle stage's own
+ * setup becoming visible. That setup (generateMap('castle'), the wave 1
+ * spawn) already ran before this state was entered, hidden behind the black
+ * screen, so the click just reveals it rather than triggering it.
+ */
+function drawCastleIntro(t) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
+  _scanSweep('rgba(176,64,224,0.045)', 90);
+  _cornerFrame('#4a1a5c');
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 16 + 7 * Math.sin(t * 1.7);
+  ctx.fillStyle = '#B040E0'; ctx.font = '24px "Courier New", monospace';
+  ctx.fillText("You've entered the cursed Castle!", CONFIG.canvasW / 2, CONFIG.canvasH / 2 - 16);
+  ctx.shadowBlur = 0;
+
+  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 3);
+  ctx.fillStyle = '#8A40A8'; ctx.font = '16px "Courier New", monospace';
+  ctx.fillText('[ CLICK TO CONTINUE ]', CONFIG.canvasW / 2, CONFIG.canvasH / 2 + 32);
+  ctx.globalAlpha = 1;
+}
+
 const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
 
 function render(t) {
@@ -5340,6 +5373,7 @@ function render(t) {
   } else if (appState === 'controls')   { drawControls(t);
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
+  } else if (appState === 'castle_intro') { drawCastleIntro(t);
   } else if (appState === 'inventory')  { FEATHERS.draw(); }
 }
 
