@@ -15,6 +15,7 @@ import { EventBus } from '../sim/events';
 import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
+import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
@@ -3235,8 +3236,10 @@ function drawWizard() {
   // the purple aim line above already shows aim direction.
   const wgrid = wizardGrid();
   const wSpriteDx = -(WIZARD_SPRITE.w) / 2, wSpriteDy = -22;
-  if (flashOn) drawPixelSpriteFlash(wgrid, wSpriteDx, wSpriteDy, 1, '#ffffff');
-  else drawPixelSprite(wgrid, wSpriteDx, wSpriteDy, 1);
+  const wCanvas = flashOn
+    ? spriteFlashCanvas('wizard', wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h, '#ffffff')
+    : spriteCanvas('wizard', wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h);
+  ctx.drawImage(wCanvas, wSpriteDx, wSpriteDy);
 
   // Orb glow pulse + bolt cooldown ring, at the orb's fixed position in the sprite
   const ox = 20 + wSpriteDx, oy = 16 + wSpriteDy;
@@ -3339,22 +3342,6 @@ function pixelOutline(g, c) {
   }
   return out;
 }
-/** Blits a pixel grid onto the game canvas at dx,dy, scaled up. */
-function drawPixelSprite(g, dx, dy, scale) {
-  for (let y = 0; y < g.length; y++)
-    for (let x = 0; x < g[0].length; x++) {
-      const c = g[y][x];
-      if (c) { ctx.fillStyle = c; ctx.fillRect(dx + x * scale, dy + y * scale, scale, scale); }
-    }
-}
-/** Same blit with every filled pixel forced to one color: the pixel-sprite
- * hit-flash technique (a flashing silhouette) instead of tinting materials. */
-function drawPixelSpriteFlash(g, dx, dy, scale, color) {
-  ctx.fillStyle = color;
-  for (let y = 0; y < g.length; y++)
-    for (let x = 0; x < g[0].length; x++)
-      if (g[y][x]) ctx.fillRect(dx + x * scale, dy + y * scale, scale, scale);
-}
 
 const ARCHER_SPRITE = {
   w: 24, h: 32,
@@ -3432,8 +3419,10 @@ function drawPlayer() {
   const spriteScale = 1;
   const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
   const spriteDy = -22;
-  if (flashOn) drawPixelSpriteFlash(grid, spriteDx, spriteDy, spriteScale, '#ffffff');
-  else drawPixelSprite(grid, spriteDx, spriteDy, spriteScale);
+  const archerCanvas = flashOn
+    ? spriteFlashCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
+    : spriteCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
+  ctx.drawImage(archerCanvas, spriteDx, spriteDy);
 
   // Shield halo
   if (playerShield) {
@@ -3813,9 +3802,11 @@ function drawKnight() {
 
   // Pixel-art body (see buildKnightGrid). bob is rounded to a whole pixel so
   // the sprite blit stays on-grid instead of a blurred sub-pixel position.
-  const kgrid = knightGrid(fsActive ? 'fireSword' : 'normal');
+  const kKind = fsActive ? 'fireSword' : 'normal';
+  const kgrid = knightGrid(kKind);
   const kSpriteDx = -(KNIGHT_SPRITE.w) / 2, kSpriteDy = -22 + Math.round(bob);
-  drawPixelSprite(kgrid, kSpriteDx, kSpriteDy, 1);
+  const kCanvas = spriteCanvas(`knight|${kKind}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
+  ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
   // ── Weapon ───────────────────────────────────────────────────────────────
   const spearAng = Math.atan2(Math.sin(player.aimAngle), f * Math.cos(player.aimAngle)); // world-space angle mapped into flipped canvas
