@@ -357,17 +357,31 @@ let controlsSelection = 0, remapTarget = null;
  * character is one entry rather than two lists that have to independently
  * agree on the same three names.
  */
+// Difficulty gradient for the char-select panels, one home for the
+// label/color pair so all four panels agree on what "hard" looks like.
+// Rendered at full brightness regardless of panel selection (unlike
+// everything else in a dimmed panel) so all four are scannable at a glance.
+const DIFFICULTY = {
+  easy:      { label: 'EASY',       color: '#39FF14' },
+  medium:    { label: 'MEDIUM',     color: '#CCAA00' },
+  hard:      { label: 'HARD',       color: '#FF8C00' },
+  extraHard: { label: 'EXTRA HARD', color: '#FF3B30' },
+};
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    difficulty: DIFFICULTY.medium,
     lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
            'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    difficulty: DIFFICULTY.extraHard,
     lines:['Homing magic bolts  3s CD','Fire Bolt pickup: 2 dmg homing',
            'Laser pickup: pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    difficulty: DIFFICULTY.hard,
     lines:['Long spear  ·  melee range','Pickup: Iron Javelin (pierces)',
            'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Frontline playstyle'] },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+    difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
 ];
@@ -5011,6 +5025,11 @@ function drawCharSelect(t) {
     ctx.font='10.5px "Courier New",monospace';
     ctx.fillStyle = sel ? p.color.replace('FF','88') : p.dim;
     p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+208+i*30));
+    ctx.font='11px "Courier New",monospace';
+    ctx.shadowColor = p.difficulty.color; ctx.shadowBlur = 6;
+    ctx.fillStyle = p.difficulty.color;
+    ctx.fillText(`DIFFICULTY: ${p.difficulty.label}`, px+panelW/2, panelY+360);
+    ctx.shadowBlur = 0;
   });
 
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
