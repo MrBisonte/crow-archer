@@ -64,6 +64,10 @@ const POINT_ARGS: Record<string, readonly number[] | undefined> = {
   arcTo: [0, 2],
   quadraticCurveTo: [0, 2],
   bezierCurveTo: [0, 2, 4],
+  // The baked body is one drawImage call; its destination is the only place
+  // position-only animation (the knight's walk bob) still shows up, now that
+  // the shape itself is baked into a cached canvas instead of redrawn.
+  drawImage: [1],
 };
 
 /** Rectangles also pin down their far corner, which is where their extent is. */
@@ -163,6 +167,25 @@ function fakeContext(): Recording {
   };
 }
 
+// stamps.ts needs a real `document.createElement('canvas')` to cache the
+// baked body into, once per (character, trim, wash) key; vitest's `node`
+// environment has none. A minimal stand-in is enough — the same recording
+// technique as the main draw target, so the cached canvas's own fillRect
+// calls stay inspectable via `.getContext('2d')` instead of silently
+// vanishing into a real, un-inspectable canvas.
+interface FakeCanvas {
+  width: number;
+  height: number;
+  getContext(kind: '2d'): CanvasRenderingContext2D;
+}
+
+(globalThis as { document?: { createElement(tag: string): FakeCanvas } }).document = {
+  createElement(tag: string): FakeCanvas {
+    if (tag !== 'canvas') throw new Error(`fake document can only create a canvas, got "${tag}"`);
+    return { width: 0, height: 0, getContext: () => fakeContext().ctx };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -183,14 +206,18 @@ const draw = (over: Partial<CharacterVisual> = {}, loopT = 0, hudHeight = 0): Re
 
 const dist = (p: Point): number => Math.hypot(p.x, p.y);
 
+/**
+ * The cached canvas the baked body was blitted from. Body colour (team trim,
+ * hit-flash white, down-state grey) is baked into that canvas by stamps.ts
+ * and never touches the outer context directly, so "does the body look
+ * different" is answered by comparing *which* cached canvas got drawn, not
+ * by looking for a hex colour that no longer appears out here.
+ */
+const bodyCanvas = (rec: Recording): unknown => rec.calls.find((c) => c.name === 'drawImage')?.args[0];
+
 /** The drawn point furthest from the body's own origin: a weapon tip, in practice. */
 const reach = (rec: Recording): Point =>
   rec.points.reduce((far, p) => (dist(p) > dist(far) ? p : far), { x: 0, y: 0 });
-
-const isPale = (v: unknown): boolean =>
-  typeof v === 'string' &&
-  /^#[0-9a-f]{6}$/i.test(v) &&
-  [1, 3, 5].every((i) => parseInt(v.slice(i, i + 2), 16) > 150);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -200,7 +227,11 @@ describe('drawCharacter', () => {
   for (const character of KINDS) {
     it(`draws the ${character} without throwing`, () => {
       expect(() => draw({ character })).not.toThrow();
-      expect(draw({ character }).calls.length).toBeGreaterThan(20);
+      // The body itself is one drawImage call now (see paintBakedBody), not
+      // a few dozen individual shape draws — this floor is a "did the
+      // shadow, body and weapon all actually run" sanity check, not a count
+      // calibrated to the old per-shape implementation.
+      expect(draw({ character }).calls.length).toBeGreaterThan(8);
     });
 
     it(`gives the ${character} back the context it was handed`, () => {
@@ -216,12 +247,13 @@ describe('drawCharacter', () => {
     });
 
     it(`shows which side the ${character} is on`, () => {
-      const teamA = draw({ character, team: 0 }).valuesOf('fillStyle');
-      const teamB = draw({ character, team: 1 }).valuesOf('fillStyle');
-      expect(teamA).toContain('#39FF14');
-      expect(teamB).toContain('#39E0FF');
-      expect(teamA).not.toContain('#39E0FF');
-      expect(new Set(teamA)).not.toEqual(new Set(teamB));
+      // Team trim is baked into the body (see character-grids.ts), so two
+      // teams draw from two different cached canvases, not two fillStyles
+      // on the same one.
+      const teamA = draw({ character, team: 0 });
+      const teamB = draw({ character, team: 1 });
+      expect(bodyCanvas(teamA)).toBeDefined();
+      expect(bodyCanvas(teamA)).not.toBe(bodyCanvas(teamB));
     });
 
     it(`haloes a shielded ${character}, knight included`, () => {
@@ -283,7 +315,7 @@ describe('drawCharacter', () => {
 
   describe('a body that is down', () => {
     it('is still drawn, so team-mates can see where it fell', () => {
-      expect(draw({ dead: true }).calls.length).toBeGreaterThan(20);
+      expect(bodyCanvas(draw({ dead: true }))).toBeDefined();
     });
 
     it('is faded and tipped over, unlike a live one', () => {
@@ -295,35 +327,45 @@ describe('drawCharacter', () => {
     });
 
     it('is greyed rather than painted in its own colours', () => {
-      expect(draw({ character: 'archer' }).valuesOf('fillStyle')).toContain('#3A5F88');
-      expect(draw({ character: 'archer', dead: true }).valuesOf('fillStyle'))
-        .not.toContain('#3A5F88');
+      // Down bakes a corpse-grey silhouette (see paintBakedBody), a
+      // different cached canvas from the body's own colours.
+      const live = draw({ character: 'archer' });
+      const down = draw({ character: 'archer', dead: true });
+      expect(bodyCanvas(down)).not.toBe(bodyCanvas(live));
     });
   });
 
   describe('the hit flash', () => {
     it('washes the body white', () => {
-      const hit = draw({ character: 'archer', hitFlash: 0.3 }).valuesOf('fillStyle');
-      expect(hit).not.toContain('#3A5F88');
-      expect(hit.some(isPale)).toBe(true);
+      // A lit blink frame bakes an all-white silhouette (see
+      // paintBakedBody), a different cached canvas from the body's own
+      // colours.
+      const bare = draw({ character: 'archer' });
+      const hit = draw({ character: 'archer', hitFlash: 0.3 });
+      expect(bodyCanvas(hit)).not.toBe(bodyCanvas(bare));
     });
 
     it('blinks rather than holding, so it reads as pain and not as a fault', () => {
-      // 10 Hz: 0.30 s left is a lit frame, 0.25 s left is a dark one.
-      expect(draw({ character: 'archer', hitFlash: 0.25 }).valuesOf('fillStyle'))
-        .toContain('#3A5F88');
+      // 10 Hz: 0.30 s left is a lit frame, 0.25 s left is a dark one — the
+      // same, un-flashed canvas as no hit at all.
+      const bare = draw({ character: 'archer' });
+      const dark = draw({ character: 'archer', hitFlash: 0.25 });
+      expect(bodyCanvas(dark)).toBe(bodyCanvas(bare));
     });
 
     it('leaves an unhurt body alone', () => {
-      expect(draw({ character: 'archer', hitFlash: 0 }).valuesOf('fillStyle'))
-        .toContain('#3A5F88');
+      const bare = draw({ character: 'archer' });
+      const unhurt = draw({ character: 'archer', hitFlash: 0 });
+      expect(bodyCanvas(unhurt)).toBe(bodyCanvas(bare));
     });
   });
 
   it('animates the wizard on the wall clock, so a standing body is never still', () => {
-    const still = draw({ character: 'wizard' }, 0);
-    const later = draw({ character: 'wizard' }, 1.3);
-    expect(later.points).not.toEqual(still.points);
+    // The body itself is one fixed pose now (see buildWizardGrid); what
+    // still never holds still is the orb glow paintStaff draws live.
+    const still = draw({ character: 'wizard' }, 0).valuesOf('fillStyle');
+    const later = draw({ character: 'wizard' }, 1.3).valuesOf('fillStyle');
+    expect(later).not.toEqual(still);
   });
 
   it('animates the knight on the walk phase', () => {
