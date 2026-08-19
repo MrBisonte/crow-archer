@@ -3715,18 +3715,28 @@ function drawRanger() {
 // Same body shape, two palettes — the fire sword's "powered up" recolor of
 // the whole knight, not just the blade. Mirrors SKELETON_PALETTES: one grid
 // builder parameterized by kind rather than two near-duplicate functions.
+//
+// Reads as metal, not cloth: a genuine value jump from armorShadow to
+// armorHi (dark-to-near-white), not just a slightly-lighter dark tone —
+// pixel art has no gradients or glow to imply a reflective surface, so the
+// contrast itself has to carry that read. Every plate (helm, pauldrons,
+// chest) gets its own highlight rather than just one patch on the chest.
 const KNIGHT_PALETTES = {
   normal: {
-    armor: '#242436', armorHi: '#34364E', pauldron: '#181826',
-    leg: '#1E2030', legHi: '#2A2C3E',
-    helm: '#1E2030', visor: '#39FF14', crest: '#2244AA',
-    rivet: '#888888',
+    armor: '#3A4258', armorShadow: '#20242E', armorHi: '#C4CEE2',
+    pauldron: '#2E3446', pauldronHi: '#8894AC',
+    leg: '#323850', legHi: '#7884A0',
+    helm: '#323850', helmHi: '#8894AC',
+    visor: '#39FF14', crest: '#3A5CC8',
+    rivet: '#D8DCE4',
   },
   fireSword: {
-    armor: '#3A2010', armorHi: '#5A3018', pauldron: '#2A1808',
-    leg: '#1E2030', legHi: '#2A2C3E',
-    helm: '#3A1A08', visor: '#FF5500', crest: '#CC3300',
-    rivet: '#888888',
+    armor: '#5A3018', armorShadow: '#301A0C', armorHi: '#F8C088',
+    pauldron: '#442410', pauldronHi: '#E89858',
+    leg: '#4A2818', legHi: '#C87838',
+    helm: '#4A2818', helmHi: '#E89858',
+    visor: '#FF5500', crest: '#CC3300',
+    rivet: '#F0C090',
   },
 };
 const KNIGHT_SPRITE = { w: 30, h: 36, outline: '#0A0F0A' };
@@ -3743,18 +3753,22 @@ function buildKnightGrid(kind) {
     const hw = Math.max(0, 3 - y);
     pixelRect(g, 15 - hw, y, hw * 2 + 1, 1, C.crest);
   }
-  // Great helm
+  // Great helm, with a bright brow band catching the light
   pixelEllipse(g, 15, 10, 9, 6, C.helm);
   pixelRect(g, 6, 8, 18, 6, C.helm);
+  pixelRect(g, 7, 8, 16, 2, C.helmHi);
   // Visor slits
   pixelRect(g, 8, 11, 14, 2, C.visor);
   pixelRect(g, 10, 14, 10, 2, C.visor);
-  // Pauldrons
+  // Pauldrons, each with a rim highlight
   pixelEllipse(g, 5, 18, 4, 5, C.pauldron);
   pixelEllipse(g, 25, 18, 4, 5, C.pauldron);
+  pixelEllipse(g, 4, 16, 2, 1.4, C.pauldronHi);
+  pixelEllipse(g, 24, 16, 2, 1.4, C.pauldronHi);
   setPixel(g, 5, 16, C.rivet); setPixel(g, 25, 16, C.rivet);
-  // Torso / breastplate
+  // Torso / breastplate — shadow low, base mid, bright highlight upper-left
   pixelRect(g, 6, 15, 18, 15, C.armor);
+  pixelRect(g, 6, 24, 18, 6, C.armorShadow);
   pixelRect(g, 8, 16, 8, 8, C.armorHi);
   // Legs
   pixelRect(g, 8, 29, 6, 7, C.leg); pixelRect(g, 16, 29, 6, 7, C.leg);
