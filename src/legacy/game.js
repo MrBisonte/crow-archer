@@ -3342,6 +3342,15 @@ function pixelOutline(g, c) {
   }
   return out;
 }
+/** Fills an upward-pointing triangle, apex up, base centered at (cx, baseY).
+ * A tapering stack of 1-row-tall rects, same shape the knight's crest and
+ * the crow king's crown spikes both need. */
+function pixelTriangleUp(g, cx, baseY, halfW, h, c) {
+  for (let i = 0; i < h; i++) {
+    const w = Math.max(0, Math.round(halfW - (halfW * i) / (h - 1 || 1)));
+    pixelRect(g, cx - w, baseY - i, w * 2 + 1, 1, c);
+  }
+}
 /** Buckets a continuous animation phase into one of 3 pixel-art frames: a
  * flap/stride cycle only reads as pixel art if it steps between hand-drawn
  * poses instead of interpolating smoothly like the vector version did. */
@@ -3745,10 +3754,7 @@ function buildKnightGrid(kind) {
   const C = KNIGHT_PALETTES[kind];
   const g = makePixelGrid(KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
   // Crest / plume
-  for (let y = 0; y <= 4; y++) {
-    const hw = Math.max(0, 3 - y);
-    pixelRect(g, 15 - hw, y, hw * 2 + 1, 1, C.crest);
-  }
+  pixelTriangleUp(g, 15, 4, 3, 5, C.crest);
   // Great helm, with a bright brow band catching the light
   pixelEllipse(g, 15, 10, 9, 6, C.helm);
   pixelRect(g, 6, 8, 18, 6, C.helm);
@@ -4570,6 +4576,52 @@ function drawFloaters() {
   ctx.globalAlpha = 1;
 }
 
+const CROW_KING_SPRITE = { w: 64, h: 44 };
+
+// One boss, no kind variants, so a plain palette object — not a
+// Record<Kind,X> table, there is no second row this would ever need.
+const CROW_KING_PALETTE = {
+  body: '#0A0A0A', bodyHi: '#2A0A0A',
+  wing: '#5A0808', wingHi: '#8A1010',
+  beak: '#3A0606', crown: '#0A0A0A', crownRim: '#5A0808',
+  edge: '#000000',
+};
+
+/** frame 'a'/'b' are the two flap extremes, 'mid' the level pass between
+ * them — see animFrame3. Same simplification as the regular crow: crown,
+ * beak, and body stay put, only the wing mass moves. */
+function buildCrowKingGrid(frame) {
+  const C = CROW_KING_PALETTE;
+  const g = makePixelGrid(CROW_KING_SPRITE.w, CROW_KING_SPRITE.h);
+
+  if (frame === 'a')      pixelEllipse(g, 30, 35, 20, 6, C.wing);   // lowered, spread below
+  else if (frame === 'b') pixelEllipse(g, 30, 11, 17, 6, C.wingHi); // raised, folded over the back
+  else                    pixelEllipse(g, 28, 24, 22, 5, C.wing);   // level, spread to the sides
+
+  // Crown — 5 spikes, tallest in the middle
+  const spikeXs = [16, 24, 32, 40, 48], spikeHs = [5, 8, 11, 8, 5];
+  for (let i = 0; i < 5; i++) pixelTriangleUp(g, spikeXs[i], 9, 4, spikeHs[i], C.crown);
+  pixelRect(g, 12, 8, 40, 2, C.crownRim);
+
+  // Body, drawn over the wing root and crown base
+  pixelEllipse(g, 34, 24, 20, 13, C.body);
+  pixelEllipse(g, 27, 18, 9, 5, C.bodyHi);
+
+  // Beak, pointing left — a sideways taper, apex at the tip, so a column
+  // loop rather than pixelTriangleUp's upward-apex shape.
+  for (let i = 0; i < 6; i++) {
+    const hw = Math.round((5 * i) / 5);
+    pixelRect(g, 4 + i, 22 - hw, 1, hw * 2 + 1, C.beak);
+  }
+
+  return pixelOutline(g, C.edge);
+}
+
+const _crowKingGrids = {};
+function crowKingGrid(frame) {
+  return _crowKingGrids[frame] || (_crowKingGrids[frame] = buildCrowKingGrid(frame));
+}
+
 function drawBoss() {
   if (bossDeathSeq) {
     for (const f of bossDeathSeq.fragments) {
@@ -4635,85 +4687,23 @@ function drawBoss() {
     ctx.restore(); return;
   }
 
-  // 3. Far wing
-  const farRot = 0.3 + 0.4 * Math.sin(wPhase);
-  const farY   = bobY - 2 + Math.sin(wPhase) * 5;
-  ctx.fillStyle = '#5A0808';
-  ctx.beginPath(); ctx.ellipse(4, farY, 28, 11, farRot, 0, Math.PI*2); ctx.fill();
+  // 3. Pixel-art body (see buildCrowKingGrid). Same 3-baked-frame flap as
+  // the regular crow, scaled up, plus the crown and stacked eyes a boss needs.
+  const bkFrame = animFrame3(wPhase);
+  const bkGrid  = crowKingGrid(bkFrame);
+  const bkDx = -(CROW_KING_SPRITE.w) / 2, bkDy = -24 + Math.round(bobY);
+  ctx.drawImage(spriteCanvas(`crowking|${bkFrame}`, bkGrid, CROW_KING_SPRITE.w, CROW_KING_SPRITE.h), bkDx, bkDy);
 
-  // 4. Far wing edge feathers (5 tufts along outer arc)
-  ctx.strokeStyle = '#0A0A0A'; ctx.lineWidth = 1.5;
-  ctx.save(); ctx.translate(4, farY); ctx.rotate(farRot);
-  [0.2, 0.4, 0.55, 0.7, 0.85].forEach(frac => {
-    const t = frac * Math.PI;
-    const ex = Math.cos(t) * 28, ey = Math.sin(t) * 11;
-    const nLen = Math.hypot(Math.cos(t)/28, Math.sin(t)/11);
-    const nx = (Math.cos(t)/28)/nLen, ny = (Math.sin(t)/11)/nLen;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + nx*6, ey + ny*6); ctx.stroke();
-  });
-  ctx.restore();
-
-  // 5. Body
-  ctx.fillStyle = '#050505';
-  ctx.beginPath(); ctx.ellipse(0, bobY, 28, 18, 0, 0, Math.PI*2); ctx.fill();
-
-  // 6. Body highlight
-  ctx.fillStyle = '#1A1A1A';
-  ctx.beginPath(); ctx.ellipse(-5, bobY - 4, 14, 6, 0, 0, Math.PI*2); ctx.fill();
-
-  // 7. Crown spikes — 5 triangles, heights 5/8/11/8/5
-  const spikeXs = [-16, -8, 0, 8, 16];
-  const spikeHs = [5, 8, 11, 8, 5];
-  const spikeBaseY = bobY - 18;
-  for (let si = 0; si < 5; si++) {
-    const sx = spikeXs[si], sh = spikeHs[si];
-    ctx.fillStyle = '#0A0A0A';
-    ctx.beginPath();
-    ctx.moveTo(sx - 4, spikeBaseY); ctx.lineTo(sx, spikeBaseY - sh); ctx.lineTo(sx + 4, spikeBaseY);
-    ctx.closePath(); ctx.fill();
-    // Rim light on spike
-    ctx.strokeStyle = '#5A0808'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(sx - 4, spikeBaseY); ctx.lineTo(sx, spikeBaseY - sh); ctx.lineTo(sx + 4, spikeBaseY);
-    ctx.stroke();
-  }
-
-  // 8. Beak — large triangle facing left
-  ctx.fillStyle = '#3A0606';
-  ctx.beginPath();
-  ctx.moveTo(-26, bobY - 1); ctx.lineTo(-38, bobY); ctx.lineTo(-26, bobY + 5);
-  ctx.closePath(); ctx.fill();
-
-  // 9. Eyes — two stacked
+  // 4. Eyes — two stacked, same glow-stamp technique as the skeleton's
   const eyeBlur = 10 + 5 * Math.sin(loopT * 8);
-  ctx.shadowColor = '#FF1F1F'; ctx.shadowBlur = eyeBlur;
-  ctx.fillStyle = '#FF1F1F';
-  ctx.beginPath(); ctx.arc(-21, bobY - 4, 5, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(-21, bobY + 3, 5, 0, Math.PI*2); ctx.fill();
-  ctx.shadowBlur = 0;
+  const eyeStamp = glowDotStamp('#FF1F1F', 2.5, eyeBlur * 0.4);
+  ctx.drawImage(eyeStamp, bkDx + 13 - eyeStamp.width/2, bkDy + 20 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, bkDx + 13 - eyeStamp.width/2, bkDy + 27 - eyeStamp.height/2);
 
-  // 10. Eye cores (1×1 amber dot in each eye)
+  // 5. Eye cores (1×1 amber dot in each eye)
   ctx.fillStyle = '#FFB400';
-  ctx.fillRect(-21, bobY - 4, 1, 1);
-  ctx.fillRect(-21, bobY + 3, 1, 1);
-
-  // 11. Near wing (overlaps body on player side)
-  const nearRot = 0.3 + 0.4 * Math.sin(wPhase + Math.PI);
-  const nearY   = bobY - 2 + Math.sin(wPhase + Math.PI) * 5;
-  ctx.fillStyle = '#8A1010';
-  ctx.beginPath(); ctx.ellipse(-4, nearY, 28, 11, nearRot, 0, Math.PI*2); ctx.fill();
-
-  // 12. Near wing edge feathers
-  ctx.strokeStyle = '#0A0A0A'; ctx.lineWidth = 1.5;
-  ctx.save(); ctx.translate(-4, nearY); ctx.rotate(nearRot);
-  [0.2, 0.4, 0.55, 0.7, 0.85].forEach(frac => {
-    const t = frac * Math.PI;
-    const ex = Math.cos(t) * 28, ey = Math.sin(t) * 11;
-    const nLen = Math.hypot(Math.cos(t)/28, Math.sin(t)/11);
-    const nx = (Math.cos(t)/28)/nLen, ny = (Math.sin(t)/11)/nLen;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + nx*6, ey + ny*6); ctx.stroke();
-  });
-  ctx.restore();
+  ctx.fillRect(bkDx + 13, bkDy + 20, 1, 1);
+  ctx.fillRect(bkDx + 13, bkDy + 27, 1, 1);
 
   ctx.restore();
 }
@@ -4725,6 +4715,40 @@ function drawBoss() {
  * hit-flash techniques from the crow king. New geometry, not new drawing
  * tricks.
  */
+const DARK_ARCHER_SPRITE = { w: 40, h: 42 };
+const DARK_ARCHER_PALETTE = {
+  cloak: '#241030', cloakHi: '#3A1A4A',
+  body: '#382048', head: '#1A0E22', hood: '#150A1C',
+  edge: '#0A0510',
+};
+
+/** No walk cycle, no wing-flap — like the heroes, one static frame plus a
+ * live bob is enough. Bow/arm/bowstring stay live below, same reasoning as
+ * the player Archer's own bow: real-time aim is gameplay information. */
+function buildDarkArcherGrid() {
+  const C = DARK_ARCHER_PALETTE;
+  const g = makePixelGrid(DARK_ARCHER_SPRITE.w, DARK_ARCHER_SPRITE.h);
+
+  // Cloak — widens from the shoulders down to the hem
+  for (let y = 14; y <= 41; y++) {
+    const halfW = Math.round(10 + 9 * ((y - 14) / 27));
+    pixelRect(g, 20 - halfW, y, halfW * 2, 1, C.cloak);
+  }
+  pixelRect(g, 12, 14, 8, 6, C.cloakHi);
+
+  // Body panel, under the hood
+  pixelRect(g, 10, 18, 20, 16, C.body);
+
+  // Head, with the hood's brim shadowing its top
+  pixelEllipse(g, 20, 10, 9, 9, C.head);
+  pixelRect(g, 10, 0, 20, 6, C.hood);
+
+  return pixelOutline(g, C.edge);
+}
+
+let _darkArcherGrid = null;
+function darkArcherGrid() { return _darkArcherGrid || (_darkArcherGrid = buildDarkArcherGrid()); }
+
 function drawDarkArcher() {
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const bobY = 1.2 * Math.sin(loopT * 1.2);
@@ -4750,30 +4774,14 @@ function drawDarkArcher() {
     ctx.restore(); return;
   }
 
-  // Cloak
-  ctx.fillStyle = '#241030';
-  ctx.beginPath();
-  ctx.moveTo(-11, bobY - 6);
-  ctx.bezierCurveTo(-19, bobY, -19, bobY + 8, -15, bobY + 17);
-  ctx.lineTo(15, bobY + 13);
-  ctx.bezierCurveTo(19, bobY + 8, 19, bobY, 11, bobY - 6);
-  ctx.closePath(); ctx.fill();
-  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 5;
-  ctx.strokeStyle = '#B040E0'; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // Body
-  ctx.fillStyle = '#382048'; ctx.fillRect(-10, bobY - 6, 20, 22);
-
-  // Head + hood
-  ctx.fillStyle = '#1A0E22';
-  ctx.beginPath(); ctx.arc(0, bobY - 14, 10, 0, Math.PI*2); ctx.fill();
-  ctx.fillRect(-10, bobY - 24, 20, 6);
+  // Pixel-art cloak/body/head (see buildDarkArcherGrid)
+  const daDx = -(DARK_ARCHER_SPRITE.w) / 2, daDy = -24 + Math.round(bobY);
+  ctx.drawImage(spriteCanvas('darkarcher', darkArcherGrid(), DARK_ARCHER_SPRITE.w, DARK_ARCHER_SPRITE.h), daDx, daDy);
 
   // Eyes — same glow-stamp technique as the skeleton's
   const eyeStamp = glowDotStamp('#B040E0', 1.4, 4);
-  ctx.drawImage(eyeStamp, -5 - eyeStamp.width/2, bobY - 15 - eyeStamp.height/2);
-  ctx.drawImage(eyeStamp, 1 - eyeStamp.width/2, bobY - 15 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, daDx + 15 - eyeStamp.width/2, daDy + 9 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, daDx + 21 - eyeStamp.width/2, daDy + 9 - eyeStamp.height/2);
 
   // Bow arm, drawn toward the player
   const gx = Math.cos(aimAngle) * 16, gy = bobY + Math.sin(aimAngle) * 16;
@@ -4802,6 +4810,57 @@ function drawDarkArcher() {
  * remap it thrusts its spear with (see drawKnight), scaled up, plus the
  * corona-pulse and hit-flash techniques from the crow king.
  */
+const DARK_KNIGHT_SPRITE = { w: 40, h: 70 };
+const DARK_KNIGHT_PALETTE = {
+  leg: '#141018', legHi: '#2A2430',
+  torso: '#241820', torsoHi: '#3A2030',
+  pauldron: '#1A1018', pauldronHi: '#3A2838',
+  helm: '#1A1018', helmHi: '#3A2838',
+  visor: '#B040E0', crest: '#5A1030',
+  edge: '#0A0510',
+};
+
+/** No walk cycle — like the heroes, one static frame plus a live bob. The
+ * whirlwind visual and the spear (rotates with aim, extends on a charge)
+ * stay live below, same reasoning as the player Knight's own spear. */
+function buildDarkKnightGrid() {
+  const C = DARK_KNIGHT_PALETTE;
+  const g = makePixelGrid(DARK_KNIGHT_SPRITE.w, DARK_KNIGHT_SPRITE.h);
+
+  // Crest
+  pixelTriangleUp(g, 20, 10, 4, 10, C.crest);
+
+  // Great helm — rect body with a domed top
+  pixelRect(g, 10, 10, 20, 18, C.helm);
+  pixelEllipse(g, 20, 10, 10, 7, C.helm);
+  pixelRect(g, 10, 8, 20, 3, C.helmHi);
+
+  // Visor slits — baked solid, same convention as the player Knight's visor
+  pixelRect(g, 12, 16, 16, 3, C.visor);
+  pixelRect(g, 14, 21, 11, 3, C.visor);
+
+  // Pauldrons
+  pixelRect(g, 0, 28, 8, 11, C.pauldron);
+  pixelRect(g, 32, 28, 8, 11, C.pauldron);
+  pixelRect(g, 0, 28, 8, 3, C.pauldronHi);
+  pixelRect(g, 32, 28, 8, 3, C.pauldronHi);
+
+  // Torso
+  pixelRect(g, 5, 28, 30, 26, C.torso);
+  pixelRect(g, 8, 30, 10, 9, C.torsoHi);
+
+  // Legs
+  pixelRect(g, 7, 52, 11, 16, C.leg);
+  pixelRect(g, 22, 52, 11, 16, C.leg);
+  pixelRect(g, 7, 52, 11, 3, C.legHi);
+  pixelRect(g, 22, 52, 11, 3, C.legHi);
+
+  return pixelOutline(g, C.edge);
+}
+
+let _darkKnightGrid = null;
+function darkKnightGrid() { return _darkKnightGrid || (_darkKnightGrid = buildDarkKnightGrid()); }
+
 function drawDarkKnight() {
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const bobY = 1.2 * Math.sin(loopT * 1.2);
@@ -4852,39 +4911,9 @@ function drawDarkKnight() {
     ctx.restore(); return;
   }
 
-  // Legs
-  ctx.fillStyle = '#141018';
-  ctx.fillRect(-13, bobY + 8, 11, 16);
-  ctx.fillRect(2,   bobY + 8, 11, 16);
-
-  // Torso
-  ctx.fillStyle = '#241820';
-  ctx.fillRect(-15, bobY - 16, 30, 26);
-  ctx.fillStyle = '#3A2030';
-  ctx.fillRect(-12, bobY - 14, 10, 9);
-
-  // Pauldrons
-  ctx.fillStyle = '#1A1018';
-  ctx.fillRect(-20, bobY - 16, 8, 11);
-  ctx.fillRect(12,  bobY - 16, 8, 11);
-
-  // Great helm
-  ctx.fillStyle = '#1A1018';
-  ctx.fillRect(-10, bobY - 34, 20, 18);
-  ctx.beginPath(); ctx.arc(0, bobY - 34, 10, Math.PI, 0); ctx.fill();
-
-  // Visor slits — glowing, same accent as the skeleton and dark archer
-  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
-  ctx.fillStyle = '#B040E0';
-  ctx.fillRect(-8, bobY - 28, 16, 2.5);
-  ctx.fillRect(-6, bobY - 23, 11, 2.5);
-  ctx.shadowBlur = 0;
-
-  // Crest
-  ctx.fillStyle = '#5A1030';
-  ctx.beginPath();
-  ctx.moveTo(-4, bobY - 34); ctx.lineTo(0, bobY - 44); ctx.lineTo(4, bobY - 34);
-  ctx.closePath(); ctx.fill();
+  // Pixel-art armor (see buildDarkKnightGrid)
+  const dkDx = -(DARK_KNIGHT_SPRITE.w) / 2, dkDy = -44 + Math.round(bobY);
+  ctx.drawImage(spriteCanvas('darkknight', darkKnightGrid(), DARK_KNIGHT_SPRITE.w, DARK_KNIGHT_SPRITE.h), dkDx, dkDy);
 
   // Spear — extends forward on a charge
   ctx.save();
