@@ -3156,6 +3156,51 @@ function drawTiles() {
   tileOverlay.draw(ctx, loopT, waterPhase);
 }
 
+const WIZARD_SPRITE = {
+  w: 24, h: 32,
+  colors: {
+    robe: '#14143A', robeHi: '#22225A',
+    skin: '#D9B98A',
+    wood: '#5B3A1F',
+    orb: '#8888FF', orbHi: '#FFFFFF',
+    star: '#FFB400',
+    outline: '#0A0F0A',
+  },
+};
+
+/** Top-down 3/4, one fixed pose, same convention as the Archer's grid — see
+ * buildArcherGrid. Staff and orb baked into the pose; the orb's pulse and
+ * cooldown ring are drawn separately in drawWizard so that feedback stays
+ * animated instead of frozen into the static art. */
+function buildWizardGrid() {
+  const C = WIZARD_SPRITE.colors;
+  const g = makePixelGrid(WIZARD_SPRITE.w, WIZARD_SPRITE.h);
+  // Pointed hat, a stack of shrinking rows down to a wide brim
+  for (let y = 0; y <= 7; y++) {
+    const hw = Math.max(0, Math.round((y / 7) * 8));
+    pixelRect(g, 12 - hw, y, hw * 2 + 1, 1, C.robe);
+  }
+  pixelRect(g, 3, 7, 18, 2, C.robeHi);
+  setPixel(g, 12, 0, C.star);
+  // Face
+  pixelEllipse(g, 12, 12, 3.2, 2.6, C.skin);
+  setPixel(g, 10.5, 11.7, C.outline); setPixel(g, 13.5, 11.7, C.outline);
+  // Robe, tapered wider toward the hem
+  pixelRect(g, 8, 15, 8, 3, C.robe);
+  pixelRect(g, 6, 18, 12, 10, C.robe);
+  pixelRect(g, 4, 26, 16, 4, C.robe);
+  pixelRect(g, 10, 16, 4, 12, C.robeHi);
+  setPixel(g, 12, 20, C.star); setPixel(g, 12, 21, C.star);
+  // Staff arm, held out to the side
+  pixelRect(g, 12, 17, 8, 1, C.wood);
+  pixelEllipse(g, 20, 16, 2.6, 2.6, C.orb);
+  setPixel(g, 19, 15, C.orbHi);
+  return pixelOutline(g, C.outline);
+}
+
+let _wizardGrid = null;
+function wizardGrid() { return _wizardGrid || (_wizardGrid = buildWizardGrid()); }
+
 function drawWizard() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
@@ -3180,65 +3225,31 @@ function drawWizard() {
 
   ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
   const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash*20)%2===0;
-  const localAngle = f===1 ? player.aimAngle : Math.PI - player.aimAngle;
 
   // Ground shadow
   ctx.fillStyle='rgba(0,0,0,0.40)';
-  ctx.beginPath(); ctx.ellipse(0,11,9,2.5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0,10,10,2.5,0,0,Math.PI*2); ctx.fill();
 
-  // Robe
-  const sway = 1.4 * Math.sin((player.walkPhase||0)*0.7);
-  ctx.beginPath();
-  ctx.moveTo(-8, 13+sway); ctx.lineTo(-6,-1); ctx.lineTo(6,-1); ctx.lineTo(8,13-sway);
-  ctx.closePath();
-  ctx.fillStyle = flashOn ? '#553377' : '#14143a';
-  ctx.fill();
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=3;
-  ctx.strokeStyle='#4444aa'; ctx.lineWidth=1; ctx.stroke(); ctx.shadowBlur=0;
+  // Pixel-art body (see buildWizardGrid). Staff and orb are baked into the
+  // pose rather than rotated with aim, same reasoning as the archer's bow:
+  // the purple aim line above already shows aim direction.
+  const wgrid = wizardGrid();
+  const wSpriteDx = -(WIZARD_SPRITE.w) / 2, wSpriteDy = -22;
+  if (flashOn) drawPixelSpriteFlash(wgrid, wSpriteDx, wSpriteDy, 1, '#ffffff');
+  else drawPixelSprite(wgrid, wSpriteDx, wSpriteDy, 1);
 
-  // Robe centre stripe + emblem star
-  ctx.fillStyle='#22225a'; ctx.fillRect(-4,0,8,8);
-  ctx.shadowColor='#FFB400'; ctx.shadowBlur=4;
-  ctx.fillStyle='#FFB400';
-  ctx.beginPath(); ctx.arc(0,3,2,0,Math.PI*2); ctx.fill();
-  ctx.shadowBlur=0;
-
-  // Head
-  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
-  ctx.beginPath(); ctx.arc(0,-7,5,0,Math.PI*2); ctx.fill();
-
-  // Pointed hat
-  const hatWobble = 1.6*Math.sin(loopT*1.9);
-  ctx.fillStyle = flashOn ? '#553377' : '#14143a';
-  ctx.beginPath(); ctx.moveTo(-7,-10); ctx.lineTo(0,-25+hatWobble); ctx.lineTo(7,-10);
-  ctx.closePath(); ctx.fill();
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=2;
-  ctx.strokeStyle='#4444aa'; ctx.lineWidth=0.8; ctx.stroke(); ctx.shadowBlur=0;
-  ctx.fillStyle='#22225a'; ctx.fillRect(-9,-12,18,2.5);
-  // Hat star
-  ctx.fillStyle='#FFB400'; ctx.shadowColor='#FFB400'; ctx.shadowBlur=5;
-  ctx.fillRect(-0.5,-20+hatWobble,1,1); ctx.shadowBlur=0;
-
-  // Staff arm toward aim
-  const sx = Math.cos(localAngle)*15, sy = Math.sin(localAngle)*15;
-  ctx.strokeStyle='#5c3317'; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(sx,sy); ctx.stroke();
-
-  // Orb
+  // Orb glow pulse + bolt cooldown ring, at the orb's fixed position in the sprite
+  const ox = 20 + wSpriteDx, oy = 16 + wSpriteDy;
   const op = loopT*4.5;
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=10+4*Math.sin(op);
-  ctx.fillStyle=`rgba(136,136,255,${(0.85+0.15*Math.sin(op)).toFixed(2)})`;
-  ctx.beginPath(); ctx.arc(sx,sy,4+0.5*Math.sin(op),0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.7)';
-  ctx.beginPath(); ctx.arc(sx-1,sy-1,1.2,0,Math.PI*2); ctx.fill();
+  ctx.shadowColor='#8888FF'; ctx.shadowBlur=8+3*Math.sin(op);
+  ctx.fillStyle=`rgba(136,136,255,${(0.35+0.15*Math.sin(op)).toFixed(2)})`;
+  ctx.beginPath(); ctx.arc(ox,oy,4+0.5*Math.sin(op),0,Math.PI*2); ctx.fill();
   ctx.shadowBlur=0;
-
-  // Bolt cooldown ring around orb
   if (wizBoltCD > 0) {
     const fill = 1 - wizBoltCD/3.0;
     ctx.save(); ctx.globalAlpha=0.65;
     ctx.strokeStyle='#8888FF'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(sx,sy,7,-Math.PI/2,-Math.PI/2+fill*Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ox,oy,7,-Math.PI/2,-Math.PI/2+fill*Math.PI*2); ctx.stroke();
     ctx.restore();
   }
 
@@ -3247,7 +3258,7 @@ function drawWizard() {
     const shP = loopT*4;
     ctx.shadowColor='#FFB400'; ctx.shadowBlur=14+5*Math.sin(shP);
     ctx.strokeStyle=`rgba(255,180,0,${(0.6+0.3*Math.sin(shP)).toFixed(2)})`; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(0,0,16+Math.sin(shP*1.3),0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,-6,19+Math.sin(shP*1.3),0,Math.PI*2); ctx.stroke();
     ctx.shadowBlur=0;
   }
   ctx.restore();
@@ -3701,6 +3712,59 @@ function drawRanger() {
   if (!hasArrows) drawPitchforkIndicators(px, py);
 }
 
+// Same body shape, two palettes — the fire sword's "powered up" recolor of
+// the whole knight, not just the blade. Mirrors SKELETON_PALETTES: one grid
+// builder parameterized by kind rather than two near-duplicate functions.
+const KNIGHT_PALETTES = {
+  normal: {
+    armor: '#242436', armorHi: '#34364E', pauldron: '#181826',
+    leg: '#1E2030', legHi: '#2A2C3E',
+    helm: '#1E2030', visor: '#39FF14', crest: '#2244AA',
+    rivet: '#888888',
+  },
+  fireSword: {
+    armor: '#3A2010', armorHi: '#5A3018', pauldron: '#2A1808',
+    leg: '#1E2030', legHi: '#2A2C3E',
+    helm: '#3A1A08', visor: '#FF5500', crest: '#CC3300',
+    rivet: '#888888',
+  },
+};
+const KNIGHT_SPRITE = { w: 30, h: 36, outline: '#0A0F0A' };
+
+/** Top-down 3/4, one fixed pose. The spear/fire-sword is deliberately NOT
+ * baked in here (unlike the archer's bow and wizard's orb) — its thrust
+ * animation is live combat feedback with no other on-screen indicator, so
+ * drawKnight keeps drawing and rotating it separately, same as before. */
+function buildKnightGrid(kind) {
+  const C = KNIGHT_PALETTES[kind];
+  const g = makePixelGrid(KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
+  // Crest / plume
+  for (let y = 0; y <= 4; y++) {
+    const hw = Math.max(0, 3 - y);
+    pixelRect(g, 15 - hw, y, hw * 2 + 1, 1, C.crest);
+  }
+  // Great helm
+  pixelEllipse(g, 15, 10, 9, 6, C.helm);
+  pixelRect(g, 6, 8, 18, 6, C.helm);
+  // Visor slits
+  pixelRect(g, 8, 11, 14, 2, C.visor);
+  pixelRect(g, 10, 14, 10, 2, C.visor);
+  // Pauldrons
+  pixelEllipse(g, 5, 18, 4, 5, C.pauldron);
+  pixelEllipse(g, 25, 18, 4, 5, C.pauldron);
+  setPixel(g, 5, 16, C.rivet); setPixel(g, 25, 16, C.rivet);
+  // Torso / breastplate
+  pixelRect(g, 6, 15, 18, 15, C.armor);
+  pixelRect(g, 8, 16, 8, 8, C.armorHi);
+  // Legs
+  pixelRect(g, 8, 29, 6, 7, C.leg); pixelRect(g, 16, 29, 6, 7, C.leg);
+  pixelRect(g, 8, 29, 6, 3, C.legHi); pixelRect(g, 16, 29, 6, 3, C.legHi);
+  return pixelOutline(g, C.outline);
+}
+
+const _knightGrids = {};
+function knightGrid(kind) { return _knightGrids[kind] || (_knightGrids[kind] = buildKnightGrid(kind)); }
+
 function drawKnight() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
   ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
@@ -3733,45 +3797,11 @@ function drawKnight() {
   const fsActive = inv.knightFireSwordTimer > 0;
   const swing    = knightSpearSwing > 0 ? 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration : -1;
 
-  // Legs — plate greaves
-  ctx.fillStyle = '#1e2030';
-  ctx.fillRect(-9, 7 + bob, 8, 10);
-  ctx.fillRect(1,  7 + bob, 8, 10);
-  ctx.fillStyle = '#2a2c3e';
-  ctx.fillRect(-8, 7 + bob, 3, 4);
-  ctx.fillRect(2,  7 + bob, 3, 4);
-
-  // Torso — plate breastplate
-  ctx.fillStyle = fsActive ? '#3a2010' : '#242436';
-  ctx.fillRect(-11, -13 + bob, 22, 20);
-  // Highlight stripe
-  ctx.fillStyle = fsActive ? '#5a3018' : '#34364e';
-  ctx.fillRect(-9, -12 + bob, 8, 7);
-  // Pauldrons
-  ctx.fillStyle = fsActive ? '#2a1808' : '#181826';
-  ctx.fillRect(-15, -13 + bob, 6, 8);
-  ctx.fillRect(9,   -13 + bob, 6, 8);
-  // Pauldron rivets
-  ctx.fillStyle = '#888';
-  ctx.beginPath(); ctx.arc(-12, -10 + bob, 1.2, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(12,  -10 + bob, 1.2, 0, Math.PI*2); ctx.fill();
-
-  // Helmet — great helm style
-  ctx.fillStyle = fsActive ? '#3a1a08' : '#1e2030';
-  ctx.fillRect(-8, -26 + bob, 16, 14);
-  ctx.beginPath(); ctx.arc(0, -26 + bob, 8, Math.PI, 0); ctx.fill();
-  // Visor slits (2 horizontal bars)
-  ctx.fillStyle = fsActive ? '#FF5500' : '#39FF14';
-  ctx.shadowColor = fsActive ? '#FF7A1F' : '#39FF14';
-  ctx.shadowBlur  = 5;
-  ctx.fillRect(-6, -22 + bob, 12, 2);
-  ctx.fillRect(-4, -18 + bob, 8,  2);
-  ctx.shadowBlur = 0;
-  // Helmet crest / plume
-  ctx.fillStyle = fsActive ? '#cc3300' : '#2244aa';
-  ctx.beginPath();
-  ctx.moveTo(-3, -26 + bob); ctx.lineTo(0, -34 + bob); ctx.lineTo(3, -26 + bob);
-  ctx.closePath(); ctx.fill();
+  // Pixel-art body (see buildKnightGrid). bob is rounded to a whole pixel so
+  // the sprite blit stays on-grid instead of a blurred sub-pixel position.
+  const kgrid = knightGrid(fsActive ? 'fireSword' : 'normal');
+  const kSpriteDx = -(KNIGHT_SPRITE.w) / 2, kSpriteDy = -22 + Math.round(bob);
+  drawPixelSprite(kgrid, kSpriteDx, kSpriteDy, 1);
 
   // ── Weapon ───────────────────────────────────────────────────────────────
   const spearAng = Math.atan2(Math.sin(player.aimAngle), f * Math.cos(player.aimAngle)); // world-space angle mapped into flipped canvas
