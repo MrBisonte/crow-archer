@@ -19,6 +19,18 @@ import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, animFrame3,
 } from '../render/pixel-grid';
+import {
+  ARCHER_SPRITE, buildArcherGrid,
+  WIZARD_SPRITE, buildWizardGrid,
+  RANGER_SPRITE, buildRangerGrid,
+  KNIGHT_SPRITE, buildKnightGrid,
+} from '../render/character-grids';
+
+// Single-player has no team concept, so each hero gets one fixed trim
+// colour instead of the multiplayer per-team one. Archer's was already its
+// tunic accent; the others are new, small, low-stakes additions in the same
+// spirit (see buildWizardGrid/buildRangerGrid's hem/hood-brim trim).
+const SP_TRIM = { archer: '#39FF14', wizard: '#FFB400', ranger: '#FFCC00', knightNormal: '#3A5CC8', knightFireSword: '#CC3300' };
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
@@ -3160,51 +3172,6 @@ function drawTiles() {
   tileOverlay.draw(ctx, loopT, waterPhase);
 }
 
-const WIZARD_SPRITE = {
-  w: 24, h: 32,
-  colors: {
-    robe: '#14143A', robeHi: '#22225A',
-    skin: '#D9B98A',
-    wood: '#5B3A1F',
-    orb: '#8888FF', orbHi: '#FFFFFF',
-    star: '#FFB400',
-    outline: '#0A0F0A',
-  },
-};
-
-/** Top-down 3/4, one fixed pose, same convention as the Archer's grid — see
- * buildArcherGrid. Staff and orb baked into the pose; the orb's pulse and
- * cooldown ring are drawn separately in drawWizard so that feedback stays
- * animated instead of frozen into the static art. */
-function buildWizardGrid() {
-  const C = WIZARD_SPRITE.colors;
-  const g = makePixelGrid(WIZARD_SPRITE.w, WIZARD_SPRITE.h);
-  // Pointed hat, a stack of shrinking rows down to a wide brim
-  for (let y = 0; y <= 7; y++) {
-    const hw = Math.max(0, Math.round((y / 7) * 8));
-    pixelRect(g, 12 - hw, y, hw * 2 + 1, 1, C.robe);
-  }
-  pixelRect(g, 3, 7, 18, 2, C.robeHi);
-  setPixel(g, 12, 0, C.star);
-  // Face
-  pixelEllipse(g, 12, 12, 3.2, 2.6, C.skin);
-  setPixel(g, 10.5, 11.7, C.outline); setPixel(g, 13.5, 11.7, C.outline);
-  // Robe, tapered wider toward the hem
-  pixelRect(g, 8, 15, 8, 3, C.robe);
-  pixelRect(g, 6, 18, 12, 10, C.robe);
-  pixelRect(g, 4, 26, 16, 4, C.robe);
-  pixelRect(g, 10, 16, 4, 12, C.robeHi);
-  setPixel(g, 12, 20, C.star); setPixel(g, 12, 21, C.star);
-  // Staff arm, held out to the side
-  pixelRect(g, 12, 17, 8, 1, C.wood);
-  pixelEllipse(g, 20, 16, 2.6, 2.6, C.orb);
-  setPixel(g, 19, 15, C.orbHi);
-  return pixelOutline(g, C.outline);
-}
-
-let _wizardGrid = null;
-function wizardGrid() { return _wizardGrid || (_wizardGrid = buildWizardGrid()); }
-
 function drawWizard() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
@@ -3237,11 +3204,11 @@ function drawWizard() {
   // Pixel-art body (see buildWizardGrid). Staff and orb are baked into the
   // pose rather than rotated with aim, same reasoning as the archer's bow:
   // the purple aim line above already shows aim direction.
-  const wgrid = wizardGrid();
+  const wgrid = buildWizardGrid(SP_TRIM.wizard);
   const wSpriteDx = -(WIZARD_SPRITE.w) / 2, wSpriteDy = -22;
   const wCanvas = flashOn
     ? spriteFlashCanvas('wizard', wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h, '#ffffff')
-    : spriteCanvas('wizard', wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h);
+    : spriteCanvas(`wizard|${SP_TRIM.wizard}`, wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h);
   ctx.drawImage(wCanvas, wSpriteDx, wSpriteDy);
 
   // Orb glow pulse + bolt cooldown ring, at the orb's fixed position in the sprite
@@ -3314,56 +3281,6 @@ function drawPlayerFrozenOverlay() {
 // for why later phases add a table entry per character/tile kind here
 // instead of a growing if/else chain.
 
-const ARCHER_SPRITE = {
-  w: 24, h: 32,
-  colors: {
-    tunic: '#1F4A19', tunicHi: '#2C5A22',
-    leather: '#1A2A1A', leatherHi: '#243424',
-    skin: '#D9B98A',
-    wood: '#5B3A1F', woodHi: '#A07828',
-    fletch: '#8A1010',
-    accent: '#39FF14',
-    outline: '#0A0F0A',
-  },
-};
-
-/** Top-down 3/4, one fixed pose (facing the viewer) — the engine only mirrors
- * left/right (ctx.scale(facing, 1)), so there is no separate back pose. The
- * bow is baked into the pose rather than rotated with aim; drawAimLine and
- * the per-character reticle already show aim direction, so the sprite itself
- * doesn't need to duplicate that. */
-function buildArcherGrid() {
-  const C = ARCHER_SPRITE.colors;
-  const g = makePixelGrid(ARCHER_SPRITE.w, ARCHER_SPRITE.h);
-  // Quiver on back, arrow fletchings peeking above
-  pixelEllipse(g, 5, 7, 2.1, 4, C.wood);
-  pixelEllipse(g, 4.2, 5, 1, 2, C.woodHi);
-  pixelRect(g, 4, 0, 1, 2, C.fletch); pixelRect(g, 5, 0, 1, 2, C.fletch); pixelRect(g, 6, 1, 1, 2, C.fletch);
-  // Hood
-  pixelEllipse(g, 12, 6, 5.5, 4.5, C.leather);
-  pixelEllipse(g, 10, 4.5, 2.5, 2, C.leatherHi);
-  // Face, two eye pixels so the pose reads front-facing
-  pixelEllipse(g, 12, 7.7, 2.6, 1.8, C.skin);
-  setPixel(g, 10.5, 7.5, C.outline); setPixel(g, 13.5, 7.5, C.outline);
-  // Shoulders and tapered torso
-  pixelRect(g, 5, 9, 14, 3, C.tunic);
-  pixelRect(g, 7, 12, 10, 8, C.tunic);
-  pixelRect(g, 6, 9, 3, 10, C.tunicHi);
-  pixelRect(g, 8, 20, 8, 2, C.leather);
-  pixelRect(g, 11, 13, 1, 6, C.accent);
-  // Bow arm, held out to the side
-  pixelCurve(g, [18,9], [23,15], [19,23], C.wood, 40);
-  pixelCurve(g, [18,10], [22.3,15], [19.5,22], C.woodHi, 40);
-  setPixel(g, 19, 16, C.skin); setPixel(g, 20, 16, C.skin);
-  // Legs and boots
-  pixelRect(g, 8, 22, 3, 5, C.leather); pixelRect(g, 13, 22, 3, 5, C.leather);
-  pixelRect(g, 7, 27, 4, 3, C.leatherHi); pixelRect(g, 13, 27, 4, 3, C.leatherHi);
-  return pixelOutline(g, C.outline);
-}
-
-let _archerGrid = null;
-function archerGrid() { return _archerGrid || (_archerGrid = buildArcherGrid()); }
-
 function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
   if (selectedChar === 'knight') { drawKnight(); return; }
@@ -3386,13 +3303,13 @@ function drawPlayer() {
   // grid rather than rotated with aim, matching the rest of the aim feedback
   // this game already draws (drawAimLine, the per-character reticle) rather
   // than duplicating it on the sprite itself.
-  const grid = archerGrid();
+  const grid = buildArcherGrid(SP_TRIM.archer);
   const spriteScale = 1;
   const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
   const spriteDy = -22;
   const archerCanvas = flashOn
     ? spriteFlashCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
-    : spriteCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
+    : spriteCanvas(`archer|${SP_TRIM.archer}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
   ctx.drawImage(archerCanvas, spriteDx, spriteDy);
 
   // Shield halo
@@ -3575,56 +3492,6 @@ function drawPitchforkIndicators(px, py) {
  * instead of a brimmed hat, a satchel pouch at the hip, and a crossbow's
  * crosswise limb and stock in place of the bow's curved arc.
  */
-const RANGER_SPRITE = { w: 24, h: 32 };
-const RANGER_PALETTE = {
-  cloak: '#0E1410', cloakHi: '#1C2A18',
-  tunic: '#4A5D2E', tunicHi: '#5C7238', belt: '#0E1410',
-  satchel: '#5A4A2A',
-  skin: '#D9B98A', hood: '#24301A', hoodHi: '#324018',
-  outline: '#0A0F0A',
-};
-
-/** frame 'a'/'b' are the cloak swayed to each side, 'mid' centered — see
- * animFrame3, driven by walkPhase instead of a live per-frame offset like
- * the vector version used. The satchel is baked at a fixed spot rather than
- * on whichever hip `f` picked; a small, low-stakes simplification, same
- * spirit as the crow's wings sharing one phase instead of two independent
- * ones. */
-function buildRangerGrid(frame) {
-  const C = RANGER_PALETTE;
-  const g = makePixelGrid(RANGER_SPRITE.w, RANGER_SPRITE.h);
-  const sway = frame === 'a' ? -1 : frame === 'b' ? 1 : 0;
-
-  // Cloak — widens toward the hem, same shape family as the dark archer's
-  for (let y = 19; y <= 29; y++) {
-    const halfW = Math.round(5 + 4 * ((y - 19) / 10));
-    pixelRect(g, 12 - halfW + sway, y, halfW * 2, 1, C.cloak);
-  }
-  pixelRect(g, 8, 19, 4, 3, C.cloakHi);
-
-  // Tunic + belt
-  pixelRect(g, 7, 19, 10, 11, C.tunic);
-  pixelRect(g, 7, 19, 10, 2, C.tunicHi);
-  pixelRect(g, 7, 25, 10, 1, C.belt);
-
-  // Satchel, on one hip
-  pixelRect(g, 4, 22, 4, 5, C.satchel);
-
-  // Head
-  pixelEllipse(g, 12, 14, 5, 5, C.skin);
-
-  // Hood — peaked and swept back, distinct from the archer's flat hat
-  pixelTriangleUp(g, 13, 13, 6, 9, C.hood);
-  pixelEllipse(g, 12, 12, 6, 4, C.hood);
-  pixelRect(g, 9, 5, 4, 3, C.hoodHi);
-
-  return pixelOutline(g, C.outline);
-}
-
-const _rangerGrids = {};
-function rangerGrid(frame) {
-  return _rangerGrids[frame] || (_rangerGrids[frame] = buildRangerGrid(frame));
-}
 
 function drawRanger() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
@@ -3645,11 +3512,11 @@ function drawRanger() {
   // walk sway is 3 baked frames off player.walkPhase, same technique as the
   // crow's flap and skeleton's stride, instead of a live per-frame offset.
   const rFrame = animFrame3(player.walkPhase || 0);
-  const rGrid  = rangerGrid(rFrame);
+  const rGrid  = buildRangerGrid(rFrame, SP_TRIM.ranger);
   const rDx = -(RANGER_SPRITE.w) / 2, rDy = -22;
   const rCanvas = flashOn
     ? spriteFlashCanvas(`ranger|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h, '#ffffff')
-    : spriteCanvas(`ranger|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h);
+    : spriteCanvas(`ranger|${SP_TRIM.ranger}|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h);
   ctx.drawImage(rCanvas, rDx, rDy);
 
   // Shield halo
@@ -3710,60 +3577,6 @@ function drawRanger() {
 // pixel art has no gradients or glow to imply a reflective surface, so the
 // contrast itself has to carry that read. Every plate (helm, pauldrons,
 // chest) gets its own highlight rather than just one patch on the chest.
-const KNIGHT_PALETTES = {
-  normal: {
-    armor: '#3A4258', armorShadow: '#20242E', armorHi: '#C4CEE2',
-    pauldron: '#2E3446', pauldronHi: '#8894AC',
-    leg: '#323850', legHi: '#7884A0',
-    helm: '#323850', helmHi: '#8894AC',
-    visor: '#39FF14', crest: '#3A5CC8',
-    rivet: '#D8DCE4',
-  },
-  fireSword: {
-    armor: '#5A3018', armorShadow: '#301A0C', armorHi: '#F8C088',
-    pauldron: '#442410', pauldronHi: '#E89858',
-    leg: '#4A2818', legHi: '#C87838',
-    helm: '#4A2818', helmHi: '#E89858',
-    visor: '#FF5500', crest: '#CC3300',
-    rivet: '#F0C090',
-  },
-};
-const KNIGHT_SPRITE = { w: 30, h: 36, outline: '#0A0F0A' };
-
-/** Top-down 3/4, one fixed pose. The spear/fire-sword is deliberately NOT
- * baked in here (unlike the archer's bow and wizard's orb) — its thrust
- * animation is live combat feedback with no other on-screen indicator, so
- * drawKnight keeps drawing and rotating it separately, same as before. */
-function buildKnightGrid(kind) {
-  const C = KNIGHT_PALETTES[kind];
-  const g = makePixelGrid(KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
-  // Crest / plume
-  pixelTriangleUp(g, 15, 4, 3, 5, C.crest);
-  // Great helm, with a bright brow band catching the light
-  pixelEllipse(g, 15, 10, 9, 6, C.helm);
-  pixelRect(g, 6, 8, 18, 6, C.helm);
-  pixelRect(g, 7, 8, 16, 2, C.helmHi);
-  // Visor slits
-  pixelRect(g, 8, 11, 14, 2, C.visor);
-  pixelRect(g, 10, 14, 10, 2, C.visor);
-  // Pauldrons, each with a rim highlight
-  pixelEllipse(g, 5, 18, 4, 5, C.pauldron);
-  pixelEllipse(g, 25, 18, 4, 5, C.pauldron);
-  pixelEllipse(g, 4, 16, 2, 1.4, C.pauldronHi);
-  pixelEllipse(g, 24, 16, 2, 1.4, C.pauldronHi);
-  setPixel(g, 5, 16, C.rivet); setPixel(g, 25, 16, C.rivet);
-  // Torso / breastplate — shadow low, base mid, bright highlight upper-left
-  pixelRect(g, 6, 15, 18, 15, C.armor);
-  pixelRect(g, 6, 24, 18, 6, C.armorShadow);
-  pixelRect(g, 8, 16, 8, 8, C.armorHi);
-  // Legs
-  pixelRect(g, 8, 29, 6, 7, C.leg); pixelRect(g, 16, 29, 6, 7, C.leg);
-  pixelRect(g, 8, 29, 6, 3, C.legHi); pixelRect(g, 16, 29, 6, 3, C.legHi);
-  return pixelOutline(g, C.outline);
-}
-
-const _knightGrids = {};
-function knightGrid(kind) { return _knightGrids[kind] || (_knightGrids[kind] = buildKnightGrid(kind)); }
 
 function drawKnight() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
@@ -3800,9 +3613,10 @@ function drawKnight() {
   // Pixel-art body (see buildKnightGrid). bob is rounded to a whole pixel so
   // the sprite blit stays on-grid instead of a blurred sub-pixel position.
   const kKind = fsActive ? 'fireSword' : 'normal';
-  const kgrid = knightGrid(kKind);
+  const kTrim = fsActive ? SP_TRIM.knightFireSword : SP_TRIM.knightNormal;
+  const kgrid = buildKnightGrid(kKind, kTrim);
   const kSpriteDx = -(KNIGHT_SPRITE.w) / 2, kSpriteDy = -22 + Math.round(bob);
-  const kCanvas = spriteCanvas(`knight|${kKind}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
+  const kCanvas = spriteCanvas(`knight|${kKind}|${kTrim}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
   // ── Weapon ───────────────────────────────────────────────────────────────
@@ -5137,10 +4951,10 @@ function _cornerFrame(color) {
 function _drawCharPreview(cx, cy, char, t) {
   const rFrame = animFrame3(t * 1.5);
   const PREVIEW = {
-    archer: { grid: archerGrid(),         sprite: ARCHER_SPRITE, key: 'archer' },
-    wizard: { grid: wizardGrid(),         sprite: WIZARD_SPRITE, key: 'wizard' },
-    knight: { grid: knightGrid('normal'), sprite: KNIGHT_SPRITE, key: 'knight|normal' },
-    ranger: { grid: rangerGrid(rFrame),   sprite: RANGER_SPRITE, key: `ranger|${rFrame}` },
+    archer: { grid: buildArcherGrid(SP_TRIM.archer),        sprite: ARCHER_SPRITE, key: 'archer' },
+    wizard: { grid: buildWizardGrid(SP_TRIM.wizard),        sprite: WIZARD_SPRITE, key: 'wizard' },
+    knight: { grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' },
+    ranger: { grid: buildRangerGrid(rFrame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${rFrame}` },
   };
   const p = PREVIEW[char];
   if (!p) return;
