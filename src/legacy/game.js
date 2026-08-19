@@ -196,17 +196,25 @@ const CONFIG = {
   // Knight
   knightSpearRange: 80, knightSpearCooldown: 1.0,
   knightSpearBossDamage: 2, knightSpearSwingDuration: 0.35,
-  knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 8,
+  knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 6,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
   knightJavelinsPerPickup: 3, knightJavelinSpeed: 580, knightJavelinPierce: 2,
   knightJavelinBossDamage: 1,
   bossHPKnight: 12,               // knight has high DPS so boss needs more HP
+  // Block: a self-charging directional guard, no pickup needed. Reuses
+  // playerShield/damagePlayer's existing absorb-one-hit handling wholesale;
+  // this cooldown just decides how often it's re-granted while down.
+  knightBlockCooldown: 10,
 
   // Wizard
   wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
+  // Wizard-only pickup batch size (archer/ranger/knight keep their own
+  // counts — specialArrowPickupCount/knightJavelinsPerPickup below — so
+  // this doesn't change anyone else's ammo economy).
+  wizSpecialBoltCount: 5,
   stormCooldown: 10,
   stormBlastRadius: 450,          // = dynamiteBlastRadius * 5
   stormBossDamage: 3,
@@ -374,12 +382,12 @@ const CHAR_PANELS = [
            'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
-    lines:['Homing magic bolts  3s CD','Fire Bolt pickup: 2 dmg homing',
-           'Laser pickup: pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
+    lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
+           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     lines:['Long spear  ·  melee range','Pickup: Iron Javelin (pierces)',
-           'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Frontline playstyle'] },
+           'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
@@ -417,6 +425,10 @@ let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 // Knight combat state
 let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false, knightSpearPhase2Hit = false;
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
+// Counts down to the next free Block charge while no shield is banked (see
+// the per-frame tick in updatePlayer); frozen while playerShield is true,
+// since there's nothing to wait for until the current charge is used.
+let knightBlockCD = 0;
 
 // Inventory — all resource counts live here, keyed by CONFIG.resources
 let inv    = {};   // { arrows: n, dynamites: n }
@@ -971,6 +983,7 @@ function initGame() {
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
+  knightBlockCD = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
@@ -1122,6 +1135,12 @@ function updatePlayer(dt) {
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
   if (knightWhirlwindCD   > 0) knightWhirlwindCD  = Math.max(0, knightWhirlwindCD  - dt);
   if (inv.knightFireSwordTimer > 0) inv.knightFireSwordTimer = Math.max(0, inv.knightFireSwordTimer - dt);
+  // Block: passive, no keybind — once charged it just sits banked in
+  // playerShield until something hits the knight from the front.
+  if (selectedChar === 'knight' && !playerShield) {
+    knightBlockCD = Math.max(0, knightBlockCD - dt);
+    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = CONFIG.knightBlockCooldown; }
+  }
   if (pfSwing > 0) {
     pfSwing = Math.max(0, pfSwing - dt);
     const prog = pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : 1;
@@ -1305,7 +1324,7 @@ function tryWizardBolt() {
   if (arrows.length >= CONFIG.maxArrowsInFlight) return;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
-  if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizBoltDamage; }
+  if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
   else if (inv.fireBolts    > 0) { inv.fireBolts--;   type = 'wiz_fire';  dmg = CONFIG.wizFireBoltDamage; }
   wizBoltCD = CONFIG.wizBoltCooldown;
   const spd = CONFIG.wizBoltSpeed;
@@ -2090,11 +2109,11 @@ function checkPickupCollection() {
     }
     // Type-specific bonus — effect differs by character
     if (p.type === 'ricochet') {
-      if      (selectedChar === 'wizard') inv.laserStreams  += CONFIG.specialArrowPickupCount;
+      if      (selectedChar === 'wizard') inv.laserStreams  += CONFIG.wizSpecialBoltCount;
       else if (selectedChar === 'knight') inv.knightJavelins += CONFIG.knightJavelinsPerPickup;
       else                                inv.ricochetArrows += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'fire') {
-      if      (selectedChar === 'wizard') inv.fireBolts          += CONFIG.specialArrowPickupCount;
+      if      (selectedChar === 'wizard') inv.fireBolts          += CONFIG.wizSpecialBoltCount;
       else if (selectedChar === 'knight') inv.knightFireSwordTimer += CONFIG.knightFireSwordDuration;
       else                                inv.fireArrows           += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'shield') {
@@ -3697,6 +3716,27 @@ function drawKnight() {
     ctx.globalAlpha = 1;
   }
 
+  // ── Block: charging ring, or the shield itself once banked ────────────────
+  // Unlike the other three characters' omnidirectional shield halo (pickup
+  // luck, any angle), Block is self-charged and reads as a guard the knight
+  // actually raises — an arc centered on spearAng (the same mirrored aim
+  // angle the spear points along), not a full ring.
+  if (!playerShield && knightBlockCD > 0) {
+    const fill = 1 - knightBlockCD / CONFIG.knightBlockCooldown;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, bob, 19, -Math.PI/2, -Math.PI/2 + fill * Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  } else if (playerShield) {
+    const shP = loopT * 4;
+    const halfArc = Math.PI * 0.4;
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
+    ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, bob, 19 + Math.sin(shP * 1.3), spearAng - halfArc, spearAng + halfArc); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
   ctx.restore();
 }
 
@@ -4860,6 +4900,21 @@ function drawHUD(t) {
     ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
     const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '◎ READY' : `◎ ${knightWhirlwindCD.toFixed(1)}s`);
     ctx.fillText(wrdLabel, rx+39, 12);
+    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    // Block bar — countdown to the next free charge. The shared ◆SHLD
+    // readout further down already flags a banked charge as active, so this
+    // one just needs to read "ready" rather than duplicate that text.
+    const blkRdy  = knightBlockCD <= 0 || playerShield;
+    const blkFrac = blkRdy ? 1 : (CONFIG.knightBlockCooldown - knightBlockCD) / CONFIG.knightBlockCooldown;
+    ctx.fillStyle='#2a1a05'; ctx.fillRect(rx, 4, 78, 11);
+    ctx.shadowColor='#FFB400'; ctx.shadowBlur = blkRdy ? 6 : 0;
+    ctx.fillStyle = blkRdy ? '#FFB400' : '#5a3a10';
+    ctx.fillRect(rx, 4, 78*blkFrac, 11);
+    ctx.shadowBlur=0;
+    ctx.strokeStyle='#FFB400'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
+    ctx.fillStyle = blkRdy ? '#FFE8B0' : '#7a5a30';
+    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
+    ctx.fillText(blkRdy ? '◎ READY' : `◎ ${knightBlockCD.toFixed(1)}s`, rx+39, 12);
     rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
     if (inv.knightFireSwordTimer > 0) {
