@@ -28,7 +28,10 @@ export type PickupKind = 'ricochet' | 'fire' | 'shield';
 export type GameEvent =
   // Combat results
   | { type: 'CROW_KILLED'; x: number; y: number; white: boolean; earned: number }
-  | { type: 'SKELETON_KILLED'; x: number; y: number }
+  | { type: 'SKELETON_KILLED'; x: number; y: number; kind: 'normal' | 'fire' | 'ice' }
+  | { type: 'FIRE_SKELETON_BLAST'; x: number; y: number }
+  | { type: 'ICE_BOLT_FIRED'; x: number; y: number }
+  | { type: 'PLAYER_FROZEN'; x: number; y: number }
   | { type: 'MELEE_HIT'; x: number; y: number; kind: 'pitchfork' | 'spear'; fire: boolean }
   | { type: 'BOSS_HIT'; source: HitSource }
   | { type: 'ARROW_MISS' }
