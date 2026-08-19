@@ -3620,6 +3620,57 @@ function drawPitchforkIndicators(px, py) {
  * instead of a brimmed hat, a satchel pouch at the hip, and a crossbow's
  * crosswise limb and stock in place of the bow's curved arc.
  */
+const RANGER_SPRITE = { w: 24, h: 32 };
+const RANGER_PALETTE = {
+  cloak: '#0E1410', cloakHi: '#1C2A18',
+  tunic: '#4A5D2E', tunicHi: '#5C7238', belt: '#0E1410',
+  satchel: '#5A4A2A',
+  skin: '#D9B98A', hood: '#24301A', hoodHi: '#324018',
+  outline: '#0A0F0A',
+};
+
+/** frame 'a'/'b' are the cloak swayed to each side, 'mid' centered — see
+ * animFrame3, driven by walkPhase instead of a live per-frame offset like
+ * the vector version used. The satchel is baked at a fixed spot rather than
+ * on whichever hip `f` picked; a small, low-stakes simplification, same
+ * spirit as the crow's wings sharing one phase instead of two independent
+ * ones. */
+function buildRangerGrid(frame) {
+  const C = RANGER_PALETTE;
+  const g = makePixelGrid(RANGER_SPRITE.w, RANGER_SPRITE.h);
+  const sway = frame === 'a' ? -1 : frame === 'b' ? 1 : 0;
+
+  // Cloak — widens toward the hem, same shape family as the dark archer's
+  for (let y = 19; y <= 29; y++) {
+    const halfW = Math.round(5 + 4 * ((y - 19) / 10));
+    pixelRect(g, 12 - halfW + sway, y, halfW * 2, 1, C.cloak);
+  }
+  pixelRect(g, 8, 19, 4, 3, C.cloakHi);
+
+  // Tunic + belt
+  pixelRect(g, 7, 19, 10, 11, C.tunic);
+  pixelRect(g, 7, 19, 10, 2, C.tunicHi);
+  pixelRect(g, 7, 25, 10, 1, C.belt);
+
+  // Satchel, on one hip
+  pixelRect(g, 4, 22, 4, 5, C.satchel);
+
+  // Head
+  pixelEllipse(g, 12, 14, 5, 5, C.skin);
+
+  // Hood — peaked and swept back, distinct from the archer's flat hat
+  pixelTriangleUp(g, 13, 13, 6, 9, C.hood);
+  pixelEllipse(g, 12, 12, 6, 4, C.hood);
+  pixelRect(g, 9, 5, 4, 3, C.hoodHi);
+
+  return pixelOutline(g, C.outline);
+}
+
+const _rangerGrids = {};
+function rangerGrid(frame) {
+  return _rangerGrids[frame] || (_rangerGrids[frame] = buildRangerGrid(frame));
+}
+
 function drawRanger() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
@@ -3635,38 +3686,16 @@ function drawRanger() {
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath(); ctx.ellipse(0, 9, 9, 2.5, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Cloak
-  const cloakSway   = 0.15 * Math.sin(loopT * 2.2);
-  const cloakOffset = 1.5  * Math.sin((player.walkPhase || 0) + cloakSway);
-  ctx.beginPath();
-  ctx.moveTo(-5, -3);
-  ctx.bezierCurveTo(-9, 0, -9, 4, -7, 7 + cloakOffset);
-  ctx.lineTo(7, 7 - cloakOffset);
-  ctx.bezierCurveTo(9, 4, 9, 0, 5, -3);
-  ctx.closePath();
-  ctx.fillStyle = flashOn ? '#882222' : '#0E1410'; ctx.fill();
-  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 3;
-  ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // 3. Body / tunic — earthy olive, distinct from the archer's blue
-  ctx.fillStyle = flashOn ? '#8fae5a' : '#4A5D2E'; ctx.fillRect(-5, -3, 10, 11);
-  ctx.fillStyle = '#0E1410'; ctx.fillRect(-5, 3, 10, 1); // belt
-
-  // 3b. Satchel pouch, opposite hip from the weapon arm
-  ctx.fillStyle = '#5A4A2A'; ctx.fillRect(f === 1 ? -8 : 4, 0, 4, 5);
-  ctx.strokeStyle = '#3A2A10'; ctx.lineWidth = 0.5;
-  ctx.strokeRect(f === 1 ? -8 : 4, 0, 4, 5);
-
-  // 4. Head
-  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
-  ctx.beginPath(); ctx.arc(0, -8, 5, 0, Math.PI*2); ctx.fill();
-
-  // 5. Hood — peaked and swept back, distinct from the archer's flat hat
-  ctx.fillStyle = '#24301A';
-  ctx.beginPath();
-  ctx.moveTo(-6, -9); ctx.lineTo(-4, -16); ctx.lineTo(2, -18); ctx.lineTo(6, -11); ctx.lineTo(4, -9);
-  ctx.closePath(); ctx.fill();
+  // 2. Pixel-art cloak/tunic/head/hood (see buildRangerGrid). The cloak's
+  // walk sway is 3 baked frames off player.walkPhase, same technique as the
+  // crow's flap and skeleton's stride, instead of a live per-frame offset.
+  const rFrame = animFrame3(player.walkPhase || 0);
+  const rGrid  = rangerGrid(rFrame);
+  const rDx = -(RANGER_SPRITE.w) / 2, rDy = -22;
+  const rCanvas = flashOn
+    ? spriteFlashCanvas(`ranger|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`ranger|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h);
+  ctx.drawImage(rCanvas, rDx, rDy);
 
   // Shield halo
   if (playerShield) {
@@ -5146,98 +5175,27 @@ function _cornerFrame(color) {
     .forEach(([fx,fy,sx,sy]) => { ctx.beginPath(); ctx.moveTo(fx+sx*cl,fy); ctx.lineTo(fx,fy); ctx.lineTo(fx,fy+sy*cl); ctx.stroke(); });
 }
 
+/** Reuses the same cached grids gameplay draws from — one real sprite per
+ * hero instead of a fifth hand-drawn mini-vector copy per character. The
+ * gentle bob is the only animation now; the vector version's per-character
+ * sway/pulse lived on live overlays this preview has no equivalent of. */
 function _drawCharPreview(cx, cy, char, t) {
-  ctx.save(); ctx.translate(cx, cy); ctx.scale(2, 2);
-  if (char === 'archer') {
-    // Cloak
-    ctx.fillStyle='#0E1410'; ctx.beginPath();
-    ctx.moveTo(-5,-3); ctx.bezierCurveTo(-9,0,-9,4,-7,7); ctx.lineTo(7,7); ctx.bezierCurveTo(9,4,9,0,5,-3); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle='#39FF14'; ctx.lineWidth=0.5; ctx.stroke();
-    // Body
-    ctx.fillStyle='#3A5F88'; ctx.fillRect(-5,-3,10,11);
-    // Head
-    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-8,5,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='#0E1410'; ctx.fillRect(-5,-13,10,3); ctx.fillRect(-6,-10,12,1);
-    // Bow
-    ctx.shadowColor='#8A6028'; ctx.shadowBlur=2;
-    ctx.strokeStyle='#8A6028'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.arc(8,0,7,-Math.PI/2,Math.PI/2); ctx.stroke();
-    ctx.strokeStyle='#39FF14'; ctx.lineWidth=0.8;
-    ctx.beginPath(); ctx.moveTo(8,-7); ctx.lineTo(8,7); ctx.stroke();
-    ctx.shadowBlur=0;
-  } else if (char === 'wizard') {
-    // Robe
-    const sw=1.2*Math.sin(t*1.8);
-    ctx.fillStyle='#14143a';
-    ctx.beginPath(); ctx.moveTo(-8,13+sw); ctx.lineTo(-6,-1); ctx.lineTo(6,-1); ctx.lineTo(8,13-sw); ctx.closePath(); ctx.fill();
-    ctx.shadowColor='#8888FF'; ctx.shadowBlur=3;
-    ctx.strokeStyle='#4444aa'; ctx.lineWidth=0.6; ctx.stroke(); ctx.shadowBlur=0;
-    ctx.fillStyle='#22225a'; ctx.fillRect(-4,0,8,8);
-    ctx.fillStyle='#FFB400'; ctx.beginPath(); ctx.arc(0,3,2,0,Math.PI*2); ctx.fill();
-    // Head
-    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-7,5,0,Math.PI*2); ctx.fill();
-    // Hat
-    const hw=1.5*Math.sin(t*1.9);
-    ctx.fillStyle='#14143a';
-    ctx.beginPath(); ctx.moveTo(-7,-10); ctx.lineTo(0,-25+hw); ctx.lineTo(7,-10); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle='#4444aa'; ctx.lineWidth=0.5; ctx.stroke();
-    ctx.fillStyle='#22225a'; ctx.fillRect(-9,-12,18,2.5);
-    // Orb
-    const op2=t*4;
-    ctx.shadowColor='#8888FF'; ctx.shadowBlur=8+3*Math.sin(op2);
-    ctx.fillStyle=`rgba(136,136,255,${(0.85+0.15*Math.sin(op2)).toFixed(2)})`;
-    ctx.beginPath(); ctx.arc(12,-2+0.5*Math.sin(op2),4,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(11,-3,1.2,0,Math.PI*2); ctx.fill();
-    ctx.shadowBlur=0;
-  } else if (char === 'knight') {
-    // Knight — plate armour mini-preview
-    // Legs
-    ctx.fillStyle='#1e2030'; ctx.fillRect(-7,5,6,9); ctx.fillRect(1,5,6,9);
-    ctx.fillStyle='#2a2c3e'; ctx.fillRect(-6,5,2,4); ctx.fillRect(2,5,2,4);
-    // Torso
-    ctx.fillStyle='#242436'; ctx.fillRect(-8,-10,16,16);
-    ctx.fillStyle='#34364e'; ctx.fillRect(-7,-9,7,5);
-    ctx.fillStyle='#181826'; ctx.fillRect(-11,-10,4,7); ctx.fillRect(7,-10,4,7);
-    // Helmet
-    ctx.fillStyle='#1e2030'; ctx.fillRect(-6,-22,12,13);
-    ctx.beginPath(); ctx.arc(0,-22,6,Math.PI,0); ctx.fill();
-    ctx.fillStyle='#39FF14'; ctx.shadowColor='#39FF14'; ctx.shadowBlur=4;
-    ctx.fillRect(-5,-18,10,2); ctx.fillRect(-3,-15,6,2); ctx.shadowBlur=0;
-    // Helmet crest
-    ctx.fillStyle='#2244aa';
-    ctx.beginPath(); ctx.moveTo(-2,-22); ctx.lineTo(0,-29); ctx.lineTo(2,-22); ctx.closePath(); ctx.fill();
-    // Spear
-    const sa = -0.35 + 0.1*Math.sin(t*1.5);
-    ctx.save(); ctx.rotate(sa);
-    ctx.strokeStyle='#5a3a10'; ctx.lineWidth=2.5;
-    ctx.beginPath(); ctx.moveTo(-6,0); ctx.lineTo(18,0); ctx.stroke();
-    ctx.fillStyle='#D0D0D8';
-    ctx.beginPath(); ctx.moveTo(16,-4); ctx.lineTo(24,0); ctx.lineTo(16,4); ctx.closePath(); ctx.fill();
-    ctx.restore();
-  } else if (char === 'ranger') {
-    // Cloak
-    ctx.fillStyle='#0E1410'; ctx.beginPath();
-    ctx.moveTo(-5,-3); ctx.bezierCurveTo(-9,0,-9,4,-7,7); ctx.lineTo(7,7); ctx.bezierCurveTo(9,4,9,0,5,-3); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle='#FFCC00'; ctx.lineWidth=0.5; ctx.stroke();
-    // Body — earthy olive, distinct from the archer's blue
-    ctx.fillStyle='#4A5D2E'; ctx.fillRect(-5,-3,10,11);
-    // Head
-    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-8,5,0,Math.PI*2); ctx.fill();
-    // Hood — peaked and swept back, distinct from the archer's flat hat
-    ctx.fillStyle='#24301A';
-    ctx.beginPath();
-    ctx.moveTo(-6,-9); ctx.lineTo(-4,-16); ctx.lineTo(2,-18); ctx.lineTo(6,-11); ctx.lineTo(4,-9);
-    ctx.closePath(); ctx.fill();
-    // Crossbow — stock, crosswise limb, string; not the archer's curved bow
-    ctx.shadowColor='#8A6028'; ctx.shadowBlur=2;
-    ctx.strokeStyle='#5A3A1A'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(13,0); ctx.stroke();
-    ctx.strokeStyle='#8A6028'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.moveTo(11,-6); ctx.lineTo(11,6); ctx.stroke();
-    ctx.strokeStyle='#FFCC00'; ctx.lineWidth=0.8;
-    ctx.beginPath(); ctx.moveTo(12.5,-6); ctx.lineTo(12.5,6); ctx.stroke();
-    ctx.shadowBlur=0;
-  }
+  const rFrame = animFrame3(t * 1.5);
+  const PREVIEW = {
+    archer: { grid: archerGrid(),         sprite: ARCHER_SPRITE, key: 'archer' },
+    wizard: { grid: wizardGrid(),         sprite: WIZARD_SPRITE, key: 'wizard' },
+    knight: { grid: knightGrid('normal'), sprite: KNIGHT_SPRITE, key: 'knight|normal' },
+    ranger: { grid: rangerGrid(rFrame),   sprite: RANGER_SPRITE, key: `ranger|${rFrame}` },
+  };
+  const p = PREVIEW[char];
+  if (!p) return;
+  const scale = 1.4;
+  const bob = Math.round(1.5 * Math.sin(t * 2));
+  ctx.save(); ctx.translate(cx, cy + bob);
+  ctx.drawImage(
+    spriteCanvas(`preview|${p.key}`, p.grid, p.sprite.w, p.sprite.h, scale),
+    -(p.sprite.w * scale) / 2, -(p.sprite.h * scale) / 2,
+  );
   ctx.restore();
 }
 
