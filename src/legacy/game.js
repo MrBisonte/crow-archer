@@ -3342,6 +3342,13 @@ function pixelOutline(g, c) {
   }
   return out;
 }
+/** Buckets a continuous animation phase into one of 3 pixel-art frames: a
+ * flap/stride cycle only reads as pixel art if it steps between hand-drawn
+ * poses instead of interpolating smoothly like the vector version did. */
+function animFrame3(phase) {
+  const s = Math.sin(phase);
+  return s > 0.33 ? 'b' : s < -0.33 ? 'a' : 'mid';
+}
 
 const ARCHER_SPRITE = {
   w: 24, h: 32,
@@ -4178,6 +4185,48 @@ function drawSatchels() {
   }
 }
 
+const CROW_SPRITE = { w: 20, h: 16 };
+
+// White is a persistent enemy kind (c.white), not just the entrance's
+// blink-white telegraph — drawCrow below picks this palette for both.
+const CROW_PALETTES = {
+  normal: { body: '#141414', bodyHi: '#3A3A3A', edge: '#000000', beak: '#FFB400' },
+  white:  { body: '#E4E4E4', bodyHi: '#FFFFFF', edge: '#A8A8A8', beak: '#FF1F1F' },
+};
+
+/** frame 'a'/'b' are the two extremes of the flap, 'mid' the level pass
+ * between them — see animFrame3. Body/tail/beak stay put; only the wing
+ * mass moves, same simplification drawSkeleton's legs use below. */
+function buildCrowGrid(kind, frame) {
+  const C = CROW_PALETTES[kind];
+  const g = makePixelGrid(CROW_SPRITE.w, CROW_SPRITE.h);
+
+  // Wings are the highlight tone, not the body tone — pixelOutline only
+  // seams the outer silhouette, so two overlapping same-color shapes fuse
+  // into one blob without a distinct fill to tell them apart.
+  if (frame === 'a')      pixelEllipse(g, 9, 11, 6, 2.2, C.bodyHi); // lowered, spread below
+  else if (frame === 'b') pixelEllipse(g, 9, 3, 5, 2, C.bodyHi);    // raised, folded over the back
+  else                    pixelEllipse(g, 8, 7.5, 6.5, 1.6, C.bodyHi); // level, spread to the sides
+
+  // Tail, trailing right (crow flies left, tail streams behind)
+  pixelEllipse(g, 15, 7, 3, 1.6, C.body);
+
+  // Body, drawn over the wing root so the silhouette reads front-to-back
+  pixelEllipse(g, 11, 7.5, 5, 3.3, C.body);
+
+  // Beak, pointing left (crow flies left)
+  pixelRect(g, 3, 7, 3, 1, C.beak);
+  setPixel(g, 2, 7, C.beak);
+
+  return pixelOutline(g, C.edge);
+}
+
+const _crowGrids = {};
+function crowGrid(kind, frame) {
+  const key = `${kind}|${frame}`;
+  return _crowGrids[key] || (_crowGrids[key] = buildCrowGrid(kind, frame));
+}
+
 function drawCrow(c) {
   const cx = c.x, cy = c.y + CONFIG.hudHeight;
   let alpha = 1;
@@ -4193,11 +4242,9 @@ function drawCrow(c) {
   const pulsePhase = loopT * 6;
   const flashOn = c.hitFlash > 0 && Math.floor(c.hitFlash * 20) % 2 === 0;
 
-  // Per-spec palettes
-  const bodyCol  = flashOn ? '#FFFFFF' : (isWhite ? '#E8E8E8' : '#0A0A0A');
-  const edgeCol  = isWhite ? '#FFFFFF' : '#1F1F1F';
-  const wingCol  = flashOn ? '#FFFFFF' : (isWhite ? '#E8E8E8' : '#0A0A0A');
-  const beakCol  = isWhite ? '#FF1F1F' : '#FFB400';
+  const kind  = isWhite ? 'white' : 'normal';
+  const frame = animFrame3(c.wingPhase);
+  const grid  = crowGrid(kind, frame);
   const eyeCol   = isWhite ? '#FF1F1F' : '#FFB400';
   const glintCol = isWhite ? '#FFFFFF' : '#FF1F1F';
   const shadowFill = isWhite ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
@@ -4210,52 +4257,27 @@ function drawCrow(c) {
   ctx.fillStyle = shadowFill;
   ctx.beginPath(); ctx.ellipse(0, 6, 7, 1.8, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Body
-  ctx.fillStyle = bodyCol;
-  ctx.beginPath(); ctx.ellipse(0, bobY, 8, 5, 0, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(0, bobY, 8, 5, 0, 0, Math.PI*2); ctx.stroke();
+  // 2. Pixel-art body (see buildCrowGrid). The flap cycle is 3 baked frames
+  // (animFrame3), not a rotated overlay — a silhouette that never stops
+  // moving needs real frames to read as pixel art instead of a frozen pose.
+  const cSpriteDx = -(CROW_SPRITE.w) / 2;
+  const cSpriteDy = -8 + Math.round(bobY);
+  const cCanvas = flashOn
+    ? spriteFlashCanvas(`crow|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h, '#ffffff')
+    : spriteCanvas(`crow|${kind}|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h);
+  ctx.drawImage(cCanvas, cSpriteDx, cSpriteDy);
 
-  // 3. Tail — faces +x (right), crow moves left so tail trails behind
-  ctx.fillStyle = bodyCol;
-  ctx.beginPath();
-  ctx.moveTo(6, bobY + 1); ctx.lineTo(11, bobY - 2); ctx.lineTo(11, bobY + 4);
-  ctx.closePath(); ctx.fill();
-
-  // 4. Far wing (left side, +π phase)
-  const lwPhase = c.wingPhase + Math.PI;
-  const lwY     = bobY - 2 + Math.sin(lwPhase) * 3;
-  const lwRot   = -0.4 + 0.5 * Math.sin(lwPhase);
-  ctx.fillStyle = wingCol;
-  ctx.beginPath(); ctx.ellipse(-3, lwY, 8, 3, lwRot, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(-3, lwY, 8, 3, lwRot, 0, Math.PI*2); ctx.stroke();
-
-  // 5. Near wing (right side)
-  const rwY   = bobY - 2 + Math.sin(c.wingPhase) * 3;
-  const rwRot = -0.4 + 0.5 * Math.sin(c.wingPhase);
-  ctx.fillStyle = wingCol;
-  ctx.beginPath(); ctx.ellipse(3, rwY, 8, 3, rwRot, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(3, rwY, 8, 3, rwRot, 0, Math.PI*2); ctx.stroke();
-
-  // 6. Beak — faces -x (crow flies left)
-  ctx.fillStyle = beakCol;
-  ctx.beginPath();
-  ctx.moveTo(-9, bobY - 0.5); ctx.lineTo(-13, bobY); ctx.lineTo(-9, bobY + 1.5);
-  ctx.closePath(); ctx.fill();
-
-  // 7. Eye — stamped glow, one per (color, blur step) across the whole flock
+  // 3. Eye — stamped glow, one per (color, blur step) across the whole flock
   const eyeStamp = glowDotStamp(eyeCol, 1.2, eyeBlur);
-  ctx.drawImage(eyeStamp, -6 - eyeStamp.width / 2, bobY - 1.5 - eyeStamp.height / 2);
+  ctx.drawImage(eyeStamp, cSpriteDx + 5 - eyeStamp.width / 2, cSpriteDy + 6 - eyeStamp.height / 2);
 
-  // 8. Eye glint (2×2 when aggro, 1×1 otherwise)
+  // 4. Eye glint (2×2 when aggro, 1×1 otherwise)
   if (isAggro) {
     const gs = glowRectStamp('#FF1F1F', 2, 2, 5);
-    ctx.drawImage(gs, -5 - gs.width / 2, bobY - 0.5 - gs.height / 2);
+    ctx.drawImage(gs, cSpriteDx + 6 - gs.width / 2, cSpriteDy + 7 - gs.height / 2);
   } else {
     ctx.fillStyle = glintCol;
-    ctx.fillRect(-6, bobY - 1.5, 1, 1);
+    ctx.fillRect(cSpriteDx + 5, cSpriteDy + 6, 1, 1);
   }
 
   // Aggro pulse ring — layered on top
@@ -4286,10 +4308,48 @@ function drawCrow(c) {
 // One palette per wave kind. `aura` is null for a normal skeleton so the
 // elemental glow below only ever draws for fire and ice.
 const SKELETON_PALETTES = {
-  normal: { bone: '#D8D0C0', edge: '#8A8070', eye: '#B040E0', aura: null },
-  fire:   { bone: '#D86A40', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
-  ice:    { bone: '#A8D8F0', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
+  normal: { bone: '#D8D0C0', boneHi: '#F4F0E6', edge: '#8A8070', eye: '#B040E0', aura: null },
+  fire:   { bone: '#D86A40', boneHi: '#F4A868', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
+  ice:    { bone: '#A8D8F0', boneHi: '#E4F6FF', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
 };
+
+const SKELETON_SPRITE = { w: 14, h: 24 };
+
+/** frame 'a'/'b' are the two extremes of the stride, 'mid' legs-together
+ * between them — see animFrame3. Skull and ribcage stay put; only limbs
+ * move, same simplification buildCrowGrid's wings use above. */
+function buildSkeletonGrid(kind, frame) {
+  const C = SKELETON_PALETTES[kind];
+  const g = makePixelGrid(SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+  const swing = frame === 'a' ? 2.5 : frame === 'b' ? -2.5 : 0;
+
+  // Legs
+  pixelCurve(g, [5, 15], [5 + swing * 0.4, 18], [5 + swing, 22], C.bone, 10);
+  pixelCurve(g, [6, 15], [6 + swing * 0.4, 18], [6 + swing, 22], C.bone, 10);
+  pixelCurve(g, [8, 15], [8 - swing * 0.4, 18], [8 - swing, 22], C.bone, 10);
+  pixelCurve(g, [9, 15], [9 - swing * 0.4, 18], [9 - swing, 22], C.bone, 10);
+
+  // Arms
+  pixelCurve(g, [3, 10], [3 - swing * 0.3, 13], [3 - swing * 0.6, 16], C.bone, 8);
+  pixelCurve(g, [10, 10], [10 + swing * 0.3, 13], [10 + swing * 0.6, 16], C.bone, 8);
+
+  // Ribcage
+  pixelRect(g, 4, 9, 6, 8, C.bone);
+  pixelRect(g, 4, 9, 6, 2, C.boneHi);
+  for (let ry = 11; ry <= 15; ry += 2) pixelRect(g, 4, ry, 6, 1, C.edge);
+
+  // Skull
+  pixelEllipse(g, 7, 5, 4, 3.6, C.bone);
+  pixelEllipse(g, 5.5, 3.5, 1.6, 1.2, C.boneHi);
+
+  return pixelOutline(g, C.edge);
+}
+
+const _skeletonGrids = {};
+function skeletonGrid(kind, frame) {
+  const key = `${kind}|${frame}`;
+  return _skeletonGrids[key] || (_skeletonGrids[key] = buildSkeletonGrid(kind, frame));
+}
 
 // Ground-based, so a walk cycle (legs swinging on s.walkPhase) replaces a
 // crow's wing-flap. Reuses drawCrow's ground-shadow and glow-stamped-eye
@@ -4297,11 +4357,11 @@ const SKELETON_PALETTES = {
 function drawSkeleton(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
   const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
-  const palette = SKELETON_PALETTES[s.kind] || SKELETON_PALETTES.normal;
-  const boneCol = flashOn ? '#FFFFFF' : palette.bone;
-  const edgeCol = palette.edge;
-  const eyeCol  = palette.eye;
-  const legSwing = Math.sin(s.walkPhase) * 6;
+  const kind = s.kind || 'normal';
+  const palette = SKELETON_PALETTES[kind] || SKELETON_PALETTES.normal;
+  const eyeCol = palette.eye;
+  const frame = animFrame3(s.walkPhase);
+  const grid = skeletonGrid(kind, frame);
 
   ctx.save(); ctx.translate(cx, cy);
 
@@ -4320,32 +4380,18 @@ function drawSkeleton(s) {
     ctx.globalAlpha = 1; ctx.shadowBlur = 0;
   }
 
-  // 2. Legs — alternating swing, opposite phase
-  ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(-2, 2); ctx.lineTo(-2 + legSwing * 0.3, 9); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(2, 2); ctx.lineTo(2 - legSwing * 0.3, 9); ctx.stroke();
+  // 2. Pixel-art body (see buildSkeletonGrid). The stride is 3 baked frames
+  // (animFrame3), same reasoning as the crow's flap cycle above.
+  const kSpriteDx = -(SKELETON_SPRITE.w) / 2, kSpriteDy = -15;
+  const kCanvas = flashOn
+    ? spriteFlashCanvas(`skeleton|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h, '#ffffff')
+    : spriteCanvas(`skeleton|${kind}|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+  ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
-  // 3. Ribcage
-  ctx.fillStyle = boneCol;
-  ctx.fillRect(-4, -6, 8, 9);
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  for (let ry = -5; ry <= 1; ry += 2) { ctx.beginPath(); ctx.moveTo(-4, ry); ctx.lineTo(4, ry); ctx.stroke(); }
-
-  // 4. Arms — swing opposite the legs
-  ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(-4, -4); ctx.lineTo(-6 - legSwing * 0.2, 1); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(4, -4); ctx.lineTo(6 + legSwing * 0.2, 1); ctx.stroke();
-
-  // 5. Skull
-  ctx.fillStyle = boneCol;
-  ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI*2); ctx.stroke();
-
-  // 6. Eye sockets — stamped glow, same technique as the crow's eye
+  // 3. Eye sockets — stamped glow, same technique as the crow's eye
   const eyeStamp = glowDotStamp(eyeCol, 1, 3);
-  ctx.drawImage(eyeStamp, -3 - eyeStamp.width/2, -10 - eyeStamp.height/2);
-  ctx.drawImage(eyeStamp, 1 - eyeStamp.width/2, -10 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, kSpriteDx + 4 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, kSpriteDx + 8 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
 
   ctx.restore();
 }
