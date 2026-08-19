@@ -16,6 +16,9 @@ import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
+import {
+  makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, animFrame3,
+} from '../render/pixel-grid';
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
@@ -3310,54 +3313,6 @@ function drawPlayerFrozenOverlay() {
 // of the pixel-art overhaul (the Archer only) — see docs/design-patterns.md
 // for why later phases add a table entry per character/tile kind here
 // instead of a growing if/else chain.
-
-function makePixelGrid(w, h) { return Array.from({ length: h }, () => Array(w).fill(null)); }
-function setPixel(g, x, y, c) {
-  x = Math.round(x); y = Math.round(y);
-  if (x >= 0 && x < g[0].length && y >= 0 && y < g.length) g[y][x] = c;
-}
-function pixelRect(g, x0, y0, w, h, c) {
-  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) setPixel(g, x, y, c);
-}
-function pixelEllipse(g, cx, cy, rx, ry, c) {
-  for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++)
-    for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
-      const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
-      if (dx * dx + dy * dy <= 1) setPixel(g, x, y, c);
-    }
-}
-function pixelCurve(g, p0, p1, p2, c, n) {
-  for (let i = 0; i <= n; i++) {
-    const t = i / n, mt = 1 - t;
-    setPixel(g, mt*mt*p0[0] + 2*mt*t*p1[0] + t*t*p2[0], mt*mt*p0[1] + 2*mt*t*p1[1] + t*t*p2[1], c);
-  }
-}
-/** Any transparent cell touching a filled one becomes a 1px dark outline, so
- * a sprite's silhouette stays crisp without hand-placing every edge pixel. */
-function pixelOutline(g, c) {
-  const h = g.length, w = g[0].length, out = g.map(row => row.slice());
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    if (g[y][x]) continue;
-    if (g[y][x-1] || g[y][x+1] || (g[y-1] && g[y-1][x]) || (g[y+1] && g[y+1][x])) out[y][x] = c;
-  }
-  return out;
-}
-/** Fills an upward-pointing triangle, apex up, base centered at (cx, baseY).
- * A tapering stack of 1-row-tall rects, same shape the knight's crest and
- * the crow king's crown spikes both need. */
-function pixelTriangleUp(g, cx, baseY, halfW, h, c) {
-  for (let i = 0; i < h; i++) {
-    const w = Math.max(0, Math.round(halfW - (halfW * i) / (h - 1 || 1)));
-    pixelRect(g, cx - w, baseY - i, w * 2 + 1, 1, c);
-  }
-}
-/** Buckets a continuous animation phase into one of 3 pixel-art frames: a
- * flap/stride cycle only reads as pixel art if it steps between hand-drawn
- * poses instead of interpolating smoothly like the vector version did. */
-function animFrame3(phase) {
-  const s = Math.sin(phase);
-  return s > 0.33 ? 'b' : s < -0.33 ? 'a' : 'mid';
-}
 
 const ARCHER_SPRITE = {
   w: 24, h: 32,

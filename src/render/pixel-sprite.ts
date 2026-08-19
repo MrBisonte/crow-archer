@@ -1,23 +1,14 @@
 import { stamps, type StampPainter } from './stamps';
+import { blitPixelGrid, blitPixelGridFlash, type PixelGrid } from './pixel-grid';
 
-/** A small logical sprite: one hex color, or null for transparent, per cell. */
-export type PixelGrid = readonly (string | null)[][];
+export type { PixelGrid };
 
 function gridPainter(grid: PixelGrid, scale: number): StampPainter {
-  return (g) => {
-    for (const [y, row] of grid.entries())
-      for (const [x, c] of row.entries())
-        if (c) { g.fillStyle = c; g.fillRect(x * scale, y * scale, scale, scale); }
-  };
+  return (g) => blitPixelGrid(g, grid, 0, 0, scale);
 }
 
 function gridFlashPainter(grid: PixelGrid, color: string, scale: number): StampPainter {
-  return (g) => {
-    g.fillStyle = color;
-    for (const [y, row] of grid.entries())
-      for (const [x, c] of row.entries())
-        if (c) g.fillRect(x * scale, y * scale, scale, scale);
-  };
+  return (g) => blitPixelGridFlash(g, grid, 0, 0, scale, color);
 }
 
 /** The pre-rendered, true-color sprite for a grid. `w`/`h` are the grid's
