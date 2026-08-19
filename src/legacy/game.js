@@ -3133,37 +3133,21 @@ function drawPlayer() {
   const localAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
   const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash * 20) % 2 === 0;
 
-  // 1. Ground shadow
+  // Ground shadow
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.beginPath(); ctx.ellipse(0, 9, 9, 2.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 10, 10, 2.5, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Cloak (drawn before body so body covers front)
-  const cloakSway   = 0.15 * Math.sin(loopT * 2.2);
-  const cloakOffset = 1.5  * Math.sin((player.walkPhase || 0) + cloakSway);
-  ctx.beginPath();
-  ctx.moveTo(-5, -3);
-  ctx.bezierCurveTo(-9, 0, -9, 4, -7, 7 + cloakOffset);
-  ctx.lineTo(7, 7 - cloakOffset);
-  ctx.bezierCurveTo(9, 4, 9, 0, 5, -3);
-  ctx.closePath();
-  ctx.fillStyle = flashOn ? '#882222' : '#0E1410'; ctx.fill();
-  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
-  ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // 3. Body / tunic
-  ctx.fillStyle = flashOn ? '#6688cc' : '#3A5F88'; ctx.fillRect(-5, -3, 10, 11);
-  ctx.fillStyle = '#0E1410'; ctx.fillRect(-5, 3, 10, 1); // belt
-
-  // 4. Head
-  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
-  ctx.beginPath(); ctx.arc(0, -8, 5, 0, Math.PI*2); ctx.fill();
-
-  // 5. Hat
-  ctx.fillStyle = '#0E1410';
-  ctx.fillRect(-5, -13, 10, 3);
-  ctx.fillRect(-6, -10, 12, 1);
+  // Pixel-art body (see buildArcherGrid). The reference bow is baked into the
+  // grid rather than rotated with aim, matching the rest of the aim feedback
+  // this game already draws (drawAimLine, the per-character reticle) rather
+  // than duplicating it on the sprite itself.
+  const grid = archerGrid();
+  const spriteScale = 1;
+  const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
+  const spriteDy = -22;
+  if (flashOn) drawPixelSpriteFlash(grid, spriteDx, spriteDy, spriteScale, '#ffffff');
+  else drawPixelSprite(grid, spriteDx, spriteDy, spriteScale);
 
   // Shield halo
   if (playerShield) {
@@ -3171,34 +3155,12 @@ function drawPlayer() {
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
     ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, -1, 16 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, -6, 19 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
     ctx.shadowBlur = 0;
   }
 
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
-  if (hasArrows) {
-    // 6. Bow arm
-    const gx = Math.cos(localAngle) * 8, gy = Math.sin(localAngle) * 8;
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = '#D9B98A'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(gx, gy); ctx.stroke();
-
-    // 7. Bow (half-circle arc facing aim direction)
-    ctx.strokeStyle = '#8A6028'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(gx, gy, 7, localAngle - Math.PI/2, localAngle + Math.PI/2); ctx.stroke();
-
-    // 8. Bowstring
-    const bowTop = { x: gx + Math.cos(localAngle - Math.PI/2)*7, y: gy + Math.sin(localAngle - Math.PI/2)*7 };
-    const bowBot = { x: gx + Math.cos(localAngle + Math.PI/2)*7, y: gy + Math.sin(localAngle + Math.PI/2)*7 };
-    const nxOff  = gx + (-Math.cos(localAngle)) * 3;
-    const nyOff  = gy + (-Math.sin(localAngle)) * 3;
-    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4;
-    ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(bowTop.x, bowTop.y); ctx.lineTo(nxOff, nyOff); ctx.lineTo(bowBot.x, bowBot.y); ctx.stroke();
-    ctx.shadowBlur = 0;
-  } else {
-    drawPitchfork(localAngle);
-  }
+  if (!hasArrows) drawPitchfork(localAngle);
   ctx.restore();
 
   if (!hasArrows) drawPitchforkIndicators(px, py);
