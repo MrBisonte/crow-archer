@@ -4,7 +4,7 @@
  * per draw, which is what made dense particle frames stall.
  */
 
-type StampPainter = (g: CanvasRenderingContext2D, w: number, h: number) => void;
+export type StampPainter = (g: CanvasRenderingContext2D, w: number, h: number) => void;
 
 export class StampCache {
   private map = new Map<string, HTMLCanvasElement>();

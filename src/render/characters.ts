@@ -19,6 +19,14 @@ import {
 } from '../sim/weapons';
 import { TEAM_COLOURS } from './palette';
 import type { CharacterKind } from '../net/protocol';
+import { animFrame3, type PixelGrid } from './pixel-grid';
+import { spriteCanvas, spriteFlashCanvas } from './pixel-sprite';
+import {
+  ARCHER_SPRITE, buildArcherGrid,
+  WIZARD_SPRITE, buildWizardGrid,
+  RANGER_SPRITE, buildRangerGrid,
+  KNIGHT_SPRITE, buildKnightGrid,
+} from './character-grids';
 
 /** Everything needed to draw one character. All positions are world pixels. */
 export interface CharacterVisual {
@@ -255,50 +263,41 @@ function paintShieldHalo(ctx: CanvasRenderingContext2D, loopT: number, look: Sil
   ctx.shadowBlur = 0;
 }
 
+/**
+ * Blits a hero's baked body (see character-grids.ts), choosing the cached
+ * canvas that matches this frame's wash: real colours, an all-white flash
+ * silhouette, or an all-grey down silhouette. Team trim is already baked
+ * into `grid` (buildXGrid's trim parameter), so only the wash — and which
+ * cached canvas that implies — is picked per frame, not the whole body.
+ *
+ * `key` must already be unique per distinct grid shape (character, and
+ * frame or kind where those vary) — this function only adds the wash/trim
+ * suffix on top. `extraDy` is the knight's live walk bob; every other
+ * character passes 0.
+ */
+function paintBakedBody(
+  ctx: CanvasRenderingContext2D,
+  p: Pose,
+  key: string,
+  sprite: { w: number; h: number },
+  grid: PixelGrid,
+  extraDy = 0,
+): void {
+  const dx = -sprite.w / 2, dy = -22 + extraDy;
+  const canvas =
+    p.white > 0 ? spriteFlashCanvas(key, grid, sprite.w, sprite.h, WHITE)
+    : p.grey > 0 ? spriteFlashCanvas(key, grid, sprite.w, sprite.h, CORPSE_GREY)
+    : spriteCanvas(`${key}|${p.trim}`, grid, sprite.w, sprite.h);
+  ctx.drawImage(canvas, dx, dy);
+}
+
 // ---------------------------------------------------------------------------
 // Archer
 // ---------------------------------------------------------------------------
 
 function paintArcher(ctx: CanvasRenderingContext2D, p: Pose): void {
-  // Cloak first, so the body covers its front edge.
-  const sway = 0.15 * Math.sin(p.t * 2.2);
-  const hem = 1.5 * Math.sin(p.walk + sway);
-  ctx.beginPath();
-  ctx.moveTo(-5, -3);
-  ctx.bezierCurveTo(-9, 0, -9, 4, -7, 7 + hem);
-  ctx.lineTo(7, 7 - hem);
-  ctx.bezierCurveTo(9, 4, 9, 0, 5, -3);
-  ctx.closePath();
-  ctx.fillStyle = shade(p, '#0E1410');
-  ctx.fill();
-  // The cloak edge carries the team colour: it traces the whole silhouette, so
-  // it is the one mark that reads from any angle.
-  ctx.shadowColor = p.trim;
-  ctx.shadowBlur = 3;
-  ctx.strokeStyle = p.trim;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  // Tunic and belt
-  ctx.fillStyle = shade(p, '#3A5F88');
-  ctx.fillRect(-5, -3, 10, 11);
-  ctx.fillStyle = shade(p, '#0E1410');
-  ctx.fillRect(-5, 3, 10, 1);
-  paintArcherHead(ctx, p);
+  paintBakedBody(ctx, p, 'archer', ARCHER_SPRITE, buildArcherGrid(p.trim));
   paintBow(ctx, p);
-}
-
-function paintArcherHead(ctx: CanvasRenderingContext2D, p: Pose): void {
-  ctx.fillStyle = shade(p, '#D9B98A');
-  ctx.beginPath();
-  ctx.arc(0, -8, 5, 0, Math.PI * 2);
-  ctx.fill();
-  // Flat hat: crown then brim
-  ctx.fillStyle = shade(p, '#0E1410');
-  ctx.fillRect(-5, -13, 10, 3);
-  ctx.fillRect(-6, -10, 12, 1);
-  ctx.fillStyle = p.trim;
-  ctx.fillRect(-5, -13.5, 10, 1);
 }
 
 /** Bow arm, half-circle bow and string, all swung to the aim direction. */
@@ -344,44 +343,11 @@ function paintBow(ctx: CanvasRenderingContext2D, p: Pose): void {
  * arena the silhouette is what has to tell them apart, not the palette.
  */
 function paintRanger(ctx: CanvasRenderingContext2D, p: Pose): void {
-  const sway = 0.15 * Math.sin(p.t * 2.2);
-  const hem = 1.5 * Math.sin(p.walk + sway);
-  ctx.beginPath();
-  ctx.moveTo(-5, -3);
-  ctx.bezierCurveTo(-8, 0, -8, 4, -6, 7 + hem);
-  ctx.lineTo(6, 7 - hem);
-  ctx.bezierCurveTo(8, 4, 8, 0, 5, -3);
-  ctx.closePath();
-  ctx.fillStyle = shade(p, '#1A2318');
-  ctx.fill();
-  ctx.shadowColor = p.trim;
-  ctx.shadowBlur = 3;
-  ctx.strokeStyle = p.trim;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = shade(p, '#4A6741');
-  ctx.fillRect(-5, -3, 10, 11);
-  paintRangerHead(ctx, p);
+  // Cloak sway is 3 baked frames off walk phase (see buildRangerGrid),
+  // rather than the continuous live offset the vector version swung with.
+  const frame = animFrame3(p.walk);
+  paintBakedBody(ctx, p, `ranger|${frame}`, RANGER_SPRITE, buildRangerGrid(frame, p.trim));
   paintCrossbow(ctx, p);
-}
-
-function paintRangerHead(ctx: CanvasRenderingContext2D, p: Pose): void {
-  ctx.fillStyle = shade(p, '#D9B98A');
-  ctx.beginPath();
-  ctx.arc(0, -8, 5, 0, Math.PI * 2);
-  ctx.fill();
-  // A hood rather than the archer's flat hat brim, so the two ranged
-  // characters are told apart by shape alone, not only by colour.
-  ctx.fillStyle = shade(p, '#1A2318');
-  ctx.beginPath();
-  ctx.moveTo(-6, -9);
-  ctx.quadraticCurveTo(0, -17, 6, -9);
-  ctx.quadraticCurveTo(0, -12, -6, -9);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = p.trim;
-  ctx.fillRect(-6, -9.5, 12, 1);
 }
 
 /**
@@ -426,71 +392,8 @@ function paintCrossbow(ctx: CanvasRenderingContext2D, p: Pose): void {
 // ---------------------------------------------------------------------------
 
 function paintWizard(ctx: CanvasRenderingContext2D, p: Pose): void {
-  paintRobe(ctx, p);
-  ctx.fillStyle = shade(p, '#D9B98A');
-  ctx.beginPath();
-  ctx.arc(0, -7, 5, 0, Math.PI * 2);
-  ctx.fill();
-  paintWizardHat(ctx, p);
+  paintBakedBody(ctx, p, 'wizard', WIZARD_SPRITE, buildWizardGrid(p.trim));
   paintStaff(ctx, p);
-}
-
-function paintRobe(ctx: CanvasRenderingContext2D, p: Pose): void {
-  // The hem swings against the stride, which is the whole gait: the wizard has
-  // no legs to animate.
-  const sway = 1.4 * Math.sin(p.walk * 0.7);
-  ctx.beginPath();
-  ctx.moveTo(-8, 13 + sway);
-  ctx.lineTo(-6, -1);
-  ctx.lineTo(6, -1);
-  ctx.lineTo(8, 13 - sway);
-  ctx.closePath();
-  ctx.fillStyle = shade(p, '#14143A');
-  ctx.fill();
-  ctx.shadowColor = '#8888FF';
-  ctx.shadowBlur = 3;
-  ctx.strokeStyle = shade(p, '#4444AA');
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  // Centre stripe, team hem, amber emblem
-  ctx.fillStyle = shade(p, '#22225A');
-  ctx.fillRect(-4, 0, 8, 8);
-  ctx.fillStyle = p.trim;
-  ctx.fillRect(-4, 8, 8, 1.5);
-  ctx.shadowColor = '#FFB400';
-  ctx.shadowBlur = 4;
-  ctx.fillStyle = '#FFB400';
-  ctx.beginPath();
-  ctx.arc(0, 3, 2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-}
-
-/** The hat wobbles on the wall clock, so a standing wizard is never a still image. */
-function paintWizardHat(ctx: CanvasRenderingContext2D, p: Pose): void {
-  const wobble = 1.6 * Math.sin(p.t * 1.9);
-  ctx.fillStyle = shade(p, '#14143A');
-  ctx.beginPath();
-  ctx.moveTo(-7, -10);
-  ctx.lineTo(0, -25 + wobble);
-  ctx.lineTo(7, -10);
-  ctx.closePath();
-  ctx.fill();
-  ctx.shadowColor = '#8888FF';
-  ctx.shadowBlur = 2;
-  ctx.strokeStyle = shade(p, '#4444AA');
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  // Hat band in the team colour: the tallest part of the tallest character.
-  ctx.fillStyle = p.trim;
-  ctx.fillRect(-9, -12, 18, 2.5);
-  ctx.fillStyle = '#FFB400';
-  ctx.shadowColor = '#FFB400';
-  ctx.shadowBlur = 5;
-  ctx.fillRect(-0.5, -20 + wobble, 1, 1);
-  ctx.shadowBlur = 0;
 }
 
 /** Staff arm out to the aim, with the orb pulsing on the end of it. */
@@ -523,58 +426,13 @@ function paintStaff(ctx: CanvasRenderingContext2D, p: Pose): void {
 
 function paintKnight(ctx: CanvasRenderingContext2D, p: Pose): void {
   // Everything above the greaves bobs with the stride; the spear does not,
-  // because a braced weapon that bounced would read as a stumble.
+  // because a braced weapon that bounced would read as a stumble. Multiplayer
+  // has no fire-sword state in Pose, so 'normal' is the only kind reachable
+  // here; the plume, elsewhere the fire-sword's own recolor, carries the
+  // team trim instead — multiplayer's one clearest team read stays put.
   const bob = Math.sin(p.walk) * 1.2;
-  ctx.fillStyle = shade(p, '#1E2030');
-  ctx.fillRect(-9, 7 + bob, 8, 10);
-  ctx.fillRect(1, 7 + bob, 8, 10);
-  ctx.fillStyle = shade(p, '#2A2C3E');
-  ctx.fillRect(-8, 7 + bob, 3, 4);
-  ctx.fillRect(2, 7 + bob, 3, 4);
-  ctx.fillStyle = shade(p, '#242436');
-  ctx.fillRect(-11, -13 + bob, 22, 20);
-  ctx.fillStyle = shade(p, '#34364E');
-  ctx.fillRect(-9, -12 + bob, 8, 7);
-  ctx.fillStyle = shade(p, '#181826');
-  ctx.fillRect(-15, -13 + bob, 6, 8);
-  ctx.fillRect(9, -13 + bob, 6, 8);
-  // Pauldron trim, the shoulder-height team mark
-  ctx.fillStyle = p.trim;
-  ctx.fillRect(-15, -13 + bob, 6, 1.5);
-  ctx.fillRect(9, -13 + bob, 6, 1.5);
-  ctx.fillStyle = shade(p, '#888888');
-  ctx.beginPath();
-  ctx.arc(-12, -10 + bob, 1.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(12, -10 + bob, 1.2, 0, Math.PI * 2);
-  ctx.fill();
-  paintGreatHelm(ctx, p, bob);
+  paintBakedBody(ctx, p, 'knight', KNIGHT_SPRITE, buildKnightGrid('normal', p.trim), bob);
   paintSpear(ctx, p);
-}
-
-function paintGreatHelm(ctx: CanvasRenderingContext2D, p: Pose, bob: number): void {
-  ctx.fillStyle = shade(p, '#1E2030');
-  ctx.fillRect(-8, -26 + bob, 16, 14);
-  ctx.beginPath();
-  ctx.arc(0, -26 + bob, 8, Math.PI, 0);
-  ctx.fill();
-  // Visor slits stay the knight's own green whatever the team, because they
-  // are the one part that says the armour has somebody inside it.
-  ctx.fillStyle = shade(p, '#39FF14');
-  ctx.shadowColor = '#39FF14';
-  ctx.shadowBlur = 5;
-  ctx.fillRect(-6, -22 + bob, 12, 2);
-  ctx.fillRect(-4, -18 + bob, 8, 2);
-  ctx.shadowBlur = 0;
-  // Plume: the highest point of the sprite and the clearest team read.
-  ctx.fillStyle = p.trim;
-  ctx.beginPath();
-  ctx.moveTo(-3, -26 + bob);
-  ctx.lineTo(0, -34 + bob);
-  ctx.lineTo(3, -26 + bob);
-  ctx.closePath();
-  ctx.fill();
 }
 
 /**

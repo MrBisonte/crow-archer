@@ -199,3 +199,116 @@ add it, only extended.
 > lobby's ready-toggle) and the compiler would have refused to build without
 > that line at all. Full account of what the ranger added: `ROADMAP.md`,
 > decision 7.
+
+## Cache canvas primitives once: reuse the paint cache, don't build a new one
+
+Pixel-art character sprites (`src/legacy/game.js`) are small logical grids,
+one hex color or `null` per cell, hand-authored once per character and
+blitted onto the real canvas every frame. The naive way to blit one is to
+walk every cell and call `ctx.fillRect` on each filled one. That's cheap for
+a single entity, but the pixel-art work is explicitly headed toward many
+more sprite kinds (crows, three skeleton kinds, three bosses), several of
+which appear concurrently on screen during castle waves. Re-walking every
+cell of every visible sprite, every frame, forever, is the kind of cost that
+is invisible with three sprites and real with a dozen.
+
+The fix is not a new cache. `src/render/stamps.ts` already has one.
+
+### Building blocks
+
+| Name | Type | Holds |
+|---|---|---|
+| `StampCache` | class | A canvas cached by string key, built once from a paint callback. |
+| `stamps` | `StampCache` singleton | The one shared instance every caller uses. |
+| `StampPainter` | `(g, w, h) => void` | The paint routine a cache entry is built from. Knows nothing about what it draws. |
+| `PixelGrid` | `readonly (string \| null)[][]` | A sprite's logical pixel data, one hex color or `null` per cell. |
+| `gridPainter` / `gridFlashPainter` | `(grid, scale) => StampPainter` | Adapts a `PixelGrid` into a `StampPainter`: real colors, or a flat single-color silhouette for hit-flash. |
+| `spriteCanvas` / `spriteFlashCanvas` | `(key, grid, w, h, ...) => HTMLCanvasElement` | The public entry point: the cached canvas for one sprite kind. |
+
+- `StampCache`, `stamps`, `StampPainter` are defined at `src/render/stamps.ts:7-30`,
+  built for a different problem first: `glowDotStamp`/`glowRectStamp` cache
+  pre-rendered glow effects the same way, keyed by `` `dot|${color}|${r}|${blur}` ``.
+- `PixelGrid`, `gridPainter`, `gridFlashPainter`, `spriteCanvas`, and
+  `spriteFlashCanvas` are defined in `src/render/pixel-sprite.ts`, the only
+  new file this decision added.
+- Consumed by all three heroes today: `src/legacy/game.js:3240-3241` (wizard),
+  `:3423-3424` (archer), `:3808` (knight). Each still owns its own grid
+  builder and memoized grid (`archerGrid()`, `knightGrid(kind)`, ...) — only
+  the blit-to-canvas step changed.
+
+### How it works
+
+```mermaid
+flowchart LR
+    grid["PixelGrid\n(archerGrid(), knightGrid(kind), ...\nmemoized once per kind)"]
+    painter["gridPainter(grid, scale)\nreturns a StampPainter"]
+    getcall["stamps.get(key, w, h, painter)"]
+    cached["cached HTMLCanvasElement\n(painter runs once per key)"]
+    frame["drawKnight() / drawWizard() / drawPlayer(),\nevery frame:\nctx.drawImage(canvas, x, y)"]
+
+    grid --> painter --> getcall --> cached --> frame
+    getcall -. "key already in stamps' Map?\nskip the painter entirely" .-> cached
+```
+
+### The alternative considered
+
+Two other shapes were built out, in conversation, before this one:
+
+1. **Patch `drawPixelSprite` in place.** Keep each character's existing
+   per-pixel loop, but cache a rendered canvas alongside its already-cached
+   grid (`_archerGrid`, `_knightGrids`). Rejected: it doesn't remove the
+   duplication it should, it grows it. Every future sprite kind still needs
+   its own hand-wired cache, wired correctly, by hand, every time.
+2. **A dedicated `PixelSprite` / `SpriteCache` abstraction**, built fresh for
+   this problem: a class or factory that owns a grid, renders it once to an
+   offscreen canvas, and exposes a single `draw()`. Structurally better than
+   (1), but rejected once `stamps.ts` was actually read: `StampCache`
+   already is this abstraction. It was built for glow stamps, but its
+   `get(key, w, h, painter)` signature never assumed what the painter draws.
+   Writing a second cache under a new name would have duplicated proven
+   infrastructure instead of reusing it.
+
+### Why reuse wins here
+
+- **The only real difference is the painter, not the caching.** A glow dot
+  and a pixel grid are both just "some drawing calls into a 2D context, run
+  once, cached by key." Once that's noticed, a second cache class has
+  nothing left to justify it.
+- **Consistency.** `game.js` already imports three things from
+  `src/render/*.ts` (`tiles.ts`, `shake.ts`, `stamps.ts`) before this change.
+  Crossing that boundary for a fourth is not a new pattern, it's the same
+  one applied one more time.
+- **The payoff outside this file is concrete, not speculative.** The TS
+  multiplayer renderer (`src/render/characters.ts`) has no pixel art yet,
+  but is pending work, not a hypothetical. When it lands, it imports
+  `spriteCanvas` directly — no port, because the cache never lived inside
+  `game.js` to begin with.
+- **Hit-flash reuses the mechanism instead of special-casing it.**
+  `spriteFlashCanvas` is a second cached canvas per key
+  (`` `${key}|flash|${color}` ``), painted once with every cell forced to one
+  color. Same `stamps.get`, a different painter — not a second code path.
+
+### Example: adding a sprite kind
+
+When Crow or Skeleton pixel art lands, the call site is one line, and
+nothing about `stamps` or `pixel-sprite.ts` changes:
+
+```js
+ctx.drawImage(spriteCanvas('crow', crowGrid(), CROW_SPRITE.w, CROW_SPRITE.h), dx, dy);
+```
+
+No new cache variable, no new class, no file to remember to touch.
+`SKELETON_PALETTES`-style kind variants key the same way the knight already
+does: `` spriteCanvas(`skeleton|${kind}`, ...) ``.
+
+### Notes
+
+> **Note.** This decision was reached while investigating a performance
+> question, not a bug: pixel-art sprites for Archer/Wizard/Knight were
+> re-walking their full grid with `fillRect` every frame, which is fine for
+> one on-screen hero but would not have stayed fine once castle waves put
+> several skeletons on screen at once, each doing the same. The fix landed
+> as a migration of the three existing heroes onto `spriteCanvas`/
+> `spriteFlashCanvas`, with the now-unused per-frame loop
+> (`drawPixelSprite`/`drawPixelSpriteFlash`) deleted rather than kept
+> alongside it.

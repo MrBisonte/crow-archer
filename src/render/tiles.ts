@@ -5,6 +5,23 @@
 
 import type { MapKind } from '../sim/arena-map';
 import { TILE, type TileId, type TileMap } from '../sim/tilemap';
+import {
+  makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelTriangleUp, blitPixelGrid, type PixelGrid,
+} from './pixel-grid';
+
+/** Logical resolution every tile paints at, blown up to fill the real tile
+ * size — chunkier than a character sprite on purpose: tiles repeat across
+ * the whole map, and coarser pixels read cleaner at a glance than fine
+ * detail would tiled dozens of times. */
+const TILE_GRID = 16;
+
+function paintGrid(
+  g: CanvasRenderingContext2D, x: number, y: number, ts: number, build: (grid: PixelGrid) => void,
+): void {
+  const grid = makePixelGrid(TILE_GRID, TILE_GRID);
+  build(grid);
+  blitPixelGrid(g, grid, x, y, ts / TILE_GRID);
+}
 
 /** Grid geometry the renderer needs. Injected so render code has no global config. */
 export interface TileLayout {
@@ -26,99 +43,80 @@ type TilePainter = (
 /** Adding a tile type means adding a painter here, not editing a loop. */
 export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
   [TILE.EMPTY](g, x, y, seed, { tileSize: ts }) {
-    g.fillStyle = '#1a2a1a'; g.fillRect(x, y, ts, ts);
-    // Ground texture: deterministic micro-spots per tile
-    if (seed % 7 === 0) { g.fillStyle = '#172517'; g.fillRect(x+(seed%12)+2, y+(seed%11)+2, 4, 4); }
-    if (seed % 11 === 0){ g.fillStyle = '#1c2f1c'; g.fillRect(x+(seed%18)+4, y+(seed%15)+3, 3, 3); }
-    g.strokeStyle = '#1e2e1e'; g.lineWidth = 0.5; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#1a2a1a');
+      pixelRect(grid, 0, 0, 16, 1, '#16241a');
+      pixelRect(grid, 0, 0, 1, 16, '#16241a');
+      // Ground texture: deterministic micro-spots per tile
+      if (seed % 7 === 0)  pixelRect(grid, (seed % 11) + 1, (seed % 9) + 1, 2, 2, '#172517');
+      if (seed % 11 === 0) pixelRect(grid, (seed % 9) + 3, (seed % 7) + 3, 2, 2, '#1c2f1c');
+      if (seed % 5 === 0)  setPixel(grid, (seed % 13) + 2, (seed % 10) + 8, '#213a21');
+    });
   },
   [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
-    g.fillStyle = '#1a2a1a'; g.fillRect(x, y, ts, ts);
-    g.fillStyle = '#585858';
-    g.beginPath();
-    g.moveTo(x+6+(seed%3), y+4); g.lineTo(x+ts-5+(seed%2), y+5+(seed%3));
-    g.lineTo(x+ts-4, y+ts-7+(seed%2)); g.lineTo(x+ts-8-(seed%3), y+ts-4);
-    g.lineTo(x+5, y+ts-6+(seed%2)); g.lineTo(x+4+(seed%2), y+8);
-    g.closePath(); g.fill();
-    g.strokeStyle = '#747474'; g.lineWidth = 1; g.stroke();
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#1a2a1a');
+      pixelEllipse(grid, 8, 9, 6, 5, '#585858');
+      pixelEllipse(grid, 6 + (seed % 2), 7, 3, 3, '#6e6e6e');
+      pixelEllipse(grid, 6, 8, 2, 2, '#828282');
+      pixelEllipse(grid, 10, 11, 2, 2, '#484848');
+    });
   },
   [TILE.WATER](g, x, y, _seed, { tileSize: ts }) {
-    // Base fill only. The live overlay draws the phase color and ripples.
+    // Flat fill only — already blocky, no grid needed. The live overlay
+    // (AnimatedTileOverlay) draws the phase color and ripples.
     g.fillStyle = '#1a4a8a'; g.fillRect(x, y, ts, ts);
   },
   [TILE.TREE](g, x, y, _seed, { tileSize: ts }) {
-    g.fillStyle = '#1a2a1a'; g.fillRect(x, y, ts, ts);
-    // Shadow ellipse beneath canopy
-    g.fillStyle = 'rgba(0,0,0,0.30)';
-    g.beginPath(); g.ellipse(x+17, y+28, 10, 4, 0, 0, Math.PI*2); g.fill();
-    // Trunk
-    g.fillStyle = '#5c3317'; g.fillRect(x+13, y+18, 6, 13);
-    // Canopy
-    g.fillStyle = '#1e7a1e'; g.beginPath(); g.arc(x+16, y+14, 10, 0, Math.PI*2); g.fill();
-    g.fillStyle = '#27962a'; g.beginPath(); g.arc(x+12, y+11, 7, 0, Math.PI*2); g.fill();
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#1a2a1a');
+      pixelEllipse(grid, 8, 14, 5, 2, 'rgba(0,0,0,0.30)');
+      pixelRect(grid, 6, 9, 3, 6, '#5c3317');
+      pixelEllipse(grid, 8, 6, 5, 5, '#1e7a1e');
+      pixelEllipse(grid, 6, 5, 3.5, 3.5, '#27962a');
+    });
   },
   [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
     // Charred ground, passable but scorched
-    g.fillStyle = '#141410'; g.fillRect(x, y, ts, ts);
-    g.fillStyle = '#1e1a10';
-    if (seed % 5 === 0) g.fillRect(x+(seed%14)+4, y+(seed%11)+4, 5, 3);
-    if (seed % 7 === 0) g.fillRect(x+(seed%18)+2, y+(seed%13)+8, 3, 5);
-    if (seed % 3 === 0) g.fillRect(x+(seed%22)+3, y+(seed%9)+12, 4, 2);
-    g.strokeStyle = '#0e0e0a'; g.lineWidth = 0.5; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#141410');
+      pixelRect(grid, 0, 0, 16, 1, '#100f0c');
+      pixelRect(grid, 0, 0, 1, 16, '#100f0c');
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#1e1a10');
+      if (seed % 7 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 1, '#1e1a10');
+      if (seed % 3 === 0) setPixel(grid, (seed % 12) + 3, (seed % 10) + 9, '#26221a');
+    });
   },
   [TILE.HUT](g, x, y, _seed, { tileSize: ts }, hutAbove, hutLeft) {
-    // Ground beneath
-    g.fillStyle = '#1a2a1a'; g.fillRect(x, y, ts, ts);
-    // Outer wall, clay and stone
-    g.fillStyle = '#b89060';
-    g.fillRect(x+1, y+1, ts-2, ts-2);
-    // Stone brick rows, 3 mortar lines
-    g.strokeStyle = '#7a5c38'; g.lineWidth = 1;
-    for (let my = 0; my < 3; my++) {
-      const ly = y + 7 + my * 8;
-      g.beginPath(); g.moveTo(x+1, ly); g.lineTo(x+ts-1, ly); g.stroke();
-    }
-    // Offset vertical mortar per row, for a brick pattern
-    for (let my = 0; my < 4; my++) {
-      const lx = x + (my % 2 === 0 ? 9 : 17);
-      const ly0 = y + 1 + my * 8;
-      g.beginPath(); g.moveTo(lx, ly0); g.lineTo(lx, ly0 + 8); g.stroke();
-    }
-    // Roof: top row of the hut cluster only, dark terracotta peak
-    if (!hutAbove) {
-      g.fillStyle = '#7a3010';
-      g.beginPath();
-      g.moveTo(x, y+7); g.lineTo(x+ts/2, y); g.lineTo(x+ts, y+7);
-      g.closePath(); g.fill();
-      // Ridge highlight
-      g.strokeStyle = '#c06030'; g.lineWidth = 1.5;
-      g.beginPath(); g.moveTo(x+3, y+6); g.lineTo(x+ts/2, y+1); g.lineTo(x+ts-3, y+6); g.stroke();
-    }
-    // Door: bottom-left tile of the cluster only, centred
-    if (!hutLeft && hutAbove) {
-      g.fillStyle = '#3a1f08';
-      g.fillRect(x+10, y+14, 12, 18);   // door frame
-      g.fillStyle = '#5c3215';
-      g.fillRect(x+11, y+15, 10, 16);   // door fill
-      // Door knob
-      g.fillStyle = '#c8a030';
-      g.beginPath(); g.arc(x+19, y+23, 1.5, 0, Math.PI*2); g.fill();
-    }
-    // Small window on the other tiles
-    if (hutAbove && hutLeft) {
-      g.fillStyle = '#3a1f08';
-      g.fillRect(x+8, y+10, 16, 12);
-      g.fillStyle = '#7ab8d8';
-      g.fillRect(x+9, y+11, 14, 10);
-      // Cross pane
-      g.strokeStyle = '#3a1f08'; g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(x+16, y+11); g.lineTo(x+16, y+21);
-      g.moveTo(x+9,  y+16); g.lineTo(x+23, y+16);
-      g.stroke();
-    }
-    // Border
-    g.strokeStyle = '#5a3a18'; g.lineWidth = 1; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+    paintGrid(g, x, y, ts, (grid) => {
+      // Ground beneath, then the outer wall, clay and stone
+      pixelRect(grid, 0, 0, 16, 16, '#1a2a1a');
+      pixelRect(grid, 1, 1, 14, 14, '#b89060');
+      // Stone brick rows, 3 mortar lines
+      for (let my = 0; my < 3; my++) pixelRect(grid, 1, 4 + my * 4, 14, 1, '#7a5c38');
+      // Offset vertical mortar per row, for a brick pattern
+      for (let my = 0; my < 4; my++) pixelRect(grid, my % 2 === 0 ? 5 : 9, 1 + my * 4, 1, 4, '#7a5c38');
+      // Roof: top row of the hut cluster only, dark terracotta peak
+      if (!hutAbove) {
+        pixelTriangleUp(grid, 8, 4, 8, 5, '#7a3010');
+        pixelRect(grid, 6, 1, 4, 1, '#c06030'); // ridge highlight
+      }
+      // Door: bottom-left tile of the cluster only, centred
+      if (!hutLeft && hutAbove) {
+        pixelRect(grid, 5, 7, 6, 9, '#3a1f08');   // door frame
+        pixelRect(grid, 6, 8, 4, 8, '#5c3215');   // door fill
+        setPixel(grid, 9, 12, '#c8a030');         // knob
+      }
+      // Small window on the other tiles
+      if (hutAbove && hutLeft) {
+        pixelRect(grid, 4, 5, 8, 6, '#3a1f08');
+        pixelRect(grid, 5, 6, 6, 4, '#7ab8d8');
+        pixelRect(grid, 7, 6, 1, 4, '#3a1f08');   // cross pane
+        pixelRect(grid, 5, 8, 6, 1, '#3a1f08');
+      }
+      pixelRect(grid, 0, 0, 16, 1, '#5a3a18');
+      pixelRect(grid, 0, 0, 1, 16, '#5a3a18');
+    });
   },
 };
 
@@ -130,81 +128,73 @@ export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
  */
 export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
   [TILE.EMPTY](g, x, y, seed, { tileSize: ts }) {
-    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
-    g.strokeStyle = '#2c2c2e'; g.lineWidth = 1; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
-    if (seed % 5 === 0) { g.fillStyle = '#333335'; g.fillRect(x+(seed%14)+3, y+(seed%11)+3, 5, 3); }
-    if (seed % 8 === 0) { g.fillStyle = '#424244'; g.fillRect(x+(seed%16)+4, y+(seed%13)+6, 4, 4); }
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#3a3a3c');
+      pixelRect(grid, 0, 0, 16, 1, '#2c2c2e');
+      pixelRect(grid, 0, 0, 1, 16, '#2c2c2e');
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#333335');
+      if (seed % 8 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 2, '#424244');
+    });
   },
   // A pillar, not a boulder: a vertical shaft with a capital and a base.
   [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
-    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
-    g.fillStyle = '#6a6a6e'; g.fillRect(x+7, y+3, ts-14, ts-6);
-    g.fillStyle = '#84848a';
-    g.fillRect(x+4+(seed%2), y+2, ts-8-(seed%2), 4);
-    g.fillRect(x+4+(seed%2), y+ts-6, ts-8-(seed%2), 4);
-    g.strokeStyle = '#26262a'; g.lineWidth = 1; g.strokeRect(x+7.5, y+3.5, ts-15, ts-7);
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#3a3a3c');
+      pixelRect(grid, 4, 2, 8, 12, '#6a6a6e');
+      pixelRect(grid, 2 + (seed % 2), 1, 12 - (seed % 2), 2, '#84848a');
+      pixelRect(grid, 2 + (seed % 2), 13, 12 - (seed % 2), 2, '#84848a');
+    });
   },
-  // A still, dark pool, not a sunlit pond.
+  // A still, dark pool, not a sunlit pond — flat fill, same as the forest's water.
   [TILE.WATER](g, x, y, _seed, { tileSize: ts }) {
     g.fillStyle = '#0e2a3a'; g.fillRect(x, y, ts, ts);
   },
   // A stacked wooden crate, so "burns to ash" still makes sense here.
   [TILE.TREE](g, x, y, _seed, { tileSize: ts }) {
-    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
-    g.fillStyle = 'rgba(0,0,0,0.30)';
-    g.beginPath(); g.ellipse(x+16, y+27, 10, 4, 0, 0, Math.PI*2); g.fill();
-    g.fillStyle = '#5c4326'; g.fillRect(x+6, y+9, ts-12, ts-14);
-    g.strokeStyle = '#3a2a16'; g.lineWidth = 1; g.strokeRect(x+6.5, y+9.5, ts-13, ts-15);
-    g.beginPath();
-    g.moveTo(x+6, y+9); g.lineTo(x+ts-6, y+ts-5);
-    g.moveTo(x+ts-6, y+9); g.lineTo(x+6, y+ts-5);
-    g.stroke();
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#3a3a3c');
+      pixelEllipse(grid, 8, 13, 5, 2, 'rgba(0,0,0,0.30)');
+      pixelRect(grid, 3, 4, 10, 8, '#5c4326');
+      for (let i = 0; i < 8; i++) {
+        setPixel(grid, 3 + i, 4 + i, '#3a2a16');
+        setPixel(grid, 12 - i, 4 + i, '#3a2a16');
+      }
+    });
   },
   [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
-    g.fillStyle = '#242224'; g.fillRect(x, y, ts, ts);
-    g.fillStyle = '#302c2a';
-    if (seed % 5 === 0) g.fillRect(x+(seed%14)+4, y+(seed%11)+4, 5, 3);
-    if (seed % 7 === 0) g.fillRect(x+(seed%18)+2, y+(seed%13)+8, 3, 5);
-    if (seed % 3 === 0) g.fillRect(x+(seed%22)+3, y+(seed%9)+12, 4, 2);
-    g.strokeStyle = '#1a1818'; g.lineWidth = 0.5; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#242224');
+      pixelRect(grid, 0, 0, 16, 1, '#1a1818');
+      pixelRect(grid, 0, 0, 1, 16, '#1a1818');
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#302c2a');
+      if (seed % 7 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 1, '#302c2a');
+    });
   },
   // A shrine, not a hut: same 2x2/neighbour-aware silhouette (peak, archway,
   // sconce in place of roof, door, window), stone instead of clay.
   [TILE.HUT](g, x, y, _seed, { tileSize: ts }, hutAbove, hutLeft) {
-    g.fillStyle = '#3a3a3c'; g.fillRect(x, y, ts, ts);
-    g.fillStyle = '#54545a'; g.fillRect(x+1, y+1, ts-2, ts-2);
-    g.strokeStyle = '#38383c'; g.lineWidth = 1;
-    for (let my = 0; my < 3; my++) {
-      const ly = y + 7 + my * 8;
-      g.beginPath(); g.moveTo(x+1, ly); g.lineTo(x+ts-1, ly); g.stroke();
-    }
-    for (let my = 0; my < 4; my++) {
-      const lx = x + (my % 2 === 0 ? 9 : 17);
-      const ly0 = y + 1 + my * 8;
-      g.beginPath(); g.moveTo(lx, ly0); g.lineTo(lx, ly0 + 8); g.stroke();
-    }
-    if (!hutAbove) {
-      g.fillStyle = '#3a2050';
-      g.beginPath();
-      g.moveTo(x, y+7); g.lineTo(x+ts/2, y); g.lineTo(x+ts, y+7);
-      g.closePath(); g.fill();
-      g.strokeStyle = '#7a50a8'; g.lineWidth = 1.5;
-      g.beginPath(); g.moveTo(x+3, y+6); g.lineTo(x+ts/2, y+1); g.lineTo(x+ts-3, y+6); g.stroke();
-    }
-    if (!hutLeft && hutAbove) {
-      g.fillStyle = '#181418'; g.fillRect(x+10, y+14, 12, 18);
-      g.fillStyle = '#2c2430'; g.fillRect(x+11, y+15, 10, 16);
-    }
-    if (hutAbove && hutLeft) {
-      g.fillStyle = '#181418'; g.fillRect(x+8, y+10, 16, 12);
-      g.fillStyle = '#7a50a8'; g.fillRect(x+9, y+11, 14, 10);
-      g.strokeStyle = '#181418'; g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(x+16, y+11); g.lineTo(x+16, y+21);
-      g.moveTo(x+9,  y+16); g.lineTo(x+23, y+16);
-      g.stroke();
-    }
-    g.strokeStyle = '#26262a'; g.lineWidth = 1; g.strokeRect(x+.5, y+.5, ts-1, ts-1);
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#3a3a3c');
+      pixelRect(grid, 1, 1, 14, 14, '#54545a');
+      for (let my = 0; my < 3; my++) pixelRect(grid, 1, 4 + my * 4, 14, 1, '#38383c');
+      for (let my = 0; my < 4; my++) pixelRect(grid, my % 2 === 0 ? 5 : 9, 1 + my * 4, 1, 4, '#38383c');
+      if (!hutAbove) {
+        pixelTriangleUp(grid, 8, 4, 8, 5, '#3a2050');
+        pixelRect(grid, 6, 1, 4, 1, '#7a50a8');
+      }
+      if (!hutLeft && hutAbove) {
+        pixelRect(grid, 5, 7, 6, 9, '#181418');
+        pixelRect(grid, 6, 8, 4, 8, '#2c2430');
+      }
+      if (hutAbove && hutLeft) {
+        pixelRect(grid, 4, 5, 8, 6, '#181418');
+        pixelRect(grid, 5, 6, 6, 4, '#7a50a8');
+        pixelRect(grid, 7, 6, 1, 4, '#181418');
+        pixelRect(grid, 5, 8, 6, 1, '#181418');
+      }
+      pixelRect(grid, 0, 0, 16, 1, '#26262a');
+      pixelRect(grid, 0, 0, 1, 16, '#26262a');
+    });
   },
 };
 

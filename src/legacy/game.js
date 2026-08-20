@@ -15,6 +15,22 @@ import { EventBus } from '../sim/events';
 import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
+import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
+import {
+  makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, animFrame3,
+} from '../render/pixel-grid';
+import {
+  ARCHER_SPRITE, buildArcherGrid,
+  WIZARD_SPRITE, buildWizardGrid,
+  RANGER_SPRITE, buildRangerGrid,
+  KNIGHT_SPRITE, buildKnightGrid,
+} from '../render/character-grids';
+
+// Single-player has no team concept, so each hero gets one fixed trim
+// colour instead of the multiplayer per-team one. Archer's was already its
+// tunic accent; the others are new, small, low-stakes additions in the same
+// spirit (see buildWizardGrid/buildRangerGrid's hem/hood-brim trim).
+const SP_TRIM = { archer: '#39FF14', wizard: '#FFB400', ranger: '#FFCC00', knightNormal: '#3A5CC8', knightFireSword: '#CC3300' };
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
@@ -97,8 +113,16 @@ const CONFIG = {
   // crow's 200 (matching player speed) on purpose, a threat that is always
   // closing is not meant to also be unescapable.
   skeletonSpeed: 130, skeletonContactDamage: 1,
-  killsToTriggerDarkBoss: 10,
-  skeletonStartCount: 5, skeletonMax: 10,
+
+  // Fire skeleton: same movement and contact damage as normal, but its
+  // death is a small blast that punishes standing next to it when it pops.
+  fireSkeletonBlastRadius: 50, fireSkeletonBlastDamage: 1,
+
+  // Ice skeleton: same movement, plus a shot on a timer aimed at wherever
+  // the player is right now. A hit chips 1 HP and locks out all input for
+  // the freeze duration, so a wave of them punishes standing still.
+  iceSkeletonShotInterval: 3, iceSkeletonBoltSpeed: 300,
+  iceSkeletonBoltDamage: 1, iceSkeletonFreezeSecs: 3,
 
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
@@ -115,6 +139,10 @@ const CONFIG = {
   waterShimmerMs: 800,
 
   bossHP: 5, bossHPWizard: 14, bossOrbitRadius: 180, bossOrbitSpeed: 80, bossOrbitDuration: 3,
+  // Time constant for orbitRadius easing back to bossOrbitRadius after any
+  // interrupt (charge, screech, whirlwind) — see enterOrbit(). Keeps the
+  // boss gliding back out instead of popping straight onto the circle.
+  bossOrbitRadiusEaseTau: 0.35,
   bossChargeSpeed: 350, bossScreechInterval: 8, bossScreechHalt: 0.4, bossScreechRange: 200,
   bossBatCD: 2.5, bossBatsPerSummon: 5,
   bossShieldInitialDuration: 10,  // seconds of mandatory opening shield
@@ -129,6 +157,14 @@ const CONFIG = {
   bossBurnSlowdown: 0.3,          // fraction of speed removed while he burns
   bossBurnDamage: 0.5,            // extra damage the burn deals, as a fraction of the igniting hit
   bossBurnEmberInterval: 0.12,    // seconds between ember puffs while burning
+  // Crow king only: a real (unshielded) hit dazes him, a breather window on
+  // top of the knockback every hit already gives. Stun is a full action
+  // freeze; the two recovery steps only slow him. A shielded hit still gets
+  // knocked back (see resolveBossHit) but never dazes him, so the player
+  // can't perma-freeze him through the one phase meant to be untouchable.
+  bossDazeStunDuration: 1,
+  bossDazeSlow1Duration: 1.5, bossDazeSlow1Speed: 0.33,
+  bossDazeSlow2Duration: 1.5, bossDazeSlow2Speed: 0.66,
 
   // Dark bosses (castle stage 2/3). They reuse the crow king's orbit/charge
   // engine and burn/knockback handling; the shield-window mechanic is
@@ -137,9 +173,22 @@ const CONFIG = {
   darkArcherContactDamage: 1,     // weak up close — an archer that got caught
   darkArcherVolleyInterval: 2.2, darkArcherVolleyCount: 3,
   darkArcherVolleySpread: Math.PI / 14, darkArcherBoltSpeed: 380, darkArcherBoltDamage: 1,
+  // Secondary, on its own cooldown alongside the volley: a lobbed bomb that
+  // detonates in a radius, the same bow-and-dynamite split the real archer
+  // carries.
+  darkArcherBombInterval: 4.5, darkArcherBombFuse: 1.1, darkArcherBombSpeed: 220,
+  darkArcherBombDamage: 2, darkArcherBombRadius: 55,
+  darkArcherSkeletonInterval: 7,  // summons one ice skeleton on this cadence
+
   darkKnightHP: 8, darkKnightHPWizard: 20, darkKnightHPKnight: 18,
   darkKnightOrbitDuration: 1.2,   // short lead-in, spends most of its time charging
   darkKnightChargeSpeed: 460, darkKnightContactDamage: 3,
+  // Secondary, on its own cooldown: a whirlwind halt between charges, the
+  // same spear-and-whirlwind split the real knight carries.
+  darkKnightWhirlwindInterval: 6, darkKnightWhirlwindDuration: 1.4,
+  darkKnightWhirlwindTickRate: 0.25, darkKnightWhirlwindRadius: 70,
+  darkKnightWhirlwindDamage: 1,
+  darkKnightSkeletonInterval: 7,  // summons one fire skeleton on this cadence
 
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
@@ -155,17 +204,25 @@ const CONFIG = {
   // Knight
   knightSpearRange: 80, knightSpearCooldown: 1.0,
   knightSpearBossDamage: 2, knightSpearSwingDuration: 0.35,
-  knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 8,
+  knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 6,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
   knightJavelinsPerPickup: 3, knightJavelinSpeed: 580, knightJavelinPierce: 2,
   knightJavelinBossDamage: 1,
   bossHPKnight: 12,               // knight has high DPS so boss needs more HP
+  // Block: a self-charging directional guard, no pickup needed. Reuses
+  // playerShield/damagePlayer's existing absorb-one-hit handling wholesale;
+  // this cooldown just decides how often it's re-granted while down.
+  knightBlockCooldown: 10,
 
   // Wizard
   wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
+  // Wizard-only pickup batch size (archer/ranger/knight keep their own
+  // counts — specialArrowPickupCount/knightJavelinsPerPickup below — so
+  // this doesn't change anyone else's ammo economy).
+  wizSpecialBoltCount: 5,
   stormCooldown: 10,
   stormBlastRadius: 450,          // = dynamiteBlastRadius * 5
   stormBossDamage: 3,
@@ -282,6 +339,7 @@ let score = 0, wave = 1, gameTime = 0, escalationTimer = 0;
 let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
 let waveAnnounce = 0;            // countdown timer for wave banner display
+let waveAnnounceText = '';       // what the banner says while it is up
 let menuSelection = 0;
 
 /**
@@ -315,25 +373,47 @@ let controlsSelection = 0, remapTarget = null;
  * character is one entry rather than two lists that have to independently
  * agree on the same three names.
  */
+// Difficulty gradient for the char-select panels, one home for the
+// label/color pair so all four panels agree on what "hard" looks like.
+// Rendered at full brightness regardless of panel selection (unlike
+// everything else in a dimmed panel) so all four are scannable at a glance.
+const DIFFICULTY = {
+  easy:      { label: 'EASY',       color: '#39FF14' },
+  medium:    { label: 'MEDIUM',     color: '#CCAA00' },
+  hard:      { label: 'HARD',       color: '#FF8C00' },
+  extraHard: { label: 'EXTRA HARD', color: '#FF3B30' },
+};
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    difficulty: DIFFICULTY.medium,
     lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
            'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
-    lines:['Homing magic bolts  3s CD','Fire Bolt pickup: 2 dmg homing',
-           'Laser pickup: pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
+    difficulty: DIFFICULTY.extraHard,
+    lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
+           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
+    difficulty: DIFFICULTY.hard,
     lines:['Long spear  ·  melee range','Pickup: Iron Javelin (pierces)',
-           'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Frontline playstyle'] },
+           'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+    difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
 ];
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
+// Set by an ice skeleton's bolt landing. Counts down in updatePlayer, which
+// returns before reading input while it is positive, so movement, aiming
+// and every weapon lock out together for the duration.
+let playerFrozenTimer = 0;
 // Its own counter, deliberately not sharing killCount: see the comment above
 // the SKELETONS section for why that separation is load-bearing.
 let skeletonKillCount = 0;
+// The castle stage's own gauntlet: 0 before it starts, 1-9 during it. See
+// startCastleWave. Distinct from `wave`, which is waves-mode's own counter
+// and never advances during brawl mode.
+let castleWave = 0;
 // Which boss brawl mode is on: 1 = crow king (forest), 2 = dark archer,
 // 3 = dark knight (both castle). Read by spawnBoss(); advanced by
 // updateBossDeath() when a non-final boss dies.
@@ -353,6 +433,10 @@ let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 // Knight combat state
 let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false, knightSpearPhase2Hit = false;
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
+// Counts down to the next free Block charge while no shield is banked (see
+// the per-frame tick in updatePlayer); frozen while playerShield is true,
+// since there's nothing to wait for until the current charge is used.
+let knightBlockCD = 0;
 
 // Inventory — all resource counts live here, keyed by CONFIG.resources
 let inv    = {};   // { arrows: n, dynamites: n }
@@ -487,6 +571,22 @@ function initAudio() {
 
 const inGame = () => appState === 'playing' || appState === 'boss_fight';
 
+/**
+ * Hides the OS cursor once aiming actually matters, since drawReticle()
+ * draws the per-character indicator in its place; restores it the moment
+ * aiming stops (menus, pause, boss entrance, castle intro), so a screen
+ * with a clickable row, like controls remapping, still shows a real one.
+ * A style write is cheap but not free, so this only fires on the frame
+ * inGame() actually flips rather than every frame.
+ */
+let cursorHidden = false;
+function syncCursor() {
+  const hide = inGame();
+  if (hide === cursorHidden) return;
+  cursorHidden = hide;
+  canvas.style.cursor = hide ? 'none' : 'crosshair';
+}
+
 function startCharge() {
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
@@ -518,7 +618,14 @@ let mouseRightHeld = false;
 let mouseLeftHeld = false;
 canvas.addEventListener('mousedown', e => {
   initAudio();
-  if (e.button === 0) { mouseLeftHeld = true; if (inGame()) shootPressed = true; }
+  if (e.button === 0) {
+    mouseLeftHeld = true;
+    if (inGame()) shootPressed = true;
+    // The castle-intro black screen waits for exactly this: one click, no
+    // key, since it is shown mid-run with the keyboard already busy with
+    // movement held down.
+    else if (appState === 'castle_intro') appState = 'playing';
+  }
   if (e.button === 2) { mouseRightHeld = true; startCharge(); }
 });
 canvas.addEventListener('mouseup',    e => {
@@ -560,10 +667,11 @@ let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamite
 // The castle stage's critter. A parallel array to crows, not a variant of it —
 // see damageSkeleton/killSkeleton and updateSkeletons for why.
 let skeletons = [];
-// The dark archer's volleys. A boss-owned projectile, not a variant of the
-// player's arrows array — it has none of that array's ammo/pierce/ricochet
-// concerns, only "fly straight, hit the player."
-let bossBolts = [];
+// Enemy-owned projectiles that hit the player: the dark archer's volleys and
+// the ice skeleton's shots. Not a variant of the player's arrows array — it
+// has none of that array's ammo/pierce/ricochet concerns, only "fly
+// straight, hit the player," optionally freezing on contact.
+let hostileBolts = [];
 
 // Local player input. Produces one InputCommand per tick from keyboard + mouse.
 // The command shape matches the network input packet, so phase 2 sends the same
@@ -618,13 +726,40 @@ events.on(e => {
       floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
       break;
 
-    case 'SKELETON_KILLED':
+    case 'SKELETON_KILLED': {
       playSound(sndHitCrow);
+      const skelColors = e.kind === 'fire' ? ['#D86A40','#7A2A10','#FF6020','#FFFFFF']
+                        : e.kind === 'ice'  ? ['#A8D8F0','#4878A0','#40D0F0','#FFFFFF']
+                        : ['#D8D0C0','#8A8070','#B040E0','#FFFFFF'];
+      const skelGlow = e.kind === 'fire' ? '#FF6020' : e.kind === 'ice' ? '#40D0F0' : '#B040E0';
       burst(e.x, e.y, {
-        count: 14, colors: ['#D8D0C0','#8A8070','#B040E0','#FFFFFF'],
+        count: 14, colors: skelColors,
         speedMin: 40, speedMax: 120, decay: 1.8,
         shapeMix: [['circle', 0.7], ['spark', 0.3]],
-        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#B040E0'
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: skelGlow
+      });
+      break;
+    }
+
+    case 'FIRE_SKELETON_BLAST':
+      playSound(sndExplosion); triggerShake(6, 250);
+      burst(e.x, e.y, {
+        count: 20, colors: ['#FFB400','#FF6020','#FFFFFF','#8A1010'],
+        speedMin: 80, speedMax: 220, decay: 2.0,
+        shape: 'circle', sizeMin: 2, sizeMax: 4, shadowBlur: 10, shadowColor: '#FF6020'
+      });
+      break;
+
+    case 'ICE_BOLT_FIRED':
+      playSound(sndWizBolt);
+      break;
+
+    case 'PLAYER_FROZEN':
+      triggerShake(4, 200);
+      burst(e.x, e.y, {
+        count: 12, colors: ['#40D0F0','#A0E8FF','#FFFFFF'],
+        speedMin: 30, speedMax: 90, decay: 2.2, shape: 'spark',
+        shadowBlur: 8, shadowColor: '#40D0F0'
       });
       break;
 
@@ -856,11 +991,13 @@ function initGame() {
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
+  knightBlockCD = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
-  boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; bossBolts = [];
+  boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
+  castleWave = 0; playerFrozenTimer = 0;
   fovMap.invalidate(); // force FOV recompute on next player move
   FEATHERS.applyToGame();
   resetInv();
@@ -962,6 +1099,10 @@ function dist2(ax, ay, bx, by) { return (ax-bx)**2 + (ay-by)**2; }
 
 function updatePlayer(dt) {
   if (appState === 'boss_entrance') return;
+  // An ice bolt's freeze locks out everything below, movement, aiming and
+  // every weapon's cooldown tick, for its full duration. Nothing else can
+  // read player input while this is positive.
+  if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
   sniperMode = hasButton(cmd, Button.SNIPE);
@@ -1002,6 +1143,12 @@ function updatePlayer(dt) {
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
   if (knightWhirlwindCD   > 0) knightWhirlwindCD  = Math.max(0, knightWhirlwindCD  - dt);
   if (inv.knightFireSwordTimer > 0) inv.knightFireSwordTimer = Math.max(0, inv.knightFireSwordTimer - dt);
+  // Block: passive, no keybind — once charged it just sits banked in
+  // playerShield until something hits the knight from the front.
+  if (selectedChar === 'knight' && !playerShield) {
+    knightBlockCD = Math.max(0, knightBlockCD - dt);
+    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = CONFIG.knightBlockCooldown; }
+  }
   if (pfSwing > 0) {
     pfSwing = Math.max(0, pfSwing - dt);
     const prog = pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : 1;
@@ -1185,7 +1332,7 @@ function tryWizardBolt() {
   if (arrows.length >= CONFIG.maxArrowsInFlight) return;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
-  if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizBoltDamage; }
+  if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
   else if (inv.fireBolts    > 0) { inv.fireBolts--;   type = 'wiz_fire';  dmg = CONFIG.wizFireBoltDamage; }
   wizBoltCD = CONFIG.wizBoltCooldown;
   const spd = CONFIG.wizBoltSpeed;
@@ -1624,15 +1771,18 @@ function killCrow(j) {
 // first skeleton kill from instantly re-triggering the Crow King's own
 // boss_entrance the moment the stage changes.
 
-function spawnSkeleton() {
+function spawnSkeleton(kind = 'normal') {
   const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
   skeletons.push({
     x: CONFIG.canvasW + 20, y: baseY,
+    kind, // 'normal' | 'fire' | 'ice' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
     hp: 1, maxHp: 1, hitFlash: 0,
     walkPhase: Math.random() * Math.PI * 2,
     path: null, pathTimer: 0,
+    // Staggered so a whole wave of ice skeletons does not fire in sync.
+    shotCD: kind === 'ice' ? CONFIG.iceSkeletonShotInterval * Math.random() : 0,
   });
 }
 
@@ -1648,14 +1798,44 @@ function killSkeleton(j) {
   const s = skeletons[j];
   score++; skeletonKillCount++;
   STREAK.onKill();
-  events.emit({ type: 'SKELETON_KILLED', x: s.x, y: s.y });
+  events.emit({ type: 'SKELETON_KILLED', x: s.x, y: s.y, kind: s.kind });
+  if (s.kind === 'fire') {
+    events.emit({ type: 'FIRE_SKELETON_BLAST', x: s.x, y: s.y });
+    if (dist2(s.x, s.y, player.x, player.y) < CONFIG.fireSkeletonBlastRadius ** 2) {
+      damagePlayer(CONFIG.fireSkeletonBlastDamage);
+    }
+  }
   const dropChance = 0.25 + HANDICAP.dropBoost();
   dropStreak++;
   if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(s.x, s.y); }
   skeletons.splice(j, 1);
-  if (gameMode === 'brawl' && skeletonKillCount >= CONFIG.killsToTriggerDarkBoss && appState === 'playing') {
-    transitionTo('boss_entrance');
+  // No kill count here: the gauntlet is nine waves, cleared one at a time.
+  // The last skeleton of a wave dying is what starts the next one, or, past
+  // wave 9, the dark archer's entrance.
+  if (gameMode === 'brawl' && appState === 'playing' && skeletons.length === 0) {
+    if (castleWave < CASTLE_TOTAL_WAVES) startCastleWave(castleWave + 1);
+    else transitionTo('boss_entrance');
   }
+}
+
+// Three groups of three: normal, then fire, then ice, each group sized
+// 3/4/5 so every new enemy kind starts easy and ends hard before the next
+// group's first, harder kind takes over.
+const CASTLE_TOTAL_WAVES = 9;
+function castleWaveKind(n) { return n <= 3 ? 'normal' : n <= 6 ? 'fire' : 'ice'; }
+function castleWaveSize(n) { return 3 + ((n - 1) % 3); }
+function castleWaveBannerText(n) {
+  const kind = castleWaveKind(n);
+  const label = kind === 'fire' ? 'FIRE SKELETONS' : kind === 'ice' ? 'ICE SKELETONS' : 'SKELETONS';
+  return `── WAVE ${n}/${CASTLE_TOTAL_WAVES}: ${label} ──`;
+}
+
+function startCastleWave(n) {
+  castleWave = n;
+  const kind = castleWaveKind(n);
+  for (let i = 0; i < castleWaveSize(n); i++) spawnSkeleton(kind);
+  waveAnnounce = 2.2;
+  waveAnnounceText = castleWaveBannerText(n);
 }
 
 /**
@@ -1688,6 +1868,11 @@ function updateSkeletons(dt) {
       s.x += (dx / dist) * spd * dt; s.y += (dy / dist) * spd * dt; moved = true;
     }
     if (moved) s.walkPhase += dt * 8;
+
+    if (s.kind === 'ice') {
+      s.shotCD -= dt;
+      if (s.shotCD <= 0) { s.shotCD = CONFIG.iceSkeletonShotInterval; fireIceBolt(s); }
+    }
   }
 }
 
@@ -1932,11 +2117,11 @@ function checkPickupCollection() {
     }
     // Type-specific bonus — effect differs by character
     if (p.type === 'ricochet') {
-      if      (selectedChar === 'wizard') inv.laserStreams  += CONFIG.specialArrowPickupCount;
+      if      (selectedChar === 'wizard') inv.laserStreams  += CONFIG.wizSpecialBoltCount;
       else if (selectedChar === 'knight') inv.knightJavelins += CONFIG.knightJavelinsPerPickup;
       else                                inv.ricochetArrows += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'fire') {
-      if      (selectedChar === 'wizard') inv.fireBolts          += CONFIG.specialArrowPickupCount;
+      if      (selectedChar === 'wizard') inv.fireBolts          += CONFIG.wizSpecialBoltCount;
       else if (selectedChar === 'knight') inv.knightFireSwordTimer += CONFIG.knightFireSwordDuration;
       else                                inv.fireArrows           += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'shield') {
@@ -1950,17 +2135,15 @@ function checkPickupCollection() {
 function updateEscalation(dt) {
   escalationTimer += dt;
   if (waveAnnounce > 0) waveAnnounce -= dt;
+  // The castle stage's population is entirely wave-driven (startCastleWave),
+  // not this timer — see killSkeleton. Only waveAnnounce still needs to
+  // count down here so a castle-wave banner fades on schedule.
+  if (mapKind === 'castle') return;
   if (escalationTimer >= CONFIG.crowEscalationInterval) {
     escalationTimer -= CONFIG.crowEscalationInterval;
     wave++;
-    if (gameMode === 'waves') waveAnnounce = 2.2; // banner only in waves mode
-    // The castle stage has no crows to escalate — it escalates skeletons
-    // instead, on the same cadence.
-    if (mapKind === 'castle') {
-      if (skeletons.length < CONFIG.skeletonMax) spawnSkeleton();
-    } else if (crows.length < CONFIG.crowMax) {
-      spawnCrow();
-    }
+    if (gameMode === 'waves') { waveAnnounce = 2.2; waveAnnounceText = `── WAVE ${wave} ──`; }
+    if (crows.length < CONFIG.crowMax) spawnCrow();
   }
 }
 
@@ -2020,7 +2203,7 @@ function updateBossEntrance(dt) {
     boss.x = Math.max(targetX, boss.x - 300 * dt);
   }
   if (t >= 2.3) { e.fadeOut = true; e.overlayAlpha = Math.max(0, e.overlayAlpha - dt * 5); }
-  if (t >= 2.5) { if (boss) boss.bstate = 'orbit'; transitionTo('boss_fight'); }
+  if (t >= 2.5) { if (boss) enterOrbit(); transitionTo('boss_fight'); }
 }
 
 // Stage order for brawl mode's full run. Index 0 is always the forest fight;
@@ -2050,11 +2233,12 @@ function spawnBoss() {
     x: CONFIG.canvasW + 40, y: (CONFIG.rows / 2) * CONFIG.tileSize,
     hp: hpMax, hpMax,
     bstate: 'entering', stateTimer: 0,
-    orbitAngle: 0, chargeTarget: null,
+    orbitAngle: 0, orbitRadius: CONFIG.bossOrbitRadius, chargeTarget: null,
     wingPhase: 0, hitFlash: 0, facing: 1,
     knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
     burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him and drains HP
     burnDps: 0,                     // damage per second for the burn now running
+    dazeTimer: 0,                   // crow king only: stun then two-step slow, see dazeBoss
   };
   if (kind === 'crowking') {
     boss = {
@@ -2070,8 +2254,23 @@ function spawnBoss() {
     return;
   }
   // Dark bosses skip the shield window entirely — shield stays permanently
-  // down, so every hit lands the instant the entrance ends.
-  boss = { ...common, shield: false, volleyCD: CONFIG.darkArcherVolleyInterval };
+  // down, so every hit lands the instant the entrance ends. Each also carries
+  // its own secondary-attack cooldown and a skeleton-summon cooldown; see
+  // updateBoss for how they fire.
+  if (kind === 'dark_archer') {
+    boss = {
+      ...common, shield: false,
+      volleyCD: CONFIG.darkArcherVolleyInterval,
+      bombCD: CONFIG.darkArcherBombInterval,
+      skeletonCD: CONFIG.darkArcherSkeletonInterval,
+    };
+  } else {
+    boss = {
+      ...common, shield: false,
+      whirlwindCD: CONFIG.darkKnightWhirlwindInterval, whirlwindTick: 0,
+      skeletonCD: CONFIG.darkKnightSkeletonInterval,
+    };
+  }
 }
 
 /**
@@ -2084,6 +2283,17 @@ function applyBossDamage(amount) {
   if (boss.hp <= 0) startBossDeath();
 }
 
+/** Shoves the boss away from (fromX, fromY). Shared by real hits and
+ * shielded blocks, so a shield still gives real physical feedback even
+ * though it takes no damage. Decayed and actually applied to boss.x/y in
+ * applyBossKnockback, every frame, not here. */
+function knockBoss(fromX, fromY) {
+  const dx = boss.x - fromX, dy = boss.y - fromY;
+  const d = Math.hypot(dx, dy) || 1;
+  boss.knockX += (dx / d) * CONFIG.bossKnockback;
+  boss.knockY += (dy / d) * CONFIG.bossKnockback;
+}
+
 /**
  * Applies damage to the boss and shoves him away from the hit. Every weapon
  * routes through here, so hit flash, the BOSS_HIT event, and knockback stay in
@@ -2094,10 +2304,8 @@ function applyBossDamage(amount) {
  */
 function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
   boss.hitFlash = flash;
-  const dx = boss.x - fromX, dy = boss.y - fromY;
-  const d = Math.hypot(dx, dy) || 1;
-  boss.knockX += (dx / d) * CONFIG.bossKnockback;
-  boss.knockY += (dy / d) * CONFIG.bossKnockback;
+  knockBoss(fromX, fromY);
+  if (boss.kind === 'crowking') dazeBoss();
   events.emit({ type: 'BOSS_HIT', source });
   applyBossDamage(amount);
 }
@@ -2127,6 +2335,7 @@ function resolveBossHit(a, damage, source) {
   const blocked = boss.shield;
 
   if (blocked) {
+    knockBoss(a.x, a.y);
     events.emit({ type: 'BOSS_SHIELD_BLOCKED', x: a.x, y: a.y });
   } else {
     if (a.type === 'fire') igniteBoss(damage);
@@ -2172,9 +2381,39 @@ function igniteBoss(damage) {
   boss.burnDps = damage * CONFIG.bossBurnDamage / CONFIG.bossBurnDuration;
 }
 
-/** Speed multiplier for boss movement. Burning slows him. */
+/** Speed multiplier for boss movement. Burning and dazed-recovery both slow
+ * him and stack multiplicatively; full stun is gated separately in
+ * updateBoss (an action freeze, not just a movement slowdown). */
 function bossSpeedMod() {
-  return boss.burnTimer > 0 ? 1 - CONFIG.bossBurnSlowdown : 1;
+  const burnMod = boss.burnTimer > 0 ? 1 - CONFIG.bossBurnSlowdown : 1;
+  const phase = bossDazePhase();
+  const dazeMod = phase === 'slow1' ? CONFIG.bossDazeSlow1Speed
+                : phase === 'slow2' ? CONFIG.bossDazeSlow2Speed
+                : 1;
+  return burnMod * dazeMod;
+}
+
+/** Total length of one daze: the stun plus both recovery steps. */
+function bossDazeTotal() {
+  return CONFIG.bossDazeStunDuration + CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration;
+}
+
+/** 'stun' | 'slow1' | 'slow2' | null, derived from the one countdown so
+ * movement, the speed multiplier, and the visual all read the same source. */
+function bossDazePhase() {
+  const t = boss.dazeTimer;
+  if (t <= 0) return null;
+  if (t > CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration) return 'stun';
+  if (t > CONFIG.bossDazeSlow2Duration) return 'slow1';
+  return 'slow2';
+}
+
+/** Landing a real hit refreshes the daze to its full length, stun included
+ * — chaining hits during an open window keeps him dazed continuously. */
+function dazeBoss() { boss.dazeTimer = bossDazeTotal(); }
+
+function updateBossDaze(dt) {
+  if (boss.dazeTimer > 0) boss.dazeTimer = Math.max(0, boss.dazeTimer - dt);
 }
 
 /** Counts the burn down, drains HP with it, and puffs embers while it lasts. */
@@ -2208,6 +2447,24 @@ function applyBossKnockback(dt) {
   if (Math.hypot(boss.knockX, boss.knockY) < 0.5) { boss.knockX = 0; boss.knockY = 0; }
 }
 
+/**
+ * Puts the boss into orbit starting from wherever it actually is right now,
+ * instead of onto the orbit circle at whatever stale angle and radius were
+ * left over from before the interruption. Every return to 'orbit' — charge
+ * ending, screech ending, whirlwind ending, the entrance handing off to the
+ * fight — routes through here. orbitRadius then eases toward bossOrbitRadius
+ * in updateBoss's orbit branch rather than snapping to it, so the boss glides
+ * back out instead of popping 150+px in one frame. This is what "teleporting"
+ * was: orbit always computed position from the fixed bossOrbitRadius, so
+ * re-entering it after being close to the player (mid-charge, mid-whirlwind)
+ * always snapped straight back out to the full radius.
+ */
+function enterOrbit() {
+  boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
+  boss.orbitAngle = Math.atan2(boss.y - player.y, boss.x - player.x);
+  boss.orbitRadius = Math.hypot(boss.x - player.x, boss.y - player.y);
+}
+
 function updateBoss(dt) {
   if (!boss || boss.bstate === 'dead') return;
   boss.wingPhase += dt * 8;
@@ -2218,6 +2475,20 @@ function updateBoss(dt) {
   if (boss.hitFlash > 0) boss.hitFlash = Math.max(0, boss.hitFlash - dt);
   // Update facing toward player
   boss.facing = player.x > boss.x ? -1 : 1;
+
+  // The instant the stun itself ends (not the slower recovery after it),
+  // re-anchor the orbit from wherever he actually is. Without this, a player
+  // who moved during that full second would make the orbit's stale
+  // angle/radius snap him back the next frame — the same teleport-looking
+  // bug enterOrbit() already fixes for charge/whirlwind returns. justResumed
+  // also holds movement off for this exact frame: applying it right after
+  // enterOrbit() would let orbitRadius's own easing decay run against the
+  // freshly re-anchored radius before the next frame ever reads it, which
+  // is a second, smaller version of the same snap.
+  const wasStunned = bossDazePhase() === 'stun';
+  updateBossDaze(dt);
+  const justResumed = wasStunned && bossDazePhase() !== 'stun';
+  if (justResumed && boss.bstate === 'orbit') enterOrbit();
 
   // ── Shield phase machine — crow king only ────────────────────────────────
   // Rolling 30s window: reset shield-use counter each window
@@ -2251,61 +2522,98 @@ function updateBoss(dt) {
   }
   // ────────────────────────────────────────────────────────────────────────
 
-  if (boss.bstate === 'orbit' || boss.bstate === 'charge') {
-    if (boss.kind === 'crowking') {
-      boss.screchCD -= dt;
-      boss.batCD -= dt;
-      if (boss.batCD <= 0) {
-        boss.batCD = CONFIG.bossBatCD;
-        spawnBossBats();
-      }
-      if (boss.screchCD <= 0) {
-        boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
-        boss.stateTimer = CONFIG.bossScreechHalt;
-        events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
-        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
-      }
-    } else if (boss.kind === 'dark_archer' && boss.bstate === 'orbit') {
-      boss.volleyCD -= dt;
-      if (boss.volleyCD <= 0) { boss.volleyCD = CONFIG.darkArcherVolleyInterval; fireBossVolley(); }
-    }
-  }
-
-  const contactDamage = boss.kind === 'dark_archer' ? CONFIG.darkArcherContactDamage
-                       : boss.kind === 'dark_knight' ? CONFIG.darkKnightContactDamage
-                       : CONFIG.bossContactDamage;
-
-  if (boss.bstate === 'orbit') {
-    boss.stateTimer += dt;
-    const angSpd = CONFIG.bossOrbitSpeed * bossSpeedMod() / CONFIG.bossOrbitRadius;
-    boss.orbitAngle += angSpd * dt;
-    boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * CONFIG.bossOrbitRadius));
-    boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * CONFIG.bossOrbitRadius));
-    if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
-    // The dark archer keeps its distance and never charges; the crow king
-    // and dark knight both do once their lead-in expires (the knight's is
-    // short on purpose, so it spends most of the fight charging).
-    const orbitDuration = boss.kind === 'dark_knight' ? CONFIG.darkKnightOrbitDuration : CONFIG.bossOrbitDuration;
-    if (boss.kind !== 'dark_archer' && boss.stateTimer >= orbitDuration) startBossCharge();
-
-  } else if (boss.bstate === 'charge') {
-    if (!boss.chargeTarget) { boss.bstate = 'orbit'; boss.stateTimer = 0; return; }
-    const dx = boss.chargeTarget.x - boss.x, dy = boss.chargeTarget.y - boss.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 12) {
-      boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
-    } else {
-      const chargeSpeed = boss.kind === 'dark_knight' ? CONFIG.darkKnightChargeSpeed : CONFIG.bossChargeSpeed;
-      const spd = chargeSpeed * bossSpeedMod() * dt;
-      boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
-      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
-        damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' });
-        boss.bstate = 'orbit'; boss.stateTimer = 0; boss.chargeTarget = null;
+  // Full stun freezes everything below: attack cooldowns, state timers,
+  // movement. Burn, the shield machine, and the knockback shove at the
+  // bottom all keep running regardless — none of those are "the boss
+  // acting", so there's nothing dazing him should pause about them.
+  if (bossDazePhase() !== 'stun' && !justResumed) {
+    if (boss.bstate === 'orbit' || boss.bstate === 'charge') {
+      if (boss.kind === 'crowking') {
+        boss.screchCD -= dt;
+        boss.batCD -= dt;
+        if (boss.batCD <= 0) {
+          boss.batCD = CONFIG.bossBatCD;
+          spawnBossBats();
+        }
+        if (boss.screchCD <= 0) {
+          boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
+          boss.stateTimer = CONFIG.bossScreechHalt;
+          events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
+          if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
+        }
+      } else if (boss.kind === 'dark_archer' && boss.bstate === 'orbit') {
+        boss.volleyCD -= dt;
+        if (boss.volleyCD <= 0) { boss.volleyCD = CONFIG.darkArcherVolleyInterval; fireBossVolley(); }
+        boss.bombCD -= dt;
+        if (boss.bombCD <= 0) { boss.bombCD = CONFIG.darkArcherBombInterval; fireBossBomb(); }
+        boss.skeletonCD -= dt;
+        if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkArcherSkeletonInterval; spawnSkeleton('ice'); }
+      } else if (boss.kind === 'dark_knight') {
+        boss.whirlwindCD -= dt;
+        if (boss.whirlwindCD <= 0) {
+          boss.whirlwindCD = CONFIG.darkKnightWhirlwindInterval;
+          boss.bstate = 'whirlwind'; boss.stateTimer = CONFIG.darkKnightWhirlwindDuration;
+          boss.whirlwindTick = 0; boss.chargeTarget = null;
+          events.emit({ type: 'WHIRLWIND_START', x: boss.x, y: boss.y });
+        }
+        boss.skeletonCD -= dt;
+        if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkKnightSkeletonInterval; spawnSkeleton('fire'); }
       }
     }
-  } else if (boss.bstate === 'screech') {
-    boss.stateTimer -= dt;
-    if (boss.stateTimer <= 0) { boss.bstate = 'orbit'; boss.stateTimer = 0; }
+
+    const contactDamage = boss.kind === 'dark_archer' ? CONFIG.darkArcherContactDamage
+                         : boss.kind === 'dark_knight' ? CONFIG.darkKnightContactDamage
+                         : CONFIG.bossContactDamage;
+
+    if (boss.bstate === 'orbit') {
+      boss.stateTimer += dt;
+      const angSpd = CONFIG.bossOrbitSpeed * bossSpeedMod() / CONFIG.bossOrbitRadius;
+      boss.orbitAngle += angSpd * dt;
+      // Close the gap to the target radius instead of snapping onto it — see enterOrbit.
+      const radiusDecay = Math.exp(-dt / CONFIG.bossOrbitRadiusEaseTau);
+      boss.orbitRadius = CONFIG.bossOrbitRadius + (boss.orbitRadius - CONFIG.bossOrbitRadius) * radiusDecay;
+      boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * boss.orbitRadius));
+      boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * boss.orbitRadius));
+      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
+      // The dark archer keeps its distance and never charges; the crow king
+      // and dark knight both do once their lead-in expires (the knight's is
+      // short on purpose, so it spends most of the fight charging).
+      const orbitDuration = boss.kind === 'dark_knight' ? CONFIG.darkKnightOrbitDuration : CONFIG.bossOrbitDuration;
+      if (boss.kind !== 'dark_archer' && boss.stateTimer >= orbitDuration) startBossCharge();
+
+    } else if (boss.bstate === 'charge') {
+      if (!boss.chargeTarget) { enterOrbit(); return; }
+      const dx = boss.chargeTarget.x - boss.x, dy = boss.chargeTarget.y - boss.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 12) {
+        enterOrbit();
+      } else {
+        const chargeSpeed = boss.kind === 'dark_knight' ? CONFIG.darkKnightChargeSpeed : CONFIG.bossChargeSpeed;
+        const spd = chargeSpeed * bossSpeedMod() * dt;
+        boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
+        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
+          damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' });
+          enterOrbit();
+        }
+      }
+    } else if (boss.bstate === 'screech') {
+      boss.stateTimer -= dt;
+      if (boss.stateTimer <= 0) enterOrbit();
+    } else if (boss.bstate === 'whirlwind') {
+      boss.stateTimer -= dt;
+      boss.whirlwindTick -= dt;
+      if (boss.whirlwindTick <= 0) {
+        boss.whirlwindTick = CONFIG.darkKnightWhirlwindTickRate;
+        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.darkKnightWhirlwindRadius ** 2) {
+          damagePlayer(CONFIG.darkKnightWhirlwindDamage);
+        }
+        events.emit({ type: 'WHIRLWIND_TICK', x: boss.x, y: boss.y });
+      }
+      if (boss.stateTimer <= 0) {
+        events.emit({ type: 'WHIRLWIND_END', x: boss.x, y: boss.y });
+        enterOrbit();
+      }
+    }
   }
 
   applyBossKnockback(dt);
@@ -2313,37 +2621,96 @@ function updateBoss(dt) {
 
 /**
  * The dark archer's ranged attack: a narrow spread of magic bolts aimed at
- * the player's current position. A boss-owned array, not the player's arrows
- * — see the bossBolts declaration for why.
+ * the player's current position. Pushed onto the shared hostileBolts array
+ * — see its declaration for why that is not the player's arrows.
  */
 function fireBossVolley() {
   const ang = Math.atan2(player.y - boss.y, player.x - boss.x);
   const count = CONFIG.darkArcherVolleyCount, half = (count - 1) / 2;
   for (let i = 0; i < count; i++) {
     const a = ang + (i - half) * CONFIG.darkArcherVolleySpread;
-    bossBolts.push({
+    hostileBolts.push({
       x: boss.x, y: boss.y,
       vx: Math.cos(a) * CONFIG.darkArcherBoltSpeed,
       vy: Math.sin(a) * CONFIG.darkArcherBoltSpeed,
-      life: 2.5,
+      life: 2.5, damage: CONFIG.darkArcherBoltDamage, freezeSecs: 0, blastRadius: 0,
     });
   }
   events.emit({ type: 'BOSS_VOLLEY', x: boss.x, y: boss.y });
 }
 
-/** Moves the dark archer's bolts and resolves them against the player. */
-function updateBossBolts(dt) {
-  for (let i = bossBolts.length - 1; i >= 0; i--) {
-    const b = bossBolts[i];
+/**
+ * The dark archer's secondary: a slow lobbed bomb that detonates in a radius
+ * at the end of its fuse, on its own cooldown alongside the volley — the
+ * same bow-and-dynamite split the real archer's kit has. Aimed at the
+ * player's position at throw time, same as the volley and the ice bolt;
+ * it does not lead the target.
+ */
+function fireBossBomb() {
+  const ang = Math.atan2(player.y - boss.y, player.x - boss.x);
+  hostileBolts.push({
+    x: boss.x, y: boss.y,
+    vx: Math.cos(ang) * CONFIG.darkArcherBombSpeed,
+    vy: Math.sin(ang) * CONFIG.darkArcherBombSpeed,
+    life: CONFIG.darkArcherBombFuse, damage: CONFIG.darkArcherBombDamage, freezeSecs: 0,
+    blastRadius: CONFIG.darkArcherBombRadius,
+  });
+}
+
+/**
+ * The ice skeleton's own shot: a single bolt aimed at the player, same
+ * physics as the dark archer's volley, but it freezes on a hit instead of
+ * just damaging.
+ */
+function fireIceBolt(s) {
+  const ang = Math.atan2(player.y - s.y, player.x - s.x);
+  hostileBolts.push({
+    x: s.x, y: s.y,
+    vx: Math.cos(ang) * CONFIG.iceSkeletonBoltSpeed,
+    vy: Math.sin(ang) * CONFIG.iceSkeletonBoltSpeed,
+    life: 2.5, damage: CONFIG.iceSkeletonBoltDamage, freezeSecs: CONFIG.iceSkeletonFreezeSecs, blastRadius: 0,
+  });
+  events.emit({ type: 'ICE_BOLT_FIRED', x: s.x, y: s.y });
+}
+
+/**
+ * A lobbed bomb reaching the end of its fuse, or a wall/edge/water tile
+ * stopping it early: either way it goes off right where it is, rather than
+ * bouncing like the player's own dynamite does — dark bosses reimplement a
+ * character's kit thematically, not physics-for-physics (see fireBossVolley
+ * and the charge/spear comment on drawDarkKnight). Reuses the same EXPLOSION
+ * event a dynamite going off already emits, so render/audio need nothing new.
+ */
+function detonateHostileBomb(b) {
+  const onWater = tileAt(b.x, b.y) === TILE.WATER;
+  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater });
+  if (dist2(b.x, b.y, player.x, player.y) < b.blastRadius * b.blastRadius) {
+    damagePlayer(b.damage);
+  }
+}
+
+/** Moves every hostile bolt and resolves it against the player. */
+function updateHostileBolts(dt) {
+  for (let i = hostileBolts.length - 1; i >= 0; i--) {
+    const b = hostileBolts[i];
     b.life -= dt;
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (b.life <= 0 || b.x < 0 || b.x >= CONFIG.canvasW || b.y < 0 ||
         b.y >= CONFIG.rows * CONFIG.tileSize || !tilePassable(tileAt(b.x, b.y))) {
-      bossBolts.splice(i, 1); continue;
+      if (b.blastRadius > 0) detonateHostileBomb(b);
+      hostileBolts.splice(i, 1); continue;
     }
     if (dist2(b.x, b.y, player.x, player.y) < CONFIG.arrowHitRadius * CONFIG.arrowHitRadius) {
-      damagePlayer(CONFIG.darkArcherBoltDamage);
-      bossBolts.splice(i, 1);
+      if (b.blastRadius > 0) {
+        detonateHostileBomb(b);
+        hostileBolts.splice(i, 1); continue;
+      }
+      damagePlayer(b.damage);
+      if (b.freezeSecs > 0) {
+        playerFrozenTimer = Math.max(playerFrozenTimer, b.freezeSecs);
+        events.emit({ type: 'PLAYER_FROZEN', x: player.x, y: player.y });
+      }
+      hostileBolts.splice(i, 1);
     }
   }
 }
@@ -2399,7 +2766,7 @@ function updateBossDeath(dt) {
   if (s.timer >= 1.2) {
     bossDeathSeq = null;
     const deadKind = boss.kind;
-    boss = null; bossBolts = [];
+    boss = null; hostileBolts = [];
     if (deadKind === 'crowking') {
       // Stage 1 done. The run continues into the castle stage: reload the
       // map, reposition on the same corner initGame() always starts from
@@ -2411,13 +2778,16 @@ function updateBossDeath(dt) {
       generateMap('castle');
       player.x = 2.5 * CONFIG.tileSize; player.y = (CONFIG.rows / 2) * CONFIG.tileSize;
       skeletons = []; skeletonKillCount = 0;
-      for (let i = 0; i < CONFIG.skeletonStartCount; i++) spawnSkeleton();
+      startCastleWave(1);
       // Not transitionTo('playing'): that path calls initGame() for every
       // other 'playing' entry, which would wipe the run that just cleared
-      // stage 1. Skeleton-killing plays out in 'playing' like a normal
-      // brawl; killSkeleton's own threshold check is what starts the dark
-      // archer's entrance once skeletonKillCount catches up.
-      appState = 'playing';
+      // stage 1. The nine-wave gauntlet plays out in 'playing' like a normal
+      // brawl; killSkeleton's own wave-clear check is what starts the next
+      // wave, or the dark archer's entrance once wave 9 clears. The castle
+      // is already fully set up at this point; castle_intro just holds a
+      // black screen in front of it until the player clicks, since cutting
+      // straight from the death burst into the new map read as too fast.
+      appState = 'castle_intro';
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
       skeletons = [];
@@ -2928,65 +3298,33 @@ function drawWizard() {
 
   ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
   const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash*20)%2===0;
-  const localAngle = f===1 ? player.aimAngle : Math.PI - player.aimAngle;
 
   // Ground shadow
   ctx.fillStyle='rgba(0,0,0,0.40)';
-  ctx.beginPath(); ctx.ellipse(0,11,9,2.5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0,10,10,2.5,0,0,Math.PI*2); ctx.fill();
 
-  // Robe
-  const sway = 1.4 * Math.sin((player.walkPhase||0)*0.7);
-  ctx.beginPath();
-  ctx.moveTo(-8, 13+sway); ctx.lineTo(-6,-1); ctx.lineTo(6,-1); ctx.lineTo(8,13-sway);
-  ctx.closePath();
-  ctx.fillStyle = flashOn ? '#553377' : '#14143a';
-  ctx.fill();
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=3;
-  ctx.strokeStyle='#4444aa'; ctx.lineWidth=1; ctx.stroke(); ctx.shadowBlur=0;
+  // Pixel-art body (see buildWizardGrid). Staff and orb are baked into the
+  // pose rather than rotated with aim, same reasoning as the archer's bow:
+  // the purple aim line above already shows aim direction.
+  const wgrid = buildWizardGrid(SP_TRIM.wizard);
+  const wSpriteDx = -(WIZARD_SPRITE.w) / 2, wSpriteDy = -22;
+  const wCanvas = flashOn
+    ? spriteFlashCanvas('wizard', wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h, '#ffffff')
+    : spriteCanvas(`wizard|${SP_TRIM.wizard}`, wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h);
+  ctx.drawImage(wCanvas, wSpriteDx, wSpriteDy);
 
-  // Robe centre stripe + emblem star
-  ctx.fillStyle='#22225a'; ctx.fillRect(-4,0,8,8);
-  ctx.shadowColor='#FFB400'; ctx.shadowBlur=4;
-  ctx.fillStyle='#FFB400';
-  ctx.beginPath(); ctx.arc(0,3,2,0,Math.PI*2); ctx.fill();
-  ctx.shadowBlur=0;
-
-  // Head
-  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
-  ctx.beginPath(); ctx.arc(0,-7,5,0,Math.PI*2); ctx.fill();
-
-  // Pointed hat
-  const hatWobble = 1.6*Math.sin(loopT*1.9);
-  ctx.fillStyle = flashOn ? '#553377' : '#14143a';
-  ctx.beginPath(); ctx.moveTo(-7,-10); ctx.lineTo(0,-25+hatWobble); ctx.lineTo(7,-10);
-  ctx.closePath(); ctx.fill();
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=2;
-  ctx.strokeStyle='#4444aa'; ctx.lineWidth=0.8; ctx.stroke(); ctx.shadowBlur=0;
-  ctx.fillStyle='#22225a'; ctx.fillRect(-9,-12,18,2.5);
-  // Hat star
-  ctx.fillStyle='#FFB400'; ctx.shadowColor='#FFB400'; ctx.shadowBlur=5;
-  ctx.fillRect(-0.5,-20+hatWobble,1,1); ctx.shadowBlur=0;
-
-  // Staff arm toward aim
-  const sx = Math.cos(localAngle)*15, sy = Math.sin(localAngle)*15;
-  ctx.strokeStyle='#5c3317'; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(sx,sy); ctx.stroke();
-
-  // Orb
+  // Orb glow pulse + bolt cooldown ring, at the orb's fixed position in the sprite
+  const ox = 20 + wSpriteDx, oy = 16 + wSpriteDy;
   const op = loopT*4.5;
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=10+4*Math.sin(op);
-  ctx.fillStyle=`rgba(136,136,255,${(0.85+0.15*Math.sin(op)).toFixed(2)})`;
-  ctx.beginPath(); ctx.arc(sx,sy,4+0.5*Math.sin(op),0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.7)';
-  ctx.beginPath(); ctx.arc(sx-1,sy-1,1.2,0,Math.PI*2); ctx.fill();
+  ctx.shadowColor='#8888FF'; ctx.shadowBlur=8+3*Math.sin(op);
+  ctx.fillStyle=`rgba(136,136,255,${(0.35+0.15*Math.sin(op)).toFixed(2)})`;
+  ctx.beginPath(); ctx.arc(ox,oy,4+0.5*Math.sin(op),0,Math.PI*2); ctx.fill();
   ctx.shadowBlur=0;
-
-  // Bolt cooldown ring around orb
   if (wizBoltCD > 0) {
     const fill = 1 - wizBoltCD/3.0;
     ctx.save(); ctx.globalAlpha=0.65;
     ctx.strokeStyle='#8888FF'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(sx,sy,7,-Math.PI/2,-Math.PI/2+fill*Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ox,oy,7,-Math.PI/2,-Math.PI/2+fill*Math.PI*2); ctx.stroke();
     ctx.restore();
   }
 
@@ -2995,7 +3333,7 @@ function drawWizard() {
     const shP = loopT*4;
     ctx.shadowColor='#FFB400'; ctx.shadowBlur=14+5*Math.sin(shP);
     ctx.strokeStyle=`rgba(255,180,0,${(0.6+0.3*Math.sin(shP)).toFixed(2)})`; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(0,0,16+Math.sin(shP*1.3),0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,-6,19+Math.sin(shP*1.3),0,Math.PI*2); ctx.stroke();
     ctx.shadowBlur=0;
   }
   ctx.restore();
@@ -3014,6 +3352,37 @@ function drawWizard() {
   }
 }
 
+/**
+ * Drawn over whichever character is selected, while playerFrozenTimer is up.
+ * A separate pass rather than a branch inside drawPlayer/drawWizard/
+ * drawKnight/drawRanger, so the freeze reads the same on every character
+ * without touching four separate draw functions for one shared status.
+ */
+function drawPlayerFrozenOverlay() {
+  const px = player.x, py = player.y + CONFIG.hudHeight;
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 5);
+  ctx.save(); ctx.translate(px, py);
+  ctx.shadowColor = '#40D0F0'; ctx.shadowBlur = 10 + 4 * pulse;
+  ctx.strokeStyle = `rgba(64,208,240,${(0.6 + 0.3*pulse).toFixed(2)})`; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, -2, 15 + pulse, 0, Math.PI*2); ctx.stroke();
+  ctx.shadowBlur = 0;
+  for (let k = 0; k < 5; k++) {
+    const a = (k / 5) * Math.PI * 2 + loopT * 1.5;
+    const sx = Math.cos(a) * 15, sy = -2 + Math.sin(a) * 15;
+    ctx.fillStyle = '#A0E8FF';
+    ctx.fillRect(sx - 1, sy - 1, 2, 2);
+  }
+  ctx.restore();
+}
+
+// ── PIXEL SPRITES ────────────────────────────────────────────────────────────
+// Hand-authored pixel art: a small logical grid, one hex color or null per
+// cell, built once and cached, then blitted at an integer scale so pixels
+// stay crisp squares (no smoothing, no sub-pixel positions). This is Phase 1
+// of the pixel-art overhaul (the Archer only) — see docs/design-patterns.md
+// for why later phases add a table entry per character/tile kind here
+// instead of a growing if/else chain.
+
 function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
   if (selectedChar === 'knight') { drawKnight(); return; }
@@ -3027,37 +3396,23 @@ function drawPlayer() {
   const localAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
   const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash * 20) % 2 === 0;
 
-  // 1. Ground shadow
+  // Ground shadow
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.beginPath(); ctx.ellipse(0, 9, 9, 2.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 10, 10, 2.5, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Cloak (drawn before body so body covers front)
-  const cloakSway   = 0.15 * Math.sin(loopT * 2.2);
-  const cloakOffset = 1.5  * Math.sin((player.walkPhase || 0) + cloakSway);
-  ctx.beginPath();
-  ctx.moveTo(-5, -3);
-  ctx.bezierCurveTo(-9, 0, -9, 4, -7, 7 + cloakOffset);
-  ctx.lineTo(7, 7 - cloakOffset);
-  ctx.bezierCurveTo(9, 4, 9, 0, 5, -3);
-  ctx.closePath();
-  ctx.fillStyle = flashOn ? '#882222' : '#0E1410'; ctx.fill();
-  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 3;
-  ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // 3. Body / tunic
-  ctx.fillStyle = flashOn ? '#6688cc' : '#3A5F88'; ctx.fillRect(-5, -3, 10, 11);
-  ctx.fillStyle = '#0E1410'; ctx.fillRect(-5, 3, 10, 1); // belt
-
-  // 4. Head
-  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
-  ctx.beginPath(); ctx.arc(0, -8, 5, 0, Math.PI*2); ctx.fill();
-
-  // 5. Hat
-  ctx.fillStyle = '#0E1410';
-  ctx.fillRect(-5, -13, 10, 3);
-  ctx.fillRect(-6, -10, 12, 1);
+  // Pixel-art body (see buildArcherGrid). The reference bow is baked into the
+  // grid rather than rotated with aim, matching the rest of the aim feedback
+  // this game already draws (drawAimLine, the per-character reticle) rather
+  // than duplicating it on the sprite itself.
+  const grid = buildArcherGrid(SP_TRIM.archer);
+  const spriteScale = 1;
+  const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
+  const spriteDy = -22;
+  const archerCanvas = flashOn
+    ? spriteFlashCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
+    : spriteCanvas(`archer|${SP_TRIM.archer}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
+  ctx.drawImage(archerCanvas, spriteDx, spriteDy);
 
   // Shield halo
   if (playerShield) {
@@ -3065,34 +3420,12 @@ function drawPlayer() {
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
     ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, -1, 16 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, -6, 19 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
     ctx.shadowBlur = 0;
   }
 
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
-  if (hasArrows) {
-    // 6. Bow arm
-    const gx = Math.cos(localAngle) * 8, gy = Math.sin(localAngle) * 8;
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = '#D9B98A'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(gx, gy); ctx.stroke();
-
-    // 7. Bow (half-circle arc facing aim direction)
-    ctx.strokeStyle = '#8A6028'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(gx, gy, 7, localAngle - Math.PI/2, localAngle + Math.PI/2); ctx.stroke();
-
-    // 8. Bowstring
-    const bowTop = { x: gx + Math.cos(localAngle - Math.PI/2)*7, y: gy + Math.sin(localAngle - Math.PI/2)*7 };
-    const bowBot = { x: gx + Math.cos(localAngle + Math.PI/2)*7, y: gy + Math.sin(localAngle + Math.PI/2)*7 };
-    const nxOff  = gx + (-Math.cos(localAngle)) * 3;
-    const nyOff  = gy + (-Math.sin(localAngle)) * 3;
-    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4;
-    ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(bowTop.x, bowTop.y); ctx.lineTo(nxOff, nyOff); ctx.lineTo(bowBot.x, bowBot.y); ctx.stroke();
-    ctx.shadowBlur = 0;
-  } else {
-    drawPitchfork(localAngle);
-  }
+  if (!hasArrows) drawPitchfork(localAngle);
   ctx.restore();
 
   if (!hasArrows) drawPitchforkIndicators(px, py);
@@ -3261,6 +3594,7 @@ function drawPitchforkIndicators(px, py) {
  * instead of a brimmed hat, a satchel pouch at the hip, and a crossbow's
  * crosswise limb and stock in place of the bow's curved arc.
  */
+
 function drawRanger() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
@@ -3276,38 +3610,16 @@ function drawRanger() {
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath(); ctx.ellipse(0, 9, 9, 2.5, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Cloak
-  const cloakSway   = 0.15 * Math.sin(loopT * 2.2);
-  const cloakOffset = 1.5  * Math.sin((player.walkPhase || 0) + cloakSway);
-  ctx.beginPath();
-  ctx.moveTo(-5, -3);
-  ctx.bezierCurveTo(-9, 0, -9, 4, -7, 7 + cloakOffset);
-  ctx.lineTo(7, 7 - cloakOffset);
-  ctx.bezierCurveTo(9, 4, 9, 0, 5, -3);
-  ctx.closePath();
-  ctx.fillStyle = flashOn ? '#882222' : '#0E1410'; ctx.fill();
-  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 3;
-  ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // 3. Body / tunic — earthy olive, distinct from the archer's blue
-  ctx.fillStyle = flashOn ? '#8fae5a' : '#4A5D2E'; ctx.fillRect(-5, -3, 10, 11);
-  ctx.fillStyle = '#0E1410'; ctx.fillRect(-5, 3, 10, 1); // belt
-
-  // 3b. Satchel pouch, opposite hip from the weapon arm
-  ctx.fillStyle = '#5A4A2A'; ctx.fillRect(f === 1 ? -8 : 4, 0, 4, 5);
-  ctx.strokeStyle = '#3A2A10'; ctx.lineWidth = 0.5;
-  ctx.strokeRect(f === 1 ? -8 : 4, 0, 4, 5);
-
-  // 4. Head
-  ctx.fillStyle = flashOn ? '#ffddcc' : '#D9B98A';
-  ctx.beginPath(); ctx.arc(0, -8, 5, 0, Math.PI*2); ctx.fill();
-
-  // 5. Hood — peaked and swept back, distinct from the archer's flat hat
-  ctx.fillStyle = '#24301A';
-  ctx.beginPath();
-  ctx.moveTo(-6, -9); ctx.lineTo(-4, -16); ctx.lineTo(2, -18); ctx.lineTo(6, -11); ctx.lineTo(4, -9);
-  ctx.closePath(); ctx.fill();
+  // 2. Pixel-art cloak/tunic/head/hood (see buildRangerGrid). The cloak's
+  // walk sway is 3 baked frames off player.walkPhase, same technique as the
+  // crow's flap and skeleton's stride, instead of a live per-frame offset.
+  const rFrame = animFrame3(player.walkPhase || 0);
+  const rGrid  = buildRangerGrid(rFrame, SP_TRIM.ranger);
+  const rDx = -(RANGER_SPRITE.w) / 2, rDy = -22;
+  const rCanvas = flashOn
+    ? spriteFlashCanvas(`ranger|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`ranger|${SP_TRIM.ranger}|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h);
+  ctx.drawImage(rCanvas, rDx, rDy);
 
   // Shield halo
   if (playerShield) {
@@ -3358,6 +3670,16 @@ function drawRanger() {
   if (!hasArrows) drawPitchforkIndicators(px, py);
 }
 
+// Same body shape, two palettes — the fire sword's "powered up" recolor of
+// the whole knight, not just the blade. Mirrors SKELETON_PALETTES: one grid
+// builder parameterized by kind rather than two near-duplicate functions.
+//
+// Reads as metal, not cloth: a genuine value jump from armorShadow to
+// armorHi (dark-to-near-white), not just a slightly-lighter dark tone —
+// pixel art has no gradients or glow to imply a reflective surface, so the
+// contrast itself has to carry that read. Every plate (helm, pauldrons,
+// chest) gets its own highlight rather than just one patch on the chest.
+
 function drawKnight() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
   ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
@@ -3390,45 +3712,14 @@ function drawKnight() {
   const fsActive = inv.knightFireSwordTimer > 0;
   const swing    = knightSpearSwing > 0 ? 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration : -1;
 
-  // Legs — plate greaves
-  ctx.fillStyle = '#1e2030';
-  ctx.fillRect(-9, 7 + bob, 8, 10);
-  ctx.fillRect(1,  7 + bob, 8, 10);
-  ctx.fillStyle = '#2a2c3e';
-  ctx.fillRect(-8, 7 + bob, 3, 4);
-  ctx.fillRect(2,  7 + bob, 3, 4);
-
-  // Torso — plate breastplate
-  ctx.fillStyle = fsActive ? '#3a2010' : '#242436';
-  ctx.fillRect(-11, -13 + bob, 22, 20);
-  // Highlight stripe
-  ctx.fillStyle = fsActive ? '#5a3018' : '#34364e';
-  ctx.fillRect(-9, -12 + bob, 8, 7);
-  // Pauldrons
-  ctx.fillStyle = fsActive ? '#2a1808' : '#181826';
-  ctx.fillRect(-15, -13 + bob, 6, 8);
-  ctx.fillRect(9,   -13 + bob, 6, 8);
-  // Pauldron rivets
-  ctx.fillStyle = '#888';
-  ctx.beginPath(); ctx.arc(-12, -10 + bob, 1.2, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(12,  -10 + bob, 1.2, 0, Math.PI*2); ctx.fill();
-
-  // Helmet — great helm style
-  ctx.fillStyle = fsActive ? '#3a1a08' : '#1e2030';
-  ctx.fillRect(-8, -26 + bob, 16, 14);
-  ctx.beginPath(); ctx.arc(0, -26 + bob, 8, Math.PI, 0); ctx.fill();
-  // Visor slits (2 horizontal bars)
-  ctx.fillStyle = fsActive ? '#FF5500' : '#39FF14';
-  ctx.shadowColor = fsActive ? '#FF7A1F' : '#39FF14';
-  ctx.shadowBlur  = 5;
-  ctx.fillRect(-6, -22 + bob, 12, 2);
-  ctx.fillRect(-4, -18 + bob, 8,  2);
-  ctx.shadowBlur = 0;
-  // Helmet crest / plume
-  ctx.fillStyle = fsActive ? '#cc3300' : '#2244aa';
-  ctx.beginPath();
-  ctx.moveTo(-3, -26 + bob); ctx.lineTo(0, -34 + bob); ctx.lineTo(3, -26 + bob);
-  ctx.closePath(); ctx.fill();
+  // Pixel-art body (see buildKnightGrid). bob is rounded to a whole pixel so
+  // the sprite blit stays on-grid instead of a blurred sub-pixel position.
+  const kKind = fsActive ? 'fireSword' : 'normal';
+  const kTrim = fsActive ? SP_TRIM.knightFireSword : SP_TRIM.knightNormal;
+  const kgrid = buildKnightGrid(kKind, kTrim);
+  const kSpriteDx = -(KNIGHT_SPRITE.w) / 2, kSpriteDy = -22 + Math.round(bob);
+  const kCanvas = spriteCanvas(`knight|${kKind}|${kTrim}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
+  ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
   // ── Weapon ───────────────────────────────────────────────────────────────
   const spearAng = Math.atan2(Math.sin(player.aimAngle), f * Math.cos(player.aimAngle)); // world-space angle mapped into flipped canvas
@@ -3492,6 +3783,27 @@ function drawKnight() {
     ctx.strokeStyle = '#6080FF'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(0, bob, 15, 0, Math.PI*2); ctx.stroke();
     ctx.globalAlpha = 1;
+  }
+
+  // ── Block: charging ring, or the shield itself once banked ────────────────
+  // Unlike the other three characters' omnidirectional shield halo (pickup
+  // luck, any angle), Block is self-charged and reads as a guard the knight
+  // actually raises — an arc centered on spearAng (the same mirrored aim
+  // angle the spear points along), not a full ring.
+  if (!playerShield && knightBlockCD > 0) {
+    const fill = 1 - knightBlockCD / CONFIG.knightBlockCooldown;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, bob, 19, -Math.PI/2, -Math.PI/2 + fill * Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  } else if (playerShield) {
+    const shP = loopT * 4;
+    const halfArc = Math.PI * 0.4;
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
+    ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, bob, 19 + Math.sin(shP * 1.3), spearAng - halfArc, spearAng + halfArc); ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   ctx.restore();
@@ -3800,6 +4112,48 @@ function drawSatchels() {
   }
 }
 
+const CROW_SPRITE = { w: 20, h: 16 };
+
+// White is a persistent enemy kind (c.white), not just the entrance's
+// blink-white telegraph — drawCrow below picks this palette for both.
+const CROW_PALETTES = {
+  normal: { body: '#141414', bodyHi: '#3A3A3A', edge: '#000000', beak: '#FFB400' },
+  white:  { body: '#E4E4E4', bodyHi: '#FFFFFF', edge: '#A8A8A8', beak: '#FF1F1F' },
+};
+
+/** frame 'a'/'b' are the two extremes of the flap, 'mid' the level pass
+ * between them — see animFrame3. Body/tail/beak stay put; only the wing
+ * mass moves, same simplification drawSkeleton's legs use below. */
+function buildCrowGrid(kind, frame) {
+  const C = CROW_PALETTES[kind];
+  const g = makePixelGrid(CROW_SPRITE.w, CROW_SPRITE.h);
+
+  // Wings are the highlight tone, not the body tone — pixelOutline only
+  // seams the outer silhouette, so two overlapping same-color shapes fuse
+  // into one blob without a distinct fill to tell them apart.
+  if (frame === 'a')      pixelEllipse(g, 9, 11, 6, 2.2, C.bodyHi); // lowered, spread below
+  else if (frame === 'b') pixelEllipse(g, 9, 3, 5, 2, C.bodyHi);    // raised, folded over the back
+  else                    pixelEllipse(g, 8, 7.5, 6.5, 1.6, C.bodyHi); // level, spread to the sides
+
+  // Tail, trailing right (crow flies left, tail streams behind)
+  pixelEllipse(g, 15, 7, 3, 1.6, C.body);
+
+  // Body, drawn over the wing root so the silhouette reads front-to-back
+  pixelEllipse(g, 11, 7.5, 5, 3.3, C.body);
+
+  // Beak, pointing left (crow flies left)
+  pixelRect(g, 3, 7, 3, 1, C.beak);
+  setPixel(g, 2, 7, C.beak);
+
+  return pixelOutline(g, C.edge);
+}
+
+const _crowGrids = {};
+function crowGrid(kind, frame) {
+  const key = `${kind}|${frame}`;
+  return _crowGrids[key] || (_crowGrids[key] = buildCrowGrid(kind, frame));
+}
+
 function drawCrow(c) {
   const cx = c.x, cy = c.y + CONFIG.hudHeight;
   let alpha = 1;
@@ -3815,11 +4169,9 @@ function drawCrow(c) {
   const pulsePhase = loopT * 6;
   const flashOn = c.hitFlash > 0 && Math.floor(c.hitFlash * 20) % 2 === 0;
 
-  // Per-spec palettes
-  const bodyCol  = flashOn ? '#FFFFFF' : (isWhite ? '#E8E8E8' : '#0A0A0A');
-  const edgeCol  = isWhite ? '#FFFFFF' : '#1F1F1F';
-  const wingCol  = flashOn ? '#FFFFFF' : (isWhite ? '#E8E8E8' : '#0A0A0A');
-  const beakCol  = isWhite ? '#FF1F1F' : '#FFB400';
+  const kind  = isWhite ? 'white' : 'normal';
+  const frame = animFrame3(c.wingPhase);
+  const grid  = crowGrid(kind, frame);
   const eyeCol   = isWhite ? '#FF1F1F' : '#FFB400';
   const glintCol = isWhite ? '#FFFFFF' : '#FF1F1F';
   const shadowFill = isWhite ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
@@ -3832,52 +4184,27 @@ function drawCrow(c) {
   ctx.fillStyle = shadowFill;
   ctx.beginPath(); ctx.ellipse(0, 6, 7, 1.8, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Body
-  ctx.fillStyle = bodyCol;
-  ctx.beginPath(); ctx.ellipse(0, bobY, 8, 5, 0, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(0, bobY, 8, 5, 0, 0, Math.PI*2); ctx.stroke();
+  // 2. Pixel-art body (see buildCrowGrid). The flap cycle is 3 baked frames
+  // (animFrame3), not a rotated overlay — a silhouette that never stops
+  // moving needs real frames to read as pixel art instead of a frozen pose.
+  const cSpriteDx = -(CROW_SPRITE.w) / 2;
+  const cSpriteDy = -8 + Math.round(bobY);
+  const cCanvas = flashOn
+    ? spriteFlashCanvas(`crow|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h, '#ffffff')
+    : spriteCanvas(`crow|${kind}|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h);
+  ctx.drawImage(cCanvas, cSpriteDx, cSpriteDy);
 
-  // 3. Tail — faces +x (right), crow moves left so tail trails behind
-  ctx.fillStyle = bodyCol;
-  ctx.beginPath();
-  ctx.moveTo(6, bobY + 1); ctx.lineTo(11, bobY - 2); ctx.lineTo(11, bobY + 4);
-  ctx.closePath(); ctx.fill();
-
-  // 4. Far wing (left side, +π phase)
-  const lwPhase = c.wingPhase + Math.PI;
-  const lwY     = bobY - 2 + Math.sin(lwPhase) * 3;
-  const lwRot   = -0.4 + 0.5 * Math.sin(lwPhase);
-  ctx.fillStyle = wingCol;
-  ctx.beginPath(); ctx.ellipse(-3, lwY, 8, 3, lwRot, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(-3, lwY, 8, 3, lwRot, 0, Math.PI*2); ctx.stroke();
-
-  // 5. Near wing (right side)
-  const rwY   = bobY - 2 + Math.sin(c.wingPhase) * 3;
-  const rwRot = -0.4 + 0.5 * Math.sin(c.wingPhase);
-  ctx.fillStyle = wingCol;
-  ctx.beginPath(); ctx.ellipse(3, rwY, 8, 3, rwRot, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(3, rwY, 8, 3, rwRot, 0, Math.PI*2); ctx.stroke();
-
-  // 6. Beak — faces -x (crow flies left)
-  ctx.fillStyle = beakCol;
-  ctx.beginPath();
-  ctx.moveTo(-9, bobY - 0.5); ctx.lineTo(-13, bobY); ctx.lineTo(-9, bobY + 1.5);
-  ctx.closePath(); ctx.fill();
-
-  // 7. Eye — stamped glow, one per (color, blur step) across the whole flock
+  // 3. Eye — stamped glow, one per (color, blur step) across the whole flock
   const eyeStamp = glowDotStamp(eyeCol, 1.2, eyeBlur);
-  ctx.drawImage(eyeStamp, -6 - eyeStamp.width / 2, bobY - 1.5 - eyeStamp.height / 2);
+  ctx.drawImage(eyeStamp, cSpriteDx + 5 - eyeStamp.width / 2, cSpriteDy + 6 - eyeStamp.height / 2);
 
-  // 8. Eye glint (2×2 when aggro, 1×1 otherwise)
+  // 4. Eye glint (2×2 when aggro, 1×1 otherwise)
   if (isAggro) {
     const gs = glowRectStamp('#FF1F1F', 2, 2, 5);
-    ctx.drawImage(gs, -5 - gs.width / 2, bobY - 0.5 - gs.height / 2);
+    ctx.drawImage(gs, cSpriteDx + 6 - gs.width / 2, cSpriteDy + 7 - gs.height / 2);
   } else {
     ctx.fillStyle = glintCol;
-    ctx.fillRect(-6, bobY - 1.5, 1, 1);
+    ctx.fillRect(cSpriteDx + 5, cSpriteDy + 6, 1, 1);
   }
 
   // Aggro pulse ring — layered on top
@@ -3905,16 +4232,63 @@ function drawCrow(c) {
   ctx.restore();
 }
 
+// One palette per wave kind. `aura` is null for a normal skeleton so the
+// elemental glow below only ever draws for fire and ice.
+const SKELETON_PALETTES = {
+  normal: { bone: '#D8D0C0', boneHi: '#F4F0E6', edge: '#8A8070', eye: '#B040E0', aura: null },
+  fire:   { bone: '#D86A40', boneHi: '#F4A868', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
+  ice:    { bone: '#A8D8F0', boneHi: '#E4F6FF', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
+};
+
+const SKELETON_SPRITE = { w: 14, h: 24 };
+
+/** frame 'a'/'b' are the two extremes of the stride, 'mid' legs-together
+ * between them — see animFrame3. Skull and ribcage stay put; only limbs
+ * move, same simplification buildCrowGrid's wings use above. */
+function buildSkeletonGrid(kind, frame) {
+  const C = SKELETON_PALETTES[kind];
+  const g = makePixelGrid(SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+  const swing = frame === 'a' ? 2.5 : frame === 'b' ? -2.5 : 0;
+
+  // Legs
+  pixelCurve(g, [5, 15], [5 + swing * 0.4, 18], [5 + swing, 22], C.bone, 10);
+  pixelCurve(g, [6, 15], [6 + swing * 0.4, 18], [6 + swing, 22], C.bone, 10);
+  pixelCurve(g, [8, 15], [8 - swing * 0.4, 18], [8 - swing, 22], C.bone, 10);
+  pixelCurve(g, [9, 15], [9 - swing * 0.4, 18], [9 - swing, 22], C.bone, 10);
+
+  // Arms
+  pixelCurve(g, [3, 10], [3 - swing * 0.3, 13], [3 - swing * 0.6, 16], C.bone, 8);
+  pixelCurve(g, [10, 10], [10 + swing * 0.3, 13], [10 + swing * 0.6, 16], C.bone, 8);
+
+  // Ribcage
+  pixelRect(g, 4, 9, 6, 8, C.bone);
+  pixelRect(g, 4, 9, 6, 2, C.boneHi);
+  for (let ry = 11; ry <= 15; ry += 2) pixelRect(g, 4, ry, 6, 1, C.edge);
+
+  // Skull
+  pixelEllipse(g, 7, 5, 4, 3.6, C.bone);
+  pixelEllipse(g, 5.5, 3.5, 1.6, 1.2, C.boneHi);
+
+  return pixelOutline(g, C.edge);
+}
+
+const _skeletonGrids = {};
+function skeletonGrid(kind, frame) {
+  const key = `${kind}|${frame}`;
+  return _skeletonGrids[key] || (_skeletonGrids[key] = buildSkeletonGrid(kind, frame));
+}
+
 // Ground-based, so a walk cycle (legs swinging on s.walkPhase) replaces a
 // crow's wing-flap. Reuses drawCrow's ground-shadow and glow-stamped-eye
 // techniques, not its geometry — always aggro, so no state-transition ring.
 function drawSkeleton(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
   const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
-  const boneCol = flashOn ? '#FFFFFF' : '#D8D0C0';
-  const edgeCol = '#8A8070';
-  const eyeCol  = '#B040E0';
-  const legSwing = Math.sin(s.walkPhase) * 6;
+  const kind = s.kind || 'normal';
+  const palette = SKELETON_PALETTES[kind] || SKELETON_PALETTES.normal;
+  const eyeCol = palette.eye;
+  const frame = animFrame3(s.walkPhase);
+  const grid = skeletonGrid(kind, frame);
 
   ctx.save(); ctx.translate(cx, cy);
 
@@ -3923,43 +4297,55 @@ function drawSkeleton(s) {
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Legs — alternating swing, opposite phase
-  ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(-2, 2); ctx.lineTo(-2 + legSwing * 0.3, 9); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(2, 2); ctx.lineTo(2 - legSwing * 0.3, 9); ctx.stroke();
+  // Elemental aura — fire and ice only, a small pulsing glow behind the ribs
+  if (palette.aura && !flashOn) {
+    const pulse = 0.5 + 0.5 * Math.sin(loopT * 6 + s.walkPhase);
+    ctx.globalAlpha = 0.25 + 0.15 * pulse;
+    ctx.shadowColor = palette.aura; ctx.shadowBlur = 8 + 5 * pulse;
+    ctx.fillStyle = palette.aura;
+    ctx.beginPath(); ctx.arc(0, -3, 11, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  }
 
-  // 3. Ribcage
-  ctx.fillStyle = boneCol;
-  ctx.fillRect(-4, -6, 8, 9);
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  for (let ry = -5; ry <= 1; ry += 2) { ctx.beginPath(); ctx.moveTo(-4, ry); ctx.lineTo(4, ry); ctx.stroke(); }
+  // 2. Pixel-art body (see buildSkeletonGrid). The stride is 3 baked frames
+  // (animFrame3), same reasoning as the crow's flap cycle above.
+  const kSpriteDx = -(SKELETON_SPRITE.w) / 2, kSpriteDy = -15;
+  const kCanvas = flashOn
+    ? spriteFlashCanvas(`skeleton|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h, '#ffffff')
+    : spriteCanvas(`skeleton|${kind}|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+  ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
-  // 4. Arms — swing opposite the legs
-  ctx.strokeStyle = boneCol; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(-4, -4); ctx.lineTo(-6 - legSwing * 0.2, 1); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(4, -4); ctx.lineTo(6 + legSwing * 0.2, 1); ctx.stroke();
-
-  // 5. Skull
-  ctx.fillStyle = boneCol;
-  ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = edgeCol; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(0, -10, 5, 0, Math.PI*2); ctx.stroke();
-
-  // 6. Eye sockets — stamped glow, same technique as the crow's eye
+  // 3. Eye sockets — stamped glow, same technique as the crow's eye
   const eyeStamp = glowDotStamp(eyeCol, 1, 3);
-  ctx.drawImage(eyeStamp, -3 - eyeStamp.width/2, -10 - eyeStamp.height/2);
-  ctx.drawImage(eyeStamp, 1 - eyeStamp.width/2, -10 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, kSpriteDx + 4 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, kSpriteDx + 8 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
 
   ctx.restore();
 }
 
-/** The dark archer's volley bolts — a glowing shard oriented along its flight. */
-function drawBossBolts() {
-  for (const b of bossBolts) {
+/**
+ * Every hostile bolt in flight — a glowing shard oriented along its flight,
+ * purple for the dark archer's, icy blue for a freezing one.
+ */
+function drawHostileBolts() {
+  for (const b of hostileBolts) {
+    if (b.blastRadius > 0) {
+      // Lobbed bomb: a pulsing orb, not a directional dart — it threatens an
+      // area once it lands, not a line, so it should not read as aimed.
+      const pulse = 0.5 + 0.5 * Math.sin(loopT * 12);
+      ctx.save(); ctx.translate(b.x, b.y + CONFIG.hudHeight);
+      ctx.shadowColor = '#FF8020'; ctx.shadowBlur = 10 + 4 * pulse;
+      ctx.fillStyle = '#FF8020';
+      ctx.beginPath(); ctx.arc(0, 0, 5 + 1.5 * pulse, 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      continue;
+    }
     const ang = Math.atan2(b.vy, b.vx);
+    const col = b.freezeSecs > 0 ? '#40D0F0' : '#B040E0';
     ctx.save(); ctx.translate(b.x, b.y + CONFIG.hudHeight); ctx.rotate(ang);
-    ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
-    ctx.strokeStyle = '#B040E0'; ctx.lineWidth = 2;
+    ctx.shadowColor = col; ctx.shadowBlur = 6;
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.restore();
@@ -4111,6 +4497,52 @@ function drawFloaters() {
   ctx.globalAlpha = 1;
 }
 
+const CROW_KING_SPRITE = { w: 64, h: 44 };
+
+// One boss, no kind variants, so a plain palette object — not a
+// Record<Kind,X> table, there is no second row this would ever need.
+const CROW_KING_PALETTE = {
+  body: '#0A0A0A', bodyHi: '#2A0A0A',
+  wing: '#5A0808', wingHi: '#8A1010',
+  beak: '#3A0606', crown: '#0A0A0A', crownRim: '#5A0808',
+  edge: '#000000',
+};
+
+/** frame 'a'/'b' are the two flap extremes, 'mid' the level pass between
+ * them — see animFrame3. Same simplification as the regular crow: crown,
+ * beak, and body stay put, only the wing mass moves. */
+function buildCrowKingGrid(frame) {
+  const C = CROW_KING_PALETTE;
+  const g = makePixelGrid(CROW_KING_SPRITE.w, CROW_KING_SPRITE.h);
+
+  if (frame === 'a')      pixelEllipse(g, 30, 35, 20, 6, C.wing);   // lowered, spread below
+  else if (frame === 'b') pixelEllipse(g, 30, 11, 17, 6, C.wingHi); // raised, folded over the back
+  else                    pixelEllipse(g, 28, 24, 22, 5, C.wing);   // level, spread to the sides
+
+  // Crown — 5 spikes, tallest in the middle
+  const spikeXs = [16, 24, 32, 40, 48], spikeHs = [5, 8, 11, 8, 5];
+  for (let i = 0; i < 5; i++) pixelTriangleUp(g, spikeXs[i], 9, 4, spikeHs[i], C.crown);
+  pixelRect(g, 12, 8, 40, 2, C.crownRim);
+
+  // Body, drawn over the wing root and crown base
+  pixelEllipse(g, 34, 24, 20, 13, C.body);
+  pixelEllipse(g, 27, 18, 9, 5, C.bodyHi);
+
+  // Beak, pointing left — a sideways taper, apex at the tip, so a column
+  // loop rather than pixelTriangleUp's upward-apex shape.
+  for (let i = 0; i < 6; i++) {
+    const hw = Math.round((5 * i) / 5);
+    pixelRect(g, 4 + i, 22 - hw, 1, hw * 2 + 1, C.beak);
+  }
+
+  return pixelOutline(g, C.edge);
+}
+
+const _crowKingGrids = {};
+function crowKingGrid(frame) {
+  return _crowKingGrids[frame] || (_crowKingGrids[frame] = buildCrowKingGrid(frame));
+}
+
 function drawBoss() {
   if (bossDeathSeq) {
     for (const f of bossDeathSeq.fragments) {
@@ -4176,85 +4608,42 @@ function drawBoss() {
     ctx.restore(); return;
   }
 
-  // 3. Far wing
-  const farRot = 0.3 + 0.4 * Math.sin(wPhase);
-  const farY   = bobY - 2 + Math.sin(wPhase) * 5;
-  ctx.fillStyle = '#5A0808';
-  ctx.beginPath(); ctx.ellipse(4, farY, 28, 11, farRot, 0, Math.PI*2); ctx.fill();
+  // 3. Pixel-art body (see buildCrowKingGrid). Same 3-baked-frame flap as
+  // the regular crow, scaled up, plus the crown and stacked eyes a boss needs.
+  const bkFrame = animFrame3(wPhase);
+  const bkGrid  = crowKingGrid(bkFrame);
+  const bkDx = -(CROW_KING_SPRITE.w) / 2, bkDy = -24 + Math.round(bobY);
+  ctx.drawImage(spriteCanvas(`crowking|${bkFrame}`, bkGrid, CROW_KING_SPRITE.w, CROW_KING_SPRITE.h), bkDx, bkDy);
 
-  // 4. Far wing edge feathers (5 tufts along outer arc)
-  ctx.strokeStyle = '#0A0A0A'; ctx.lineWidth = 1.5;
-  ctx.save(); ctx.translate(4, farY); ctx.rotate(farRot);
-  [0.2, 0.4, 0.55, 0.7, 0.85].forEach(frac => {
-    const t = frac * Math.PI;
-    const ex = Math.cos(t) * 28, ey = Math.sin(t) * 11;
-    const nLen = Math.hypot(Math.cos(t)/28, Math.sin(t)/11);
-    const nx = (Math.cos(t)/28)/nLen, ny = (Math.sin(t)/11)/nLen;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + nx*6, ey + ny*6); ctx.stroke();
-  });
-  ctx.restore();
-
-  // 5. Body
-  ctx.fillStyle = '#050505';
-  ctx.beginPath(); ctx.ellipse(0, bobY, 28, 18, 0, 0, Math.PI*2); ctx.fill();
-
-  // 6. Body highlight
-  ctx.fillStyle = '#1A1A1A';
-  ctx.beginPath(); ctx.ellipse(-5, bobY - 4, 14, 6, 0, 0, Math.PI*2); ctx.fill();
-
-  // 7. Crown spikes — 5 triangles, heights 5/8/11/8/5
-  const spikeXs = [-16, -8, 0, 8, 16];
-  const spikeHs = [5, 8, 11, 8, 5];
-  const spikeBaseY = bobY - 18;
-  for (let si = 0; si < 5; si++) {
-    const sx = spikeXs[si], sh = spikeHs[si];
-    ctx.fillStyle = '#0A0A0A';
-    ctx.beginPath();
-    ctx.moveTo(sx - 4, spikeBaseY); ctx.lineTo(sx, spikeBaseY - sh); ctx.lineTo(sx + 4, spikeBaseY);
-    ctx.closePath(); ctx.fill();
-    // Rim light on spike
-    ctx.strokeStyle = '#5A0808'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(sx - 4, spikeBaseY); ctx.lineTo(sx, spikeBaseY - sh); ctx.lineTo(sx + 4, spikeBaseY);
-    ctx.stroke();
-  }
-
-  // 8. Beak — large triangle facing left
-  ctx.fillStyle = '#3A0606';
-  ctx.beginPath();
-  ctx.moveTo(-26, bobY - 1); ctx.lineTo(-38, bobY); ctx.lineTo(-26, bobY + 5);
-  ctx.closePath(); ctx.fill();
-
-  // 9. Eyes — two stacked
+  // 4. Eyes — two stacked, same glow-stamp technique as the skeleton's
   const eyeBlur = 10 + 5 * Math.sin(loopT * 8);
-  ctx.shadowColor = '#FF1F1F'; ctx.shadowBlur = eyeBlur;
-  ctx.fillStyle = '#FF1F1F';
-  ctx.beginPath(); ctx.arc(-21, bobY - 4, 5, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(-21, bobY + 3, 5, 0, Math.PI*2); ctx.fill();
-  ctx.shadowBlur = 0;
+  const eyeStamp = glowDotStamp('#FF1F1F', 2.5, eyeBlur * 0.4);
+  ctx.drawImage(eyeStamp, bkDx + 13 - eyeStamp.width/2, bkDy + 20 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, bkDx + 13 - eyeStamp.width/2, bkDy + 27 - eyeStamp.height/2);
 
-  // 10. Eye cores (1×1 amber dot in each eye)
+  // 5. Eye cores (1×1 amber dot in each eye)
   ctx.fillStyle = '#FFB400';
-  ctx.fillRect(-21, bobY - 4, 1, 1);
-  ctx.fillRect(-21, bobY + 3, 1, 1);
+  ctx.fillRect(bkDx + 13, bkDy + 20, 1, 1);
+  ctx.fillRect(bkDx + 13, bkDy + 27, 1, 1);
 
-  // 11. Near wing (overlaps body on player side)
-  const nearRot = 0.3 + 0.4 * Math.sin(wPhase + Math.PI);
-  const nearY   = bobY - 2 + Math.sin(wPhase + Math.PI) * 5;
-  ctx.fillStyle = '#8A1010';
-  ctx.beginPath(); ctx.ellipse(-4, nearY, 28, 11, nearRot, 0, Math.PI*2); ctx.fill();
-
-  // 12. Near wing edge feathers
-  ctx.strokeStyle = '#0A0A0A'; ctx.lineWidth = 1.5;
-  ctx.save(); ctx.translate(-4, nearY); ctx.rotate(nearRot);
-  [0.2, 0.4, 0.55, 0.7, 0.85].forEach(frac => {
-    const t = frac * Math.PI;
-    const ex = Math.cos(t) * 28, ey = Math.sin(t) * 11;
-    const nLen = Math.hypot(Math.cos(t)/28, Math.sin(t)/11);
-    const nx = (Math.cos(t)/28)/nLen, ny = (Math.sin(t)/11)/nLen;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + nx*6, ey + ny*6); ctx.stroke();
-  });
-  ctx.restore();
+  // 6. Daze stars — old-pixel-game "seeing stars", orbiting his head. Fewer
+  // and slower as bossSpeedMod()'s same phase read recovers, so the visual
+  // decays in step with the mechanical debuff instead of just switching off.
+  const dazePhase = bossDazePhase();
+  if (dazePhase) {
+    const starCount = dazePhase === 'stun' ? 4 : dazePhase === 'slow1' ? 3 : 2;
+    const spinSpeed = dazePhase === 'stun' ? 6 : dazePhase === 'slow1' ? 3 : 1.5;
+    const starY = bobY - 26;
+    ctx.shadowColor = '#FFEE44'; ctx.shadowBlur = 5;
+    ctx.fillStyle = '#FFEE44';
+    for (let i = 0; i < starCount; i++) {
+      const a = loopT * spinSpeed + (i / starCount) * Math.PI * 2;
+      const sx = Math.cos(a) * 14, sy = starY + Math.sin(a) * 5;
+      ctx.fillRect(sx - 0.5, sy - 2, 1, 5);
+      ctx.fillRect(sx - 2, sy - 0.5, 5, 1);
+    }
+    ctx.shadowBlur = 0;
+  }
 
   ctx.restore();
 }
@@ -4266,6 +4655,40 @@ function drawBoss() {
  * hit-flash techniques from the crow king. New geometry, not new drawing
  * tricks.
  */
+const DARK_ARCHER_SPRITE = { w: 40, h: 42 };
+const DARK_ARCHER_PALETTE = {
+  cloak: '#241030', cloakHi: '#3A1A4A',
+  body: '#382048', head: '#1A0E22', hood: '#150A1C',
+  edge: '#0A0510',
+};
+
+/** No walk cycle, no wing-flap — like the heroes, one static frame plus a
+ * live bob is enough. Bow/arm/bowstring stay live below, same reasoning as
+ * the player Archer's own bow: real-time aim is gameplay information. */
+function buildDarkArcherGrid() {
+  const C = DARK_ARCHER_PALETTE;
+  const g = makePixelGrid(DARK_ARCHER_SPRITE.w, DARK_ARCHER_SPRITE.h);
+
+  // Cloak — widens from the shoulders down to the hem
+  for (let y = 14; y <= 41; y++) {
+    const halfW = Math.round(10 + 9 * ((y - 14) / 27));
+    pixelRect(g, 20 - halfW, y, halfW * 2, 1, C.cloak);
+  }
+  pixelRect(g, 12, 14, 8, 6, C.cloakHi);
+
+  // Body panel, under the hood
+  pixelRect(g, 10, 18, 20, 16, C.body);
+
+  // Head, with the hood's brim shadowing its top
+  pixelEllipse(g, 20, 10, 9, 9, C.head);
+  pixelRect(g, 10, 0, 20, 6, C.hood);
+
+  return pixelOutline(g, C.edge);
+}
+
+let _darkArcherGrid = null;
+function darkArcherGrid() { return _darkArcherGrid || (_darkArcherGrid = buildDarkArcherGrid()); }
+
 function drawDarkArcher() {
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const bobY = 1.2 * Math.sin(loopT * 1.2);
@@ -4291,30 +4714,14 @@ function drawDarkArcher() {
     ctx.restore(); return;
   }
 
-  // Cloak
-  ctx.fillStyle = '#241030';
-  ctx.beginPath();
-  ctx.moveTo(-11, bobY - 6);
-  ctx.bezierCurveTo(-19, bobY, -19, bobY + 8, -15, bobY + 17);
-  ctx.lineTo(15, bobY + 13);
-  ctx.bezierCurveTo(19, bobY + 8, 19, bobY, 11, bobY - 6);
-  ctx.closePath(); ctx.fill();
-  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 5;
-  ctx.strokeStyle = '#B040E0'; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // Body
-  ctx.fillStyle = '#382048'; ctx.fillRect(-10, bobY - 6, 20, 22);
-
-  // Head + hood
-  ctx.fillStyle = '#1A0E22';
-  ctx.beginPath(); ctx.arc(0, bobY - 14, 10, 0, Math.PI*2); ctx.fill();
-  ctx.fillRect(-10, bobY - 24, 20, 6);
+  // Pixel-art cloak/body/head (see buildDarkArcherGrid)
+  const daDx = -(DARK_ARCHER_SPRITE.w) / 2, daDy = -24 + Math.round(bobY);
+  ctx.drawImage(spriteCanvas('darkarcher', darkArcherGrid(), DARK_ARCHER_SPRITE.w, DARK_ARCHER_SPRITE.h), daDx, daDy);
 
   // Eyes — same glow-stamp technique as the skeleton's
   const eyeStamp = glowDotStamp('#B040E0', 1.4, 4);
-  ctx.drawImage(eyeStamp, -5 - eyeStamp.width/2, bobY - 15 - eyeStamp.height/2);
-  ctx.drawImage(eyeStamp, 1 - eyeStamp.width/2, bobY - 15 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, daDx + 15 - eyeStamp.width/2, daDy + 9 - eyeStamp.height/2);
+  ctx.drawImage(eyeStamp, daDx + 21 - eyeStamp.width/2, daDy + 9 - eyeStamp.height/2);
 
   // Bow arm, drawn toward the player
   const gx = Math.cos(aimAngle) * 16, gy = bobY + Math.sin(aimAngle) * 16;
@@ -4343,6 +4750,57 @@ function drawDarkArcher() {
  * remap it thrusts its spear with (see drawKnight), scaled up, plus the
  * corona-pulse and hit-flash techniques from the crow king.
  */
+const DARK_KNIGHT_SPRITE = { w: 40, h: 70 };
+const DARK_KNIGHT_PALETTE = {
+  leg: '#141018', legHi: '#2A2430',
+  torso: '#241820', torsoHi: '#3A2030',
+  pauldron: '#1A1018', pauldronHi: '#3A2838',
+  helm: '#1A1018', helmHi: '#3A2838',
+  visor: '#B040E0', crest: '#5A1030',
+  edge: '#0A0510',
+};
+
+/** No walk cycle — like the heroes, one static frame plus a live bob. The
+ * whirlwind visual and the spear (rotates with aim, extends on a charge)
+ * stay live below, same reasoning as the player Knight's own spear. */
+function buildDarkKnightGrid() {
+  const C = DARK_KNIGHT_PALETTE;
+  const g = makePixelGrid(DARK_KNIGHT_SPRITE.w, DARK_KNIGHT_SPRITE.h);
+
+  // Crest
+  pixelTriangleUp(g, 20, 10, 4, 10, C.crest);
+
+  // Great helm — rect body with a domed top
+  pixelRect(g, 10, 10, 20, 18, C.helm);
+  pixelEllipse(g, 20, 10, 10, 7, C.helm);
+  pixelRect(g, 10, 8, 20, 3, C.helmHi);
+
+  // Visor slits — baked solid, same convention as the player Knight's visor
+  pixelRect(g, 12, 16, 16, 3, C.visor);
+  pixelRect(g, 14, 21, 11, 3, C.visor);
+
+  // Pauldrons
+  pixelRect(g, 0, 28, 8, 11, C.pauldron);
+  pixelRect(g, 32, 28, 8, 11, C.pauldron);
+  pixelRect(g, 0, 28, 8, 3, C.pauldronHi);
+  pixelRect(g, 32, 28, 8, 3, C.pauldronHi);
+
+  // Torso
+  pixelRect(g, 5, 28, 30, 26, C.torso);
+  pixelRect(g, 8, 30, 10, 9, C.torsoHi);
+
+  // Legs
+  pixelRect(g, 7, 52, 11, 16, C.leg);
+  pixelRect(g, 22, 52, 11, 16, C.leg);
+  pixelRect(g, 7, 52, 11, 3, C.legHi);
+  pixelRect(g, 22, 52, 11, 3, C.legHi);
+
+  return pixelOutline(g, C.edge);
+}
+
+let _darkKnightGrid = null;
+function darkKnightGrid() { return _darkKnightGrid || (_darkKnightGrid = buildDarkKnightGrid()); }
+
 function drawDarkKnight() {
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const bobY = 1.2 * Math.sin(loopT * 1.2);
@@ -4353,6 +4811,27 @@ function drawDarkKnight() {
     : Math.atan2(player.y - boss.y, player.x - boss.x);
 
   ctx.save(); ctx.translate(bx, by); ctx.scale(facing, 1);
+
+  // Whirlwind visual (behind the body) — same three-rotating-arcs technique
+  // as the player's own whirlwind (see drawKnight), in the dark knight's own
+  // red/purple palette instead of the player's steel blue.
+  if (boss.bstate === 'whirlwind') {
+    const wAlpha = Math.min(1, boss.stateTimer / 0.4);
+    for (let i = 0; i < 3; i++) {
+      const baseA = loopT * 9 + (i / 3) * Math.PI * 2;
+      ctx.save();
+      ctx.globalAlpha = wAlpha * (0.45 + 0.3 * Math.sin(loopT * 14 + i * 2.1));
+      ctx.strokeStyle = '#FF1F1F';
+      ctx.shadowColor  = '#B040E0';
+      ctx.shadowBlur   = 10;
+      ctx.lineWidth    = 3;
+      const r = CONFIG.darkKnightWhirlwindRadius;
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.42, baseA,        baseA + 1.15); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.72, baseA + 0.38, baseA + 1.55); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.93, baseA + 0.65, baseA + 1.80); ctx.stroke();
+      ctx.restore();
+    }
+  }
 
   // Ground shadow
   ctx.shadowBlur = 0;
@@ -4372,39 +4851,9 @@ function drawDarkKnight() {
     ctx.restore(); return;
   }
 
-  // Legs
-  ctx.fillStyle = '#141018';
-  ctx.fillRect(-13, bobY + 8, 11, 16);
-  ctx.fillRect(2,   bobY + 8, 11, 16);
-
-  // Torso
-  ctx.fillStyle = '#241820';
-  ctx.fillRect(-15, bobY - 16, 30, 26);
-  ctx.fillStyle = '#3A2030';
-  ctx.fillRect(-12, bobY - 14, 10, 9);
-
-  // Pauldrons
-  ctx.fillStyle = '#1A1018';
-  ctx.fillRect(-20, bobY - 16, 8, 11);
-  ctx.fillRect(12,  bobY - 16, 8, 11);
-
-  // Great helm
-  ctx.fillStyle = '#1A1018';
-  ctx.fillRect(-10, bobY - 34, 20, 18);
-  ctx.beginPath(); ctx.arc(0, bobY - 34, 10, Math.PI, 0); ctx.fill();
-
-  // Visor slits — glowing, same accent as the skeleton and dark archer
-  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 6;
-  ctx.fillStyle = '#B040E0';
-  ctx.fillRect(-8, bobY - 28, 16, 2.5);
-  ctx.fillRect(-6, bobY - 23, 11, 2.5);
-  ctx.shadowBlur = 0;
-
-  // Crest
-  ctx.fillStyle = '#5A1030';
-  ctx.beginPath();
-  ctx.moveTo(-4, bobY - 34); ctx.lineTo(0, bobY - 44); ctx.lineTo(4, bobY - 34);
-  ctx.closePath(); ctx.fill();
+  // Pixel-art armor (see buildDarkKnightGrid)
+  const dkDx = -(DARK_KNIGHT_SPRITE.w) / 2, dkDy = -44 + Math.round(bobY);
+  ctx.drawImage(spriteCanvas('darkknight', darkKnightGrid(), DARK_KNIGHT_SPRITE.w, DARK_KNIGHT_SPRITE.h), dkDx, dkDy);
 
   // Spear — extends forward on a charge
   ctx.save();
@@ -4540,6 +4989,21 @@ function drawHUD(t) {
     const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '◎ READY' : `◎ ${knightWhirlwindCD.toFixed(1)}s`);
     ctx.fillText(wrdLabel, rx+39, 12);
     rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    // Block bar — countdown to the next free charge. The shared ◆SHLD
+    // readout further down already flags a banked charge as active, so this
+    // one just needs to read "ready" rather than duplicate that text.
+    const blkRdy  = knightBlockCD <= 0 || playerShield;
+    const blkFrac = blkRdy ? 1 : (CONFIG.knightBlockCooldown - knightBlockCD) / CONFIG.knightBlockCooldown;
+    ctx.fillStyle='#2a1a05'; ctx.fillRect(rx, 4, 78, 11);
+    ctx.shadowColor='#FFB400'; ctx.shadowBlur = blkRdy ? 6 : 0;
+    ctx.fillStyle = blkRdy ? '#FFB400' : '#5a3a10';
+    ctx.fillRect(rx, 4, 78*blkFrac, 11);
+    ctx.shadowBlur=0;
+    ctx.strokeStyle='#FFB400'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
+    ctx.fillStyle = blkRdy ? '#FFE8B0' : '#7a5a30';
+    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
+    ctx.fillText(blkRdy ? '◎ READY' : `◎ ${knightBlockCD.toFixed(1)}s`, rx+39, 12);
+    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
     if (inv.knightFireSwordTimer > 0) {
       ctx.fillStyle='#FF7A1F';
@@ -4637,98 +5101,27 @@ function _cornerFrame(color) {
     .forEach(([fx,fy,sx,sy]) => { ctx.beginPath(); ctx.moveTo(fx+sx*cl,fy); ctx.lineTo(fx,fy); ctx.lineTo(fx,fy+sy*cl); ctx.stroke(); });
 }
 
+/** Reuses the same cached grids gameplay draws from — one real sprite per
+ * hero instead of a fifth hand-drawn mini-vector copy per character. The
+ * gentle bob is the only animation now; the vector version's per-character
+ * sway/pulse lived on live overlays this preview has no equivalent of. */
 function _drawCharPreview(cx, cy, char, t) {
-  ctx.save(); ctx.translate(cx, cy); ctx.scale(2, 2);
-  if (char === 'archer') {
-    // Cloak
-    ctx.fillStyle='#0E1410'; ctx.beginPath();
-    ctx.moveTo(-5,-3); ctx.bezierCurveTo(-9,0,-9,4,-7,7); ctx.lineTo(7,7); ctx.bezierCurveTo(9,4,9,0,5,-3); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle='#39FF14'; ctx.lineWidth=0.5; ctx.stroke();
-    // Body
-    ctx.fillStyle='#3A5F88'; ctx.fillRect(-5,-3,10,11);
-    // Head
-    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-8,5,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='#0E1410'; ctx.fillRect(-5,-13,10,3); ctx.fillRect(-6,-10,12,1);
-    // Bow
-    ctx.shadowColor='#8A6028'; ctx.shadowBlur=2;
-    ctx.strokeStyle='#8A6028'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.arc(8,0,7,-Math.PI/2,Math.PI/2); ctx.stroke();
-    ctx.strokeStyle='#39FF14'; ctx.lineWidth=0.8;
-    ctx.beginPath(); ctx.moveTo(8,-7); ctx.lineTo(8,7); ctx.stroke();
-    ctx.shadowBlur=0;
-  } else if (char === 'wizard') {
-    // Robe
-    const sw=1.2*Math.sin(t*1.8);
-    ctx.fillStyle='#14143a';
-    ctx.beginPath(); ctx.moveTo(-8,13+sw); ctx.lineTo(-6,-1); ctx.lineTo(6,-1); ctx.lineTo(8,13-sw); ctx.closePath(); ctx.fill();
-    ctx.shadowColor='#8888FF'; ctx.shadowBlur=3;
-    ctx.strokeStyle='#4444aa'; ctx.lineWidth=0.6; ctx.stroke(); ctx.shadowBlur=0;
-    ctx.fillStyle='#22225a'; ctx.fillRect(-4,0,8,8);
-    ctx.fillStyle='#FFB400'; ctx.beginPath(); ctx.arc(0,3,2,0,Math.PI*2); ctx.fill();
-    // Head
-    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-7,5,0,Math.PI*2); ctx.fill();
-    // Hat
-    const hw=1.5*Math.sin(t*1.9);
-    ctx.fillStyle='#14143a';
-    ctx.beginPath(); ctx.moveTo(-7,-10); ctx.lineTo(0,-25+hw); ctx.lineTo(7,-10); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle='#4444aa'; ctx.lineWidth=0.5; ctx.stroke();
-    ctx.fillStyle='#22225a'; ctx.fillRect(-9,-12,18,2.5);
-    // Orb
-    const op2=t*4;
-    ctx.shadowColor='#8888FF'; ctx.shadowBlur=8+3*Math.sin(op2);
-    ctx.fillStyle=`rgba(136,136,255,${(0.85+0.15*Math.sin(op2)).toFixed(2)})`;
-    ctx.beginPath(); ctx.arc(12,-2+0.5*Math.sin(op2),4,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(11,-3,1.2,0,Math.PI*2); ctx.fill();
-    ctx.shadowBlur=0;
-  } else if (char === 'knight') {
-    // Knight — plate armour mini-preview
-    // Legs
-    ctx.fillStyle='#1e2030'; ctx.fillRect(-7,5,6,9); ctx.fillRect(1,5,6,9);
-    ctx.fillStyle='#2a2c3e'; ctx.fillRect(-6,5,2,4); ctx.fillRect(2,5,2,4);
-    // Torso
-    ctx.fillStyle='#242436'; ctx.fillRect(-8,-10,16,16);
-    ctx.fillStyle='#34364e'; ctx.fillRect(-7,-9,7,5);
-    ctx.fillStyle='#181826'; ctx.fillRect(-11,-10,4,7); ctx.fillRect(7,-10,4,7);
-    // Helmet
-    ctx.fillStyle='#1e2030'; ctx.fillRect(-6,-22,12,13);
-    ctx.beginPath(); ctx.arc(0,-22,6,Math.PI,0); ctx.fill();
-    ctx.fillStyle='#39FF14'; ctx.shadowColor='#39FF14'; ctx.shadowBlur=4;
-    ctx.fillRect(-5,-18,10,2); ctx.fillRect(-3,-15,6,2); ctx.shadowBlur=0;
-    // Helmet crest
-    ctx.fillStyle='#2244aa';
-    ctx.beginPath(); ctx.moveTo(-2,-22); ctx.lineTo(0,-29); ctx.lineTo(2,-22); ctx.closePath(); ctx.fill();
-    // Spear
-    const sa = -0.35 + 0.1*Math.sin(t*1.5);
-    ctx.save(); ctx.rotate(sa);
-    ctx.strokeStyle='#5a3a10'; ctx.lineWidth=2.5;
-    ctx.beginPath(); ctx.moveTo(-6,0); ctx.lineTo(18,0); ctx.stroke();
-    ctx.fillStyle='#D0D0D8';
-    ctx.beginPath(); ctx.moveTo(16,-4); ctx.lineTo(24,0); ctx.lineTo(16,4); ctx.closePath(); ctx.fill();
-    ctx.restore();
-  } else if (char === 'ranger') {
-    // Cloak
-    ctx.fillStyle='#0E1410'; ctx.beginPath();
-    ctx.moveTo(-5,-3); ctx.bezierCurveTo(-9,0,-9,4,-7,7); ctx.lineTo(7,7); ctx.bezierCurveTo(9,4,9,0,5,-3); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle='#FFCC00'; ctx.lineWidth=0.5; ctx.stroke();
-    // Body — earthy olive, distinct from the archer's blue
-    ctx.fillStyle='#4A5D2E'; ctx.fillRect(-5,-3,10,11);
-    // Head
-    ctx.fillStyle='#D9B98A'; ctx.beginPath(); ctx.arc(0,-8,5,0,Math.PI*2); ctx.fill();
-    // Hood — peaked and swept back, distinct from the archer's flat hat
-    ctx.fillStyle='#24301A';
-    ctx.beginPath();
-    ctx.moveTo(-6,-9); ctx.lineTo(-4,-16); ctx.lineTo(2,-18); ctx.lineTo(6,-11); ctx.lineTo(4,-9);
-    ctx.closePath(); ctx.fill();
-    // Crossbow — stock, crosswise limb, string; not the archer's curved bow
-    ctx.shadowColor='#8A6028'; ctx.shadowBlur=2;
-    ctx.strokeStyle='#5A3A1A'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(6,0); ctx.lineTo(13,0); ctx.stroke();
-    ctx.strokeStyle='#8A6028'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.moveTo(11,-6); ctx.lineTo(11,6); ctx.stroke();
-    ctx.strokeStyle='#FFCC00'; ctx.lineWidth=0.8;
-    ctx.beginPath(); ctx.moveTo(12.5,-6); ctx.lineTo(12.5,6); ctx.stroke();
-    ctx.shadowBlur=0;
-  }
+  const rFrame = animFrame3(t * 1.5);
+  const PREVIEW = {
+    archer: { grid: buildArcherGrid(SP_TRIM.archer),        sprite: ARCHER_SPRITE, key: 'archer' },
+    wizard: { grid: buildWizardGrid(SP_TRIM.wizard),        sprite: WIZARD_SPRITE, key: 'wizard' },
+    knight: { grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' },
+    ranger: { grid: buildRangerGrid(rFrame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${rFrame}` },
+  };
+  const p = PREVIEW[char];
+  if (!p) return;
+  const scale = 1.4;
+  const bob = Math.round(1.5 * Math.sin(t * 2));
+  ctx.save(); ctx.translate(cx, cy + bob);
+  ctx.drawImage(
+    spriteCanvas(`preview|${p.key}`, p.grid, p.sprite.w, p.sprite.h, scale),
+    -(p.sprite.w * scale) / 2, -(p.sprite.h * scale) / 2,
+  );
   ctx.restore();
 }
 
@@ -4775,6 +5168,11 @@ function drawCharSelect(t) {
     ctx.font='10.5px "Courier New",monospace';
     ctx.fillStyle = sel ? p.color.replace('FF','88') : p.dim;
     p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+208+i*30));
+    ctx.font='11px "Courier New",monospace';
+    ctx.shadowColor = p.difficulty.color; ctx.shadowBlur = 6;
+    ctx.fillStyle = p.difficulty.color;
+    ctx.fillText(`DIFFICULTY: ${p.difficulty.label}`, px+panelW/2, panelY+360);
+    ctx.shadowBlur = 0;
   });
 
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
@@ -4979,9 +5377,126 @@ function drawWin(t) {
   ctx.fillText(`[R] PLAY AGAIN${Math.floor(t*2)%2===0 ? '_' : ' '}   [M] MENU`, CONFIG.canvasW/2, 410);
 }
 
+/**
+ * Shown once, between the Crow King's death and the castle stage's own
+ * setup becoming visible. That setup (generateMap('castle'), the wave 1
+ * spawn) already ran before this state was entered, hidden behind the black
+ * screen, so the click just reveals it rather than triggering it.
+ */
+function drawCastleIntro(t) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
+  _scanSweep('rgba(176,64,224,0.045)', 90);
+  _cornerFrame('#4a1a5c');
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 16 + 7 * Math.sin(t * 1.7);
+  ctx.fillStyle = '#B040E0'; ctx.font = '24px "Courier New", monospace';
+  ctx.fillText("You've entered the cursed Castle!", CONFIG.canvasW / 2, CONFIG.canvasH / 2 - 16);
+  ctx.shadowBlur = 0;
+
+  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 3);
+  ctx.fillStyle = '#8A40A8'; ctx.font = '16px "Courier New", monospace';
+  ctx.fillText('[ CLICK TO CONTINUE ]', CONFIG.canvasW / 2, CONFIG.canvasH / 2 + 32);
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Per-character aim reticle, drawn at the mouse position in place of the
+ * system cursor (see syncCursor). One row per CHAR_PANELS entry, reusing
+ * that table's own color for each so the reticle always matches the
+ * character-select swatch, and a fifth character gets a row here instead
+ * of a growing if/else chain.
+ */
+const RETICLE_PAINTERS = {
+  archer: drawArcherReticle,
+  wizard: drawWizardReticle,
+  knight: drawKnightReticle,
+  ranger: drawRangerReticle,
+};
+
+function drawReticle() {
+  ctx.save();
+  ctx.translate(mouse.x, mouse.y + CONFIG.hudHeight);
+  (RETICLE_PAINTERS[selectedChar] || drawRangerReticle)();
+  ctx.restore();
+}
+
+/** Ranger: a plain crosshair, the natural read for the crossbow's straight bolts. */
+function drawRangerReticle() {
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  ctx.globalAlpha = 0.25 + 0.55 * pulse;
+  ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1.5;
+  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 5 + 3 * pulse;
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.moveTo(dx * 4, dy * 4); ctx.lineTo(dx * 11, dy * 11); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#FFCC00';
+  ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/** Archer: a scope ring with the cross peeking through it, for a longbow's precision. */
+function drawArcherReticle() {
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  const R = 9;
+  ctx.globalAlpha = 0.25 + 0.5 * pulse;
+  ctx.strokeStyle = '#39FF14'; ctx.lineWidth = 1.4;
+  ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 5 + 3 * pulse;
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.moveTo(dx * (R - 4), dy * (R - 4)); ctx.lineTo(dx * (R + 4), dy * (R + 4)); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#39FF14';
+  ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Knight: a small spearhead rotated onto player.aimAngle, so it points the
+ * same way the real spear would thrust rather than sitting axis-aligned.
+ */
+function drawKnightReticle() {
+  ctx.rotate(player.aimAngle);
+  ctx.globalAlpha = 0.75;
+  ctx.shadowColor = '#C8C8E8'; ctx.shadowBlur = 5;
+  ctx.fillStyle = '#C8C8E8';
+  ctx.beginPath();
+  ctx.moveTo(10, 0); ctx.lineTo(0, -4); ctx.lineTo(-3, 0); ctx.lineTo(0, 4);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#8C8CA8'; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(-10, 0); ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Wizard: a small wand rotated onto player.aimAngle, its tip sparking with
+ * the same pulse-and-glow technique the character panels' magic accents use.
+ */
+function drawWizardReticle() {
+  ctx.rotate(player.aimAngle);
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 6);
+  ctx.globalAlpha = 0.75;
+  ctx.strokeStyle = '#5A3C22'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(4, 0); ctx.stroke();
+  ctx.shadowColor = '#8888FF'; ctx.shadowBlur = 6 + 4 * pulse;
+  ctx.fillStyle = '#8888FF';
+  ctx.beginPath(); ctx.arc(6, 0, 2 + pulse, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#C8C8FF'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(2, 0); ctx.lineTo(10, 0);
+  ctx.moveTo(6, -4); ctx.lineTo(6, 4);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+}
+
 const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
 
 function render(t) {
+  syncCursor();
   const gameVisible = GAME_VISIBLE_STATES.has(appState);
   if (gameVisible) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
@@ -4990,7 +5505,9 @@ function render(t) {
     drawTiles(); FORESHADOW.drawSkyTint(); drawPickups(); drawFires(); drawParticles();
     crows.forEach(drawCrow);
     skeletons.forEach(drawSkeleton);
-    drawArrows(); drawDynamites(); drawSatchels(); drawBossBolts(); drawPlayer(); drawBoss(); drawFloaters();
+    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
+    if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
+    drawBoss(); drawFloaters();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -5012,7 +5529,7 @@ function render(t) {
       ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4 + 4 * Math.sin(loopT * 4);
       ctx.fillStyle = '#39FF14'; ctx.font = 'bold 22px "Courier New", monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(`── WAVE ${wave} ──`, CONFIG.canvasW/2, CONFIG.canvasH/2);
+      ctx.fillText(waveAnnounceText, CONFIG.canvasW/2, CONFIG.canvasH/2);
       ctx.shadowBlur = 0;
       ctx.restore();
     }
@@ -5027,12 +5544,14 @@ function render(t) {
     }
     if (appState === 'paused')        drawPause();
     if (appState === 'boss_entrance') drawBossEntrance();
+    if (inGame()) drawReticle();
   } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys, { x: mouse.x, y: mouse.y, fire: mouseLeftHeld, special: mouseRightHeld });
   } else if (appState === 'menu')       { drawMenu(t);
   } else if (appState === 'charselect') { drawCharSelect(t);
   } else if (appState === 'controls')   { drawControls(t);
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
+  } else if (appState === 'castle_intro') { drawCastleIntro(t);
   } else if (appState === 'inventory')  { FEATHERS.draw(); }
 }
 
@@ -5156,6 +5675,7 @@ function stepGame(dt) {
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
+      updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -5169,7 +5689,7 @@ function stepGame(dt) {
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
-      if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateBossBolts(dt); }
+      if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -5261,14 +5781,17 @@ window.__game = {
   boss: () => boss,
   bossStage: () => bossStage,
   setBossStage(n) { bossStage = n; },
-  bossBolts: () => bossBolts,
+  hostileBolts: () => hostileBolts,
+  castleWave: () => castleWave,
+  startCastleWave(n) { startCastleWave(n); },
+  frozenTimer: () => playerFrozenTimer,
   // Tap the event bus, for verifying which gameplay events fire.
   onEvent: fn => events.on(fn),
   // Drive a real state transition, and pick a character, for scripted runs.
   go(s) { transitionTo(s); },
   pick(c) { selectedChar = c; },
   spawnCrow() { spawnCrow(); },
-  spawnSkeleton() { spawnSkeleton(); },
+  spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },
   key(k) {
     const e = new KeyboardEvent('keydown', { key: k, bubbles: true });
     window.dispatchEvent(e); document.dispatchEvent(e);
