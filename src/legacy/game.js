@@ -157,6 +157,14 @@ const CONFIG = {
   bossBurnSlowdown: 0.3,          // fraction of speed removed while he burns
   bossBurnDamage: 0.5,            // extra damage the burn deals, as a fraction of the igniting hit
   bossBurnEmberInterval: 0.12,    // seconds between ember puffs while burning
+  // Crow king only: a real (unshielded) hit dazes him, a breather window on
+  // top of the knockback every hit already gives. Stun is a full action
+  // freeze; the two recovery steps only slow him. A shielded hit still gets
+  // knocked back (see resolveBossHit) but never dazes him, so the player
+  // can't perma-freeze him through the one phase meant to be untouchable.
+  bossDazeStunDuration: 1,
+  bossDazeSlow1Duration: 1.5, bossDazeSlow1Speed: 0.33,
+  bossDazeSlow2Duration: 1.5, bossDazeSlow2Speed: 0.66,
 
   // Dark bosses (castle stage 2/3). They reuse the crow king's orbit/charge
   // engine and burn/knockback handling; the shield-window mechanic is
@@ -2230,6 +2238,7 @@ function spawnBoss() {
     knockX: 0, knockY: 0,           // decaying shove offset from weapon hits
     burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him and drains HP
     burnDps: 0,                     // damage per second for the burn now running
+    dazeTimer: 0,                   // crow king only: stun then two-step slow, see dazeBoss
   };
   if (kind === 'crowking') {
     boss = {
@@ -2274,6 +2283,17 @@ function applyBossDamage(amount) {
   if (boss.hp <= 0) startBossDeath();
 }
 
+/** Shoves the boss away from (fromX, fromY). Shared by real hits and
+ * shielded blocks, so a shield still gives real physical feedback even
+ * though it takes no damage. Decayed and actually applied to boss.x/y in
+ * applyBossKnockback, every frame, not here. */
+function knockBoss(fromX, fromY) {
+  const dx = boss.x - fromX, dy = boss.y - fromY;
+  const d = Math.hypot(dx, dy) || 1;
+  boss.knockX += (dx / d) * CONFIG.bossKnockback;
+  boss.knockY += (dy / d) * CONFIG.bossKnockback;
+}
+
 /**
  * Applies damage to the boss and shoves him away from the hit. Every weapon
  * routes through here, so hit flash, the BOSS_HIT event, and knockback stay in
@@ -2284,10 +2304,8 @@ function applyBossDamage(amount) {
  */
 function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
   boss.hitFlash = flash;
-  const dx = boss.x - fromX, dy = boss.y - fromY;
-  const d = Math.hypot(dx, dy) || 1;
-  boss.knockX += (dx / d) * CONFIG.bossKnockback;
-  boss.knockY += (dy / d) * CONFIG.bossKnockback;
+  knockBoss(fromX, fromY);
+  if (boss.kind === 'crowking') dazeBoss();
   events.emit({ type: 'BOSS_HIT', source });
   applyBossDamage(amount);
 }
@@ -2317,6 +2335,7 @@ function resolveBossHit(a, damage, source) {
   const blocked = boss.shield;
 
   if (blocked) {
+    knockBoss(a.x, a.y);
     events.emit({ type: 'BOSS_SHIELD_BLOCKED', x: a.x, y: a.y });
   } else {
     if (a.type === 'fire') igniteBoss(damage);
@@ -2362,9 +2381,39 @@ function igniteBoss(damage) {
   boss.burnDps = damage * CONFIG.bossBurnDamage / CONFIG.bossBurnDuration;
 }
 
-/** Speed multiplier for boss movement. Burning slows him. */
+/** Speed multiplier for boss movement. Burning and dazed-recovery both slow
+ * him and stack multiplicatively; full stun is gated separately in
+ * updateBoss (an action freeze, not just a movement slowdown). */
 function bossSpeedMod() {
-  return boss.burnTimer > 0 ? 1 - CONFIG.bossBurnSlowdown : 1;
+  const burnMod = boss.burnTimer > 0 ? 1 - CONFIG.bossBurnSlowdown : 1;
+  const phase = bossDazePhase();
+  const dazeMod = phase === 'slow1' ? CONFIG.bossDazeSlow1Speed
+                : phase === 'slow2' ? CONFIG.bossDazeSlow2Speed
+                : 1;
+  return burnMod * dazeMod;
+}
+
+/** Total length of one daze: the stun plus both recovery steps. */
+function bossDazeTotal() {
+  return CONFIG.bossDazeStunDuration + CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration;
+}
+
+/** 'stun' | 'slow1' | 'slow2' | null, derived from the one countdown so
+ * movement, the speed multiplier, and the visual all read the same source. */
+function bossDazePhase() {
+  const t = boss.dazeTimer;
+  if (t <= 0) return null;
+  if (t > CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration) return 'stun';
+  if (t > CONFIG.bossDazeSlow2Duration) return 'slow1';
+  return 'slow2';
+}
+
+/** Landing a real hit refreshes the daze to its full length, stun included
+ * — chaining hits during an open window keeps him dazed continuously. */
+function dazeBoss() { boss.dazeTimer = bossDazeTotal(); }
+
+function updateBossDaze(dt) {
+  if (boss.dazeTimer > 0) boss.dazeTimer = Math.max(0, boss.dazeTimer - dt);
 }
 
 /** Counts the burn down, drains HP with it, and puffs embers while it lasts. */
@@ -2427,6 +2476,20 @@ function updateBoss(dt) {
   // Update facing toward player
   boss.facing = player.x > boss.x ? -1 : 1;
 
+  // The instant the stun itself ends (not the slower recovery after it),
+  // re-anchor the orbit from wherever he actually is. Without this, a player
+  // who moved during that full second would make the orbit's stale
+  // angle/radius snap him back the next frame — the same teleport-looking
+  // bug enterOrbit() already fixes for charge/whirlwind returns. justResumed
+  // also holds movement off for this exact frame: applying it right after
+  // enterOrbit() would let orbitRadius's own easing decay run against the
+  // freshly re-anchored radius before the next frame ever reads it, which
+  // is a second, smaller version of the same snap.
+  const wasStunned = bossDazePhase() === 'stun';
+  updateBossDaze(dt);
+  const justResumed = wasStunned && bossDazePhase() !== 'stun';
+  if (justResumed && boss.bstate === 'orbit') enterOrbit();
+
   // ── Shield phase machine — crow king only ────────────────────────────────
   // Rolling 30s window: reset shield-use counter each window
   if (boss.kind === 'crowking') {
@@ -2459,91 +2522,97 @@ function updateBoss(dt) {
   }
   // ────────────────────────────────────────────────────────────────────────
 
-  if (boss.bstate === 'orbit' || boss.bstate === 'charge') {
-    if (boss.kind === 'crowking') {
-      boss.screchCD -= dt;
-      boss.batCD -= dt;
-      if (boss.batCD <= 0) {
-        boss.batCD = CONFIG.bossBatCD;
-        spawnBossBats();
+  // Full stun freezes everything below: attack cooldowns, state timers,
+  // movement. Burn, the shield machine, and the knockback shove at the
+  // bottom all keep running regardless — none of those are "the boss
+  // acting", so there's nothing dazing him should pause about them.
+  if (bossDazePhase() !== 'stun' && !justResumed) {
+    if (boss.bstate === 'orbit' || boss.bstate === 'charge') {
+      if (boss.kind === 'crowking') {
+        boss.screchCD -= dt;
+        boss.batCD -= dt;
+        if (boss.batCD <= 0) {
+          boss.batCD = CONFIG.bossBatCD;
+          spawnBossBats();
+        }
+        if (boss.screchCD <= 0) {
+          boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
+          boss.stateTimer = CONFIG.bossScreechHalt;
+          events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
+          if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
+        }
+      } else if (boss.kind === 'dark_archer' && boss.bstate === 'orbit') {
+        boss.volleyCD -= dt;
+        if (boss.volleyCD <= 0) { boss.volleyCD = CONFIG.darkArcherVolleyInterval; fireBossVolley(); }
+        boss.bombCD -= dt;
+        if (boss.bombCD <= 0) { boss.bombCD = CONFIG.darkArcherBombInterval; fireBossBomb(); }
+        boss.skeletonCD -= dt;
+        if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkArcherSkeletonInterval; spawnSkeleton('ice'); }
+      } else if (boss.kind === 'dark_knight') {
+        boss.whirlwindCD -= dt;
+        if (boss.whirlwindCD <= 0) {
+          boss.whirlwindCD = CONFIG.darkKnightWhirlwindInterval;
+          boss.bstate = 'whirlwind'; boss.stateTimer = CONFIG.darkKnightWhirlwindDuration;
+          boss.whirlwindTick = 0; boss.chargeTarget = null;
+          events.emit({ type: 'WHIRLWIND_START', x: boss.x, y: boss.y });
+        }
+        boss.skeletonCD -= dt;
+        if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkKnightSkeletonInterval; spawnSkeleton('fire'); }
       }
-      if (boss.screchCD <= 0) {
-        boss.screchCD = CONFIG.bossScreechInterval; boss.bstate = 'screech';
-        boss.stateTimer = CONFIG.bossScreechHalt;
-        events.emit({ type: 'BOSS_SCREECH' }); aggroAllWhiteCrows();
-        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossScreechRange**2) damagePlayer(1);
-      }
-    } else if (boss.kind === 'dark_archer' && boss.bstate === 'orbit') {
-      boss.volleyCD -= dt;
-      if (boss.volleyCD <= 0) { boss.volleyCD = CONFIG.darkArcherVolleyInterval; fireBossVolley(); }
-      boss.bombCD -= dt;
-      if (boss.bombCD <= 0) { boss.bombCD = CONFIG.darkArcherBombInterval; fireBossBomb(); }
-      boss.skeletonCD -= dt;
-      if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkArcherSkeletonInterval; spawnSkeleton('ice'); }
-    } else if (boss.kind === 'dark_knight') {
-      boss.whirlwindCD -= dt;
-      if (boss.whirlwindCD <= 0) {
-        boss.whirlwindCD = CONFIG.darkKnightWhirlwindInterval;
-        boss.bstate = 'whirlwind'; boss.stateTimer = CONFIG.darkKnightWhirlwindDuration;
-        boss.whirlwindTick = 0; boss.chargeTarget = null;
-        events.emit({ type: 'WHIRLWIND_START', x: boss.x, y: boss.y });
-      }
-      boss.skeletonCD -= dt;
-      if (boss.skeletonCD <= 0) { boss.skeletonCD = CONFIG.darkKnightSkeletonInterval; spawnSkeleton('fire'); }
     }
-  }
 
-  const contactDamage = boss.kind === 'dark_archer' ? CONFIG.darkArcherContactDamage
-                       : boss.kind === 'dark_knight' ? CONFIG.darkKnightContactDamage
-                       : CONFIG.bossContactDamage;
+    const contactDamage = boss.kind === 'dark_archer' ? CONFIG.darkArcherContactDamage
+                         : boss.kind === 'dark_knight' ? CONFIG.darkKnightContactDamage
+                         : CONFIG.bossContactDamage;
 
-  if (boss.bstate === 'orbit') {
-    boss.stateTimer += dt;
-    const angSpd = CONFIG.bossOrbitSpeed * bossSpeedMod() / CONFIG.bossOrbitRadius;
-    boss.orbitAngle += angSpd * dt;
-    // Close the gap to the target radius instead of snapping onto it — see enterOrbit.
-    const radiusDecay = Math.exp(-dt / CONFIG.bossOrbitRadiusEaseTau);
-    boss.orbitRadius = CONFIG.bossOrbitRadius + (boss.orbitRadius - CONFIG.bossOrbitRadius) * radiusDecay;
-    boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * boss.orbitRadius));
-    boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * boss.orbitRadius));
-    if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
-    // The dark archer keeps its distance and never charges; the crow king
-    // and dark knight both do once their lead-in expires (the knight's is
-    // short on purpose, so it spends most of the fight charging).
-    const orbitDuration = boss.kind === 'dark_knight' ? CONFIG.darkKnightOrbitDuration : CONFIG.bossOrbitDuration;
-    if (boss.kind !== 'dark_archer' && boss.stateTimer >= orbitDuration) startBossCharge();
+    if (boss.bstate === 'orbit') {
+      boss.stateTimer += dt;
+      const angSpd = CONFIG.bossOrbitSpeed * bossSpeedMod() / CONFIG.bossOrbitRadius;
+      boss.orbitAngle += angSpd * dt;
+      // Close the gap to the target radius instead of snapping onto it — see enterOrbit.
+      const radiusDecay = Math.exp(-dt / CONFIG.bossOrbitRadiusEaseTau);
+      boss.orbitRadius = CONFIG.bossOrbitRadius + (boss.orbitRadius - CONFIG.bossOrbitRadius) * radiusDecay;
+      boss.x = Math.max(CONFIG.bossRadius, Math.min(CONFIG.canvasW - CONFIG.bossRadius, player.x + Math.cos(boss.orbitAngle) * boss.orbitRadius));
+      boss.y = Math.max(CONFIG.bossRadius, Math.min(CONFIG.rows * CONFIG.tileSize - CONFIG.bossRadius, player.y + Math.sin(boss.orbitAngle) * boss.orbitRadius));
+      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) { damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' }); }
+      // The dark archer keeps its distance and never charges; the crow king
+      // and dark knight both do once their lead-in expires (the knight's is
+      // short on purpose, so it spends most of the fight charging).
+      const orbitDuration = boss.kind === 'dark_knight' ? CONFIG.darkKnightOrbitDuration : CONFIG.bossOrbitDuration;
+      if (boss.kind !== 'dark_archer' && boss.stateTimer >= orbitDuration) startBossCharge();
 
-  } else if (boss.bstate === 'charge') {
-    if (!boss.chargeTarget) { enterOrbit(); return; }
-    const dx = boss.chargeTarget.x - boss.x, dy = boss.chargeTarget.y - boss.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 12) {
-      enterOrbit();
-    } else {
-      const chargeSpeed = boss.kind === 'dark_knight' ? CONFIG.darkKnightChargeSpeed : CONFIG.bossChargeSpeed;
-      const spd = chargeSpeed * bossSpeedMod() * dt;
-      boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
-      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
-        damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' });
+    } else if (boss.bstate === 'charge') {
+      if (!boss.chargeTarget) { enterOrbit(); return; }
+      const dx = boss.chargeTarget.x - boss.x, dy = boss.chargeTarget.y - boss.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 12) {
+        enterOrbit();
+      } else {
+        const chargeSpeed = boss.kind === 'dark_knight' ? CONFIG.darkKnightChargeSpeed : CONFIG.bossChargeSpeed;
+        const spd = chargeSpeed * bossSpeedMod() * dt;
+        boss.x += (dx/dist)*spd; boss.y += (dy/dist)*spd;
+        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.bossRadius*CONFIG.bossRadius) {
+          damagePlayer(contactDamage); events.emit({ type: 'BOSS_CONTACT' });
+          enterOrbit();
+        }
+      }
+    } else if (boss.bstate === 'screech') {
+      boss.stateTimer -= dt;
+      if (boss.stateTimer <= 0) enterOrbit();
+    } else if (boss.bstate === 'whirlwind') {
+      boss.stateTimer -= dt;
+      boss.whirlwindTick -= dt;
+      if (boss.whirlwindTick <= 0) {
+        boss.whirlwindTick = CONFIG.darkKnightWhirlwindTickRate;
+        if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.darkKnightWhirlwindRadius ** 2) {
+          damagePlayer(CONFIG.darkKnightWhirlwindDamage);
+        }
+        events.emit({ type: 'WHIRLWIND_TICK', x: boss.x, y: boss.y });
+      }
+      if (boss.stateTimer <= 0) {
+        events.emit({ type: 'WHIRLWIND_END', x: boss.x, y: boss.y });
         enterOrbit();
       }
-    }
-  } else if (boss.bstate === 'screech') {
-    boss.stateTimer -= dt;
-    if (boss.stateTimer <= 0) enterOrbit();
-  } else if (boss.bstate === 'whirlwind') {
-    boss.stateTimer -= dt;
-    boss.whirlwindTick -= dt;
-    if (boss.whirlwindTick <= 0) {
-      boss.whirlwindTick = CONFIG.darkKnightWhirlwindTickRate;
-      if (dist2(boss.x, boss.y, player.x, player.y) < CONFIG.darkKnightWhirlwindRadius ** 2) {
-        damagePlayer(CONFIG.darkKnightWhirlwindDamage);
-      }
-      events.emit({ type: 'WHIRLWIND_TICK', x: boss.x, y: boss.y });
-    }
-    if (boss.stateTimer <= 0) {
-      events.emit({ type: 'WHIRLWIND_END', x: boss.x, y: boss.y });
-      enterOrbit();
     }
   }
 
@@ -4556,6 +4625,25 @@ function drawBoss() {
   ctx.fillStyle = '#FFB400';
   ctx.fillRect(bkDx + 13, bkDy + 20, 1, 1);
   ctx.fillRect(bkDx + 13, bkDy + 27, 1, 1);
+
+  // 6. Daze stars — old-pixel-game "seeing stars", orbiting his head. Fewer
+  // and slower as bossSpeedMod()'s same phase read recovers, so the visual
+  // decays in step with the mechanical debuff instead of just switching off.
+  const dazePhase = bossDazePhase();
+  if (dazePhase) {
+    const starCount = dazePhase === 'stun' ? 4 : dazePhase === 'slow1' ? 3 : 2;
+    const spinSpeed = dazePhase === 'stun' ? 6 : dazePhase === 'slow1' ? 3 : 1.5;
+    const starY = bobY - 26;
+    ctx.shadowColor = '#FFEE44'; ctx.shadowBlur = 5;
+    ctx.fillStyle = '#FFEE44';
+    for (let i = 0; i < starCount; i++) {
+      const a = loopT * spinSpeed + (i / starCount) * Math.PI * 2;
+      const sx = Math.cos(a) * 14, sy = starY + Math.sin(a) * 5;
+      ctx.fillRect(sx - 0.5, sy - 2, 1, 5);
+      ctx.fillRect(sx - 2, sy - 0.5, 5, 1);
+    }
+    ctx.shadowBlur = 0;
+  }
 
   ctx.restore();
 }
