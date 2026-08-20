@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>CROW ARCHER — GAME MANUAL</title>
+<meta name="description" content="The Crow Archer game manual: characters, keys, the run, and the three bosses. Documents the real build."/>
+<style>
+  /* ============================================================
+     GAME MANUAL for CROW ARCHER
+     Retro 8-bit bright palette + FLASH-style ink/paper-swap convention.
+     Content documents ONLY features that exist in the shipped build:
+     every kit, key and number is read off CHAR_PANELS / CONFIG.
+     ============================================================ */
+  :root {
+    /* Retro 8-bit bright palette (0-7 by BASIC number) */
+    --zx-black:   #000000;   /* 0 */
+    --zx-blue:    #0000FF;   /* 1 */
+    --zx-red:     #FF0000;   /* 2 */
+    --zx-magenta: #FF00FF;   /* 3 */
+    --zx-green:   #00FF00;   /* 4 */
+    --zx-cyan:    #00FFFF;   /* 5 */
+    --zx-yellow:  #FFFF00;   /* 6 */
+    --zx-white:   #FFFFFF;   /* 7 */
+    /* basic (non-bright) variants — used for the case/border tones */
+    --zx-red-b:    #D70000;
+    --zx-cyan-b:   #00D7D7;
+    --zx-yellow-b: #D7D700;
+    --zx-green-b:  #00D700;
+    --zx-grey:     #C0C0C0;
+    --paper: #000000;   /* screen background */
+    --ink:   #FFFFFF;   /* default ink */
+    --font: "Cascadia Mono", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: #101010; }
+  body {
+    margin: 0;
+    /* the screen BORDER — solid colour framing the screen */
+    background: var(--zx-cyan-b);
+    padding: 22px;
+    font-family: var(--font);
+    color: var(--ink);
+    -webkit-font-smoothing: none;
+    font-smooth: never;
+  }
+  /* the SCREEN — black paper the program prints onto */
+  .screen {
+    max-width: 880px;
+    margin: 0 auto;
+    background: var(--paper);
+    border: 2px solid var(--zx-white);
+    padding: 0 0 40px;
+    image-rendering: pixelated;
+  }
+  .screen, .screen * { text-rendering: geometricPrecision; }
+
+  /* ---------- rainbow stripe ---------- */
+  .rainbow { height: 12px; display: flex; }
+  .rainbow > i { flex: 1; }
+  .rainbow .r { background: var(--zx-red); }
+  .rainbow .y { background: var(--zx-yellow); }
+  .rainbow .g { background: var(--zx-green); }
+  .rainbow .c { background: var(--zx-cyan); }
+
+  /* ---------- masthead: retro boot-menu pastiche ---------- */
+  .boot { padding: 30px 34px 26px; border-bottom: 2px solid var(--zx-white); }
+  .boot .copy { color: var(--zx-white); font-size: 13px; letter-spacing: 1px; }
+  .boot h1 {
+    margin: 18px 0 4px;
+    font-size: clamp(30px, 7.2vw, 56px);
+    line-height: 0.92;
+    letter-spacing: 4px;
+    color: var(--zx-white);
+    font-weight: 700;
+    text-shadow: 3px 3px 0 var(--zx-red), 6px 6px 0 var(--zx-blue);
+  }
+  .boot .tag { color: var(--zx-cyan); font-size: 15px; letter-spacing: 2px; margin-top: 10px; }
+  .boot .ver { color: var(--zx-green); font-size: 13px; margin-top: 18px; letter-spacing: 1px; }
+
+  .menu { margin: 24px 0 6px; display: grid; gap: 6px; max-width: 520px; }
+  .menu .item {
+    font-size: 15px; letter-spacing: 2px; padding: 4px 10px;
+    color: var(--zx-white); border: 1px solid transparent;
+  }
+  .menu .item .k { color: var(--zx-yellow); }
+  .menu .item .s { color: var(--zx-grey); font-size: 11px; letter-spacing: 1px; }
+  /* FLASH bar — selected line swaps ink/paper */
+  .menu .item.sel { background: var(--zx-yellow); color: var(--zx-black); }
+  .menu .item.sel .k, .menu .item.sel .s { color: var(--zx-black); }
+  .boot .prompt { color: var(--zx-white); font-size: 13px; margin-top: 20px; letter-spacing: 1px; }
+  .boot .prompt b { background: var(--zx-white); color: var(--zx-black); padding: 0 6px; }
+
+  .load { margin: 22px 0 0; display: flex; flex-wrap: wrap; gap: 10px; }
+  .load a {
+    font-size: 13px; letter-spacing: 2px; padding: 5px 12px; text-decoration: none;
+    color: var(--zx-black); background: var(--zx-green); border: 1px solid var(--zx-green);
+  }
+  .load a.alt { color: var(--zx-cyan); background: transparent; border-color: var(--zx-cyan); }
+  .load a:hover { background: var(--zx-white); color: var(--zx-black); border-color: var(--zx-white); }
+
+  /* ---------- body ---------- */
+  main { padding: 8px 34px 0; }
+  section { margin: 40px 0 0; scroll-margin-top: 14px; }
+
+  h2 {
+    font-size: 13px; letter-spacing: 2px; margin: 0 0 4px;
+    color: var(--zx-black); background: var(--zx-cyan);
+    display: inline-block; padding: 3px 10px 4px;
+  }
+  h2 .n { color: var(--zx-black); opacity: 0.55; }
+  h3 { font-size: 14px; letter-spacing: 1px; color: var(--zx-yellow); margin: 22px 0 8px; }
+  p  { font-size: 13.5px; line-height: 1.65; color: var(--zx-white); margin: 9px 0; max-width: 74ch; }
+  .lead { color: var(--zx-green); }
+  strong { color: var(--zx-cyan); font-weight: 700; }
+  em { color: var(--zx-yellow); font-style: normal; }
+  .red { color: var(--zx-red); }
+  .grn { color: var(--zx-green); }
+  .cyn { color: var(--zx-cyan); }
+  .ylw { color: var(--zx-yellow); }
+  .mag { color: var(--zx-magenta); }
+  .wht { color: var(--zx-white); }
+
+  ul { margin: 8px 0; padding-left: 0; list-style: none; }
+  li { font-size: 13.5px; line-height: 1.6; color: var(--zx-white); margin: 5px 0; padding-left: 18px; position: relative; }
+  li::before { content: "•"; position: absolute; left: 2px; color: var(--zx-magenta); }
+
+  /* keycap — bright key on black, FLASHes via .on */
+  .key {
+    display: inline-block; font-family: var(--font); font-size: 12px; letter-spacing: 1px;
+    color: var(--zx-yellow); border: 1px solid var(--zx-yellow);
+    padding: 0 6px; line-height: 1.5; white-space: nowrap;
+    transition: none;
+  }
+  .key.on { background: var(--zx-yellow); color: var(--zx-black); }
+
+  /* key table */
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  caption { text-align: left; color: var(--zx-magenta); font-size: 12px; letter-spacing: 2px; padding: 6px 0; }
+  th, td { text-align: left; padding: 6px 12px; font-size: 13px; border: 1px solid #1d1d1d; vertical-align: top; }
+  thead th { color: var(--zx-black); background: var(--zx-green); letter-spacing: 1px; }
+  td:first-child { white-space: nowrap; color: var(--zx-yellow); }
+  td.act { color: var(--zx-white); white-space: normal; }
+  td.hero { color: var(--zx-cyan); }
+
+  /* a "what's on screen" figure: a framed mono diagram */
+  .fig {
+    margin: 14px 0; border: 1px solid var(--zx-cyan);
+    background: #000; padding: 0;
+  }
+  .fig .cap { font-size: 11px; letter-spacing: 2px; color: var(--zx-black); background: var(--zx-cyan); padding: 3px 10px; }
+  .fig pre {
+    margin: 0; padding: 14px 16px; font-family: var(--font);
+    font-size: 12px; line-height: 1.5; color: var(--zx-green); white-space: pre; overflow-x: auto;
+  }
+  .fig pre .b { color: var(--zx-white); }
+  .fig pre .d { color: var(--zx-green-b); }
+  .fig pre .y { color: var(--zx-yellow); }
+  .fig pre .c { color: var(--zx-cyan); }
+  .fig pre .r { color: var(--zx-red); }
+  .fig pre .m { color: var(--zx-magenta); }
+  .fig pre .inv { background: var(--zx-green); color: #000; }
+
+  .note {
+    border: 1px dashed var(--zx-yellow); padding: 10px 14px; margin: 16px 0;
+    color: var(--zx-yellow); font-size: 12.5px; line-height: 1.6;
+  }
+  .note b { color: var(--zx-white); }
+
+  /* live reticle demo — the same painters the game draws, at 2x */
+  .ret { margin: 14px 0; border: 1px solid var(--zx-cyan); background: #000; }
+  .ret .cap {
+    font-size: 11px; letter-spacing: 2px; color: var(--zx-black);
+    background: var(--zx-cyan); padding: 3px 10px;
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between;
+  }
+  .ret canvas { display: block; width: 100%; height: 150px; touch-action: none; cursor: none; }
+  .ret .bar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 8px 10px; border-top: 1px solid #1d1d1d;
+  }
+  .ret .bar .hint { font-size: 11px; color: var(--zx-green); letter-spacing: 1px; margin-right: 4px; }
+  .ret .bar .key { cursor: pointer; }
+
+  footer {
+    margin: 48px 34px 0; padding-top: 18px; border-top: 2px solid var(--zx-white);
+    color: var(--zx-grey); font-size: 12px; letter-spacing: 1px; line-height: 1.7;
+  }
+  footer b { color: var(--zx-white); }
+
+  a { color: var(--zx-cyan); }
+
+  @media print {
+    html, body { background: #fff; }
+    body { padding: 0; }
+    .screen { border: none; max-width: none; }
+    p, li, td { color: #000; }
+    h3 { color: #555; }
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <div class="rainbow"><i class="r"></i><i class="y"></i><i class="g"></i><i class="c"></i></div>
+
+  <!-- ============ MASTHEAD / 128 BOOT ============ -->
+  <header class="boot">
+    <div class="copy">© 2026 CROW ARCHER &middot; MIT LICENCE &middot; NO ENGINE, NO ACCOUNT, NO TRACKING</div>
+    <h1>CROW&nbsp;ARCHER</h1>
+    <div class="tag">SURVIVE THE FLOCK — GAME MANUAL</div>
+
+    <div class="menu" role="img" aria-label="Crow Archer main menu">
+      <div class="item sel"><span class="k">B</span> &nbsp;BRAWL<br/><span class="s">&nbsp;&nbsp;&nbsp;&nbsp;hunt 10 crows &middot; boss fight &middot; scarce drops</span></div>
+      <div class="item"><span class="k">W</span> &nbsp;WAVES<br/><span class="s">&nbsp;&nbsp;&nbsp;&nbsp;survive escalating swarms &middot; endless run</span></div>
+      <div class="item"><span class="k">M</span> &nbsp;MULTIPLAYER<br/><span class="s">&nbsp;&nbsp;&nbsp;&nbsp;up to 4 players &middot; co-op or 2v2 &middot; needs a server</span></div>
+      <div class="item"><span class="k">C</span> &nbsp;CONTROLS</div>
+    </div>
+
+    <div class="ver">HTML5 CANVAS &middot; WEB AUDIO &middot; ONE SELF-CONTAINED FILE &middot; 1056&times;704</div>
+    <div class="prompt">PRESS <b>B</b> TO BEGIN &middot; USE CURSORS TO MOVE &middot; THIS IS A PAPER MANUAL FOR A LIVE GAME</div>
+
+    <div class="load">
+      <a href="https://mrbisonte.github.io/crow-archer/">&#9654; PLAY NOW</a>
+      <a class="alt" href="https://github.com/MrBisonte/crow-archer/raw/master/dist/index.html">&#8659; DOWNLOAD &middot; PLAYS OFFLINE</a>
+      <a class="alt" href="https://github.com/MrBisonte/crow-archer">&#8984; SOURCE ON GITHUB</a>
+    </div>
+  </header>
+
+  <main>
+
+  <!-- ============ INTRO ============ -->
+  <section>
+    <p class="lead">SURVIVE THE FLOCK. KILL THE CROW KING. THEN THE TWO DARK BOSSES WAITING IN HIS CASTLE.</p>
+    <p>This is a paper manual for a live game: every kit, key and number described
+    here is <strong>real</strong> — it documents the actual shipped build and nothing else.
+    No feature is described that the game does not have.</p>
+    <p>The whole game runs on one canvas, in one file, with <strong>every sound synthesized
+    at runtime</strong> — no audio assets, no sprites on disk, nothing to install. Download it
+    and it plays offline, forever.</p>
+  </section>
+
+  <!-- ============ THE SCREEN ============ -->
+  <section id="screen">
+    <h2><span class="n">01 ·</span> THE SCREEN</h2>
+    <p>One HUD strip across the top, the arena below it. Everything you need to read
+    mid-fight is on that strip; nothing is hidden in a submenu.</p>
+
+    <div class="fig">
+      <div class="cap">FIG 1 — THE HUD, MID-RUN</div>
+<pre> <span class="b">SCORE:014</span>  <span class="d">KILLS:07/10</span>   <span class="r">&hearts; &hearts; &hearts; &hearts;</span> <span class="d">&hearts; &hearts; &hearts; &hearts;</span>   <span class="y">&#9654;16/16</span>  <span class="c">&#9670;57</span>      <span class="grn">BRAWL</span>
+ <span class="d">&#9500;&#9472; score      &#9500;&#9472; kill count   &#9500;&#9472; health   &#9500;&#9472; ammo  &#9500;&#9472; feathers  &#9492;&#9472; mode</span>
+<span class="m">&#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;</span>
+<span class="m">&#9474;</span>  <span class="d">&#9679;</span>      <span class="d">&#9650;</span>          <span class="b">&#9679;&#9679;</span>        <span class="d">&#9650;</span>     <span class="d">&#9679;</span>    <span class="y">&#9670;</span>       <span class="m">&#9474;</span>
+<span class="m">&#9474;</span>       <span class="c">&#9608;&#9608;</span>   <span class="grn">&#9650;</span>       <span class="d">&#9679;</span>      <span class="c">&#9608;&#9608;</span>            <span class="d">&#9650;</span>  <span class="m">&#9474;</span>   <span class="d">&#9472; arena, 33&times;21 tiles</span>
+<span class="m">&#9474;</span>   <span class="d">&#9650;</span>       <span class="d">&#9679;</span>     <span class="r">&#9679;</span>          <span class="d">&#9650;</span>    <span class="c">&#9608;&#9608;</span>       <span class="m">&#9474;</span>
+<span class="m">&#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;</span>
+   <span class="grn">&#9650;</span> you    <span class="d">&#9679;</span> crow    <span class="c">&#9608;&#9608;</span> water    <span class="d">&#9650;</span> tree    <span class="y">&#9670;</span> pickup    <span class="r">&#9679;</span> white crow</pre>
+    </div>
+
+    <ul>
+      <li><strong>Health</strong> — hearts, filled and empty. There is no regeneration; what
+        you lose stays lost for the run.</li>
+      <li><strong>Kill count</strong> — counts up to the boss. At <em>10</em>, the Crow King arrives.</li>
+      <li><strong>Feathers</strong> <span class="cyn">&#9670;</span> — the meta-currency, kept in
+        <em>localStorage</em> between runs. Spend them in the inventory (§04).</li>
+      <li><strong>Boss HP</strong> — replaces the kill counter with a bar the moment a boss lands.</li>
+      <li><strong>White crows</strong> <span class="red">&#9679;</span> — passive until the Crow King
+        screeches. Then all of them come for you at once.</li>
+    </ul>
+  </section>
+
+  <!-- ============ CHARACTERS ============ -->
+  <section id="characters">
+    <h2><span class="n">02 ·</span> THE FOUR</h2>
+    <p>Pick one before a run. They do not play alike — the difficulty on each is the
+    game's own rating, printed on the character-select screen.</p>
+
+    <h3><span class="grn">ARCHER</span> &mdash; <span class="ylw">MEDIUM</span></h3>
+    <p>The classic. Fastest shots, weakest hit; about five to kill an equal fight.</p>
+    <ul>
+      <li><strong>Bow</strong> — quiver of 10, up to <em>3 arrows in flight</em> at once.</li>
+      <li><strong>Dynamite</strong> — hold to charge, release to throw. Clears tiles and hurts bosses.</li>
+      <li><strong>Pickups</strong> — fire arrows (leave burning patches), ricochet arrows (bounce off walls, faster each bounce).</li>
+    </ul>
+
+    <h3><span class="cyn">WIZARD</span> &mdash; <span class="red">EXTRA HARD</span></h3>
+    <p>Teleguided damage and area control, with nothing to hide behind up close.</p>
+    <ul>
+      <li><strong>Magic bolts</strong> — 2s cooldown, they <em>steer toward the nearest enemy</em> on their own.</li>
+      <li><strong>Lightning Storm</strong> — instant AoE around you; levels rock, trees and huts.</li>
+      <li><strong>Pickups</strong> — fire bolt (3 dmg, homing), laser (3 dmg, <em>passes through walls</em>).</li>
+    </ul>
+
+    <h3><span class="wht">KNIGHT</span> &mdash; <span class="ylw">HARD</span></h3>
+    <p>Frontline. No answer at range at all, and the only one who does not need one.</p>
+    <ul>
+      <li><strong>Long spear</strong> — melee reach, and the thrust <em>lands twice per swing</em>.</li>
+      <li><strong>Block</strong> — passive, no key. Banks one absorbed hit every 10 seconds, by itself.</li>
+      <li><strong>Whirlwind</strong> — a spinning AoE that chews through terrain.</li>
+      <li><strong>Pickups</strong> — Iron Javelin (thrown, pierces), Fire Sword (2&times; damage and reach, 8s).</li>
+    </ul>
+
+    <h3><span class="ylw">RANGER</span> &mdash; <span class="grn">EASY</span></h3>
+    <p>Skirmisher. Three chances to land a hit instead of one.</p>
+    <ul>
+      <li><strong>Crossbow</strong> — one press fires <em>3 independent bolts</em> in a narrow spread, each 30% weaker than an arrow.</li>
+      <li><strong>Satchel</strong> — first click throws it inert; second click arms a 3s fuse. Your own bolt sets it off early, armed or not.</li>
+      <li><strong>Pickups</strong> — fire and ricochet bolts, same effects the archer gets.</li>
+    </ul>
+  </section>
+
+  <!-- ============ THE KEYS ============ -->
+  <section id="keys">
+    <h2><span class="n">03 ·</span> THE KEYS</h2>
+    <p>The whole scheme in one rule: <strong>cursors move &middot; the mouse aims &middot;
+    right-click is your second weapon.</strong></p>
+
+    <h3>YOUR RETICLE</h3>
+    <p>The game hides the system cursor while you are in the arena and draws its own
+    in its place — <strong>a different one per character</strong>. Two of them turn to
+    face your aim, because the weapon behind them does.</p>
+
+    <div class="ret">
+      <div class="cap"><span>FIG 2 — THE FOUR RETICLES, LIVE</span><span>SHOWN AT 2&times; SIZE</span></div>
+      <canvas id="ret-canvas" aria-label="Interactive demo: each character's aim reticle following the pointer"></canvas>
+      <div class="bar">
+        <span class="hint">MOVE YOUR POINTER IN THE BOX &#9656;</span>
+        <button class="key on" type="button" data-char="archer">A ARCHER</button>
+        <button class="key" type="button" data-char="wizard">W WIZARD</button>
+        <button class="key" type="button" data-char="knight">K KNIGHT</button>
+        <button class="key" type="button" data-char="ranger">X RANGER</button>
+      </div>
+    </div>
+
+    <ul>
+      <li><span class="grn">ARCHER</span> — a scope ring with the cross showing through it, for the longbow's precision.</li>
+      <li><span class="cyn">WIZARD</span> — a wand, <em>turned onto your aim</em>, its tip sparking on a pulse.</li>
+      <li><span class="wht">KNIGHT</span> — a spearhead, <em>turned onto your aim</em>, pointing where the thrust lands.</li>
+      <li><span class="ylw">RANGER</span> — a plain crosshair, the honest read for bolts that fly straight.</li>
+    </ul>
+
+    <table>
+      <caption>IN THE ARENA</caption>
+      <thead><tr><th>KEY</th><th>DOES</th></tr></thead>
+      <tbody>
+        <tr><td>&#8592; &#8593; &#8595; &#8594;</td><td class="act">Move</td></tr>
+        <tr><td>MOUSE</td><td class="act">Aim. Your reticle changes with the character you picked</td></tr>
+        <tr><td>SPACE / LEFT-CLICK</td><td class="act">Shoot or cast</td></tr>
+        <tr><td>RIGHT-CLICK</td><td class="act">Second weapon — <span class="cyn">hold</span> to charge (Archer), <span class="cyn">tap</span> (Wizard, Knight), <span class="cyn">tap twice</span> to throw then arm (Ranger)</td></tr>
+        <tr><td>SHIFT</td><td class="act">Sniper mode — slows you down, tightens the shot</td></tr>
+        <tr><td>ESC</td><td class="act">Pause</td></tr>
+        <tr><td>I</td><td class="act">Inventory, while paused — spend feathers</td></tr>
+        <tr><td>R</td><td class="act">Restart, from the game-over screen</td></tr>
+      </tbody>
+    </table>
+    <p class="note"><b>REMAPPABLE.</b> Move, shoot, sniper mode and pause can all be rebound from the
+    <em>CONTROLS</em> screen on the main menu — press <span class="key">C</span> there, then click the
+    row you want to change and press the new key.</p>
+  </section>
+
+  <!-- ============ THE RUN ============ -->
+  <section id="run">
+    <h2><span class="n">04 ·</span> THE RUN</h2>
+    <p>Brawl mode is one continuous run — forest into castle, three bosses, no menu
+    in between. It ends at a win screen or it ends at nothing.</p>
+
+    <div class="fig">
+      <div class="cap">FIG 3 — BRAWL, START TO FINISH</div>
+<pre>  <span class="d">waves of crows</span>
+        <span class="d">&#9474;</span>  <span class="d">10 kills</span>
+        <span class="d">&#9660;</span>
+   <span class="r">THE CROW KING</span>  <span class="d">&#9472;&#9472;</span> <span class="y">shielded &#8594; open &#8594; maybe shielded again</span>
+        <span class="d">&#9474;</span>
+        <span class="d">&#9660;</span>  <span class="d">the forest burns to ash</span>
+  <span class="c">THE CASTLE</span>  <span class="d">&#9472;&#9472;</span> <span class="m">9 skeleton waves, no kill target</span>
+        <span class="d">&#9474;</span>
+        <span class="d">&#9660;</span>
+   <span class="m">THE DARK ARCHER</span>  <span class="d">&#9472;&#9472;</span> <span class="d">keeps its distance</span>
+        <span class="d">&#9474;</span>
+        <span class="d">&#9660;</span>
+   <span class="m">THE DARK KNIGHT</span>  <span class="d">&#9472;&#9472;</span> <span class="d">closes it fast</span>
+        <span class="d">&#9474;</span>
+        <span class="d">&#9660;</span>
+       <span class="b">&#9733; WIN &#9733;</span></pre>
+    </div>
+
+    <h3>THE NINE WAVES</h3>
+    <p>No kill target in the castle — clearing a wave's last skeleton starts the next.
+    Three kinds, three waves each, growing <em>3 &#8594; 4 &#8594; 5</em> within each kind, so every
+    new threat starts light and ends heavy.</p>
+    <table>
+      <caption>THE CASTLE GAUNTLET</caption>
+      <thead><tr><th>WAVES</th><th>KIND</th><th>WHAT IT DOES</th></tr></thead>
+      <tbody>
+        <tr><td>1&ndash;3</td><td class="hero">NORMAL</td><td class="act">Walks straight at you. One contact hit.</td></tr>
+        <tr><td>4&ndash;6</td><td class="hero"><span class="red">FIRE</span></td><td class="act">Same approach — but <strong>explodes when it dies</strong>, for 1 damage in a 50px radius. Do not stand over the kill.</td></tr>
+        <tr><td>7&ndash;9</td><td class="hero"><span class="cyn">ICE</span></td><td class="act">Same again, plus an ice bolt every 3s aimed where you are. A hit costs 1 and <strong>freezes you for 3 seconds</strong> — no moving, no aiming, no attacking.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>FEATHERS</h3>
+    <p>Kills pay out in feathers <span class="cyn">&#9670;</span>, which survive the run in
+    <em>localStorage</em>. Spend them from the inventory (<span class="key">ESC</span> then
+    <span class="key">I</span>) on more arrows, more health, more range, more speed. They are the
+    only thing that carries forward.</p>
+  </section>
+
+  <!-- ============ BOSSES ============ -->
+  <section id="bosses">
+    <h2><span class="n">05 ·</span> THE THREE</h2>
+
+    <h3><span class="red">THE CROW KING</span></h3>
+    <p>Orbits you, charges in, screeches — and the screech turns every white crow on the
+    map hostile at once. He summons bats on a timer while he does it.</p>
+    <p>His <strong>shield</strong> is the whole fight, and it runs on a loop:</p>
+    <ul>
+      <li><strong>10 seconds</strong> behind a rotating <span class="cyn">blue</span> shield — fully immune, nothing you do lands.</li>
+      <li><strong>5 seconds</strong> open. This is the window. Spend it.</li>
+      <li>Then a <strong>65% chance</strong> to re-shield for another 5 (<span class="mag">purple</span> ring this time), up to <em>3 times per 30 seconds</em>.</li>
+    </ul>
+    <p>Kill him and the forest burns to ash around you. The castle opens.</p>
+
+    <h3><span class="mag">THE DARK ARCHER</span> &amp; <span class="mag">THE DARK KNIGHT</span></h3>
+    <p>Corrupted echoes of two of your own. The archer's silhouette keeps a bow drawn on
+    you; the knight's keeps a spear that extends on every charge. Neither carries a shield
+    — <strong>every hit lands</strong>, from the first frame.</p>
+    <table>
+      <caption>CASTLE BOSSES</caption>
+      <thead><tr><th></th><th>MOVEMENT</th><th>ATTACKS</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="hero">DARK ARCHER</td>
+          <td class="act">Orbits at range. Never closes in.</td>
+          <td class="act">Three-bolt volley &middot; an occasional <strong>lobbed bomb</strong> that goes off in a radius &middot; summons an <span class="cyn">ice</span> skeleton now and then</td>
+        </tr>
+        <tr>
+          <td class="hero">DARK KNIGHT</td>
+          <td class="act">Short lead-in, then charges — often. Sometimes halts mid-fight into a <strong>whirlwind</strong>.</td>
+          <td class="act">A harder contact hit than the Crow King's charge &middot; summons a <span class="red">fire</span> skeleton now and then</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note"><b>FIRE WORKS ON ALL THREE.</b> A fire arrow, a fire bolt or the Fire Sword ignites
+    any boss the same way, and the burn keeps ticking after the hit lands.</p>
+  </section>
+
+  <!-- ============ THE MAP ============ -->
+  <section id="map">
+    <h2><span class="n">06 ·</span> THE MAP</h2>
+    <p>A <strong>33&times;21 grid</strong>, generated fresh from a new seed every run — no two
+    are the same, and none of them are hand-drawn.</p>
+    <ul>
+      <li><strong>Rock</strong> stops you and stops arrows. <strong>Water</strong> stops you but
+        <em>not</em> arrows. <strong>Trees</strong> block both, until they burn.</li>
+      <li><strong>It does not stay put.</strong> Dynamite, Lightning Storm and Whirlwind tear
+        down rock, trees and huts <em>permanently</em>. The map you finish a fight on is never
+        the one you started it on.</li>
+      <li><strong>Every tree burns to ash</strong> the moment a boss arrives, opening the arena
+        for the fight.</li>
+    </ul>
+    <p>Two themes share that grid and every one of those rules —
+    <span class="grn">FOREST</span> (boulders, trees) and <span class="cyn">CASTLE</span>
+    (stone walls, pillars). The castle stage always uses the second; in multiplayer the host
+    picks either one.</p>
+  </section>
+
+  <!-- ============ MULTIPLAYER ============ -->
+  <section id="multiplayer">
+    <h2><span class="n">07 ·</span> MULTIPLAYER</h2>
+    <p>Up to <strong>four players</strong> in a room — co-op or 2v2 — on a fresh generated map
+    every match. No boss here: a match plays to a frag target or a time limit, then everyone
+    lands back in the lobby.</p>
+
+    <table>
+      <caption>JOINING A GAME</caption>
+      <thead><tr><th>KEY</th><th>DOES</th></tr></thead>
+      <tbody>
+        <tr><td>M</td><td class="act">Open multiplayer from the main menu</td></tr>
+        <tr><td>H</td><td class="act">Host — shows a <strong>four-letter code</strong> to read out</td></tr>
+        <tr><td>J</td><td class="act">Join — type the code, press <span class="key">ENTER</span></td></tr>
+        <tr><td>A / W / K / X</td><td class="act">Pick archer, wizard, knight or ranger</td></tr>
+        <tr><td>D / C</td><td class="act">Host only: deathmatch or co-op</td></tr>
+        <tr><td>G / V</td><td class="act">Host only: forest or castle map</td></tr>
+        <tr><td>F / T</td><td class="act">Host only: play to a frag target (10&ndash;30) or a time limit (5&ndash;10 min). Pick one, not both</td></tr>
+        <tr><td>R</td><td class="act">Ready up. The match starts when the last player does</td></tr>
+      </tbody>
+    </table>
+
+    <p>Everyone carries their own second weapon here too, all toned down from the
+    single-player numbers — a duel is not a boss fight. Everyone also starts behind a
+    <strong>one-hit shield</strong> that comes back when you respawn, and any hit buys you a
+    third of a second of immunity, so a volley cannot delete you.</p>
+    <p>Every fifteen seconds or so a lone <strong>crow</strong> drifts across the arena. It dies
+    to one hit and drops something where it falls: a fresh shield, or fire that doubles your
+    damage for eight seconds.</p>
+
+    <p class="note"><b>IT NEEDS A SERVER.</b> Multiplayer will not run off the downloaded file
+    alone — someone has to host. There is a one-command Docker image and a Railway walkthrough
+    in the <a href="https://github.com/MrBisonte/crow-archer#multiplayer">README</a>.</p>
+  </section>
+
+  </main>
+
+  <footer>
+    <b>CROW ARCHER — GAME MANUAL.</b> Every kit, key and number
+    documents the real build; no feature is described that the game does not have.<br/>
+    The reticles in FIG 2 are the game's own painters, ported line for line.<br/>
+    &copy; 2026 &middot; <a href="https://mrbisonte.github.io/crow-archer/">PLAY</a> &middot;
+    <a href="https://github.com/MrBisonte/crow-archer">SOURCE</a> &middot;
+    <a href="https://github.com/MrBisonte/crow-archer/blob/master/docs/manual.md">FULL MECHANICS REFERENCE</a> &middot;
+    <a href="https://github.com/MrBisonte/crow-archer/blob/master/LICENSE">MIT LICENCE</a>
+  </footer>
+
+  <div class="rainbow"><i class="r"></i><i class="y"></i><i class="g"></i><i class="c"></i></div>
+
+</div>
+
+<script>
+/* ================================================================
+   FIG 2 — the live reticle demo.
+
+   The four painters below are ported verbatim from RETICLE_PAINTERS in
+   src/legacy/game.js, down to the radii, the pulse rates and the colours,
+   so the manual shows the real thing rather than an artist's impression.
+   The only departures: they are drawn at 2x (these are ~10px shapes, and
+   this is a page you read, not a game you play), and the knight's and
+   wizard's aim angle is taken from the marker on the left standing in for
+   your character, exactly as the game takes it from the player.
+   ================================================================ */
+(function () {
+  var canvas = document.getElementById("ret-canvas");
+  if (!canvas || !canvas.getContext) return;
+  var ctx = canvas.getContext("2d");
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("[data-char]"));
+
+  var CHAR_COLOR = { archer: "#39FF14", wizard: "#8888FF", knight: "#C8C8E8", ranger: "#FFCC00" };
+  var selected = "archer";
+  var w = 0, h = 0;            // CSS pixels
+  var px = 0, py = 0;          // the "you" marker
+  var mx = 0, my = 0;          // pointer
+  var pointed = false;         // has the pointer ever been inside
+  var running = false;
+
+  /* Idempotent: matches the backing store to the CSS box at the current pixel
+     ratio, and does nothing when they already agree. Cheap enough to call at
+     the top of every draw, which is what keeps the figure crisp even when the
+     ResizeObserver below is starved (a hidden tab throttles both it and rAF). */
+  function resize() {
+    var dpr = window.devicePixelRatio || 1;
+    var r = canvas.getBoundingClientRect();
+    var bw = Math.round(r.width * dpr), bh = Math.round(r.height * dpr);
+    if (canvas.width === bw && canvas.height === bh && w === r.width) return false;
+    w = r.width; h = r.height;
+    canvas.width = bw; canvas.height = bh;   // this also clears it; a draw always follows
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    px = 58; py = h / 2;
+    if (!pointed) { mx = w * 0.68; my = h * 0.34; }
+    return true;
+  }
+
+  /* ---- the painters, verbatim from src/legacy/game.js ---- */
+
+  function ranger(t) {
+    var pulse = 0.7 + 0.3 * Math.sin(t * 4);
+    ctx.globalAlpha = 0.25 + 0.55 * pulse;
+    ctx.strokeStyle = "#FFCC00"; ctx.lineWidth = 1.5;
+    ctx.shadowColor = "#FFCC00"; ctx.shadowBlur = 5 + 3 * pulse;
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) {
+      ctx.beginPath(); ctx.moveTo(d[0] * 4, d[1] * 4); ctx.lineTo(d[0] * 11, d[1] * 11); ctx.stroke();
+    });
+    ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "#FFCC00";
+    ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function archer(t) {
+    var pulse = 0.7 + 0.3 * Math.sin(t * 4);
+    var R = 9;
+    ctx.globalAlpha = 0.25 + 0.5 * pulse;
+    ctx.strokeStyle = "#39FF14"; ctx.lineWidth = 1.4;
+    ctx.shadowColor = "#39FF14"; ctx.shadowBlur = 5 + 3 * pulse;
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.stroke();
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) {
+      ctx.beginPath();
+      ctx.moveTo(d[0] * (R - 4), d[1] * (R - 4));
+      ctx.lineTo(d[0] * (R + 4), d[1] * (R + 4));
+      ctx.stroke();
+    });
+    ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "#39FF14";
+    ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function knight(t, aim) {
+    ctx.rotate(aim);
+    ctx.globalAlpha = 0.75;
+    ctx.shadowColor = "#C8C8E8"; ctx.shadowBlur = 5;
+    ctx.fillStyle = "#C8C8E8";
+    ctx.beginPath();
+    ctx.moveTo(10, 0); ctx.lineTo(0, -4); ctx.lineTo(-3, 0); ctx.lineTo(0, 4);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#8C8CA8"; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(-10, 0); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  function wizard(t, aim) {
+    ctx.rotate(aim);
+    var pulse = 0.5 + 0.5 * Math.sin(t * 6);
+    ctx.globalAlpha = 0.75;
+    ctx.strokeStyle = "#5A3C22"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(4, 0); ctx.stroke();
+    ctx.shadowColor = "#8888FF"; ctx.shadowBlur = 6 + 4 * pulse;
+    ctx.fillStyle = "#8888FF";
+    ctx.beginPath(); ctx.arc(6, 0, 2 + pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#C8C8FF"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(2, 0); ctx.lineTo(10, 0);
+    ctx.moveTo(6, -4); ctx.lineTo(6, 4);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+
+  var PAINTERS = { archer: archer, wizard: wizard, knight: knight, ranger: ranger };
+
+  function draw(now) {
+    resize();
+    var t = now / 1000;
+    var aim = Math.atan2(my - py, mx - px);
+    var col = CHAR_COLOR[selected];
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Faint tile grid, standing in for the arena floor.
+    ctx.strokeStyle = "rgba(0,255,0,0.07)"; ctx.lineWidth = 1;
+    for (var gx = 0; gx <= w; gx += 16) {
+      ctx.beginPath(); ctx.moveTo(gx + 0.5, 0); ctx.lineTo(gx + 0.5, h); ctx.stroke();
+    }
+    for (var gy = 0; gy <= h; gy += 16) {
+      ctx.beginPath(); ctx.moveTo(0, gy + 0.5); ctx.lineTo(w, gy + 0.5); ctx.stroke();
+    }
+
+    // The dotted aim line the archer really draws, from you to the reticle.
+    ctx.save();
+    ctx.globalAlpha = 0.4; ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(mx, my); ctx.stroke();
+    ctx.restore();
+
+    // "You" — a chevron facing the aim, in the character's own colour.
+    ctx.save();
+    ctx.translate(px, py); ctx.rotate(aim);
+    ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.moveTo(7, 0); ctx.lineTo(-5, -5); ctx.lineTo(-2, 0); ctx.lineTo(-5, 5);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = "#C0C0C0"; ctx.font = '10px "Cascadia Mono", Consolas, monospace';
+    ctx.textAlign = "center";
+    ctx.fillText("YOU", px, py + 24);
+    ctx.globalAlpha = 1;
+
+    // The reticle itself, at 2x.
+    ctx.save();
+    ctx.translate(mx, my);
+    ctx.scale(2, 2);
+    PAINTERS[selected](t, aim);
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+
+  function frame(now) {
+    if (!running) return;
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+
+  /* One frame, right now. The pulse wants an animation loop, but the reticle
+     itself is readable standing still — and requestAnimationFrame does not run
+     in a hidden tab, nor for a reader who has asked for reduced motion. Every
+     state change paints once through here, so the figure is never blank and
+     never stale, whether or not the loop is allowed to run. */
+  function renderOnce() { draw(performance.now()); }
+
+  var stillPlease = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function start() {
+    if (stillPlease) { renderOnce(); return; }
+    if (!running) { running = true; requestAnimationFrame(frame); }
+  }
+  function stop() { running = false; }
+
+  function movePointer(clientX, clientY) {
+    var r = canvas.getBoundingClientRect();
+    mx = clientX - r.left; my = clientY - r.top;
+    pointed = true;
+    if (!running) renderOnce();
+  }
+
+  canvas.addEventListener("mousemove", function (e) { movePointer(e.clientX, e.clientY); });
+  canvas.addEventListener("touchstart", function (e) {
+    if (e.touches[0]) { movePointer(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
+  }, { passive: false });
+  canvas.addEventListener("touchmove", function (e) {
+    if (e.touches[0]) { movePointer(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
+  }, { passive: false });
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      selected = b.getAttribute("data-char");
+      buttons.forEach(function (o) { o.classList.toggle("on", o === b); });
+      if (!running) renderOnce();
+    });
+  });
+
+  /* Watch the element's own box, not the window's. A window resize event fires
+     before layout has settled, which left the backing store a few pixels off
+     the CSS box and the reticle faintly blurred. ResizeObserver fires on the
+     box that actually changed, after it changed. */
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () { resize(); renderOnce(); }).observe(canvas);
+  } else {
+    window.addEventListener("resize", function () { resize(); renderOnce(); });
+  }
+  resize();
+  renderOnce();
+
+  // Only animate while the figure is actually on screen.
+  if (window.IntersectionObserver) {
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { en.isIntersecting ? start() : stop(); });
+    }, { threshold: 0 }).observe(canvas);
+  } else {
+    start();
+  }
+})();
+</script>
+</body>
+</html>

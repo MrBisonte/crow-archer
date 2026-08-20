@@ -89,6 +89,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 
 | Doc | For |
 |---|---|
+| [Manual (retro page)](https://mrbisonte.github.io/crow-archer/manual.html) | The same manual, styled — start here if you just want to play |
 | [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
 
