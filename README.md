@@ -17,7 +17,7 @@
 
 Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. Download [`dist/index.html`](dist/index.html) and play, offline, no install.
 
-![Gameplay: the Ranger on the move, a burning tree, a satchel blast, boss entrance cinematic, boss fight](media/gameplay.gif)
+![Gameplay: the Ranger fighting a crow swarm, a satchel blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
 
 - [Play](#play)
 - [Multiplayer](#multiplayer)
