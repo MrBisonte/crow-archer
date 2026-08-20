@@ -494,12 +494,14 @@ function generateMap(kind = 'forest') {
   const rng = mulberry32(mapSeed);
   // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
   const sn = new SimplexNoise(rng);
+  // tileLayer/tileOverlay are built once at startup, so the theme has to be
+  // set here too, not just the tiles. The theme goes on first, without a
+  // repaint of its own, so the reset below is the single pass that paints
+  // every tile: doing it the other way round repaints the whole map twice.
+  tileLayer.usePainters(TILE_THEMES[kind]);
+  tileOverlay.setPalette(ANIMATED_THEMES[kind]);
   tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
     (x, y) => sn.noise2D(x, y), MAP_GEN[kind].density));
-  // tileLayer/tileOverlay are built once at startup, so the theme has to be
-  // set here too, not just the tiles. Once a game start, not a hot path.
-  tileLayer.setPainters(TILE_THEMES[kind]);
-  tileOverlay.setPalette(ANIMATED_THEMES[kind]);
 }
 
 function tileAt(wx, wy) {
