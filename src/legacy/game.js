@@ -713,10 +713,20 @@ function releaseCharge() {
   if (inGame() && selectedChar === 'archer') throwDynamite(Math.min(1, (performance.now() - charge.t0) / 1000));
 }
 
-canvas.addEventListener('mousemove', e => {
+// Listens on the window, not the canvas, and clamps into it.
+//
+// On the canvas alone, aim silently froze the moment the pointer crossed the
+// edge: the last event inside was the last aim update, so a shot fired while
+// reaching for something off to the side went wherever the pointer had last
+// been seen rather than where it was pointing. Clamping keeps the aim pinned
+// to the nearest edge instead, which is what the player means when they push
+// past the border, and costs nothing while the pointer is inside.
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+window.addEventListener('mousemove', e => {
   const r = canvas.getBoundingClientRect();
-  mouse.x = (e.clientX - r.left) * (CONFIG.canvasW / r.width);
-  mouse.y = (e.clientY - r.top)  * (CONFIG.canvasH / r.height);
+  if (r.width === 0 || r.height === 0) return;   // canvas not laid out yet
+  mouse.x = clamp((e.clientX - r.left) * (CONFIG.canvasW / r.width), 0, CONFIG.canvasW);
+  mouse.y = clamp((e.clientY - r.top) * (CONFIG.canvasH / r.height), 0, CONFIG.canvasH);
 });
 let mouseRightHeld = false;
 // Held, not just pressed: multiplayer samples the button once per frame rather

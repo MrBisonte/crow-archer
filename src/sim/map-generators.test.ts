@@ -56,13 +56,33 @@ describe('MazeTerrain', () => {
     }
   });
 
-  it('opens every cell, so no part of the maze is walled off unused', () => {
+  // The reason corridor width is a parameter: a one-tile corridor is 32px and
+  // a body is about 20, so there is no room to step around an unkillable boss.
+  it('carves corridors two tiles wide, so a body can pass another thing', () => {
     const grid = maze(5);
-    for (let r = 1; r < MAP_ROWS - 1; r += 2) {
-      for (let c = 1; c < MAP_COLS - 1; c += 2) {
-        expect(tilePassable(grid[r]?.[c]), `cell ${r},${c} was never carved`).toBe(true);
+    let widest = 0;
+    for (let r = 0; r < MAP_ROWS - 1; r++) {
+      for (let c = 0; c < MAP_COLS - 1; c++) {
+        const block =
+          tilePassable(grid[r]?.[c]) &&
+          tilePassable(grid[r]?.[c + 1]) &&
+          tilePassable(grid[r + 1]?.[c]) &&
+          tilePassable(grid[r + 1]?.[c + 1]);
+        if (block) widest = 2;
       }
     }
+    expect(widest, 'no 2x2 open block: corridors are still one tile wide').toBe(2);
+  });
+
+  it('honours a one-tile corridor when asked for one', () => {
+    const narrow = new MazeTerrain({ braid: 0, corridor: 1 }).generate(
+      MAP_ROWS,
+      MAP_COLS,
+      mulberry32(5),
+      null,
+    );
+    expect(openTilesConnected(narrow)).toBe(true);
+    expect(openCount(narrow)).toBeLessThan(openCount(maze(5, 0)));
   });
 
   it('builds walls out of ROCK, which blocks shots as well as bodies', () => {
@@ -71,27 +91,17 @@ describe('MazeTerrain', () => {
     expect(kinds).toEqual(new Set([TILE.EMPTY, TILE.ROCK]));
   });
 
-  it('braiding at 1 leaves strictly fewer dead ends than a perfect maze', () => {
-    const deadEnds = (grid: TileGrid): number => {
-      let n = 0;
-      for (let r = 1; r < MAP_ROWS - 1; r += 2) {
-        for (let c = 1; c < MAP_COLS - 1; c += 2) {
-          if (!tilePassable(grid[r]?.[c])) continue;
-          let exits = 0;
-          for (const [dr, dc] of [
-            [-1, 0],
-            [1, 0],
-            [0, -1],
-            [0, 1],
-          ]) {
-            if (tilePassable(grid[r + dr!]?.[c + dc!])) exits++;
-          }
-          if (exits === 1) n++;
-        }
-      }
-      return n;
-    };
-    expect(deadEnds(maze(21, 1))).toBeLessThan(deadEnds(maze(21, 0)));
+  // Braiding is only observable as extra open tiles: it opens passages that a
+  // perfect maze leaves walled. Asserting that, rather than recounting dead
+  // ends here, keeps the test from restating the layout arithmetic it is
+  // supposed to be checking.
+  it('opens strictly more of the map at full braid than at none', () => {
+    let opened = 0;
+    for (const seed of SEEDS.slice(0, 20)) {
+      expect(openCount(maze(seed, 1))).toBeGreaterThanOrEqual(openCount(maze(seed, 0)));
+      if (openCount(maze(seed, 1)) > openCount(maze(seed, 0))) opened++;
+    }
+    expect(opened, 'full braid never opened a single passage in 20 seeds').toBeGreaterThan(15);
   });
 
   it('degrades to solid rock rather than throwing on a grid too small to hold a cell', () => {
