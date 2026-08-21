@@ -280,8 +280,23 @@ Proposal.
 A maze changes the threat model before it changes anything else. Sightlines
 drop from most of the arena to one corridor, which means enemies that walk at
 you in the open are trivial and enemies that appear around a corner are not.
-The existing skeletons walk straight at the player. In a maze they cannot, so
-they need the pathfinding that only aggro crows currently use.
+
+Movement is in better shape than expected. Skeletons already path: they call
+`pathScheduler.request(s)` (`src/legacy/game.js:1999`) and only beeline as a
+fallback when no path exists. Aggro crows do the same. Both work in a maze
+with no change at all.
+
+Two things do break, and neither is movement.
+
+**Passive crows fly through walls.** A passive crow moves `c.x -= spd * dt`
+with no terrain check and wraps when it leaves the left edge
+(`src/legacy/game.js:2168`). On an open forest map that reads as a bird
+crossing the sky. Inside a maze it reads as a bug.
+
+**Screech-aggro almost never fires.** `aggroCrows` only converts crows that
+pass a `tileVisible` line-of-sight check (`src/legacy/game.js:2204`), which is
+correct on an open map and nearly always false in a corridor. Any maze
+antagonist that summons or aggros needs a rule that is not line of sight.
 
 The interesting design question is whether the level's antagonist is a boss at
 all. A maze suggests something that hunts: it knows the layout, it moves faster
