@@ -15,7 +15,7 @@
         A R C H E R
 ```
 
-Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. Download [`dist/index.html`](dist/index.html) and play, offline, no install.
+Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. [Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
 
 ![Gameplay: the Ranger fighting a crow swarm, a satchel blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
 
@@ -28,7 +28,7 @@ Survive the flock, kill the Crow King, then the two dark bosses waiting in his c
 
 ## Play
 
-**Single-player**, offline, no server: download [`dist/index.html`](dist/index.html) and open it in any modern browser. Every dependency is inlined.
+**Single-player**, offline, no server: download [`crow-archer.html`](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) from the [latest release](https://github.com/MrBisonte/crow-archer/releases/latest) and open it in any modern browser. Every dependency is inlined, so it plays with the network off.
 
 **Multiplayer** needs a server. See [Multiplayer](#multiplayer).
 
@@ -41,7 +41,7 @@ npm run dev
 
 `npm run dev` alone serves single-player. Multiplayer additionally needs `npm run server`, covered below.
 
-`npm run build` regenerates `dist/index.html`. The committed copy is built from the current `master`.
+`npm run build` writes `dist/index.html`, which is gitignored. Releases are built by CI from the tagged commit and attached as `crow-archer.html`, so what people download is never a stale local copy: `git tag v0.1.0 && git push --tags` is the whole publish step.
 
 ## Multiplayer
 
@@ -68,7 +68,7 @@ See the [manual](docs/manual.md#multiplayer) for hosting others, deploying, and 
 | Aim | Mouse |
 | Shoot / Cast | Space |
 | Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice: throw, then arm (Ranger) |
-| Sniper mode | Shift |
+| Sniper mode / Knight charge | Shift (the knight winds up a charging sweep instead) |
 | Pause | Escape |
 | Inventory | I (while paused) |
 
@@ -89,6 +89,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 
 | Doc | For |
 |---|---|
+| [Manual (retro page)](https://mrbisonte.github.io/crow-archer/manual.html) | The same manual, styled — start here if you just want to play |
 | [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
 

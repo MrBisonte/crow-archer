@@ -32,6 +32,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # The game itself stays at the Pages root; the manual is an extra static
+      # page alongside it, not part of the vite build.
+      - run: cp docs/manual.html dist/manual.html
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

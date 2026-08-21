@@ -26,7 +26,9 @@ Teleguided magic with area control.
 ### Knight
 Frontline melee with a long spear.
 - **Primary:** Spear thrust, 80 px reach along the aim line, 1.5 s cooldown, 1 damage to boss
-- **Special:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 8 s cooldown
+- **Charge (hold Shift):** Winds up in place for up to 3 s, taking no damage while he holds it. Releasing sends him forward at half speed for 1.5 s, sweeping a 45 degree arc 90 px in front. Anything caught in the arc dies outright; the boss takes 1.3x the spear's damage on an instant release, up to 2x at a full hold, once per charge. The invulnerability ends the moment he starts moving. 4 s cooldown
+- **Special:** Block, passive with no keybind. Banks one absorbed hit, then recharges 10 s after that hit is spent
+- **Tool:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 8 s cooldown
 - **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup), Fire Sword (2x damage and range for 8 s, leaves burning patches)
 
 ### Ranger
@@ -180,14 +182,22 @@ It reads `PORT` and answers `/healthz`, which is all any host taking a Dockerfil
 
 Run a single instance. Rooms live in the process's memory, so a second instance would hold rooms the first one cannot see and a player would join a code their friend is not in.
 
-#### On Railway
+#### On Fly
 
-1. New project, deploy from this GitHub repo. The Dockerfile is detected; there is nothing to configure and no start command to set.
-2. Settings → Networking → **Generate Domain**. That URL is the game.
-3. Settings → check the replica count is **1**, and that the region is the one nearest the players.
-4. Leave `PORT` alone. Railway assigns it and the server reads it.
+`fly.toml` in the repo root already describes the machine: one instance, Amsterdam, 256 MB, health check on `/healthz`.
 
-Health checks can point at `/healthz`. Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
+```
+fly launch --no-deploy   # first time only, to create the app
+fly deploy
+```
+
+`fly deploy` builds the Dockerfile and prints the URL. That URL is the game. `fly.toml` sets `PORT` in `[env]` to match `internal_port`, since Fly does not inject it on its own.
+
+Leave the machine count at **1** — `fly scale count 1`. Rooms live in the process's memory, so a second machine would hold rooms the first cannot see, and a player would join a code their friend is not in. Auto-stop is off so the machine does not nap between matches.
+
+Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
+
+Fly over Railway on cost, decided against a €20/month ceiling: this game is bandwidth-bound rather than CPU-bound — roughly 15 KB/s per client, so about 54 MB per player-hour — and egress is $0.02/GB on Fly against $0.05/GB on Railway. Railway Hobby's $5 monthly credit is a floor rather than a discount, so it bills $5 even while idle and its advantage disappears exactly when players arrive. Any host that takes a Dockerfile and assigns `PORT` still works; nothing in the repo is Fly-specific but this file.
 
 #### Playing without deploying
 

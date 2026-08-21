@@ -89,9 +89,21 @@ export function animFrame3(phase: number): 'a' | 'mid' | 'b' {
  * isolated canvas) and static tile art (tiles.ts, a real offset into one
  * shared layer canvas). */
 export function blitPixelGrid(ctx: CanvasRenderingContext2D, grid: PixelGrid, x: number, y: number, scale: number): void {
-  for (const [ry, row] of grid.entries())
-    for (const [rx, c] of row.entries())
-      if (c) { ctx.fillStyle = c; ctx.fillRect(x + rx * scale, y + ry * scale, scale, scale); }
+  // Runs of one colour go out as a single rect. Same pixels either way, but a
+  // per-cell fill costs a fillStyle change per cell, and that state change is
+  // what a full-map repaint actually spends its time on.
+  for (const [ry, row] of grid.entries()) {
+    let start = 0, run: string | null = null;
+    for (let rx = 0; rx <= row.length; rx++) {
+      const c = rx < row.length ? row[rx] ?? null : null;
+      if (c === run) continue;
+      if (run) {
+        ctx.fillStyle = run;
+        ctx.fillRect(x + start * scale, y + ry * scale, (rx - start) * scale, scale);
+      }
+      run = c; start = rx;
+    }
+  }
 }
 
 /** Same blit with every filled cell forced to one color — a flat silhouette

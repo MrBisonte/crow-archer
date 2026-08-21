@@ -44,6 +44,7 @@ export type GameEvent =
   | { type: 'WHIRLWIND_START'; x: number; y: number }
   | { type: 'WHIRLWIND_TICK'; x: number; y: number }
   | { type: 'WHIRLWIND_END'; x: number; y: number }
+  | { type: 'KNIGHT_CHARGE'; x: number; y: number; power: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }
   // Player state
