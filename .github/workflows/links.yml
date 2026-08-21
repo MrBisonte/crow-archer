@@ -33,12 +33,19 @@ jobs:
           # dist/ is a build artifact and deliberately not checked.
           # localhost and the LAN placeholder are instructions for the reader's
           # own machine, not addresses this runner could ever reach.
+          #
+          # Every pattern is single-quoted, and none of them use a group. The
+          # action evals this string in bash, so an unquoted ( or | is a shell
+          # syntax error rather than a regex: the first version of this file
+          # used ^wss?://(localhost|127\.0\.0\.1) and the step died before
+          # lychee ran at all, which reads exactly like a failing link check.
           args: >-
             --no-progress
             --max-retries 2
-            --exclude ^https?://localhost
-            --exclude ^wss?://(localhost|127\.0\.0\.1)
-            --exclude your-lan-ip
+            --exclude '^https?://localhost'
+            --exclude '^wss?://localhost'
+            --exclude '^wss?://127\.0\.0\.1'
+            --exclude 'your-lan-ip'
             README.md
             docs
           fail: true
