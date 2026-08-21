@@ -1,0 +1,44 @@
+name: Links
+
+# Catches the class of bug that shipped a README pointing at a file that had
+# just been deleted: a link that was true when it was written and quietly
+# stopped being true later. Checks both the relative links between docs and the
+# absolute ones out to Pages and Releases.
+#
+# Deliberately NOT a pull-request gate. Half these links leave the building, and
+# an external host having a bad afternoon is not a reason to block a merge — a
+# link checker that cries wolf on unrelated PRs is a link checker somebody turns
+# off. It runs on master, weekly, and on demand, where a red run means "go look"
+# rather than "you are stuck".
+on:
+  push:
+    branches: [master]
+  schedule:
+    # Monday morning, so a link that rotted over the week is found before it is
+    # the thing standing between a player and the download.
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every link in the docs
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # docs as a directory rather than a glob: manual.html arrives in a
+          # separate change, and a glob that matches nothing is a failure for
+          # the wrong reason. A directory is walked for whatever is in it.
+          # dist/ is a build artifact and deliberately not checked.
+          # localhost and the LAN placeholder are instructions for the reader's
+          # own machine, not addresses this runner could ever reach.
+          args: >-
+            --no-progress
+            --max-retries 2
+            --exclude ^https?://localhost
+            --exclude ^wss?://(localhost|127\.0\.0\.1)
+            --exclude your-lan-ip
+            README.md
+            docs
+          fail: true
