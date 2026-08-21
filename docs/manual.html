@@ -532,31 +532,29 @@
   var canvas = document.getElementById("ret-canvas");
   if (!canvas || !canvas.getContext) return;
   var ctx = canvas.getContext("2d");
-  var buttons = Array.prototype.slice.call(document.querySelectorAll("[data-char]"));
+  var buttons = document.querySelectorAll("[data-char]");
 
   var CHAR_COLOR = { archer: "#39FF14", wizard: "#8888FF", knight: "#C8C8E8", ranger: "#FFCC00" };
   var selected = "archer";
   var w = 0, h = 0;            // CSS pixels
   var px = 0, py = 0;          // the "you" marker
-  var mx = 0, my = 0;          // pointer
-  var pointed = false;         // has the pointer ever been inside
-  var running = false;
+  var mx = null, my = null;    // pointer; null until the reader moves it
+  var raf = 0;                 // animation handle, and the only "is it running" flag
 
   /* Idempotent: matches the backing store to the CSS box at the current pixel
-     ratio, and does nothing when they already agree. Cheap enough to call at
-     the top of every draw, which is what keeps the figure crisp even when the
-     ResizeObserver below is starved (a hidden tab throttles both it and rAF). */
+     ratio, and does nothing when they already agree. Called when the observer
+     below says the box changed, not per frame — a per-frame call would read
+     layout 60 times a second to discover nothing had moved. */
   function resize() {
     var dpr = window.devicePixelRatio || 1;
     var r = canvas.getBoundingClientRect();
     var bw = Math.round(r.width * dpr), bh = Math.round(r.height * dpr);
-    if (canvas.width === bw && canvas.height === bh && w === r.width) return false;
+    if (canvas.width === bw && canvas.height === bh && w === r.width) return;
     w = r.width; h = r.height;
     canvas.width = bw; canvas.height = bh;   // this also clears it; a draw always follows
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     px = 58; py = h / 2;
-    if (!pointed) { mx = w * 0.68; my = h * 0.34; }
-    return true;
+    if (mx === null) { mx = w * 0.68; my = h * 0.34; }
   }
 
   /* ---- the painters, verbatim from src/legacy/game.js ---- */
@@ -628,31 +626,27 @@
 
   var PAINTERS = { archer: archer, wizard: wizard, knight: knight, ranger: ranger };
 
-  function draw(now) {
-    resize();
-    var t = now / 1000;
-    var aim = Math.atan2(my - py, mx - px);
-    var col = CHAR_COLOR[selected];
-
-    ctx.clearRect(0, 0, w, h);
-
-    // Faint tile grid, standing in for the arena floor.
+  /* The arena floor. One path for every line rather than one path per line:
+     same pixels, ~65 draw calls saved on each frame. */
+  function drawFloor() {
     ctx.strokeStyle = "rgba(0,255,0,0.07)"; ctx.lineWidth = 1;
-    for (var gx = 0; gx <= w; gx += 16) {
-      ctx.beginPath(); ctx.moveTo(gx + 0.5, 0); ctx.lineTo(gx + 0.5, h); ctx.stroke();
-    }
-    for (var gy = 0; gy <= h; gy += 16) {
-      ctx.beginPath(); ctx.moveTo(0, gy + 0.5); ctx.lineTo(w, gy + 0.5); ctx.stroke();
-    }
+    ctx.beginPath();
+    for (var gx = 0; gx <= w; gx += 16) { ctx.moveTo(gx + 0.5, 0); ctx.lineTo(gx + 0.5, h); }
+    for (var gy = 0; gy <= h; gy += 16) { ctx.moveTo(0, gy + 0.5); ctx.lineTo(w, gy + 0.5); }
+    ctx.stroke();
+  }
 
-    // The dotted aim line the archer really draws, from you to the reticle.
+  /** The dotted aim line the archer really draws, from you to the reticle. */
+  function drawAimLine(col) {
     ctx.save();
     ctx.globalAlpha = 0.4; ctx.setLineDash([3, 5]);
     ctx.strokeStyle = col; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(mx, my); ctx.stroke();
     ctx.restore();
+  }
 
-    // "You" — a chevron facing the aim, in the character's own colour.
+  /** "You" — a chevron facing the aim, in the character's own colour. */
+  function drawYou(col, aim) {
     ctx.save();
     ctx.translate(px, py); ctx.rotate(aim);
     ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 6;
@@ -660,77 +654,94 @@
     ctx.moveTo(7, 0); ctx.lineTo(-5, -5); ctx.lineTo(-2, 0); ctx.lineTo(-5, 5);
     ctx.closePath(); ctx.fill();
     ctx.restore();
-    ctx.shadowBlur = 0;
+
+    ctx.save();
     ctx.globalAlpha = 0.6;
     ctx.fillStyle = "#C0C0C0"; ctx.font = '10px "Cascadia Mono", Consolas, monospace';
     ctx.textAlign = "center";
     ctx.fillText("YOU", px, py + 24);
-    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
 
-    // The reticle itself, at 2x.
+  /** The reticle itself, at 2x. */
+  function drawReticle(t, aim) {
     ctx.save();
     ctx.translate(mx, my);
     ctx.scale(2, 2);
     PAINTERS[selected](t, aim);
     ctx.restore();
-    ctx.shadowBlur = 0;
   }
 
-  function frame(now) {
-    if (!running) return;
-    draw(now);
-    requestAnimationFrame(frame);
+  function draw(now) {
+    var aim = Math.atan2(my - py, mx - px);
+    var col = CHAR_COLOR[selected];
+    ctx.clearRect(0, 0, w, h);
+    drawFloor();
+    drawAimLine(col);
+    drawYou(col, aim);
+    drawReticle(now / 1000, aim);
   }
 
   /* One frame, right now. The pulse wants an animation loop, but the reticle
-     itself is readable standing still — and requestAnimationFrame does not run
-     in a hidden tab, nor for a reader who has asked for reduced motion. Every
-     state change paints once through here, so the figure is never blank and
-     never stale, whether or not the loop is allowed to run. */
-  function renderOnce() { draw(performance.now()); }
+     is readable standing still — and requestAnimationFrame does not run for a
+     reader who has asked for reduced motion. Every state change paints once
+     through here, so the figure is never blank, whether or not the loop runs.
+     The guard lives here rather than at each call site: while the loop is
+     running it repaints within 16ms anyway. */
+  function repaint() { if (!raf) draw(performance.now()); }
 
-  var stillPlease = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var animate = !(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
-  function start() {
-    if (stillPlease) { renderOnce(); return; }
-    if (!running) { running = true; requestAnimationFrame(frame); }
-  }
-  function stop() { running = false; }
+  /* The handle is the running flag. Tracking it separately let stop() clear
+     the flag while a callback was still scheduled, and an IntersectionObserver
+     delivers coalesced records in one call — so a stop/start pair in a single
+     task could slip past the guard and leave two loops running forever. */
+  function frame(now) { draw(now); raf = requestAnimationFrame(frame); }
+  function start() { if (animate && !raf) raf = requestAnimationFrame(frame); }
+  function stop() { cancelAnimationFrame(raf); raf = 0; }
 
   function movePointer(clientX, clientY) {
     var r = canvas.getBoundingClientRect();
     mx = clientX - r.left; my = clientY - r.top;
-    pointed = true;
-    if (!running) renderOnce();
+    repaint();
+  }
+
+  function onTouch(e) {
+    var t = e.touches[0];
+    if (t) { movePointer(t.clientX, t.clientY); e.preventDefault(); }
   }
 
   canvas.addEventListener("mousemove", function (e) { movePointer(e.clientX, e.clientY); });
-  canvas.addEventListener("touchstart", function (e) {
-    if (e.touches[0]) { movePointer(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
-  }, { passive: false });
-  canvas.addEventListener("touchmove", function (e) {
-    if (e.touches[0]) { movePointer(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
-  }, { passive: false });
+  canvas.addEventListener("touchstart", onTouch, { passive: false });
+  canvas.addEventListener("touchmove", onTouch, { passive: false });
 
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
       selected = b.getAttribute("data-char");
       buttons.forEach(function (o) { o.classList.toggle("on", o === b); });
-      if (!running) renderOnce();
+      repaint();
     });
   });
 
   /* Watch the element's own box, not the window's. A window resize event fires
      before layout has settled, which left the backing store a few pixels off
-     the CSS box and the reticle faintly blurred. ResizeObserver fires on the
-     box that actually changed, after it changed. */
+     the CSS box and the reticle faintly blurred.
+
+     device-pixel-content-box, not the default content-box: the canvas is sized
+     in CSS pixels (width:100%, height:150px), so dragging the window to a
+     monitor with a different pixel ratio changes the backing store it needs
+     without changing its CSS box, and a content-box observer never fires. That
+     is the one resize this cannot otherwise see. Safari does not support the
+     option yet and throws, so it falls back to the plain observer. */
   if (window.ResizeObserver) {
-    new ResizeObserver(function () { resize(); renderOnce(); }).observe(canvas);
+    var ro = new ResizeObserver(function () { resize(); repaint(); });
+    try { ro.observe(canvas, { box: "device-pixel-content-box" }); }
+    catch (e) { ro.observe(canvas); }
   } else {
-    window.addEventListener("resize", function () { resize(); renderOnce(); });
+    window.addEventListener("resize", function () { resize(); repaint(); });
   }
   resize();
-  renderOnce();
+  draw(performance.now());
 
   // Only animate while the figure is actually on screen.
   if (window.IntersectionObserver) {
