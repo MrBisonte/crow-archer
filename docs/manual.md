@@ -189,9 +189,9 @@ fly launch --no-deploy   # first time only, to create the app
 fly deploy
 ```
 
-`fly deploy` builds the Dockerfile and prints the URL. That URL is the game. Fly assigns `PORT` and the server reads it, so there is nothing to configure.
+`fly deploy` builds the Dockerfile and prints the URL. That URL is the game. `fly.toml` sets `PORT` in `[env]` to match `internal_port`, since Fly does not inject it on its own.
 
-Leave the machine count at **1**. Rooms live in the process's memory, so a second machine would hold rooms the first cannot see; `min_machines_running = 1` with auto-stop off keeps Fly from scaling it out or napping between matches.
+Leave the machine count at **1** — `fly scale count 1`. Rooms live in the process's memory, so a second machine would hold rooms the first cannot see, and a player would join a code their friend is not in. Auto-stop is off so the machine does not nap between matches.
 
 Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
 

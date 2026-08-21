@@ -17,24 +17,29 @@ primary_region = 'ams'
   dockerfile = 'Dockerfile'
 
 [http_service]
+  # Not the default (8080). Must match the server's own fallback, because Fly
+  # does not set PORT unless it is declared in [env] — see the note below.
   internal_port = 8082
-  force_https = true
   # Both false on purpose. Auto-stop would take the idle bill to about nothing,
   # but the live player count has to reach a running server, and any poll from
   # the site would wake the machine anyway — trading roughly two dollars a month
   # for cold starts on the first join of the day.
   auto_stop_machines = false
   auto_start_machines = false
-  # The in-memory-rooms constraint again, enforced here rather than trusted:
-  # Fly will not quietly scale this out.
-  min_machines_running = 1
 
   [[http_service.checks]]
     grace_period = '10s'
     interval = '30s'
-    method = 'GET'
     timeout = '5s'
     path = '/healthz'
+
+# PORT is deliberately set rather than assumed. src/server/index.ts reads
+# process.env.PORT and falls back to 8082; Fly does not inject PORT on its own,
+# so without this the app runs on the fallback and only works because
+# internal_port happens to match it. Naming it here makes that agreement
+# explicit instead of a coincidence two files apart.
+[env]
+  PORT = '8082'
 
 [[vm]]
   size = 'shared-cpu-1x'
