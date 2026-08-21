@@ -7,82 +7,81 @@ pattern reference: every claim points at a real file.
 
 ## Composition over inheritance: character definition
 
-Crow Archer has three playable characters today, archer, wizard, and knight,
-and is built to take a fourth. A character's identity is a plain string tag.
-Behavior attaches to that tag from the outside, through lookup tables, rather
-than living on a class that the tag is an instance of.
+Crow Archer has four playable characters today, archer, wizard, knight, and
+ranger. A character's identity is a plain string tag. Behavior attaches to
+that tag from the outside, through lookup tables, rather than living on a
+class that the tag is an instance of.
 
 ### Building blocks
 
 | Name | Type | Holds |
 |---|---|---|
-| `CharacterKind` | `'archer' \| 'wizard' \| 'knight'` | The tag itself. No fields, no methods. |
+| `CharacterKind` | `'archer' \| 'wizard' \| 'knight' \| 'ranger'` | The tag itself. No fields, no methods. |
 | `CHARACTERS` | `readonly CharacterKind[]` | The one array both the union and the runtime validator check against. |
 | `PRIMARY` | `Record<CharacterKind, () => Weapon>` | Which weapon a character fights with. |
 | `SILHOUETTES` | `Record<CharacterKind, Silhouette>` | Shadow and halo geometry for the body. |
 | `PAINTERS` | `Record<CharacterKind, (ctx, pose) => void>` | The draw routine. |
 
-- `CharacterKind` is defined at `src/net/protocol.ts:64`. It crosses the
+- `CharacterKind` is defined at `src/net/protocol.ts:69`. It crosses the
   network in the `SET_CHARACTER` message, so it needs a runtime check as well
   as a compile time type.
-- `CHARACTERS` is defined at `src/net/protocol.ts:376` and is the source both
-  the type and `isCharacter()` (`protocol.ts:403`) check against, so the
+- `CHARACTERS` is defined at `src/net/protocol.ts:392` and is the source both
+  the type and `isCharacter()` (`protocol.ts:420`) check against, so the
   valid set is written once.
-- `PRIMARY` is defined at `src/sim/weapons.ts:306`. `primaryWeapon('wizard')`
+- `PRIMARY` is defined at `src/sim/weapons.ts:578`. `primaryWeapon('wizard')`
   returns a `new Staff()`.
-- `SILHOUETTES` is defined at `src/render/characters.ts:131`. Each entry is a
+- `SILHOUETTES` is defined at `src/render/characters.ts:139`. Each entry is a
   plain object, `shadowY`, `shadowRX`, `shadowRY`, `haloY`, `haloR`, sized so
   a halo drawn for the archer does not sit inside the knight's breastplate.
-- `PAINTERS` is defined at `src/render/characters.ts:208`. Each entry is the
+- `PAINTERS` is defined at `src/render/characters.ts:219`. Each entry is the
   function that draws that character's body for one frame.
 
 ### How it works
 
 ```mermaid
 flowchart LR
-    classDef newHero stroke-width:3px,stroke-dasharray:6 3
-
     archer((archer))
     wizard((wizard))
     knight((knight))
-    ranger(("ranger, new")):::newHero
+    ranger((ranger))
 
     subgraph STATS["CHARACTER_STATS, one row per tag"]
         sa["speed 200, maxHp 10"]
         sw["speed 200, maxHp 10"]
         sk["speed 200, maxHp 10"]
-        sr["speed ?, maxHp ?"]:::newHero
+        sr["speed 200, maxHp 10"]
     end
 
     subgraph PRIMARY["PRIMARY, one row per tag"]
         pa["archer maps to Bow"]
         pw["wizard maps to Staff"]
         pk["knight maps to Spear"]
-        pr["ranger maps to Crossbow"]:::newHero
+        pr["ranger maps to Crossbow"]
     end
 
     Bow["Bow: 500 spd, 2 dmg, 0.35s cd"]
     Staff["Staff: 468 spd, 3 dmg, homing"]
     Spear["Spear: melee, 2 dmg x2"]
-    Crossbow["Crossbow, new"]:::newHero
+    Crossbow["Crossbow: 3 bolts, 0.7 dmg each"]
     Weapon{{"Weapon interface: use()"}}
 
     archer --> sa
     wizard --> sw
     knight --> sk
-    ranger -.-> sr
+    ranger --> sr
 
     archer --> pa --> Bow --> Weapon
     wizard --> pw --> Staff --> Weapon
     knight --> pk --> Spear --> Weapon
-    ranger -.-> pr -.-> Crossbow -.-> Weapon
+    ranger --> pr --> Crossbow --> Weapon
 ```
 
-A tag carries no behavior. Adding `ranger` is a new circle, one new row in
-each table, and one new class implementing `Weapon`. Nothing that already
-works gets edited. TypeScript enforces the completeness: widen the
-`CharacterKind` union and every `Record<CharacterKind, X>` refuses to compile
-until it has a `ranger` row.
+A tag carries no behavior. A fifth character would be a new circle, one new
+row in each table, and one new class implementing `Weapon`. Nothing that
+already works gets edited: this is exactly the shape `ranger` landed in.
+TypeScript enforces the completeness: widen the `CharacterKind` union and
+every `Record<CharacterKind, X>` refuses to compile until the new tag has a
+row everywhere.
 
 ### The alternative considered
 
@@ -122,9 +121,8 @@ classDiagram
     }
 
     class Ranger {
-        <<new hero>>
-        +speed = 240
-        +maxHp = 8
+        +speed = 200
+        +maxHp = 10
         +weapon() Crossbow
         +paint(ctx)
     }
@@ -231,9 +229,11 @@ The fix is not a new cache. `src/render/stamps.ts` already has one.
 - `PixelGrid`, `gridPainter`, `gridFlashPainter`, `spriteCanvas`, and
   `spriteFlashCanvas` are defined in `src/render/pixel-sprite.ts`, the only
   new file this decision added.
-- Consumed by all three heroes today: `src/legacy/game.js:3240-3241` (wizard),
-  `:3423-3424` (archer), `:3808` (knight). Each still owns its own grid
-  builder and memoized grid (`archerGrid()`, `knightGrid(kind)`, ...) — only
+- Consumed by every sprite kind today, all in `src/legacy/game.js`: the four
+  heroes (wizard `:3312-3313`, archer `:3413-3414`, ranger `:3620-3621`,
+  knight `:3721`), crow (`:4193-4194`), skeleton (`:4314-4315`), and the
+  three bosses (`:4616`, `:4719`, `:4856`). Each still owns its own grid
+  builder and memoized grid (`archerGrid()`, `knightGrid(kind)`, ...). Only
   the blit-to-canvas step changed.
 
 ### How it works
@@ -280,21 +280,22 @@ Two other shapes were built out, in conversation, before this one:
   one applied one more time.
 - **The payoff outside this file is concrete, not speculative.** The TS
   multiplayer renderer (`src/render/characters.ts`) has no pixel art yet,
-  but is pending work, not a hypothetical. When it lands, it imports
-  `spriteCanvas` directly — no port, because the cache never lived inside
-  `game.js` to begin with.
+  but is pending work, not a hypothetical. When it lands, it can import
+  `spriteCanvas` directly instead of porting anything, since the cache never
+  lived inside `game.js` to begin with.
 - **Hit-flash reuses the mechanism instead of special-casing it.**
   `spriteFlashCanvas` is a second cached canvas per key
   (`` `${key}|flash|${color}` ``), painted once with every cell forced to one
-  color. Same `stamps.get`, a different painter — not a second code path.
+  color. Same `stamps.get`, a different painter: not a second code path.
 
 ### Example: adding a sprite kind
 
-When Crow or Skeleton pixel art lands, the call site is one line, and
-nothing about `stamps` or `pixel-sprite.ts` changes:
+Crow and skeleton pixel art landed the same way: one call site each, nothing
+about `stamps` or `pixel-sprite.ts` touched.
 
 ```js
-ctx.drawImage(spriteCanvas('crow', crowGrid(), CROW_SPRITE.w, CROW_SPRITE.h), dx, dy);
+// src/legacy/game.js:4194
+: spriteCanvas(`crow|${kind}|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h);
 ```
 
 No new cache variable, no new class, no file to remember to touch.
