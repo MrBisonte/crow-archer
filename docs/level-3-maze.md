@@ -298,19 +298,89 @@ pass a `tileVisible` line-of-sight check (`src/legacy/game.js:2204`), which is
 correct on an open map and nearly always false in a corridor. Any maze
 antagonist that summons or aggros needs a rule that is not line of sight.
 
-The interesting design question is whether the level's antagonist is a boss at
-all. A maze suggests something that hunts: it knows the layout, it moves faster
-than you, and the tension is in hearing it before seeing it. That is closer to
-a stalker than to the three arena bosses.
+### The minotaur
 
-Architecturally this is where `boss.kind` gets re-examined.
-[architecture.md](architecture.md#boss-the-deliberate-exception) records the
-deliberate choice to branch on it rather than table it, justified by "exactly
-three bosses, ever". A fourth boss with genuinely different movement is the
-event that decision was implicitly waiting for. Part 2 either honours the
-original reasoning by making the maze's antagonist not-a-boss, or it revisits
-the decision honestly. Both are defensible. Pretending the question did not
-come up is not.
+**Decided.** The maze's antagonist is a minotaur that charges the moment it
+sees the hero, cannot be killed, and takes impact and stuns from hero attacks.
+
+Damage stops meaning progress and starts meaning control. Every hit buys
+distance, never a step toward winning. That single inversion is what makes the
+level a chase rather than a cramped arena, and it decides Part 3 by
+implication: if the boss cannot die, the win condition cannot be killing it.
+
+Three of the four mechanics it needs are already built.
+
+**Line of sight is free.** `updateFOV` computes visibility from the player's
+own tile (`src/legacy/game.js:550`), and shadowcasting is symmetric in
+practice, so `tileVisible(minotaurCol, minotaurRow)` is a correct and free
+answer to "does the minotaur see the hero". No second FOV pass. A corridor
+gives one long sightline down its axis, so the maze produces the "he is at the
+end of this hall" moment on its own, with no scripting.
+
+**The stun already exists.** `dazeBoss()` sets one countdown and
+`bossDazePhase()` derives `'stun' | 'slow1' | 'slow2' | null` from it
+(`src/legacy/game.js:2543`), so movement, speed and the visual all read one
+source. It is gated to the Crow King today by a single line in `damageBoss`.
+The minotaur is that mechanic with the HP line removed.
+
+**Smashing walls is free, and safe.** `smashTile` (`src/legacy/game.js:531`)
+already turns ROCK and HUT to EMPTY and TREE to ASH. A charge that ends in a
+wall should break it. That opens the maze up as the fight goes on, and by the
+invariant above it can never make the level unfinishable, because removing a
+wall only ever adds connections.
+
+**The fourth piece is the one that needs design work.** `damageBoss` routes
+every hit through `applyBossDamage`, which calls `startBossDeath()` at zero HP
+(`src/legacy/game.js:2421`). An unkillable boss has no HP row for
+`BOSS_HP_KEYS` to hold and no death sequence to run.
+
+This is where `boss.kind`'s branch stops paying.
+[architecture.md](architecture.md#boss-the-deliberate-exception) justified
+branching over tabling with "exactly three bosses, ever", and the three share
+one contract: they have HP, they take damage, they die. The minotaur shares
+none of it. That is not a fourth branch inside the contract, it is a second
+contract.
+
+The move is to make a hit's effect a per-boss policy, the same
+`Record<Kind, X>` shape `BOSS_HIT_FX` already uses two hundred lines earlier:
+
+```js
+const ON_HIT = {
+  crowking:    (dmg) => { dazeBoss(); applyBossDamage(dmg); },
+  dark_archer: (dmg) => applyBossDamage(dmg),
+  dark_knight: (dmg) => applyBossDamage(dmg),
+  minotaur:    (dmg) => stun(dmg),   // no HP, no death path
+};
+```
+
+**One balance risk worth naming now.** Three of the four characters are
+ranged, and if stun is the only verb, damage numbers stop mattering and their
+identities collapse into "applies stun at a distance". Each character's stun
+tool has to feel different, or the maze punishes three quarters of the roster
+twice: once through geometry, once through the boss. Worth deciding on purpose
+before tuning.
+
+### The supporting cast
+
+The critters exist to make the chase work, so none of them should also chase.
+Their job is to stall the hero or reveal them.
+
+| Critter | Role | Cost |
+|---|---|---|
+| **Rats** | Fast, 1 HP, spawn in fives, body-block a corridor | Low. Reuses skeleton pathing unchanged |
+| **Wisp** | Extends the hero's FOV, and reveals them to the minotaur | Low. No attack, no pathing |
+| **Wall-crawler** | Moves through walls, follows where he has to smash | High. First mover with its own movement rule |
+
+Rats are the core of it. Being stalled by something trivial while something
+unkillable charges down the hall is the level in one sentence.
+
+The wisp is the interesting one because it inverts. Light is what you want in
+a maze and it is exactly what gets you caught, so picking one up is a real
+decision rather than a pickup.
+
+A lurker, an ambusher that wakes on line of sight, was considered and dropped.
+The minotaur already owns dread at a blind corner, and two ambushers is one
+too many.
 
 ## Part 3: the objective and stage wiring
 
