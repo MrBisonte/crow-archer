@@ -353,6 +353,17 @@ const ON_HIT = {
 };
 ```
 
+**How it looks.** A character sprite with a bull's head on a human body, at
+most 50% larger than a hero. Not a monster that fills a corridor: the point is
+that it is recognisably the same kind of thing as you, and bigger. A hero is
+about 20 px across, so this lands near 30 px in a 64 px corridor, which leaves
+room to slip past and makes that a skill rather than a coin flip.
+
+**Corridor width follows from it.** `MazeTerrain` originally carved one-tile
+corridors, 32 px, against a 20 px body. There is no dodging in that. Corridors
+are two tiles by default (`corridor: 2`), which is why the parameter exists at
+all.
+
 **One balance risk worth naming now.** Three of the four characters are
 ranged, and if stun is the only verb, damage numbers stop mattering and their
 identities collapse into "applies stun at a distance". Each character's stun
