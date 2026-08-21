@@ -240,8 +240,18 @@ export class StaticTileLayer {
    * until the next unrelated tile change happens to touch it.
    */
   setPainters(painters: Partial<Record<TileId, TilePainter>>): void {
-    this.painters = painters;
+    this.usePainters(painters);
     this.repaintAll();
+  }
+
+  /**
+   * The same swap without the repaint, for a caller that is about to cause
+   * one anyway. Regenerating a map resets the TileMap right after choosing a
+   * theme, and that reset repaints everything; going through setPainters
+   * there would paint all 693 tiles twice for one map.
+   */
+  usePainters(painters: Partial<Record<TileId, TilePainter>>): void {
+    this.painters = painters;
   }
 
   repaintWindow(r: number, c: number): void {

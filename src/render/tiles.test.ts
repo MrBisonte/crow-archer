@@ -95,6 +95,44 @@ describe('StaticTileLayer', () => {
     const layer = new StaticTileLayer(map, { tileSize: 32, hudHeight: 0 });
     expect(() => layer.setPainters(CASTLE_TILE_PAINTERS)).not.toThrow();
   });
+
+  it('swaps theme without painting anything, for a caller about to repaint anyway', () => {
+    const map = new TileMap(2, 2);
+    const rec = fakeContext();
+    const layer = new StaticTileLayer(map, { tileSize: 32, hudHeight: 0 });
+    Reflect.set(layer, 'g', rec.ctx);
+    layer.usePainters(CASTLE_TILE_PAINTERS);
+    expect(rec.log).toHaveLength(0);
+    // and the swap still took, so the next repaint uses the new art
+    layer.repaintAll();
+    expect(rec.log.length).toBeGreaterThan(0);
+  });
+
+  // A full-map repaint is a game-start cost, so it has a draw-call budget.
+  // Painting each cell individually blew this to ~250 per tile and made
+  // starting a match visibly slow; runs of one colour go out as one rect.
+  it('paints a tile in a bounded number of fills, not one per pixel', () => {
+    const map = new TileMap(1, 1);
+    const rec = fakeContext();
+    const layer = new StaticTileLayer(map, { tileSize: 32, hudHeight: 0 });
+    Reflect.set(layer, 'g', rec.ctx);
+    map.reset([[TILE.HUT]]); // the busiest tile: bricks, roof, door and window
+    const fills = rec.log.filter((e) => e.kind === 'call' && e.name === 'fillRect').length;
+    expect(fills).toBeLessThan(80);
+  });
+
+  it('paints every tile once per map reset, not once per listener', () => {
+    const rows = 4, cols = 4;
+    const map = new TileMap(rows, cols);
+    const rec = fakeContext();
+    const layer = new StaticTileLayer(map, { tileSize: 32, hudHeight: 0 });
+    Reflect.set(layer, 'g', rec.ctx);
+    // Water is a flat fill: exactly one clearRect and one fillRect per tile,
+    // so any extra pass shows up as a clean multiple.
+    map.reset(Array.from({ length: rows }, () => Array.from({ length: cols }, () => TILE.WATER)));
+    const clears = rec.log.filter((e) => e.kind === 'call' && e.name === 'clearRect').length;
+    expect(clears).toBe(rows * cols);
+  });
 });
 
 describe('AnimatedTileOverlay', () => {
