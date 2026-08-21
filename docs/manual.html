@@ -233,7 +233,9 @@
   <section>
     <p class="lead">SURVIVE THE FLOCK. KILL THE CROW KING. THEN THE TWO DARK BOSSES WAITING IN HIS CASTLE.</p>
     <p>This is a paper manual for a live game: every kit, key and number described
-    here is <strong>real</strong> — it documents the actual shipped build and nothing else.
+    here is <strong>real</strong> — written from the game's own code, not from a wishlist.
+    It is a snapshot, though, kept by hand: if a number here ever disagrees with the
+    game, the game is right.
     No feature is described that the game does not have.</p>
     <p>The whole game runs on one canvas, in one file, with <strong>every sound synthesized
     at runtime</strong> — no audio assets, no sprites on disk, nothing to install. Download it
@@ -504,8 +506,8 @@
 
   <footer>
     <b>CROW ARCHER — GAME MANUAL.</b> Every kit, key and number
-    documents the real build; no feature is described that the game does not have.<br/>
-    The reticles in FIG 2 are the game's own painters, ported line for line.<br/>
+    was written from the real build; no feature is described that the game does not have.<br/>
+    FIG 2 draws with a copy of the game's reticle code, taken when this page was written.<br/>
     &copy; 2026 &middot; <a href="https://mrbisonte.github.io/crow-archer/">PLAY</a> &middot;
     <a href="https://github.com/MrBisonte/crow-archer">SOURCE</a> &middot;
     <a href="https://github.com/MrBisonte/crow-archer/blob/master/docs/manual.md">FULL MECHANICS REFERENCE</a> &middot;
@@ -518,15 +520,25 @@
 
 <script>
 /* ================================================================
-   FIG 2 — the live reticle demo.
+   FIG 2 — the reticle demo.
 
-   The four painters below are ported verbatim from RETICLE_PAINTERS in
-   src/legacy/game.js, down to the radii, the pulse rates and the colours,
-   so the manual shows the real thing rather than an artist's impression.
-   The only departures: they are drawn at 2x (these are ~10px shapes, and
-   this is a page you read, not a game you play), and the knight's and
-   wizard's aim angle is taken from the marker on the left standing in for
-   your character, exactly as the game takes it from the player.
+   The four painters below were copied from RETICLE_PAINTERS in
+   src/legacy/game.js when this page was written — radii, pulse rates and
+   colours included — so the figure illustrates the real shapes rather than
+   an artist's impression of them.
+
+   It is a copy, not a live view. Nothing checks the two against each other,
+   so if the game's reticles are ever retuned this figure will keep drawing
+   the old ones until somebody updates it. That is a deliberate trade: a
+   manual page is prose and pictures, and wiring it into the build to
+   guarantee frame-accuracy would cost more in friction than a slightly
+   dated picture costs a reader. If the reticles start changing often,
+   extract them to src/render/ and let both sides import one copy.
+
+   Drawn at 2x, since these are ~10px shapes and this is a page you read
+   rather than a game you play. The knight's and wizard's aim angle comes
+   from the marker on the left standing in for your character, the same way
+   the game takes it from the player.
    ================================================================ */
 (function () {
   var canvas = document.getElementById("ret-canvas");
@@ -557,7 +569,7 @@
     if (mx === null) { mx = w * 0.68; my = h * 0.34; }
   }
 
-  /* ---- the painters, verbatim from src/legacy/game.js ---- */
+  /* ---- the painters, copied from src/legacy/game.js; see the note above ---- */
 
   function ranger(t) {
     var pulse = 0.7 + 0.3 * Math.sin(t * 4);
