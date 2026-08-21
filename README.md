@@ -68,7 +68,7 @@ See the [manual](docs/manual.md#multiplayer) for hosting others, deploying, and 
 | Aim | Mouse |
 | Shoot / Cast | Space |
 | Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice: throw, then arm (Ranger) |
-| Sniper mode | Shift |
+| Sniper mode / Knight charge | Shift (the knight winds up a charging sweep instead) |
 | Pause | Escape |
 | Inventory | I (while paused) |
 

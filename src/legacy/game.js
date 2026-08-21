@@ -214,6 +214,15 @@ const CONFIG = {
   // playerShield/damagePlayer's existing absorb-one-hit handling wholesale;
   // this cooldown just decides how often it's re-granted while down.
   knightBlockCooldown: 10,
+  // Charge: hold Shift to wind up (rooted, invulnerable), release to advance
+  // swinging. Damage scales with hold time against the boss only; crows and
+  // skeletons die outright in the arc, same as every other knight melee hit.
+  knightChargeMaxHoldSecs: 3, knightChargeCooldown: 4,
+  knightChargeDashDuration: 1.5, knightChargeDashSpeedMult: 0.5,
+  knightChargeMinDamageMult: 1.3, knightChargeMaxDamageMult: 2,
+  knightChargeBossDamage: 2, knightChargeRadius: 90,
+  knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
+  knightChargeTickRate: 0.2,
 
   // Wizard
   wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
@@ -394,8 +403,8 @@ const CHAR_PANELS = [
            'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
-    lines:['Long spear  ·  melee range','Pickup: Iron Javelin (pierces)',
-           'Pickup: Fire Sword (2× dmg)','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
+    lines:['Long spear  ·  melee range','Hold Shift: charge sweep (2× dmg)',
+           'Pickups: Javelin  ·  Fire Sword','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
@@ -437,6 +446,13 @@ let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
 // since there's nothing to wait for until the current charge is used.
 let knightBlockCD = 0;
+// Charge windup, mirroring the dynamite `charge` object below. `dash` runs
+// after release; `tick` paces its repeating arc hit-test the way
+// knightWhirlwindTick paces the whirlwind's.
+let knightCharge = { on: false, t0: 0 };
+// No separate active flag: `timer > 0` is the live check, matching whirlwind.
+let knightDash = { timer: 0, frac: 0, angle: 0, bossHit: false };
+let knightChargeTick = 0, knightChargeCD = 0;
 
 // Inventory — all resource counts live here, keyed by CONFIG.resources
 let inv    = {};   // { arrows: n, dynamites: n }
@@ -589,6 +605,63 @@ function syncCursor() {
   canvas.style.cursor = hide ? 'none' : 'crosshair';
 }
 
+/** How far the in-progress windup has filled, 0 to 1. Read by the release, the
+ * windup visual and the bar, so it lives in one place. */
+function knightChargeFrac() {
+  if (!knightCharge.on) return 0;
+  return Math.min(1, (performance.now() - knightCharge.t0) / 1000 / CONFIG.knightChargeMaxHoldSecs);
+}
+
+/** Knight-only, bound to the key that means sniper mode for everyone else.
+ * Winds up in place; releaseKnightCharge() converts the hold into the dash. */
+function startKnightCharge() {
+  if (selectedChar !== 'knight' || knightCharge.on || knightDash.timer > 0 || !inGame()) return;
+  if (knightChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  knightCharge.on = true;
+  knightCharge.t0 = performance.now();
+}
+function releaseKnightCharge() {
+  if (!knightCharge.on) return;
+  const held = knightChargeFrac();
+  knightCharge.on = false;
+  // Let go after pausing or dying and the charge is simply lost, rather than
+  // queueing a dash that fires the moment play resumes.
+  if (!inGame()) return;
+  knightDash.bossHit = false;
+  knightDash.timer   = CONFIG.knightChargeDashDuration;
+  knightDash.frac    = held;
+  knightDash.angle   = player.aimAngle;   // committed here, not re-read per frame
+  knightChargeTick = 0;   // first arc sweep lands immediately, as whirlwind's does
+  knightChargeCD   = CONFIG.knightChargeCooldown;
+  events.emit({ type: 'KNIGHT_CHARGE', x: player.x, y: player.y, power: held });
+}
+
+/** Boss damage for the dash in flight, scaled by how long the windup was held. */
+function knightDashBossDamage() {
+  const { knightChargeMinDamageMult: lo, knightChargeMaxDamageMult: hi } = CONFIG;
+  return CONFIG.knightChargeBossDamage * (lo + knightDash.frac * (hi - lo));
+}
+
+/** Windup and dash both tint yellow through orange to red as the charge builds. */
+function knightChargeColor(frac) {
+  return frac >= 0.85 ? '#FF3020' : frac > 0.5 ? '#FF8800' : '#FFCC00';
+}
+
+/** World-space angle mapped into the mirrored canvas a character is drawn in. */
+function mirrorAngle(a, facing) {
+  return Math.atan2(Math.sin(a), facing * Math.cos(a));
+}
+
+/** Is (x,y) inside the wedge the dash is currently sweeping? The spear's own
+ * hit test fakes a cone with two circle probes; this is a real one. */
+function inKnightArc(x, y) {
+  if (dist2(player.x, player.y, x, y) > CONFIG.knightChargeRadius ** 2) return false;
+  let d = Math.atan2(y - player.y, x - player.x) - knightDash.angle;
+  while (d >  Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return Math.abs(d) <= CONFIG.knightChargeArcRadians / 2;
+}
+
 function startCharge() {
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
@@ -644,12 +717,14 @@ document.addEventListener('keydown', e => {
   }
   if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
   if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
+  if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
   keys[e.key] = true;
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
 });
 document.addEventListener('keyup', e => {
   keys[e.key] = false;
   if (e.key === 'f' || e.key === 'F') releaseCharge();
+  if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
 });
 
 canvas.addEventListener('click', e => {
@@ -839,6 +914,17 @@ events.on(e => {
         shadowBlur: 6, shadowColor: '#FFCC00' });
       break;
 
+    case 'KNIGHT_CHARGE':
+      // Scales with the windup: a tap is a light swing, a full hold lands hard.
+      playSound(sndChargeWhoosh); triggerShake(2 + 4 * e.power, 120 + 160 * e.power);
+      burst(e.x, e.y, {
+        count: 8 + Math.round(14 * e.power),
+        colors: e.power > 0.85 ? ['#FF3020','#FF8800','#FFFFFF'] : ['#C8C8E8','#FFCC00','#FFFFFF'],
+        speedMin: 40, speedMax: 90 + 80 * e.power, decay: 2.6, shape: 'spark',
+        shadowBlur: 6, shadowColor: e.power > 0.85 ? '#FF3020' : '#FFCC00'
+      });
+      break;
+
     case 'WHIRLWIND_START':
       playSound(sndExplosion); triggerShake(4, 250);
       burst(e.x, e.y, {
@@ -994,6 +1080,8 @@ function initGame() {
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   knightBlockCD = 0;
+  knightCharge.on = false; knightDash.timer = 0; knightDash.bossHit = false;
+  knightChargeTick = 0; knightChargeCD = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
@@ -1107,16 +1195,28 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  sniperMode = hasButton(cmd, Button.SNIPE);
+  // The knight spends this button on his charge instead: he has no aim line
+  // to sharpen, so sniper mode was a pure downside for him.
+  sniperMode = selectedChar !== 'knight' && hasButton(cmd, Button.SNIPE);
 
-  if (!sniperMode) {
+  // Charging roots him in place the same way sniper mode roots everyone else.
+  if (!sniperMode && !knightCharge.on) {
     let vx = 0, vy = 0;
-    if (hasButton(cmd, Button.UP))    vy -= 1;
-    if (hasButton(cmd, Button.DOWN))  vy += 1;
-    if (hasButton(cmd, Button.LEFT))  vx -= 1;
-    if (hasButton(cmd, Button.RIGHT)) vx += 1;
-    const len = Math.hypot(vx, vy);
-    if (len > 0) { vx = (vx/len)*FEATHERS.speed()*dt; vy = (vy/len)*FEATHERS.speed()*dt; player.walkPhase += 8 * dt; }
+    if (knightDash.timer > 0) {
+      // The dash drives movement instead of the keys, but shares the collision
+      // resolution below so it stops on walls like any other movement.
+      const spd = FEATHERS.speed() * CONFIG.knightChargeDashSpeedMult * dt;
+      vx = Math.cos(knightDash.angle) * spd;
+      vy = Math.sin(knightDash.angle) * spd;
+      player.walkPhase += 8 * dt;
+    } else {
+      if (hasButton(cmd, Button.UP))    vy -= 1;
+      if (hasButton(cmd, Button.DOWN))  vy += 1;
+      if (hasButton(cmd, Button.LEFT))  vx -= 1;
+      if (hasButton(cmd, Button.RIGHT)) vx += 1;
+      const len = Math.hypot(vx, vy);
+      if (len > 0) { vx = (vx/len)*FEATHERS.speed()*dt; vy = (vy/len)*FEATHERS.speed()*dt; player.walkPhase += 8 * dt; }
+    }
     const r = CONFIG.playerRadius;
     // Clamp bounds keep the player's collision corners (±r) inside the first passable
     // row/col (index 1) so they never straddle the solid border tiles and get stuck.
@@ -1133,8 +1233,10 @@ function updatePlayer(dt) {
       player.y = Math.max(minY, Math.min(maxY, ny));
   }
 
-  player.aimAngle = cmd.aimAngle;
-  player.facing   = Math.cos(cmd.aimAngle) >= 0 ? 1 : -1;
+  // Mid-dash the aim is locked to the committed direction, so the arc can't be
+  // swivelled around with the mouse after release.
+  player.aimAngle = knightDash.timer > 0 ? knightDash.angle : cmd.aimAngle;
+  player.facing   = Math.cos(player.aimAngle) >= 0 ? 1 : -1;
 
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
@@ -1144,6 +1246,10 @@ function updatePlayer(dt) {
   if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
   if (knightWhirlwindCD   > 0) knightWhirlwindCD  = Math.max(0, knightWhirlwindCD  - dt);
+  // Held off while the ability is still running, so the 4s only starts once
+  // the knight is out of his own dash.
+  if (knightChargeCD > 0 && !knightCharge.on && knightDash.timer <= 0)
+    knightChargeCD = Math.max(0, knightChargeCD - dt);
   if (inv.knightFireSwordTimer > 0) inv.knightFireSwordTimer = Math.max(0, inv.knightFireSwordTimer - dt);
   // Block: passive, no keybind — once charged it just sits banked in
   // playerShield until something hits the knight from the front.
@@ -1274,7 +1380,36 @@ function updatePlayer(dt) {
     }
   }
 
-  if (shootPressed) { shootPressed = false; tryShoot(); }
+  // ── Knight charge dash: repeating arc sweep while advancing ──────────────
+  if (knightDash.timer > 0) {
+    knightDash.timer -= dt;
+    knightChargeTick -= dt;
+    if (knightChargeTick <= 0) {
+      knightChargeTick = CONFIG.knightChargeTickRate;
+      for (const [list, damage] of [[crows, damageCrow], [skeletons, damageSkeleton]])
+        for (let j = list.length - 1; j >= 0; j--)
+          if (inKnightArc(list[j].x, list[j].y)) {
+            events.emit({ type: 'MELEE_HIT', x: list[j].x, y: list[j].y, kind: 'spear', fire: false });
+            damage(j);
+          }
+      // Once per dash, the way a spear swing lands once. The repeat ticks are
+      // there to catch enemies he advances into, not to grind the same boss
+      // seven times over.
+      if (!knightDash.bossHit && boss && appState === 'boss_fight' &&
+          boss.bstate !== 'dead' && !boss.shield && inKnightArc(boss.x, boss.y)) {
+        knightDash.bossHit = true;
+        damageBoss(knightDashBossDamage(), player.x, player.y, 'spear', 0.15);
+      }
+    }
+    if (knightDash.timer <= 0) knightDash.timer = 0;
+  }
+
+  // The charge owns the button and the swing: a normal spear poke mid-charge
+  // would let the knight attack for free while invulnerable.
+  if (shootPressed) {
+    shootPressed = false;
+    if (!knightCharge.on && knightDash.timer <= 0) tryShoot();
+  }
 }
 
 function tryShoot() {
@@ -2158,6 +2293,9 @@ function damagePlayer(amount, crowIndex = -1) {
   const attacker = crowIndex >= 0 && crowIndex < crows.length ? crows[crowIndex].team : Team.ENEMY;
   if (!canDamage(attacker, player.team)) return;
   if (playerHitFlash > 0) return;
+  // Winding up the charge is the knight's whole defence for those seconds: he
+  // cannot move or attack, so he eats nothing. The dash afterwards is exposed.
+  if (knightCharge.on) return;
   if (playerShield) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
@@ -3433,14 +3571,19 @@ function drawPlayer() {
   if (!hasArrows) drawPitchforkIndicators(px, py);
 
   // Dynamite charge bar
-  if (charge.on) {
-    const chargeFrac = Math.min(1, (performance.now() - charge.t0) / 1000);
-    const bw = 28, bh = 4, bx = px - bw/2, by = py - 34;
-    ctx.fillStyle = '#222'; ctx.fillRect(bx, by, bw, bh);
-    ctx.fillStyle = chargeFrac < 0.5 ? '#ffcc00' : chargeFrac < 0.85 ? '#ff8800' : '#ff2200';
-    ctx.fillRect(bx, by, bw * chargeFrac, bh);
-    ctx.strokeStyle = '#555'; ctx.lineWidth = 0.5; ctx.strokeRect(bx, by, bw, bh);
-  }
+  if (charge.on) drawChargeBar(px, py, Math.min(1, (performance.now() - charge.t0) / 1000));
+}
+
+/** Windup meter above a character's head. Shared by the archer's dynamite and
+ * the knight's charge; both fill over their own hold and glow once full. */
+function drawChargeBar(px, py, frac) {
+  const bw = 28, bh = 4, bx = px - bw/2, by = py - 34;
+  ctx.fillStyle = '#222'; ctx.fillRect(bx, by, bw, bh);
+  ctx.fillStyle = frac < 0.5 ? '#ffcc00' : frac < 0.85 ? '#ff8800' : '#ff2200';
+  if (frac >= 1) { ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 6 + 3 * Math.sin(loopT * 18); }
+  ctx.fillRect(bx, by, bw * frac, bh);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 0.5; ctx.strokeRect(bx, by, bw, bh);
 }
 
 /** Dotted aim line with a sniper-mode reticle. Shared by every character that
@@ -3706,6 +3849,62 @@ function drawKnight() {
     }
   }
 
+  // ── Charge windup: the arc he is about to sweep, filling as he holds ────
+  if (knightCharge.on) {
+    const cf   = knightChargeFrac();
+    const full = cf >= 1;
+    const ang  = mirrorAngle(player.aimAngle, f);
+    const half = CONFIG.knightChargeArcRadians / 2;
+    const col  = knightChargeColor(cf);
+    const r    = CONFIG.knightChargeRadius * (0.35 + 0.5 * cf);
+    ctx.save();
+    ctx.strokeStyle = col; ctx.shadowColor = col;
+    ctx.shadowBlur  = 6 + 14 * cf + (full ? 6 * Math.sin(loopT * 18) : 0);
+    ctx.lineWidth   = 2 + 2 * cf;
+    ctx.globalAlpha = 0.25 + 0.55 * cf;
+    ctx.beginPath(); ctx.arc(0, 0, r, ang - half, ang + half); ctx.stroke();
+    // Streaks converging on the blade: more of them, and livelier, near full.
+    const streaks = 3 + Math.round(4 * cf);
+    for (let i = 0; i < streaks; i++) {
+      const a     = ang - half + ((i + 0.5) / streaks) * half * 2;
+      const inner = r * (0.45 + 0.3 * Math.sin(loopT * (8 + 10 * cf) + i * 1.7));
+      const ca = Math.cos(a), sa = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(ca * inner, sa * inner);
+      ctx.lineTo(ca * r,     sa * r);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ── Dash sweep: the blade crossing the arc, left to right, while advancing
+  if (knightDash.timer > 0) {
+    const prog  = 1 - knightDash.timer / CONFIG.knightChargeDashDuration;
+    const heavy = knightDash.frac;
+    const ang   = mirrorAngle(knightDash.angle, f);
+    const half  = CONFIG.knightChargeArcRadians / 2;
+    const col   = knightChargeColor(heavy);
+    const r     = CONFIG.knightChargeRadius * (0.7 + 0.3 * heavy);
+    // Three passes across the arc over the dash, so it reads as repeated swings.
+    const sweep = (prog * 3) % 1;
+    const edge  = ang - half + sweep * half * 2;
+    const ce = Math.cos(edge), se = Math.sin(edge);
+    ctx.save();
+    ctx.strokeStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 10 + 8 * heavy;
+    // Fading wedge behind the blade: where it has already passed this sweep.
+    ctx.globalAlpha = 0.3 * (1 - sweep) + 0.15;
+    ctx.lineWidth = 3 + 3 * heavy;
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.85, ang - half, edge); ctx.stroke();
+    // The blade itself.
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = 3 + 2 * heavy;
+    ctx.beginPath();
+    ctx.moveTo(ce * 8, se * 8);
+    ctx.lineTo(ce * r, se * r);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Ground shadow
   ctx.fillStyle = 'rgba(0,0,0,0.38)';
   ctx.beginPath(); ctx.ellipse(0, 14, 13, 4, 0, 0, Math.PI*2); ctx.fill();
@@ -3724,7 +3923,7 @@ function drawKnight() {
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
   // ── Weapon ───────────────────────────────────────────────────────────────
-  const spearAng = Math.atan2(Math.sin(player.aimAngle), f * Math.cos(player.aimAngle)); // world-space angle mapped into flipped canvas
+  const spearAng = mirrorAngle(player.aimAngle, f);
   // Thrust extension: peak offset = 22px forward, covers the full swing duration
   const thrustOffset = swing >= 0
     ? Math.sin(Math.min(swing, 1) * Math.PI) * 22 : 0;
@@ -3809,6 +4008,9 @@ function drawKnight() {
   }
 
   ctx.restore();
+
+  // Outside the mirrored transform, so the bar never draws backwards.
+  if (knightCharge.on) drawChargeBar(px, py, knightChargeFrac());
 }
 
 function drawArrows() {
@@ -4859,7 +5061,7 @@ function drawDarkKnight() {
 
   // Spear — extends forward on a charge
   ctx.save();
-  ctx.rotate(Math.atan2(Math.sin(aimAngle), facing * Math.cos(aimAngle)));
+  ctx.rotate(mirrorAngle(aimAngle, facing));
   ctx.translate(charging ? 14 : 0, 0);
   ctx.strokeStyle = '#2A2018'; ctx.lineWidth = 4;
   ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(30, 0); ctx.stroke();
@@ -5250,7 +5452,7 @@ const CTRL_ACTIONS = [
   { label: 'MOVE LEFT',  key: 'left'  },
   { label: 'MOVE RIGHT', key: 'right' },
   { label: 'SHOOT',      key: 'shoot' },
-  { label: 'SNIPE MODE', key: 'snipe' },
+  { label: 'SNIPE/CHARGE', key: 'snipe' },
   { label: 'PAUSE',      key: 'pause' }
 ];
 
@@ -5787,6 +5989,12 @@ window.__game = {
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
+  knightCharge: () => ({
+    charging: knightCharge.on, frac: knightChargeFrac(),
+    dashing: knightDash.timer > 0, dashTimer: knightDash.timer,
+    dashFrac: knightDash.frac, bossDamage: knightDashBossDamage(),
+    angle: knightDash.angle, cooldown: knightChargeCD,
+  }),
   // Tap the event bus, for verifying which gameplay events fire.
   onEvent: fn => events.on(fn),
   // Drive a real state transition, and pick a character, for scripted runs.
