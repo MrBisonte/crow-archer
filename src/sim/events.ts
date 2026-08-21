@@ -65,6 +65,12 @@ export type GameEvent =
   | { type: 'BOSS_ENTRANCE_FIRE'; x: number; y: number }
   | { type: 'BOSS_SHIELD_BLOCKED'; x: number; y: number }
   | { type: 'BOSS_BURNING'; x: number; y: number }
+  // The maze's warden. He has no HP, so none of these are damage events: they
+  // are the three beats of a charge, sighting you, committing, and hitting a
+  // wall hard enough to open it.
+  | { type: 'MINOTAUR_ROAR'; x: number; y: number }
+  | { type: 'MINOTAUR_CHARGE'; x: number; y: number }
+  | { type: 'MINOTAUR_SMASH'; x: number; y: number }
   // Rat venom. POISONED is the bite landing, TICK is one second of it working.
   // Two events rather than one with a flag: they sound and look different, and
   // the render layer should not have to branch to find that out.

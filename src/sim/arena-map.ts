@@ -47,6 +47,24 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
   maze: new MazeTerrain({ braid: 0.15 }),
 };
 
+/**
+ * Per-map rules that are not about generation, one row per MapKind.
+ *
+ * Separate from MAP_GEN because these outlive generation: MAP_GEN is consulted
+ * once to build the grid, these are consulted every time something tries to
+ * change it.
+ *
+ * forest and castle are built from scattered noise, so blowing a hole in one
+ * opens a shortcut and nothing else. A maze *is* its walls: clearing them with
+ * a Lightning Storm or a Whirlwind turns the level into an open room and
+ * deletes the only thing making an unkillable warden dangerous.
+ */
+export const MAP_RULES: Record<MapKind, { destructibleTerrain: boolean }> = {
+  forest: { destructibleTerrain: true },
+  castle: { destructibleTerrain: true },
+  maze: { destructibleTerrain: false },
+};
+
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
 export const TILE_SIZE = 32;
 
@@ -71,8 +89,24 @@ export type NoiseFactory = (seed: number) => Noise2D | null;
 export class Terrain {
   readonly map: TileMap;
 
-  constructor(map: TileMap) {
+  /**
+   * Which map this grid was built from, kept so the methods that change it can
+   * read MAP_RULES.
+   *
+   * A grid alone cannot answer whether its walls may be broken: rock is rock in
+   * every map. The alternative was passing the kind to `destroyArea` and
+   * `burnTile` at each call site, and the one caller that forgot would flatten
+   * a maze in a way nothing would catch.
+   */
+  readonly kind: MapKind;
+
+  /**
+   * Defaults to 'forest' rather than requiring a kind, so callers that build a
+   * grid by hand keep the destructible terrain they already had.
+   */
+  constructor(map: TileMap, kind: MapKind = 'forest') {
     this.map = map;
+    this.kind = kind;
   }
 
   /**
@@ -83,7 +117,7 @@ export class Terrain {
   static fromSeed(seed: number, noise: NoiseFactory, kind: MapKind = 'forest'): Terrain {
     const map = new TileMap(MAP_ROWS, MAP_COLS);
     map.reset(MAP_GEN[kind].generate(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed)));
-    return new Terrain(map);
+    return new Terrain(map, kind);
   }
 
   /** The tile covering a point, or undefined outside the grid. */
@@ -129,8 +163,13 @@ export class Terrain {
    *
    * A radius rather than a point, since a blast is a radius. Tile centres are
    * what is measured, also as in the legacy game.
+   *
+   * Nothing happens at all on a map MAP_RULES marks indestructible. A maze is
+   * its walls, and one Lightning Storm through them is the difference between a
+   * corridor chase and an open room.
    */
   destroyArea(x: number, y: number, radius: number): void {
+    if (!MAP_RULES[this.kind].destructibleTerrain) return;
     const reach = Math.ceil(radius / TILE_SIZE);
     const r0 = Math.floor(y / TILE_SIZE);
     const c0 = Math.floor(x / TILE_SIZE);
@@ -158,8 +197,14 @@ export class Terrain {
    * this is a shot landing on what it hit, not a blast. Returns whether
    * anything actually burned, so a caller only bothers telling clients about
    * hits that changed something.
+   *
+   * On a map MAP_RULES marks indestructible it always reports false and leaves
+   * the tile standing, which is the answer callers already handle for rock. A
+   * fire arrow burning a maze open costs the level the same walls a blast
+   * would.
    */
   burnTile(x: number, y: number): boolean {
+    if (!MAP_RULES[this.kind].destructibleTerrain) return false;
     const r = Math.floor(y / TILE_SIZE);
     const c = Math.floor(x / TILE_SIZE);
     const tile = this.map.get(r, c);

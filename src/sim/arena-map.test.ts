@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAP_COLS, MAP_GEN, MAP_ROWS, TILE_SIZE, Terrain } from './arena-map';
+import { MAP_COLS, MAP_GEN, MAP_ROWS, TILE_SIZE, Terrain, type MapKind } from './arena-map';
 import { pickSpawns } from './spawns';
-import { TILE, TileMap } from './tilemap';
+import { TILE, TileMap, type TileGrid, type TileId } from './tilemap';
 
 /** No noise source, which the generator supports and which keeps tests quick. */
 const flat: () => null = () => null;
 
 /** A map that is empty everywhere except where a test puts something. */
-function blank(): Terrain {
+function blank(kind: MapKind = 'forest'): Terrain {
   const map = new TileMap(MAP_ROWS, MAP_COLS);
-  return new Terrain(map);
+  return new Terrain(map, kind);
 }
+
+/** A deep copy, so a test can hold what a grid looked like before something hit it. */
+const copyOf = (grid: TileGrid): TileGrid => grid.map((row) => [...row]);
+
+/** The middle of the arena, where any generated map has something to break. */
+const middle = { x: (MAP_COLS * TILE_SIZE) / 2, y: (MAP_ROWS * TILE_SIZE) / 2 };
 
 describe('Terrain', () => {
   describe('built from a seed', () => {
@@ -51,6 +57,17 @@ describe('Terrain', () => {
       for (const kind of ['forest', 'castle', 'maze'] as const) {
         expect(typeof MAP_GEN[kind].generate).toBe('function');
       }
+    });
+  });
+
+  describe('which map built it', () => {
+    it('remembers the kind it was seeded with, for the rules that outlive generation', () => {
+      expect(Terrain.fromSeed(7, flat, 'maze').kind).toBe('maze');
+    });
+
+    it('calls a hand-built grid a forest, so existing callers keep their rules', () => {
+      const t = new Terrain(new TileMap(MAP_ROWS, MAP_COLS));
+      expect(t.kind).toBe('forest');
     });
   });
 
@@ -158,6 +175,38 @@ describe('Terrain', () => {
       t.destroyArea(p.x, p.y, 90);
       expect(t.tileAt(at(4, 10).x, at(4, 10).y)).toBe(TILE.TREE);
     });
+
+    it.each<[string, MapKind, TileId]>([
+      ['a hut', 'forest', TILE.HUT],
+      ['a tree', 'forest', TILE.TREE],
+      ['rock', 'forest', TILE.ROCK],
+      ['a hut', 'castle', TILE.HUT],
+      ['a tree', 'castle', TILE.TREE],
+      ['rock', 'castle', TILE.ROCK],
+    ])('still clears %s on %s, which MAP_RULES leaves destructible', (_name, kind, tile) => {
+      const t = blank(kind);
+      t.map.set(4, 4, tile);
+      const p = at(4, 4);
+      t.destroyArea(p.x, p.y, 40);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.EMPTY);
+      expect(t.walkable(p.x, p.y)).toBe(true);
+    });
+
+    it('leaves a maze exactly as it was carved, walls and all', () => {
+      const t = Terrain.fromSeed(4242, flat, 'maze');
+      const before = copyOf(t.map.grid);
+      t.destroyArea(middle.x, middle.y, 200);
+      expect(t.map.grid).toEqual(before);
+    });
+
+    it('would have torn that same grid open on a destructible map', () => {
+      // Guards the test above from passing because the blast found no walls.
+      const t = blank();
+      t.map.reset(copyOf(Terrain.fromSeed(4242, flat, 'maze').map.grid));
+      const before = copyOf(t.map.grid);
+      t.destroyArea(middle.x, middle.y, 200);
+      expect(t.map.grid).not.toEqual(before);
+    });
   });
 
   describe('burnTile', () => {
@@ -203,6 +252,32 @@ describe('Terrain', () => {
       t.burnTile(p.x, p.y);
       expect(t.tileAt(at(4, 3).x, at(4, 3).y)).toBe(TILE.TREE);
       expect(t.tileAt(at(4, 5).x, at(4, 5).y)).toBe(TILE.TREE);
+    });
+
+    it.each([
+      ['a hut', TILE.HUT],
+      ['a tree', TILE.TREE],
+    ])('burns %s on a maze not at all, and says so', (_name, tile) => {
+      // Something that burns anywhere else, planted on a maze: a carved maze is
+      // only rock and open ground, which would refuse to burn on its own and
+      // would prove nothing about MAP_RULES.
+      const t = blank('maze');
+      t.map.set(4, 4, tile);
+      const p = at(4, 4);
+      expect(t.burnTile(p.x, p.y)).toBe(false);
+      expect(t.tileAt(p.x, p.y)).toBe(tile);
+    });
+
+    it('leaves a whole carved maze alone under a fire arrow on every tile', () => {
+      const t = Terrain.fromSeed(4242, flat, 'maze');
+      const before = copyOf(t.map.grid);
+      for (let r = 0; r < MAP_ROWS; r++) {
+        for (let c = 0; c < MAP_COLS; c++) {
+          const p = at(r, c);
+          expect(t.burnTile(p.x, p.y)).toBe(false);
+        }
+      }
+      expect(t.map.grid).toEqual(before);
     });
   });
 

@@ -6,7 +6,7 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { MAP_GEN } from '../sim/arena-map';
+import { MAP_GEN, MAP_RULES } from '../sim/arena-map';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
@@ -117,12 +117,31 @@ const CONFIG = {
   // while something you cannot kill comes down it. Spawns in packs on open
   // floor rather than walking in from the right, since a maze has no corridor
   // to walk in from.
-  ratSpeed: 190, ratContactDamage: 1, ratPackSize: 5, ratSpawnMinDistance: 200,
+  // Faster than playerSpeed (200) on purpose. Slower and a rat can never land
+  // the first bite on anyone walking away, which makes the whole pack décor.
+  // The margin is small, so you outrun them briefly; once poisoned you are at
+  // 100 and they are on you. The slow is the trap, the speed just sets it.
+  ratSpeed: 215, ratContactDamage: 1, ratPackSize: 5, ratSpawnMinDistance: 200,
   // A bite is barely a hit; the poison is the point. 3 damage spread over 3
   // seconds at one point a second, plus a half-speed crawl for the same
   // window. Getting bitten once is survivable, getting swarmed is not, and
   // the slow is what turns a second bite into a third.
   ratPoisonSecs: 3, ratPoisonDamagePerTick: 1, ratPoisonTickSecs: 1, ratPoisonSlowMult: 0.5,
+  // The maze's warden. Unkillable by design, so none of these are HP: they are
+  // the shape of a chase. Prowl is a little slower than the player so walking
+  // away works until a corridor ends; the charge is much faster than anyone.
+  minotaurProwlSpeed: 165,
+  minotaurChargeSpeed: 430,
+  minotaurWindupSecs: 0.55,      // telegraph: he plants, snorts, then goes
+  minotaurChargeMaxSecs: 1.6,
+  minotaurRecoverSecs: 1.1,      // after a charge ends, however it ended
+  minotaurChargeCooldown: 1.4,   // earliest he may line up another one
+  minotaurContactDamage: 2,
+  minotaurChargeContactDamage: 3,
+  minotaurContactRadius: 26,
+  minotaurSightRange: 520,       // he still needs line of sight, this caps it
+  minotaurStunSecs: 1.5,         // what a hit buys you, instead of progress
+  minotaurSmashRadius: 1,        // tiles cleared where a charge ends in wall
 
   // Fire skeleton: same movement and contact damage as normal, but its
   // death is a small blast that punishes standing next to it when it pops.
@@ -342,6 +361,11 @@ const BOSS_ENTRY_TEXT = {
   1: '⚠  THE CROWS SUMMONED THEIR KING  ⚠',
   2: '⚠  A DARK ARCHER STIRS IN THE DEPTHS  ⚠',
   3: '⚠  THE LAST DARK KNIGHT RISES  ⚠',
+  // Stage 4 is not reachable from the brawl run yet: beating the dark knight
+  // still goes to the win screen. It exists so the minotaur can be spawned
+  // for testing without inventing a second boss-spawn path. Wiring level 3
+  // into the progression is its own piece of work, see docs/level-3-maze.md.
+  4: '⚠  SOMETHING IS ALREADY IN THE MAZE  ⚠',
 };
 
 // Above this capacity the HUD shows a count instead of one icon per unit.
@@ -574,7 +598,13 @@ function tileAt(wx, wy) {
 
 // Storm and whirlwind level terrain the same way: trees char to ash,
 // rocks and huts are cleared outright.
+/** Can anything on this map break terrain at all? One home for the rule. */
+function terrainDestructible() {
+  return MAP_RULES[mapKind].destructibleTerrain;
+}
+
 function smashTile(row, col) {
+  if (!terrainDestructible()) return;
   const t = tileMap.get(row, col);
   if (t === TILE.TREE) tileMap.set(row, col, TILE.ASH);
   else if (t === TILE.ROCK || t === TILE.HUT) tileMap.set(row, col, TILE.EMPTY);
@@ -846,6 +876,19 @@ const WEAPON_FX = {
 
 events.on(e => {
   switch (e.type) {
+    case 'MINOTAUR_ROAR':
+      playSound(sndBossScreech);
+      break;
+    case 'MINOTAUR_CHARGE':
+      playSound(sndChargeWhoosh);
+      triggerShake(4, 120);
+      break;
+    case 'MINOTAUR_SMASH':
+      playSound(sndExplosion);
+      burst(e.x, e.y, { count: 26, colors: ['#5C554A','#4A443C','#8A6242','#332F29'],
+        speedMin: 60, speedMax: 190, decay: 1.5, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 3.5, damping: 0.7, shadowBlur: 3, shadowColor: '#8A6242' });
+      break;
     case 'PLAYER_POISONED':
       playSound(sndPoisonBite);
       triggerShake(2, 80);
@@ -2207,7 +2250,7 @@ function explodeExplosive(d, source) {
       const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
       const t = tileMap.get(row, col);
       if (dist2(d.x, d.y, wx, wy) < r2 && (t === TILE.ROCK || t === TILE.TREE || t === TILE.HUT))
-        tileMap.set(row, col, TILE.EMPTY);
+        if (terrainDestructible()) tileMap.set(row, col, TILE.EMPTY);
     }
   }
 
@@ -2507,7 +2550,24 @@ function updateBossEntrance(dt) {
 
 // Stage order for brawl mode's full run. Index 0 is always the forest fight;
 // 1 and 2 are the castle stage's two dark bosses, fought in sequence.
-const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight'];
+const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight', 'minotaur'];
+
+/**
+ * What a landed hit does, per boss.
+ *
+ * The three arena bosses share one contract: they have HP, damage lowers it,
+ * zero kills them. The minotaur shares none of it, so this is not a fourth
+ * branch inside that contract, it is a second contract. Same Record<kind, fn>
+ * shape as BOSS_HIT_FX above rather than an `if` inside damageBoss.
+ */
+const BOSS_ON_HIT = {
+  crowking:    (amount) => { dazeBoss(); applyBossDamage(amount); },
+  dark_archer: (amount) => applyBossDamage(amount),
+  dark_knight: (amount) => applyBossDamage(amount),
+  // No HP to lower and no death path to reach. A hit buys time instead:
+  // it stuns him, which interrupts a charge and lets you get down the corridor.
+  minotaur:    ()       => stunMinotaur(),
+};
 
 // Which CONFIG keys hold a kind's HP for each character, so bossHpFor has one
 // home instead of a third near-identical ternary chain pasted next to the
@@ -2519,6 +2579,10 @@ const BOSS_HP_KEYS = {
 };
 
 function bossHpFor(kind) {
+  // The minotaur cannot be killed, so he has no HP row. Infinity rather than a
+  // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without
+  // any of them learning that an unkillable boss exists.
+  if (kind === 'minotaur') return Infinity;
   const [normal, wizard, knight] = BOSS_HP_KEYS[kind];
   const key = selectedChar === 'wizard' ? wizard : selectedChar === 'knight' ? knight : normal;
   return CONFIG[key];
@@ -2539,6 +2603,22 @@ function spawnBoss() {
     burnDps: 0,                     // damage per second for the burn now running
     dazeTimer: 0,                   // crow king only: stun then two-step slow, see dazeBoss
   };
+  if (kind === 'minotaur') {
+    // Starts far from the player rather than off the right edge: a maze has no
+    // open lane to walk in along, and openTileAwayFrom is already the answer
+    // to "somewhere over there" on a carved map.
+    const at = openTileAwayFrom(player.x, player.y, 320) ?? { x: common.x, y: common.y };
+    boss = {
+      ...common,
+      x: at.x, y: at.y,
+      bstate: 'prowl',
+      chargeDX: 0, chargeDY: 0,     // locked at windup, not re-aimed mid-charge
+      chargeTimer: 0, cooldown: 0,
+      path: null, pathTimer: 0,     // prowls on the shared A* scheduler
+      state: 'aggro',               // what pathScheduler.serve() looks for
+    };
+    return;
+  }
   if (kind === 'crowking') {
     boss = {
       ...common,
@@ -2604,9 +2684,8 @@ function knockBoss(fromX, fromY) {
 function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
   boss.hitFlash = flash;
   knockBoss(fromX, fromY);
-  if (boss.kind === 'crowking') dazeBoss();
   events.emit({ type: 'BOSS_HIT', source });
-  applyBossDamage(amount);
+  BOSS_ON_HIT[boss.kind](amount);
 }
 
 /** Outcome of one projectile reaching the boss. */
@@ -2764,6 +2843,111 @@ function enterOrbit() {
   boss.orbitRadius = Math.hypot(boss.x - player.x, boss.y - player.y);
 }
 
+/** Tile-space line of sight to the player, capped by how far he can see. */
+function minotaurSeesPlayer() {
+  if (Math.hypot(player.x - boss.x, player.y - boss.y) > CONFIG.minotaurSightRange) return false;
+  // fovMap is computed from the player's tile and shadowcasting is symmetric,
+  // so "is he visible to you" is also "are you visible to him". One FOV pass
+  // answers both, which is why this costs nothing.
+  return tileVisible(Math.floor(boss.x / CONFIG.tileSize), Math.floor(boss.y / CONFIG.tileSize));
+}
+
+/**
+ * What a hit on the minotaur buys: a stun that interrupts whatever he was
+ * doing and puts his charge back on cooldown.
+ *
+ * Reuses the crow king's daze countdown wholesale rather than adding a second
+ * stun concept — bossDazePhase() already derives stun/slow/slow from it, and
+ * updateBossDaze already ticks it.
+ */
+function stunMinotaur() {
+  boss.dazeTimer = Math.max(boss.dazeTimer, CONFIG.minotaurStunSecs);
+  if (boss.bstate === 'charge' || boss.bstate === 'wind') endMinotaurCharge(false);
+  boss.cooldown = Math.max(boss.cooldown, CONFIG.minotaurChargeCooldown);
+}
+
+/** Drops him out of a charge into recovery, smashing the wall if he hit one. */
+function endMinotaurCharge(hitWall) {
+  if (hitWall) {
+    // smashTile is a no-op on a map whose terrain is not destructible, so on
+    // the maze this is pure spectacle: he slams into stone, staggers, and
+    // showers chips, but the wall holds. That is deliberate — a warden who
+    // opens the maze as he chases you dismantles the level he is guarding.
+    const r0 = Math.floor(boss.y / CONFIG.tileSize), c0 = Math.floor(boss.x / CONFIG.tileSize);
+    const reach = CONFIG.minotaurSmashRadius;
+    for (let dr = -reach; dr <= reach; dr++)
+      for (let dc = -reach; dc <= reach; dc++) smashTile(r0 + dr, c0 + dc);
+    triggerShake(9, 260);
+    events.emit({ type: 'MINOTAUR_SMASH', x: boss.x, y: boss.y });
+  }
+  boss.bstate = 'recover';
+  boss.stateTimer = 0;
+  boss.cooldown = CONFIG.minotaurChargeCooldown;
+}
+
+/**
+ * Prowl, charge on sight, recover. No shield, no HP, no death.
+ *
+ * Prowling reuses chaseAlongPath, the same A* follow crows, skeletons and rats
+ * use, so he navigates a maze without knowing one exists. Only the charge
+ * ignores the path: it commits to a direction locked at windup and runs in a
+ * straight line until something stops it, which is what makes a corridor feel
+ * like a corridor.
+ */
+function updateMinotaur(dt) {
+  boss.stateTimer += dt;
+  if (boss.cooldown > 0) boss.cooldown = Math.max(0, boss.cooldown - dt);
+
+  // A stun freezes him wherever he is, mid-charge included.
+  if (bossDazePhase() === 'stun') return;
+
+  const contactR = CONFIG.minotaurContactRadius;
+  const touching = Math.hypot(player.x - boss.x, player.y - boss.y) < contactR;
+
+  if (boss.bstate === 'prowl') {
+    if (touching) damagePlayer(CONFIG.minotaurContactDamage);
+    if (chaseAlongPath(boss, CONFIG.minotaurProwlSpeed * bossSpeedMod(), dt)) boss.wingPhase += dt * 6;
+    if (boss.cooldown <= 0 && minotaurSeesPlayer()) {
+      boss.bstate = 'wind'; boss.stateTimer = 0;
+      events.emit({ type: 'MINOTAUR_ROAR', x: boss.x, y: boss.y });
+    }
+    return;
+  }
+
+  if (boss.bstate === 'wind') {
+    // Plants and telegraphs. Aim keeps tracking until the moment he launches,
+    // so the tell is honest: what he is facing at the end is where he goes.
+    const a = Math.atan2(player.y - boss.y, player.x - boss.x);
+    boss.chargeDX = Math.cos(a); boss.chargeDY = Math.sin(a);
+    if (touching) damagePlayer(CONFIG.minotaurContactDamage);
+    if (boss.stateTimer >= CONFIG.minotaurWindupSecs) {
+      boss.bstate = 'charge'; boss.stateTimer = 0; boss.chargeTimer = 0;
+      boss.path = null;
+      events.emit({ type: 'MINOTAUR_CHARGE', x: boss.x, y: boss.y });
+    }
+    return;
+  }
+
+  if (boss.bstate === 'charge') {
+    if (touching) damagePlayer(CONFIG.minotaurChargeContactDamage);
+    const spd = CONFIG.minotaurChargeSpeed * bossSpeedMod();
+    const nx = boss.x + boss.chargeDX * spd * dt;
+    const ny = boss.y + boss.chargeDY * spd * dt;
+    // Axis-separated so a glancing wall stops him on the axis that hit it.
+    const blockedX = !tilePassable(tileAt(nx, boss.y));
+    const blockedY = !tilePassable(tileAt(boss.x, ny));
+    if (blockedX || blockedY) { endMinotaurCharge(true); return; }
+    boss.x = nx; boss.y = ny;
+    boss.wingPhase += dt * 14;
+    if (boss.stateTimer >= CONFIG.minotaurChargeMaxSecs) endMinotaurCharge(false);
+    return;
+  }
+
+  // recover
+  if (touching) damagePlayer(CONFIG.minotaurContactDamage);
+  if (boss.stateTimer >= CONFIG.minotaurRecoverSecs) { boss.bstate = 'prowl'; boss.stateTimer = 0; }
+}
+
 function updateBoss(dt) {
   if (!boss || boss.bstate === 'dead') return;
   boss.wingPhase += dt * 8;
@@ -2788,6 +2972,10 @@ function updateBoss(dt) {
   updateBossDaze(dt);
   const justResumed = wasStunned && bossDazePhase() !== 'stun';
   if (justResumed && boss.bstate === 'orbit') enterOrbit();
+
+  // The minotaur shares the frame preamble above (burn, flash, facing, daze)
+  // and none of what follows: no shield window, no orbit, no volleys.
+  if (boss.kind === 'minotaur') { updateMinotaur(dt); return; }
 
   // ── Shield phase machine — crow king only ────────────────────────────────
   // Rolling 30s window: reset shield-use counter each window
@@ -4999,6 +5187,7 @@ function drawBoss() {
   if (!boss || boss.bstate === 'dead') return;
   if (boss.kind === 'dark_archer') { drawDarkArcher(); return; }
   if (boss.kind === 'dark_knight') { drawDarkKnight(); return; }
+  if (boss.kind === 'minotaur')    { drawMinotaur(); return; }
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const fl = boss.hitFlash > 0;
   const bossPulse = 0.5 + 0.5 * Math.sin(loopT * 2);
@@ -5195,6 +5384,77 @@ function drawDarkArcher() {
  * remap it thrusts its spear with (see drawKnight), scaled up, plus the
  * corona-pulse and hit-flash techniques from the crow king.
  */
+const MINOTAUR_SPRITE = { w: 26, h: 34 };
+const MINOTAUR_PALETTE = {
+  hide:    '#6B4A32',
+  hideHi:  '#8A6242',
+  hideDk:  '#43301F',
+  muscle:  '#7A563A',
+  horn:    '#E8DCC2',
+  hornDk:  '#A89777',
+  hoof:    '#2A1E14',
+  eye:     '#FF3010',
+  ring:    '#C8A040',
+};
+
+/**
+ * A hero's build wearing a bull's head, drawn at the same 1x pixel scale as
+ * every other sprite and simply taller: 26x34 against a hero's 20x24, which is
+ * the 50% ceiling asked for and still leaves room to slip past in a 64px
+ * corridor.
+ *
+ * Deliberately humanoid. The threat is that it is the same kind of thing you
+ * are, and bigger, not that it is a monster filling the passage.
+ */
+function buildMinotaurGrid(frame) {
+  const C = MINOTAUR_PALETTE;
+  const g = makePixelGrid(MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h);
+  const swing = frame === 'a' ? 3 : frame === 'b' ? -3 : 0;
+
+  // Legs, digitigrade-ish, ending in hooves
+  pixelCurve(g, [10, 22], [10 + swing * 0.4, 27], [10 + swing, 31], C.muscle, 4);
+  pixelCurve(g, [16, 22], [16 - swing * 0.4, 27], [16 - swing, 31], C.muscle, 4);
+  pixelRect(g, 8 + swing, 31, 5, 3, C.hoof);
+  pixelRect(g, 14 - swing, 31, 5, 3, C.hoof);
+
+  // Torso: broad chest tapering to the waist
+  pixelRect(g, 7, 12, 12, 8, C.hide);
+  pixelRect(g, 8, 20, 10, 3, C.hideDk);
+  pixelRect(g, 9, 13, 8, 4, C.hideHi);
+  // Pectoral shading
+  pixelRect(g, 12, 13, 1, 6, C.hideDk);
+
+  // Arms, swinging opposite the legs
+  pixelCurve(g, [6, 13], [3, 17 + swing], [3, 21 + swing], C.muscle, 4);
+  pixelCurve(g, [20, 13], [23, 17 - swing], [23, 21 - swing], C.muscle, 4);
+  pixelRect(g, 1, 21 + swing, 4, 3, C.hideDk);
+  pixelRect(g, 21, 21 - swing, 4, 3, C.hideDk);
+
+  // Neck
+  pixelRect(g, 11, 10, 4, 3, C.hideDk);
+
+  // Bull skull: broad muzzle, heavy brow
+  pixelEllipse(g, 13, 6, 6, 5, C.hide);
+  pixelRect(g, 10, 7, 7, 4, C.hideHi);       // muzzle plate
+  pixelRect(g, 11, 10, 5, 1, C.hideDk);      // mouth line
+  setPixel(g, 11, 8, C.hideDk); setPixel(g, 15, 8, C.hideDk);   // nostrils
+  pixelRect(g, 8, 3, 11, 2, C.hideDk);       // brow ridge
+
+  // Horns, sweeping out and up
+  pixelCurve(g, [7, 4], [3, 2], [1, 0], C.horn, 6);
+  pixelCurve(g, [19, 4], [23, 2], [25, 0], C.horn, 6);
+  setPixel(g, 1, 0, C.hornDk); setPixel(g, 25, 0, C.hornDk);
+  // Nose ring, the one bit of gear
+  pixelEllipse(g, 13, 12, 2, 1, C.ring);
+
+  return g;
+}
+
+let _minotaurGrids = {};
+function minotaurGrid(frame) {
+  return _minotaurGrids[frame] || (_minotaurGrids[frame] = buildMinotaurGrid(frame));
+}
+
 const DARK_KNIGHT_SPRITE = { w: 40, h: 70 };
 const DARK_KNIGHT_PALETTE = {
   leg: '#141018', legHi: '#2A2430',
@@ -5313,6 +5573,85 @@ function drawDarkKnight() {
   ctx.restore();
 }
 
+/**
+ * The minotaur, with the state he is in readable at a glance.
+ *
+ * No HP bar: he does not have HP, and drawing an empty one would promise
+ * progress that never comes. The stun ring is the only feedback a hit gives,
+ * so it has to be unmistakable.
+ */
+function drawMinotaur() {
+  const bx = boss.x, by = boss.y + CONFIG.hudHeight;
+  const flashOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash * 20) % 2 === 0;
+  const stunned = bossDazePhase() === 'stun';
+  const frame = animFrame3(boss.wingPhase);
+  const grid = minotaurGrid(frame);
+
+  ctx.save(); ctx.translate(bx, by);
+
+  // Ground shadow, wider than a hero's because he is
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.ellipse(0, 16, 13, 3.5, 0, 0, Math.PI*2); ctx.fill();
+
+  // Windup tell: dust kicking back and a red glow building at the horns
+  if (boss.bstate === 'wind') {
+    const t = Math.min(1, boss.stateTimer / CONFIG.minotaurWindupSecs);
+    ctx.globalAlpha = 0.30 + 0.35 * t;
+    ctx.shadowColor = '#FF3010'; ctx.shadowBlur = 8 + 14 * t;
+    ctx.strokeStyle = '#FF3010'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -12, 15 + 6 * t, 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    // The line he is about to run down, so the tell is directional, not just loud
+    ctx.globalAlpha = 0.25 + 0.3 * t;
+    ctx.setLineDash([6, 5]); ctx.strokeStyle = '#FF6040'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.lineTo(boss.chargeDX * 150, boss.chargeDY * 150);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // Charge: speed streaks trailing behind him
+  if (boss.bstate === 'charge') {
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#C8A040'; ctx.lineWidth = 2;
+    for (let k = 1; k <= 3; k++) {
+      ctx.beginPath();
+      ctx.moveTo(-boss.chargeDX * 10 * k, -boss.chargeDY * 10 * k - 6 + k * 4);
+      ctx.lineTo(-boss.chargeDX * 26 * k, -boss.chargeDY * 26 * k - 6 + k * 4);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  const dx = -MINOTAUR_SPRITE.w / 2, dy = -MINOTAUR_SPRITE.h + 16;
+  const cvs = flashOn
+    ? spriteFlashCanvas(`minotaur|${frame}`, grid, MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h, '#ffffff')
+    : spriteCanvas(`minotaur|${frame}`, grid, MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h);
+  ctx.save(); ctx.scale(boss.facing, 1);
+  ctx.drawImage(cvs, boss.facing === 1 ? dx : dx, dy);
+  ctx.restore();
+
+  // Eyes, stamped over the skull
+  const eye = glowDotStamp(MINOTAUR_PALETTE.eye, 1, 4);
+  ctx.drawImage(eye, dx + 10 - eye.width/2, dy + 6 - eye.height/2);
+  ctx.drawImage(eye, dx + 16 - eye.width/2, dy + 6 - eye.height/2);
+
+  // Stunned: the one thing a hit actually does, so it reads loudly
+  if (stunned) {
+    const p = 0.5 + 0.5 * Math.sin(loopT * 12);
+    ctx.shadowColor = '#FFD040'; ctx.shadowBlur = 10 + 6 * p;
+    ctx.strokeStyle = `rgba(255,208,64,${(0.65 + 0.3*p).toFixed(2)})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -22, 12, 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    for (let k = 0; k < 3; k++) {
+      const a = loopT * 5 + (k / 3) * Math.PI * 2;
+      ctx.fillStyle = '#FFD040';
+      ctx.fillRect(Math.cos(a) * 12 - 1, -22 + Math.sin(a) * 5 - 1, 2, 2);
+    }
+  }
+
+  ctx.restore();
+}
+
 function drawBossEntrance() {
   if (!entrance) return;
   const e = entrance, t = e.timer;
@@ -5344,6 +5683,16 @@ function drawHUD(t) {
   if (!isBoss) {
     if (gameMode === 'brawl') ctx.fillText(`  KILLS:${String(killCount).padStart(2,'0')}/10`, 96, 16);
     else                      ctx.fillText(`  WAVE:${String(wave).padStart(2,'0')}`, 96, 16);
+  } else if (boss && !Number.isFinite(boss.hpMax)) {
+    // A boss with no finite HP has no bar to draw. The minotaur cannot be
+    // killed, so a bar would promise progress that never arrives, and the
+    // segment loop below counts one divider per HP point — against Infinity
+    // that is not a slow frame, it is a hang. This is the one place the rest
+    // of the file has to know an unkillable boss exists.
+    ctx.textAlign='right'; ctx.font='bold 11px "Courier New",monospace';
+    ctx.fillStyle='#C8A040';
+    ctx.fillText('THE MAZE HAS A KEEPER', 680, 16);
+    ctx.textAlign='left'; ctx.font='bold 12px "Courier New",monospace';
   } else if (boss) {
     // Prominent segmented HP bar
     const bBarX=420, bBarW=260, bBarY=4, bBarH=22;
@@ -6232,6 +6581,12 @@ window.__game = {
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
   poison: () => ({ timer: playerPoison.timer, tickIn: playerPoison.tickIn, speedMult: poisonSpeedMult() }),
+  minotaur: () => (boss && boss.kind === 'minotaur'
+    ? { bstate: boss.bstate, x: boss.x, y: boss.y, hp: boss.hp,
+        stateTimer: boss.stateTimer, cooldown: boss.cooldown,
+        daze: boss.dazeTimer, phase: bossDazePhase(), sees: minotaurSeesPlayer() }
+    : null),
+  spawnMinotaur() { bossStage = 4; spawnBoss(); boss.bstate = 'prowl'; return boss.kind; },
   knightCharge: () => ({
     charging: knightCharge.on, frac: knightChargeFrac(),
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,

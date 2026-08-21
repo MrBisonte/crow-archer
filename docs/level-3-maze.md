@@ -205,12 +205,29 @@ A `TileGrid` that must be connected is exactly such a value. A flood fill over
 unplayable-level bug into a loud failure. It also gives the test a single
 assertion to make across many seeds.
 
-**One property worth noticing:** destructible terrain is safe here. Dynamite,
-Lightning Storm and Whirlwind clear `ROCK`, `TREE` and `HUT`
+**One property worth noticing, and the decision it did not settle:** destructible
+terrain is safe here, in the narrow sense that it cannot break the invariant.
+Dynamite, Lightning Storm and Whirlwind clear `ROCK`, `TREE` and `HUT`
 (`Terrain.destroyArea`). Removing walls can only ever add connections, never
-remove them, so the invariant holds under every in-game mutation without
-anything having to re-check it. Players digging shortcuts through maze walls is
-a feature that costs zero architecture.
+remove them, so connectivity holds under every in-game mutation without anything
+having to re-check it.
+
+That reasoning still stands and the decision went the other way: **maze walls
+are indestructible.** Safe for the invariant turned out not to mean good for the
+level. A Lightning Storm or a Whirlwind does not dig a shortcut, it clears a
+whole neighbourhood of wall at once, and two or three of them leave an open room
+with an unkillable minotaur standing in it. The maze is the only thing making
+that minotaur dangerous, so a level where a player can delete it on a cooldown
+has no fight left. The minotaur breaking walls by charging them stays, because
+that is one wall at a time, paid for by being in front of him.
+
+The rule lives in `MAP_RULES` (`src/sim/arena-map.ts`), a second per-map table
+next to `MAP_GEN`, one row per `MapKind` with a `destructibleTerrain` flag.
+It is separate from `MAP_GEN` because the two are consulted at different times:
+`MAP_GEN` builds the grid once, `MAP_RULES` is read every time something tries
+to change it. Both sides read the same table. `Terrain.destroyArea` and
+`Terrain.burnTile` return early on a map whose row says false, and the legacy
+single-player `smashTile` gates on the same row.
 
 ### Algorithm and grid fit
 
@@ -433,7 +450,6 @@ removes both.
    because it is the better home.
 2. Is a maze that ranged characters find frustrating a design failure or the
    level's identity?
-3. Should maze walls be destructible? The invariant holds either way. Making
-   them solid preserves the maze; making them breakable makes dynamite a
-   navigation tool and rewards the archer in a level that otherwise punishes
-   them.
+3. ~~Should maze walls be destructible?~~ **Settled: no.** See the
+   destructible-terrain paragraph above. Kept here rather than deleted so the
+   question and its answer stay findable together.
