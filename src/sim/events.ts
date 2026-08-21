@@ -64,7 +64,12 @@ export type GameEvent =
   | { type: 'BOSS_ENTRANCE_FLASH' }
   | { type: 'BOSS_ENTRANCE_FIRE'; x: number; y: number }
   | { type: 'BOSS_SHIELD_BLOCKED'; x: number; y: number }
-  | { type: 'BOSS_BURNING'; x: number; y: number };
+  | { type: 'BOSS_BURNING'; x: number; y: number }
+  // Rat venom. POISONED is the bite landing, TICK is one second of it working.
+  // Two events rather than one with a flag: they sound and look different, and
+  // the render layer should not have to branch to find that out.
+  | { type: 'PLAYER_POISONED'; x: number; y: number }
+  | { type: 'PLAYER_POISON_TICK'; x: number; y: number };
 
 export type GameEventType = GameEvent['type'];
 export type EventHandler = (e: GameEvent) => void;

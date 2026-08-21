@@ -112,6 +112,17 @@ const CONFIG = {
   // crow's 200 (matching player speed) on purpose, a threat that is always
   // closing is not meant to also be unescapable.
   skeletonSpeed: 130, skeletonContactDamage: 1,
+  // The maze's trash mob. Faster than a skeleton and dies to anything, so the
+  // threat is never one rat: it is a pack of them filling a two-tile corridor
+  // while something you cannot kill comes down it. Spawns in packs on open
+  // floor rather than walking in from the right, since a maze has no corridor
+  // to walk in from.
+  ratSpeed: 190, ratContactDamage: 1, ratPackSize: 5, ratSpawnMinDistance: 200,
+  // A bite is barely a hit; the poison is the point. 3 damage spread over 3
+  // seconds at one point a second, plus a half-speed crawl for the same
+  // window. Getting bitten once is survivable, getting swarmed is not, and
+  // the slow is what turns a second bite into a third.
+  ratPoisonSecs: 3, ratPoisonDamagePerTick: 1, ratPoisonTickSecs: 1, ratPoisonSlowMult: 0.5,
 
   // Fire skeleton: same movement and contact damage as normal, but its
   // death is a small blast that punishes standing next to it when it pops.
@@ -415,6 +426,10 @@ let killCount = 0, dropStreak = 0, playerShield = false;
 // returns before reading input while it is positive, so movement, aiming
 // and every weapon lock out together for the duration.
 let playerFrozenTimer = 0;
+// Rat venom. Mirrors playerFrozenTimer's shape: one countdown owns the whole
+// effect, so the damage tick, the slow and the tint all read one source. A
+// fresh bite refreshes rather than stacks, the same call dazeBoss makes.
+let playerPoison = { timer: 0, tickIn: 0 };
 // Its own counter, deliberately not sharing killCount: see the comment above
 // the SKELETONS section for why that separation is load-bearing.
 let skeletonKillCount = 0;
@@ -831,6 +846,19 @@ const WEAPON_FX = {
 
 events.on(e => {
   switch (e.type) {
+    case 'PLAYER_POISONED':
+      playSound(sndPoisonBite);
+      triggerShake(2, 80);
+      burst(e.x, e.y, { count: 10, colors: ['#6ABF2A','#9BE04A','#4E8F1E'],
+        speedMin: 20, speedMax: 70, decay: 1.6, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 2.5, gravity: -30, shadowBlur: 5, shadowColor: '#6ABF2A' });
+      break;
+    case 'PLAYER_POISON_TICK':
+      playSound(sndPoisonTick);
+      burst(e.x, e.y, { count: 5, colors: ['#6ABF2A','#4E8F1E'],
+        speedMin: 8, speedMax: 30, decay: 1.9, shape: 'spark',
+        sizeMin: 1, sizeMax: 2, gravity: -55, shadowBlur: 4, shadowColor: '#6ABF2A' });
+      break;
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -1128,7 +1156,7 @@ function initGame() {
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
-  castleWave = 0; playerFrozenTimer = 0;
+  castleWave = 0; playerFrozenTimer = 0; playerPoison = { timer: 0, tickIn: 0 };
   fovMap.invalidate(); // force FOV recompute on next player move
   FEATHERS.applyToGame();
   resetInv();
@@ -1236,6 +1264,10 @@ function updatePlayer(dt) {
   // An ice bolt's freeze locks out everything below, movement, aiming and
   // every weapon's cooldown tick, for its full duration. Nothing else can
   // read player input while this is positive.
+  // Ticked before the freeze gate: being frozen stops you acting, it does not
+  // stop you bleeding, and a poison that paused whenever an ice bolt landed
+  // would quietly reward getting hit by two things at once.
+  updatePlayerPoison(dt);
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
@@ -1259,7 +1291,7 @@ function updatePlayer(dt) {
       if (hasButton(cmd, Button.LEFT))  vx -= 1;
       if (hasButton(cmd, Button.RIGHT)) vx += 1;
       const len = Math.hypot(vx, vy);
-      if (len > 0) { vx = (vx/len)*FEATHERS.speed()*dt; vy = (vy/len)*FEATHERS.speed()*dt; player.walkPhase += 8 * dt; }
+      if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
     }
     const r = CONFIG.playerRadius;
     // Clamp bounds keep the player's collision corners (±r) inside the first passable
@@ -1952,11 +1984,46 @@ function killCrow(j) {
 // first skeleton kill from instantly re-triggering the Crow King's own
 // boss_entrance the moment the stage changes.
 
+/** Speed per skeleton kind. A rat is the same entity, tuned to rush. */
+const SKELETON_SPEED = {
+  normal: () => CONFIG.skeletonSpeed,
+  fire:   () => CONFIG.skeletonSpeed,
+  ice:    () => CONFIG.skeletonSpeed,
+  rat:    () => CONFIG.ratSpeed,
+};
+
+/**
+ * A random open tile at least `minDist` from the player, for kinds that
+ * appear inside the map rather than walking in from off-screen.
+ *
+ * Rejection sampling over open tiles, capped, because a maze's open tiles are
+ * scattered rather than contiguous and there is no cheap closed form for
+ * "somewhere over there". Falls back to any open tile, then to the caller's
+ * off-screen default, so a spawn always resolves.
+ */
+function openTileAwayFrom(px, py, minDist) {
+  const ts = CONFIG.tileSize;
+  let fallback = null;
+  for (let tries = 0; tries < 120; tries++) {
+    const r = Math.floor(Math.random() * CONFIG.rows);
+    const c = Math.floor(Math.random() * CONFIG.cols);
+    if (!tilePassable(tileMap.get(r, c))) continue;
+    const x = c * ts + ts / 2, y = r * ts + ts / 2;
+    fallback ??= { x, y };
+    if (dist2(x, y, px, py) >= minDist * minDist) return { x, y };
+  }
+  return fallback;
+}
+
 function spawnSkeleton(kind = 'normal') {
   const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
+  // Rats appear in the map; the castle kinds still march in from the right.
+  const at = kind === 'rat'
+    ? openTileAwayFrom(player.x, player.y, CONFIG.ratSpawnMinDistance)
+    : null;
   skeletons.push({
-    x: CONFIG.canvasW + 20, y: baseY,
-    kind, // 'normal' | 'fire' | 'ice' — see the wave table below
+    x: at ? at.x : CONFIG.canvasW + 20, y: at ? at.y : baseY,
+    kind, // 'normal' | 'fire' | 'ice' | 'rat' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
     hp: 1, maxHp: 1, hitFlash: 0,
@@ -1993,7 +2060,11 @@ function killSkeleton(j) {
   // No kill count here: the gauntlet is nine waves, cleared one at a time.
   // The last skeleton of a wave dying is what starts the next one, or, past
   // wave 9, the dark archer's entrance.
-  if (gameMode === 'brawl' && appState === 'playing' && skeletons.length === 0) {
+  // Gated on the gauntlet actually running, not just on the array emptying.
+  // castleWave is 0 until startCastleWave sets it, so any other skeleton kind
+  // in play elsewhere — the maze's rats, a boss summon before wave 1 — cannot
+  // advance a gauntlet that has not begun.
+  if (gameMode === 'brawl' && appState === 'playing' && castleWave > 0 && skeletons.length === 0) {
     if (castleWave < CASTLE_TOTAL_WAVES) startCastleWave(castleWave + 1);
     else transitionTo('boss_entrance');
   }
@@ -2025,6 +2096,33 @@ function startCastleWave(n) {
  * passive crow's flight, this respects tilePassable the way the player's own
  * movement does, so nothing here drifts through a pillar.
  */
+/**
+ * Walks one pursuer a step along its cached A* path toward the player.
+ *
+ * Crows, skeletons and rats all chase the same way: follow the cached path,
+ * ask the scheduler for a fresh one when it expires or runs out, and beeline
+ * while waiting. That was two copies and rats would have made three, so it
+ * lives here once, parameterised by the only thing that actually differs
+ * between them, speed.
+ *
+ * Returns whether it moved, which is what drives a walk cycle.
+ */
+function chaseAlongPath(e, spd, dt) {
+  e.pathTimer -= dt;
+  if (!e.path || e.path.length === 0 || e.pathTimer <= 0) pathScheduler.request(e);
+  if (e.path && e.path.length > 0) {
+    const wp = e.path[0];
+    const wdx = wp.x - e.x, wdy = wp.y - e.y, wdist = Math.hypot(wdx, wdy);
+    if (wdist < 6) { e.path.shift(); return false; }   // waypoint reached
+    e.x += (wdx / wdist) * spd * dt; e.y += (wdy / wdist) * spd * dt;
+    return true;
+  }
+  // No path yet (open ground, or already adjacent) — head straight at them.
+  const dx = player.x - e.x, dy = player.y - e.y, dist = Math.hypot(dx, dy) || 1;
+  e.x += (dx / dist) * spd * dt; e.y += (dy / dist) * spd * dt;
+  return true;
+}
+
 function updateSkeletons(dt) {
   if (bossDeathSeq) return;
   // Requests go on the same queue crows use — updateCrows.serve() drains it
@@ -2035,20 +2133,13 @@ function updateSkeletons(dt) {
     const s = skeletons[i];
     if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
     const dx = player.x - s.x, dy = player.y - s.y, dist = Math.hypot(dx, dy);
-    if (dist < 14) { damagePlayer(CONFIG.skeletonContactDamage); continue; }
-    const spd = CONFIG.skeletonSpeed;
-    s.pathTimer -= dt;
-    if (!s.path || s.path.length === 0 || s.pathTimer <= 0) pathScheduler.request(s);
-    let moved = false;
-    if (s.path && s.path.length > 0) {
-      const wp = s.path[0];
-      const wdx = wp.x - s.x, wdy = wp.y - s.y, wdist = Math.hypot(wdx, wdy);
-      if (wdist < 6) { s.path.shift(); }
-      else { s.x += (wdx / wdist) * spd * dt; s.y += (wdy / wdist) * spd * dt; moved = true; }
-    } else {
-      s.x += (dx / dist) * spd * dt; s.y += (dy / dist) * spd * dt; moved = true;
+    const reach = s.kind === 'rat' ? 11 : 14;
+    if (dist < reach) {
+      damagePlayer(s.kind === 'rat' ? CONFIG.ratContactDamage : CONFIG.skeletonContactDamage);
+      if (s.kind === 'rat') poisonPlayer();
+      continue;
     }
-    if (moved) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, SKELETON_SPEED[s.kind](), dt)) s.walkPhase += dt * 8;
 
     if (s.kind === 'ice') {
       s.shotCD -= dt;
@@ -2220,20 +2311,7 @@ function updateCrows(dt) {
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
       const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult();
-      // Request a recompute when the cached path expires or runs out; the
-      // scheduler serves it within a few frames. The crow keeps following its
-      // stale path (or beelines when empty) until then.
-      c.pathTimer -= dt;
-      if (!c.path || c.path.length === 0 || c.pathTimer <= 0) pathScheduler.request(c);
-      if (c.path && c.path.length > 0) {
-        const wp = c.path[0];
-        const wdx = wp.x - c.x, wdy = wp.y - c.y, wdist = Math.hypot(wdx, wdy);
-        if (wdist < 6) { c.path.shift(); }                          // waypoint reached
-        else { c.x += (wdx / wdist) * spd * dt; c.y += (wdy / wdist) * spd * dt; }
-      } else {
-        // No valid path (open space, already adjacent) — beeline directly
-        c.x += (dx / dist) * spd * dt; c.y += (dy / dist) * spd * dt;
-      }
+      chaseAlongPath(c, spd, dt);
       if (c.aggroTimer <= 0) { c.state = 'passive'; c.baseY = c.y; c.path = null; }
     }
   }
@@ -2329,6 +2407,43 @@ function updateEscalation(dt) {
 }
 
 // ── DAMAGE / BOSS ─────────────────────────────────────────────────────────────
+
+/** Half speed while venom is in you, full speed otherwise. */
+function poisonSpeedMult() {
+  return playerPoison.timer > 0 ? CONFIG.ratPoisonSlowMult : 1;
+}
+
+/**
+ * Applies a fresh bite's venom. Refreshes to full rather than stacking, so a
+ * swarm is dangerous through the slow it keeps renewing rather than through
+ * an unbounded damage total.
+ */
+function poisonPlayer() {
+  const first = playerPoison.timer <= 0;
+  playerPoison.timer = CONFIG.ratPoisonSecs;
+  if (first) playerPoison.tickIn = CONFIG.ratPoisonTickSecs;
+  events.emit({ type: 'PLAYER_POISONED', x: player.x, y: player.y });
+}
+
+/**
+ * Counts the venom down and bites once a second while it lasts.
+ *
+ * Damage goes straight to playerHP rather than through damagePlayer, because
+ * that gate refuses anything while playerHitFlash is up: routed through it,
+ * every tick would be swallowed by the invulnerability from the bite that
+ * applied the poison in the first place. A shield does not stop it either.
+ * Venom is already inside you.
+ */
+function updatePlayerPoison(dt) {
+  if (playerPoison.timer <= 0) return;
+  playerPoison.timer = Math.max(0, playerPoison.timer - dt);
+  playerPoison.tickIn -= dt;
+  if (playerPoison.tickIn > 0) return;
+  playerPoison.tickIn += CONFIG.ratPoisonTickSecs;
+  playerHP -= CONFIG.ratPoisonDamagePerTick;
+  events.emit({ type: 'PLAYER_POISON_TICK', x: player.x, y: player.y });
+  if (playerHP <= 0) { playerHP = 0; transitionTo('gameover'); }
+}
 
 function damagePlayer(amount, crowIndex = -1) {
   // Team gate: an attacker never hurts its own team. In single-player the
@@ -3013,6 +3128,8 @@ const sndExplosion     = [.8,  .05,  90, 0, .18, .3,  5, 1, -40];       // lowpa
 const sndWizBolt       = [.25, 0,   440, 0, .04, .13, 0, 1, 0, 0, 440, .05]; // sine + pitch jump — magic zap
 const sndLightning     = [.75, .15, 120, 0, .25, .3,  4, 1];            // bit noise — lightning crack
 const sndCrossbow      = [.28, .04, 550, 0, .03, .06, 4, 1, -120];      // bit noise snap, downward pitch — mechanical thock
+const sndPoisonBite    = [.22, .04, 260, 0, .04, .07, 4, 1, -140];     // bit noise, pitch dropping — a wet nip
+const sndPoisonTick    = [.14, .02, 180, 0, .05, .09, 2, 1, -60];      // low sawtooth throb — the venom working
 const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // triangle blip, upward pitch — arm confirm
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
@@ -3542,6 +3659,39 @@ function drawWizard() {
  * drawKnight/drawRanger, so the freeze reads the same on every character
  * without touching four separate draw functions for one shared status.
  */
+/**
+ * Venom tell: a sickly green haze and a few rising motes, plus a bar of the
+ * remaining duration under the feet.
+ *
+ * Deliberately not the freeze ring's shape. Both can be up at once, and two
+ * rings pulsing at different rates around one body is unreadable.
+ */
+function drawPlayerPoisonOverlay() {
+  const px = player.x, py = player.y + CONFIG.hudHeight;
+  const frac = Math.min(1, playerPoison.timer / CONFIG.ratPoisonSecs);
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 7);
+  ctx.save(); ctx.translate(px, py);
+  ctx.globalAlpha = 0.20 + 0.12 * pulse;
+  ctx.shadowColor = '#6ABF2A'; ctx.shadowBlur = 10;
+  ctx.fillStyle = '#6ABF2A';
+  ctx.beginPath(); ctx.arc(0, -3, 14, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  // Motes drifting up off the body
+  for (let k = 0; k < 4; k++) {
+    const t = (loopT * 0.6 + k / 4) % 1;
+    const mx = Math.sin((k * 2.3) + loopT * 2) * 7;
+    ctx.globalAlpha = (1 - t) * 0.75;
+    ctx.fillStyle = k % 2 ? '#9BE04A' : '#4E8F1E';
+    ctx.fillRect(mx, -4 - t * 16, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  // Duration bar, under the feet so it never sits where the charge bar goes.
+  const bw = 20, bh = 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(-bw/2, 13, bw, bh);
+  ctx.fillStyle = '#6ABF2A'; ctx.fillRect(-bw/2, 13, bw * frac, bh);
+  ctx.restore();
+}
+
 function drawPlayerFrozenOverlay() {
   const px = player.x, py = player.y + CONFIG.hudHeight;
   const pulse = 0.5 + 0.5 * Math.sin(loopT * 5);
@@ -4486,9 +4636,54 @@ const SKELETON_PALETTES = {
   normal: { bone: '#D8D0C0', boneHi: '#F4F0E6', edge: '#8A8070', eye: '#B040E0', aura: null },
   fire:   { bone: '#D86A40', boneHi: '#F4A868', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
   ice:    { bone: '#A8D8F0', boneHi: '#E4F6FF', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
+  // Not bone at all, but it reads the same three slots so nothing downstream
+  // needs to know a rat is not a skeleton.
+  rat:    { bone: '#4A3E36', boneHi: '#6B5A4C', edge: '#2A221C', eye: '#FF4020', aura: null },
 };
 
 const SKELETON_SPRITE = { w: 14, h: 24 };
+const RAT_SPRITE = { w: 14, h: 10 };
+
+/**
+ * A low, quick body: tail, hunched back, snout, and four legs that scurry on
+ * the same three-frame stride the skeletons use.
+ *
+ * Drawn facing right and never mirrored, like every other ground critter here.
+ */
+function buildRatGrid(kind, frame) {
+  const C = SKELETON_PALETTES[kind];
+  const g = makePixelGrid(RAT_SPRITE.w, RAT_SPRITE.h);
+  const swing = frame === 'a' ? 1 : frame === 'b' ? -1 : 0;
+
+  // Tail, whipping opposite the legs so the body reads as driven by them.
+  pixelCurve(g, [0, 4 - swing], [3, 6], [5, 5], C.edge, 8);
+  // Haunch and back
+  pixelEllipse(g, 6, 6, 4, 2, C.bone);
+  pixelEllipse(g, 6, 5, 3, 1, C.boneHi);
+  // Head and snout
+  pixelEllipse(g, 10, 6, 2, 2, C.bone);
+  pixelRect(g, 12, 6, 2, 1, C.bone);
+  // Ear
+  pixelRect(g, 9, 3, 2, 2, C.edge);
+  setPixel(g, 10, 4, C.bone);
+  // Legs, alternating with the stride
+  pixelRect(g, 4 + swing, 8, 1, 2, C.edge);
+  pixelRect(g, 7 - swing, 8, 1, 2, C.edge);
+  pixelRect(g, 10 + swing, 8, 1, 2, C.edge);
+  return g;
+}
+
+/**
+ * Per-kind rendering, so a kind with a different body is a row rather than a
+ * branch inside drawSkeleton. The three bone kinds share one builder and
+ * differ only by palette; the rat brings its own.
+ */
+const SKELETON_LOOK = {
+  normal: { sprite: SKELETON_SPRITE, build: buildSkeletonGrid, dy: -15, eyes: [[4, 5], [8, 5]], shadow: [7, 2] },
+  fire:   { sprite: SKELETON_SPRITE, build: buildSkeletonGrid, dy: -15, eyes: [[4, 5], [8, 5]], shadow: [7, 2] },
+  ice:    { sprite: SKELETON_SPRITE, build: buildSkeletonGrid, dy: -15, eyes: [[4, 5], [8, 5]], shadow: [7, 2] },
+  rat:    { sprite: RAT_SPRITE,      build: buildRatGrid,      dy: -7,  eyes: [[11, 5]],        shadow: [6, 1.5] },
+};
 
 /** frame 'a'/'b' are the two extremes of the stride, 'mid' legs-together
  * between them — see animFrame3. Skull and ribcage stay put; only limbs
@@ -4523,7 +4718,7 @@ function buildSkeletonGrid(kind, frame) {
 const _skeletonGrids = {};
 function skeletonGrid(kind, frame) {
   const key = `${kind}|${frame}`;
-  return _skeletonGrids[key] || (_skeletonGrids[key] = buildSkeletonGrid(kind, frame));
+  return _skeletonGrids[key] || (_skeletonGrids[key] = SKELETON_LOOK[kind].build(kind, frame));
 }
 
 // Ground-based, so a walk cycle (legs swinging on s.walkPhase) replaces a
@@ -4534,6 +4729,7 @@ function drawSkeleton(s) {
   const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
   const kind = s.kind || 'normal';
   const palette = SKELETON_PALETTES[kind] || SKELETON_PALETTES.normal;
+  const look = SKELETON_LOOK[kind] || SKELETON_LOOK.normal;
   const eyeCol = palette.eye;
   const frame = animFrame3(s.walkPhase);
   const grid = skeletonGrid(kind, frame);
@@ -4543,7 +4739,7 @@ function drawSkeleton(s) {
   // 1. Ground shadow
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 9, look.shadow[0], look.shadow[1], 0, 0, Math.PI*2); ctx.fill();
 
   // Elemental aura — fire and ice only, a small pulsing glow behind the ribs
   if (palette.aura && !flashOn) {
@@ -4557,16 +4753,17 @@ function drawSkeleton(s) {
 
   // 2. Pixel-art body (see buildSkeletonGrid). The stride is 3 baked frames
   // (animFrame3), same reasoning as the crow's flap cycle above.
-  const kSpriteDx = -(SKELETON_SPRITE.w) / 2, kSpriteDy = -15;
+  const kSpriteDx = -(look.sprite.w) / 2, kSpriteDy = look.dy;
   const kCanvas = flashOn
-    ? spriteFlashCanvas(`skeleton|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h, '#ffffff')
-    : spriteCanvas(`skeleton|${kind}|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+    ? spriteFlashCanvas(`skeleton|${kind}|${frame}`, grid, look.sprite.w, look.sprite.h, '#ffffff')
+    : spriteCanvas(`skeleton|${kind}|${frame}`, grid, look.sprite.w, look.sprite.h);
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
   // 3. Eye sockets — stamped glow, same technique as the crow's eye
   const eyeStamp = glowDotStamp(eyeCol, 1, 3);
-  ctx.drawImage(eyeStamp, kSpriteDx + 4 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
-  ctx.drawImage(eyeStamp, kSpriteDx + 8 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
+  for (const [ex, ey] of look.eyes) {
+    ctx.drawImage(eyeStamp, kSpriteDx + ex - eyeStamp.width/2, kSpriteDy + ey - eyeStamp.height/2);
+  }
 
   ctx.restore();
 }
@@ -5754,6 +5951,7 @@ function render(t) {
     crows.forEach(drawCrow);
     skeletons.forEach(drawSkeleton);
     drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
+    if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
     drawBoss(); drawFloaters();
     ctx.restore();
@@ -6033,6 +6231,7 @@ window.__game = {
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
+  poison: () => ({ timer: playerPoison.timer, tickIn: playerPoison.tickIn, speedMult: poisonSpeedMult() }),
   knightCharge: () => ({
     charging: knightCharge.on, frac: knightChargeFrac(),
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,
