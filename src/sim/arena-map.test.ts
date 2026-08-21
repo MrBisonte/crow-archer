@@ -47,9 +47,10 @@ describe('Terrain', () => {
   });
 
   describe('MAP_GEN', () => {
-    it('has a density for every MapKind', () => {
-      expect(MAP_GEN.forest.density).toBeGreaterThan(0);
-      expect(MAP_GEN.castle.density).toBeGreaterThan(0);
+    it('has a generator for every MapKind', () => {
+      for (const kind of ['forest', 'castle', 'maze'] as const) {
+        expect(typeof MAP_GEN[kind].generate).toBe('function');
+      }
     });
   });
 

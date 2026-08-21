@@ -55,6 +55,30 @@ const CHARACTER_LEGEND = (Object.entries(CHARACTER_KEYS) as [CharacterKind, stri
   .map(([kind, key]) => `[${key.toUpperCase()}] ${kind.toUpperCase()}`)
   .join('  ');
 
+/**
+ * One key per map, host only.
+ *
+ * No map gets its own first letter: C is coop, F is frags, M is the
+ * multiplayer screen itself. So these are mnemonic rather than initial, and
+ * they live in a table for the same reason the character keys do. A third map
+ * added as a third `if` is a third place to forget.
+ */
+const MAP_KEYS: Record<MapKind, string> = {
+  forest: 'g',
+  castle: 'v',
+  maze: 'z',
+};
+
+/** The reverse lookup the picker actually reads a keypress against. */
+const KEY_TO_MAP = new Map<string, MapKind>(
+  (Object.entries(MAP_KEYS) as [MapKind, string][]).map(([kind, key]) => [key, kind]),
+);
+
+/** Host-only hint next to the MAP line, built from the table, never typed twice. */
+const MAP_LEGEND = Object.values(MAP_KEYS)
+  .map((key) => key.toUpperCase())
+  .join('/');
+
 /** What MATCH_START hands off to the harness. One home, so a new field is one edit, not two. */
 export interface MatchStartInfo {
   seed: number;
@@ -238,21 +262,13 @@ export class LobbyController {
           return true;
         }
       }
-      // Map toggle: G for forest, V for castle (host only). Neither map's own
-      // first letter is free: C is coop, F is frags.
+      // Map picker: one key per map, from MAP_KEYS. Host only.
       if (this.#state.userSlot === this.#state.roomView?.host) {
-        if (key.toLowerCase() === 'g') {
+        const mapKind = KEY_TO_MAP.get(key.toLowerCase());
+        if (mapKind) {
           const { state: next, send } = transitionLobby(this.#state, {
             type: 'SET_MAP',
-            mapKind: 'forest',
-          });
-          this.#setState(next, send);
-          return true;
-        }
-        if (key.toLowerCase() === 'v') {
-          const { state: next, send } = transitionLobby(this.#state, {
-            type: 'SET_MAP',
-            mapKind: 'castle',
+            mapKind,
           });
           this.#setState(next, send);
           return true;
@@ -405,7 +421,7 @@ export class LobbyController {
     y += 30;
 
     // The arena. Same host-only pattern as mode, one line below it.
-    const mapText = `MAP: ${this.#state.roomView.mapKind.toUpperCase()}${isHost ? ' [G/V]' : ''}`;
+    const mapText = `MAP: ${this.#state.roomView.mapKind.toUpperCase()}${isHost ? ` [${MAP_LEGEND}]` : ''}`;
     this.#ctx.fillText(mapText, x, y);
     y += 30;
 

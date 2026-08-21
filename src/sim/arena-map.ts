@@ -12,7 +12,8 @@
  * rules apart here means neither is re-decided at a call site.
  */
 
-import { generateGrid, type Noise2D } from './mapgen';
+import { MazeTerrain, NoiseTerrain, type MapGenerator } from './map-generators';
+import { type Noise2D } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
 
@@ -22,22 +23,28 @@ import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
  * render/tiles.ts) — the same reason CharacterKind became a table instead of
  * a branch, not the reason GameMode stayed one.
  */
-export type MapKind = 'forest' | 'castle';
+export type MapKind = 'forest' | 'castle' | 'maze';
 
 /**
- * Generation tuning per map, one row per MapKind so a third map fails to
- * compile until it has a density.
+ * How each map builds its grid, one row per MapKind so a fourth map fails to
+ * compile until it has a generator.
+ *
+ * This held a plain `{ density: number }` while every map was the same noise
+ * algorithm at a different setting. The maze is not that algorithm at any
+ * density, so the row became the generator itself rather than a number the
+ * one generator reads. See docs/level-3-maze.md.
  *
  * forest's 0.45 is single player's own clutter thinned for a duel: that map
  * was drawn for crows flying a corridor, and measured, a third of its tiles
- * stop an arrow — two players 400 px apart almost never have a clear line
+ * stop an arrow, so two players 400 px apart almost never have a clear line
  * otherwise. castle's density is a starting point, tuned for readable
- * pillars over a thicket; adjust freely, nothing downstream depends on the
- * exact number.
+ * pillars over a thicket. maze's braid is the fraction of dead ends reopened
+ * into loops. All three are free to adjust; nothing downstream reads them.
  */
-export const MAP_GEN: Record<MapKind, { density: number }> = {
-  forest: { density: 0.45 },
-  castle: { density: 0.5 },
+export const MAP_GEN: Record<MapKind, MapGenerator> = {
+  forest: new NoiseTerrain({ density: 0.45 }),
+  castle: new NoiseTerrain({ density: 0.5 }),
+  maze: new MazeTerrain({ braid: 0.15 }),
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
@@ -75,7 +82,7 @@ export class Terrain {
    */
   static fromSeed(seed: number, noise: NoiseFactory, kind: MapKind = 'forest'): Terrain {
     const map = new TileMap(MAP_ROWS, MAP_COLS);
-    map.reset(generateGrid(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed), MAP_GEN[kind].density));
+    map.reset(MAP_GEN[kind].generate(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed)));
     return new Terrain(map);
   }
 

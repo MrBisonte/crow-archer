@@ -6,7 +6,6 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { generateGrid } from '../sim/mapgen';
 import { MAP_GEN } from '../sim/arena-map';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
@@ -516,8 +515,40 @@ function generateMap(kind = 'forest') {
   // every tile: doing it the other way round repaints the whole map twice.
   tileLayer.usePainters(TILE_THEMES[kind]);
   tileOverlay.setPalette(ANIMATED_THEMES[kind]);
-  tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
-    (x, y) => sn.noise2D(x, y), MAP_GEN[kind].density));
+  // MAP_GEN holds a generator per kind, not a density: the maze is carved
+  // rather than thresholded, so the noise source is offered and ignored by
+  // the generators that do not want it. See docs/level-3-maze.md.
+  tileMap.reset(MAP_GEN[kind].generate(CONFIG.rows, CONFIG.cols, rng,
+    (x, y) => sn.noise2D(x, y)));
+}
+
+/**
+ * The centre of the closest tile to (wx, wy) that a body can stand on.
+ *
+ * The spawn point used to be a bare constant, which worked only because
+ * generateGrid carves a guaranteed clear zone around it. A carved map makes no
+ * such promise: the maze puts walls on every even index, so the old spawn
+ * landed inside rock. Rings outwards the same way multiplayer's
+ * nearestStandable does (src/sim/spawns.ts) rather than inventing a second
+ * answer to the same question. Falls back to the point itself, since every map
+ * this can be asked about has open tiles somewhere near the middle.
+ */
+function nearestOpenTile(wx, wy) {
+  const ts = CONFIG.tileSize;
+  const col0 = Math.floor(wx / ts), row0 = Math.floor(wy / ts);
+  const centre = (r, c) => ({ x: c * ts + ts / 2, y: r * ts + ts / 2 });
+  for (let radius = 0; radius <= 12; radius++) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        // Only the ring's edge is new; the inside was covered by smaller radii.
+        if (radius > 0 && Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+        const r = row0 + dr, c = col0 + dc;
+        if (r < 0 || r >= CONFIG.rows || c < 0 || c >= CONFIG.cols) continue;
+        if (tilePassable(tileMap.get(r, c))) return centre(r, c);
+      }
+    }
+  }
+  return { x: wx, y: wy };
 }
 
 function tileAt(wx, wy) {
@@ -1092,7 +1123,10 @@ function initGame() {
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
-  player = { x: 2.5 * CONFIG.tileSize, y: (CONFIG.rows / 2) * CONFIG.tileSize, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
+  // Snapped rather than taken literally: see nearestOpenTile. On forest and
+  // castle the clear zone means this returns the same point it always did.
+  const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+  player = { x: spawn.x, y: spawn.y, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
   skeletons = []; // only populated once brawl mode reaches its castle stage
   for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
@@ -6011,6 +6045,15 @@ window.__game = {
   tiles: () => tileMap,
   mapKind: () => mapKind,
   generateMap(kind) { generateMap(kind); },
+  // Regenerating the map under a player already placed leaves them wherever
+  // they were, which on a carved map is often inside a wall. This is the
+  // reposition initGame does for itself, exposed so a harness can switch maps
+  // mid-run without that artefact looking like a spawn bug.
+  respawnPlayer() {
+    const p = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+    player.x = p.x; player.y = p.y;
+    return { x: p.x, y: p.y };
+  },
   player: () => player,
   crows: () => crows,
   skeletons: () => skeletons,

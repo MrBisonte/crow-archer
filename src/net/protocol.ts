@@ -391,7 +391,7 @@ const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
 
 const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
-const MAPS: readonly MapKind[] = ['forest', 'castle'];
+const MAPS: readonly MapKind[] = ['forest', 'castle', 'maze'];
 const ERROR_CODES: readonly ErrorCode[] = [
   'VERSION_MISMATCH',
   'BAD_MESSAGE',
