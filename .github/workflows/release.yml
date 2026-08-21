@@ -1,0 +1,55 @@
+name: Release
+
+# Tag-driven, so cutting a release is `git tag v0.1.0 && git push --tags` and
+# nothing else. The build runs here rather than on a laptop, which is the whole
+# point: the artifact players download is always built from the tagged commit,
+# and can never drift from the source the way a committed dist/index.html did.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create the release and upload the asset.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # The same gate the CI workflow runs. A tag is the one moment a broken
+      # build reaches players directly, so it is not taken on trust.
+      - run: npm test
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      # Renamed on the way out. The build emits index.html because that is what
+      # a web server wants; a player wants a file they can find again in their
+      # downloads folder.
+      - name: Name the artifact for humans
+        run: cp dist/index.html crow-archer.html
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: crow-archer.html
+          generate_release_notes: true
+          body: |
+            **[▶ Play in the browser](https://mrbisonte.github.io/crow-archer/)** ·
+            **[Game manual](https://mrbisonte.github.io/crow-archer/manual.html)**
+
+            ### Download and play offline
+
+            Grab `crow-archer.html` below and open it in any modern browser.
+            One self-contained file: no install, no server, no network. Every
+            sound is synthesized at runtime and both dependencies are bundled,
+            so it keeps working with the wifi off.
+
+            Multiplayer needs a server — see the
+            [README](https://github.com/MrBisonte/crow-archer#multiplayer).

@@ -3,10 +3,12 @@
 
 # build
 node_modules/
-# The built single file is committed so the game stays one download away.
-# Everything else vite emits is not.
-dist/*
-!dist/index.html
+# Nothing vite emits is committed. The built single file used to be, to keep
+# the game one download away, but a commit is a manual step and it silently
+# rotted: the copy on master fell five days and a whole castle stage behind
+# the source. The release workflow builds it from the tagged commit instead,
+# so the download cannot drift from what it claims to be.
+dist/
 # The server bundle is built by the image, not committed.
 dist-server/
 
