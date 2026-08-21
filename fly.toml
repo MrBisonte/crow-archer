@@ -1,0 +1,41 @@
+# Fly deploy config. One machine, Amsterdam, 256 MB.
+#
+# Sized deliberately small: a tick costs under a millisecond after the 2026-07
+# perf pass, so this game is bandwidth-bound rather than CPU-bound, and paying
+# for cores it will not use buys nothing. Scale the machine up if the tick
+# budget is ever the thing that runs out.
+#
+# One machine, not a cluster, and that is load-bearing rather than thrift:
+# rooms live in the process's memory, so a second machine would hold rooms the
+# first cannot see and a player would join a code their friend is not in.
+# Adding machines requires moving room state to Redis first.
+
+app = 'crow-archer'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[http_service]
+  internal_port = 8082
+  force_https = true
+  # Both false on purpose. Auto-stop would take the idle bill to about nothing,
+  # but the live player count has to reach a running server, and any poll from
+  # the site would wake the machine anyway — trading roughly two dollars a month
+  # for cold starts on the first join of the day.
+  auto_stop_machines = false
+  auto_start_machines = false
+  # The in-memory-rooms constraint again, enforced here rather than trusted:
+  # Fly will not quietly scale this out.
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = '10s'
+    interval = '30s'
+    method = 'GET'
+    timeout = '5s'
+    path = '/healthz'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'

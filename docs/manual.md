@@ -180,14 +180,22 @@ It reads `PORT` and answers `/healthz`, which is all any host taking a Dockerfil
 
 Run a single instance. Rooms live in the process's memory, so a second instance would hold rooms the first one cannot see and a player would join a code their friend is not in.
 
-#### On Railway
+#### On Fly
 
-1. New project, deploy from this GitHub repo. The Dockerfile is detected; there is nothing to configure and no start command to set.
-2. Settings → Networking → **Generate Domain**. That URL is the game.
-3. Settings → check the replica count is **1**, and that the region is the one nearest the players.
-4. Leave `PORT` alone. Railway assigns it and the server reads it.
+`fly.toml` in the repo root already describes the machine: one instance, Amsterdam, 256 MB, health check on `/healthz`.
 
-Health checks can point at `/healthz`. Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
+```
+fly launch --no-deploy   # first time only, to create the app
+fly deploy
+```
+
+`fly deploy` builds the Dockerfile and prints the URL. That URL is the game. Fly assigns `PORT` and the server reads it, so there is nothing to configure.
+
+Leave the machine count at **1**. Rooms live in the process's memory, so a second machine would hold rooms the first cannot see; `min_machines_running = 1` with auto-stop off keeps Fly from scaling it out or napping between matches.
+
+Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
+
+Fly over Railway on cost, decided against a €20/month ceiling: this game is bandwidth-bound rather than CPU-bound — roughly 15 KB/s per client, so about 54 MB per player-hour — and egress is $0.02/GB on Fly against $0.05/GB on Railway. Railway Hobby's $5 monthly credit is a floor rather than a discount, so it bills $5 even while idle and its advantage disappears exactly when players arrive. Any host that takes a Dockerfile and assigns `PORT` still works; nothing in the repo is Fly-specific but this file.
 
 #### Playing without deploying
 
