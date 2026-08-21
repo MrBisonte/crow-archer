@@ -37,7 +37,7 @@ character.
 | Map | `MapKind` | `forest \| castle` | `MAP_GEN`, `TILE_THEMES`, `ANIMATED_THEMES` | sim, render, net |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
 | Skeleton (single-player) | plain string | `normal \| fire \| ice` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
-| Boss | plain string, **not tabled** | `crowking \| dark_archer \| dark_knight` | none — see [Boss: the deliberate exception](#boss-the-deliberate-exception) | `src/legacy/game.js` only |
+| Boss | plain string, **not tabled** | `crowking \| dark_archer \| dark_knight` | none (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
 | Weapon | implicit, via `PRIMARY` | `Bow \| Staff \| Spear \| Crossbow` | each implements the `Weapon` interface | sim, net |
 
 Two systems only exist in `src/legacy/game.js` (skeletons, bosses): the
@@ -54,13 +54,13 @@ flowchart LR
     castle((castle))
     third(("?, new")):::newKind
 
-    subgraph GEN["MAP_GEN — one row per tag"]
+    subgraph GEN["MAP_GEN (one row per tag)"]
         gf["density 1"]
         gc["density 1.4"]
         g3["density ?"]:::newKind
     end
 
-    subgraph THEME["TILE_THEMES / ANIMATED_THEMES — one row per tag"]
+    subgraph THEME["TILE_THEMES / ANIMATED_THEMES (one row per tag)"]
         tf["forest painters"]
         tc["castle painters"]
         t3["? painters"]:::newKind
@@ -92,8 +92,8 @@ two places. Everywhere else it is fixed. Logged as ROADMAP.md decision 9.
 | Context | Map choice | Mechanism |
 |---|---|---|
 | Multiplayer lobby | **Free**, host-selected | `SET_MAP` → `Room.setMap()` → `MATCH_START` |
-| Single-player, Waves mode | **Free** (not yet built — today defaults to forest) | none yet; natural extension point |
-| Single-player, Brawl mode | **Fixed** | `generateMap('castle')` fires once, hardcoded inside `updateBossDeath()` when the Crow King dies — a story beat, not a menu |
+| Single-player, Waves mode | **Free** (not yet built; today defaults to forest) | none yet; natural extension point |
+| Single-player, Brawl mode | **Fixed** | `generateMap('castle')` fires once, hardcoded inside `updateBossDeath()` when the Crow King dies: a story beat, not a menu |
 
 ```mermaid
 sequenceDiagram
@@ -104,7 +104,7 @@ sequenceDiagram
 
     Host->>Lobby: press map key (table-driven, mirrors CHARACTER_KEYS)
     Lobby->>Server: SET_MAP
-    Server->>Server: Room.setMap(mapKind) — host only
+    Server->>Server: host-only Room.setMap(mapKind)
     Server-->>Lobby: ROOM_STATE (mapKind)
     Note over Lobby: every player sees the pick; only the host can change it
     Host->>Server: ready
@@ -115,7 +115,7 @@ sequenceDiagram
 
 Single-player's `gameMode` (`'brawl' | 'waves'`, `src/legacy/game.js:337`)
 is a different, older concept from multiplayer's `GameMode`
-(`'coop' | 'deathmatch'`, `src/net/protocol.ts:72`) — same name, unrelated
+(`'coop' | 'deathmatch'`, `src/net/protocol.ts:72`). Same name, unrelated
 values, picked at the main menu, not per-match. Worth not confusing the two
 when this gets built.
 
@@ -123,8 +123,8 @@ when this gets built.
 
 `boss.kind` (`'crowking' | 'dark_archer' | 'dark_knight'`,
 `src/legacy/game.js`) is plain string branching, not a `Record<Kind, X>`
-table — the same call made for `GameMode` over `CharacterKind`. It's the
-right call here too: exactly three bosses, ever, each with genuinely
+table. That's the same call `GameMode` makes over `CharacterKind`, and the
+right one here too: exactly three bosses, ever, each with genuinely
 divergent behavior (shield-window mechanic vs. none, orbit vs. charge
 tuning, different secondary attacks) rather than a shared data shape a
 table could hold. A table earns its keep when new rows are mostly data;
@@ -149,10 +149,10 @@ const EFFECTS: Record<PickupKind, (target: Empowerable) => void>
 const TILE = { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4, HUT: 5 } as const
 const tilePassable = (t: TileId) => t === TILE.EMPTY || t === TILE.ASH
 
-// src/legacy/game.js — single-player only, not compiler-checked
+// src/legacy/game.js: single-player only, not compiler-checked
 let gameMode: 'brawl' | 'waves'
 const SKELETON_PALETTES: Record<'normal' | 'fire' | 'ice', Palette>
-// boss.kind: 'crowking' | 'dark_archer' | 'dark_knight' — branched, not tabled
+// boss.kind: 'crowking' | 'dark_archer' | 'dark_knight' (branched, not tabled)
 ```
 
 `CharacterKind` and its five tables are the most complete instance of this
@@ -177,9 +177,9 @@ alternative, in
   (`generateMap()` imports `MAP_GEN`/`TILE_THEMES` for real) but
   reimplements others by hand (`CHAR_PANELS` is a plain array, not a
   `Record`; pickups have a third kind, `'ricochet'`, that the multiplayer
-  `PickupKind` doesn't). Where the two diverge it's deliberate — PvE and
-  PvP numbers are tuned separately — but it means "add a kind" is two
-  separate edits today, not one.
+  `PickupKind` doesn't). Where the two diverge it's deliberate: PvE and
+  PvP numbers are tuned separately. It means "add a kind" is two separate
+  edits today, not one.
 
 ## Netcode
 
