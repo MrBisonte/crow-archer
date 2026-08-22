@@ -388,6 +388,47 @@ applyPace(new URLSearchParams(location.search).get('pace') ?? CONFIG.pace);
 
 // Keyed by bossStage (1 = crow king, 2 = dark archer, 3 = dark knight), not
 // boss.kind — the entrance banner starts typing before spawnBoss() has run.
+/**
+ * The black screen between one stage and the next.
+ *
+ * Cutting straight from a death burst into a fresh map reads as a glitch, so
+ * each hand-off holds on a title until the player clicks. This was one screen
+ * hardcoded as its own appState; the maze made it two, which is the point a
+ * copy stops being cheaper than a table.
+ *
+ * The stage is already fully built behind the screen when it appears. The
+ * intro only decides what to say and where to go, never what to set up.
+ */
+const STAGE_INTROS = {
+  castle: {
+    text: "You've entered the cursed Castle!",
+    accent: '#B040E0', dim: '#8A40A8', frame: '#4a1a5c',
+    sweep: 'rgba(176,64,224,0.045)',
+  },
+  maze: {
+    text: "YOU HAVE ENTERED THE MINOTAUR'S LAIR",
+    // Torchlight amber rather than the castle's purple: the maze is lit by
+    // fire and the title should be the last warm thing before the dark.
+    accent: '#FFA030', dim: '#B4702A', frame: '#5c3a12',
+    sweep: 'rgba(255,160,48,0.05)',
+  },
+};
+
+/** Which intro is on screen right now, or null. Only 'stage_intro' reads it. */
+let pendingIntro = null;
+
+/**
+ * Holds the black screen in front of a stage that is already built.
+ *
+ * Assigns appState directly for the same reason the castle hand-off always
+ * did: transitionTo('playing') runs initGame() and would wipe the run that
+ * just cleared the previous stage.
+ */
+function showStageIntro(kind) {
+  pendingIntro = kind;
+  appState = 'stage_intro';
+}
+
 const BOSS_ENTRY_TEXT = {
   1: '⚠  THE CROWS SUMMONED THEIR KING  ⚠',
   2: '⚠  A DARK ARCHER STIRS IN THE DEPTHS  ⚠',
@@ -925,10 +966,9 @@ canvas.addEventListener('mousedown', e => {
   if (e.button === 0) {
     mouseLeftHeld = true;
     if (inGame()) shootPressed = true;
-    // The castle-intro black screen waits for exactly this: one click, no
-    // key, since it is shown mid-run with the keyboard already busy with
-    // movement held down.
-    else if (appState === 'castle_intro') appState = 'playing';
+    // A stage intro waits for exactly this: one click, no key, since it is
+    // shown mid-run with the keyboard already busy with movement held down.
+    else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
   }
   if (e.button === 2) { mouseRightHeld = true; startCharge(); }
 });
@@ -1385,7 +1425,7 @@ function initGame() {
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
-  castleWave = 0; playerFrozenTimer = 0; playerPoison = { timer: 0, tickIn: 0 };
+  castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
   FEATHERS.applyToGame();
   resetInv();
@@ -3727,16 +3767,32 @@ function updateBossDeath(dt) {
       // stage 1. The nine-wave gauntlet plays out in 'playing' like a normal
       // brawl; killSkeleton's own wave-clear check is what starts the next
       // wave, or the dark archer's entrance once wave 9 clears. The castle
-      // is already fully set up at this point; castle_intro just holds a
-      // black screen in front of it until the player clicks, since cutting
-      // straight from the death burst into the new map read as too fast.
-      appState = 'castle_intro';
+      // is already fully set up at this point; the intro just holds a black
+      // screen in front of it until the player clicks, since cutting straight
+      // from the death burst into the new map read as too fast.
+      showStageIntro('castle');
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
       skeletons = [];
       bossStage = 3;
       transitionTo('boss_entrance');
+    } else if (deadKind === 'dark_knight') {
+      // Stage 3 done, and the run is not over: the castle's floor gives out
+      // into the labyrinth under it. Built exactly the way the castle
+      // hand-off builds its stage, then held behind a title.
+      //
+      // spawnBoss() reads bossStage, so that has to be 4 before it runs, and
+      // the maze has to exist before the minotaur picks a tile to stand on.
+      skeletons = []; crows = [];
+      bossStage = 4;
+      generateMap('maze');
+      const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+      player.x = spawn.x; player.y = spawn.y;
+      spawnBoss();
+      showStageIntro('maze');
     } else {
+      // The minotaur cannot die, so nothing reaches here through him. The
+      // maze is won by walking out of the door, not by clearing the room.
       skeletons = [];
       transitionTo('win');
     }
@@ -6815,19 +6871,20 @@ function drawWin(t) {
  * spawn) already ran before this state was entered, hidden behind the black
  * screen, so the click just reveals it rather than triggering it.
  */
-function drawCastleIntro(t) {
+function drawStageIntro(t) {
+  const intro = STAGE_INTROS[pendingIntro] || STAGE_INTROS.castle;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
-  _scanSweep('rgba(176,64,224,0.045)', 90);
-  _cornerFrame('#4a1a5c');
+  _scanSweep(intro.sweep, 90);
+  _cornerFrame(intro.frame);
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 16 + 7 * Math.sin(t * 1.7);
-  ctx.fillStyle = '#B040E0'; ctx.font = '24px "Courier New", monospace';
-  ctx.fillText("You've entered the cursed Castle!", CONFIG.canvasW / 2, CONFIG.canvasH / 2 - 16);
+  ctx.shadowColor = intro.accent; ctx.shadowBlur = 16 + 7 * Math.sin(t * 1.7);
+  ctx.fillStyle = intro.accent; ctx.font = '24px "Courier New", monospace';
+  ctx.fillText(intro.text, CONFIG.canvasW / 2, CONFIG.canvasH / 2 - 16);
   ctx.shadowBlur = 0;
 
   ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 3);
-  ctx.fillStyle = '#8A40A8'; ctx.font = '16px "Courier New", monospace';
+  ctx.fillStyle = intro.dim; ctx.font = '16px "Courier New", monospace';
   ctx.fillText('[ CLICK TO CONTINUE ]', CONFIG.canvasW / 2, CONFIG.canvasH / 2 + 32);
   ctx.globalAlpha = 1;
 }
@@ -6991,7 +7048,7 @@ function render(t) {
   } else if (appState === 'controls')   { drawControls(t);
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
-  } else if (appState === 'castle_intro') { drawCastleIntro(t);
+  } else if (appState === 'stage_intro') { drawStageIntro(t);
   } else if (appState === 'inventory')  { FEATHERS.draw(); }
 }
 
@@ -7256,6 +7313,10 @@ window.__game = {
   spawnMinotaur() { bossStage = 4; spawnBoss(); boss.bstate = 'prowl'; return boss.kind; },
   // The whole objective chain in one read: which keys are held, which locks
   // are open, whether the warden has been met yet, and where the furniture is.
+  intro: () => pendingIntro,
+  // The same two lines the click handler runs, so a harness advances the
+  // stage hand-off through the real path rather than assigning appState.
+  dismissIntro() { if (appState !== 'stage_intro') return false; pendingIntro = null; appState = 'playing'; return true; },
   maze: () => (mazeRun ? {
     silver: mazeRun.held.silver, golden: mazeRun.held.golden,
     chestOpened: mazeRun.locks.chest.opened, doorOpened: mazeRun.locks.door.opened,

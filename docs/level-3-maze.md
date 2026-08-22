@@ -25,9 +25,9 @@ playable and independently revertable.
 | 2. What lives in it | The enemy that makes a corridor frightening | `boss.kind`'s branch-not-table decision |
 | 3. The objective | A win condition that is traversal, not extermination | `bossStage` doing two jobs |
 
-All three are built. Part 3 delivered the objective and left the stage wiring
-alone, so `bossStage` still does two jobs and the maze is still not on the path
-a normal run takes. Each part says what it decided and what it cost.
+All three are built and the maze is on the path a normal run takes: the Dark
+Knight's death opens it instead of ending the game. Each part says what it
+decided and what it cost.
 
 ## Part 1: the maze map
 
@@ -515,9 +515,10 @@ clears five of them in the dark.
 
 ## Part 3: the objective and stage wiring
 
-**The objective is built. The stage wiring is not.** Those were one heading
-because they arrived together in the sketch. They turned out to be independent,
-and only one of them was needed to make the level finishable.
+**Both are built, and they were built separately.** They shared a heading
+because they arrived together in the sketch, but only the objective was needed
+to make the level finishable, so it shipped first and the wiring followed once
+there was something worth routing a run into.
 
 A maze whose win condition is "kill everything" is a cramped arena. This one is
 traversal. Damage against the warden buys distance and never progress, so the
@@ -646,31 +647,40 @@ their radius, and `smashTile` returning early on the maze costs them nothing.
 
 ### What is still a proposal
 
-The stage wiring, unchanged and still true. `bossStage` is a 1-based index into
-`BOSS_STAGES` and does two unrelated jobs: it picks which boss spawns and it
-implies which map you are on. The castle transition is a hardcoded pair of lines
-inside `updateBossDeath`:
+The maze is now on the path a normal run takes. Killing the Dark Knight no
+longer ends the game: it opens the floor into the labyrinth under the castle.
 
-```js
-bossStage = 2;
-generateMap('castle');
+```
+forest -> Crow King -> castle -> Dark Archer -> Dark Knight -> maze -> the door
 ```
 
-Nothing routes a normal run into the maze. The level is reachable through the
-dev hook (`__game.generateMap('maze')`) and through the multiplayer lobby's map
-picker, exactly as it was after Part 1. Splitting level identity out of
-`bossStage` into its own progression is the correct move and it is the same
-`Record<Kind, X>` shape made everywhere else here, but it is a change to how the
-whole game advances, and the objective did not need it to be finishable and
-testable. Doing both at once would have hidden a win-condition bug inside a
-progression rewrite.
+`updateBossDeath` builds the stage exactly the way the castle hand-off already
+did, in the order the pieces need: `bossStage` to 4 first, because `spawnBoss`
+reads it, then the map, because the minotaur has to pick a tile to stand on,
+then the player onto real floor through `nearestOpenTile`, then the warden.
 
-The `appState` state table is still owed for the same reason. `castle_intro`
-bypasses `transitionTo` by assigning `appState` directly, because the helper
-unconditionally calls `initGame()` and would wipe the run. A maze intro screen
-would be a second bypass. One table with an explicit `keepsRun` property removes
-both, and until it exists the harness has to route through `paused` to change
-state without restarting, which is a smell the tests now depend on.
+### One screen became a table
+
+`castle_intro` was its own `appState` with its own painter and its own literal
+in the click handler. The maze needed a second one, and two copies of a black
+screen is the point a copy stops being cheaper than a row.
+
+There is now one `stage_intro` state and a `STAGE_INTROS` table holding what
+each hand-off says and what colour it says it in. The castle keeps its purple,
+the maze gets torchlight amber, on the reasoning that the title should be the
+last warm thing on screen before the dark. `showStageIntro(kind)` is the only
+writer, and it still assigns `appState` directly for the original reason:
+`transitionTo('playing')` runs `initGame()` and would wipe the run that just
+cleared the previous stage.
+
+That bypass is the one thing this did not fix. The `appState` table with an
+explicit `keepsRun` property is still owed, and is still the right answer. What
+changed is that it is now owed once rather than once per stage: a fourth level
+adds a row to `STAGE_INTROS`, not a fourth state that skips `transitionTo`.
+
+`bossStage` still does two jobs, picking the boss and implying the map, and
+four stages is where that starts to strain rather than where it breaks.
+Splitting level identity out of it remains the correct next move.
 
 ## Open questions
 
