@@ -34,7 +34,7 @@ character.
 | Class | Kind type | Values today | Tables keyed on it | Cross-cuts |
 |---|---|---|---|---|
 | Character | `CharacterKind` | `archer \| wizard \| knight \| ranger` | `PRIMARY`, `SILHOUETTES`, `PAINTERS`, `CHARACTER_STATS`, `CHARACTER_KEYS` | sim, render, net, ui |
-| Map | `MapKind` | `forest \| castle` | `MAP_GEN`, `TILE_THEMES`, `ANIMATED_THEMES` | sim, render, net |
+| Map | `MapKind` | `forest \| castle \| maze \| cavern` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
 | Skeleton (single-player) | plain string | `normal \| fire \| ice` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
 | Boss | plain string, **not tabled** | `crowking \| dark_archer \| dark_knight` | none (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
@@ -52,29 +52,39 @@ flowchart LR
 
     forest((forest))
     castle((castle))
-    third(("?, new")):::newKind
+    maze((maze))
+    cavern((cavern))
+    next(("?, new")):::newKind
 
-    subgraph GEN["MAP_GEN (one row per tag)"]
-        gf["density 1"]
-        gc["density 1.4"]
-        g3["density ?"]:::newKind
+    subgraph GEN["MAP_GEN (one generator per tag)"]
+        gf["NoiseTerrain 0.45"]
+        gc["NoiseTerrain 0.5"]
+        gm["MazeTerrain"]
+        gv["CavernTerrain"]
+        g3["? generator"]:::newKind
     end
 
     subgraph THEME["TILE_THEMES / ANIMATED_THEMES (one row per tag)"]
         tf["forest painters"]
         tc["castle painters"]
+        tm["maze painters"]
+        tv["cavern painters"]
         t3["? painters"]:::newKind
     end
 
     forest --> gf
     castle --> gc
-    third -.-> g3
+    maze --> gm
+    cavern --> gv
+    next -.-> g3
     forest --> tf
     castle --> tc
-    third -.-> t3
+    maze --> tm
+    cavern --> tv
+    next -.-> t3
 
-    gf & gc & g3 --> Terrain["Terrain.fromSeed(seed, mapKind)\nsrc/sim/arena-map.ts"]
-    tf & tc & t3 --> TileLayer["StaticTileLayer(painters)\nsrc/render/tiles.ts"]
+    gf & gc & gm & gv & g3 --> Terrain["Terrain.fromSeed(seed, mapKind)\nsrc/sim/arena-map.ts"]
+    tf & tc & tm & tv & t3 --> TileLayer["StaticTileLayer(painters)\nsrc/render/tiles.ts"]
     Terrain --> Sim["sim: passability, spawn points"]
     TileLayer --> Render["render: what a tile looks like"]
 ```
@@ -83,6 +93,20 @@ Same shape as the character diagram in design-patterns.md: a new `MapKind`
 value is one new circle, one row in each table. `TILE.ROCK` still means
 "blocks movement and shots" in every theme; only the art differs, so
 `Terrain`'s collision code never has to know a theme exists.
+
+The row a generator holds stopped being a config value when the maze
+arrived: `MAP_GEN` holds the generator itself, because a maze is not the
+noise algorithm at any density. Forest and castle are the same `NoiseTerrain`
+at two settings; the maze is carved and the cavern is grown. See
+[Level 3: the maze](level-3-maze.md).
+
+One table is not keyed on `MapKind` and is worth knowing about:
+`MAP_PANEL_INFO` in `src/legacy/game.js` holds only the presentation of the
+Waves map-select panels, and *membership* of that screen is derived from
+`MAP_RULES[kind].crows` rather than listed. A map earns a panel by having
+crows. `MAP_PANELS` throws at load if a map earns one and has no
+presentation row, so the half that cannot be derived fails early instead of
+drawing blank.
 
 ### Map selection: where the free choice actually lives
 
@@ -134,20 +158,37 @@ bosses here are mostly algorithm.
 
 ```ts
 // src/sim/arena-map.ts
-type MapKind = 'forest' | 'castle'
-const MAP_GEN: Record<MapKind, { density: number }>
+type MapKind = 'forest' | 'castle' | 'maze' | 'cavern'
+const MAP_GEN: Record<MapKind, MapGenerator>
+const MAP_RULES: Record<MapKind, {
+  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean
+}>
+
+// src/sim/map-generators.ts
+interface MapGenerator { generate(rows, cols, rng, noise): TileGrid }
+class NoiseTerrain  // thresholded noise: forest, castle
+class MazeTerrain   // recursive backtracker, braided
+class CavernTerrain // cellular automata, then joined into one region
 
 // src/render/tiles.ts
 const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>>
 const ANIMATED_THEMES: Record<MapKind, AnimatedPalette>
+
+// src/ui/lobby-controller.ts
+const MAP_KEYS: Record<MapKind, string>
 
 // src/sim/pickups.ts
 type PickupKind = 'shield' | 'fire'
 const EFFECTS: Record<PickupKind, (target: Empowerable) => void>
 
 // src/sim/tilemap.ts
-const TILE = { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4, HUT: 5 } as const
-const tilePassable = (t: TileId) => t === TILE.EMPTY || t === TILE.ASH
+const TILE =
+  { EMPTY: 0, ROCK: 1, WATER: 2, TREE: 3, ASH: 4, HUT: 5, SAPLING: 6 } as const
+const tilePassable = (t: TileId) =>
+  t === TILE.EMPTY || t === TILE.ASH || t === TILE.SAPLING
+
+// src/sim/regrowth.ts
+class Regrowth  // ash -> sapling -> tree, on destructibleTerrain maps only
 
 // src/legacy/game.js: single-player only, not compiler-checked
 let gameMode: 'brawl' | 'waves'
