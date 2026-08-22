@@ -682,6 +682,57 @@ adds a row to `STAGE_INTROS`, not a fourth state that skips `transitionTo`.
 four stages is where that starts to strain rather than where it breaks.
 Splitting level identity out of it remains the correct next move.
 
+## Balance: who the maze is hardest on
+
+The level shipped with the wrong difficulty *shape*, not the wrong amount of
+it. Melee answers a rat pack fastest, so the knight cleared it most easily,
+while the wizard and the archer, the two characters a corridor level is
+supposed to test hardest, were the ones dying during the key hunt. Measured
+across scripted runs: knight 6/8, ranger 5/8, archer 3/8, wizard 3/8.
+
+The order it should have, easiest first, is **ranger, archer, wizard, knight**.
+
+### One scalar, not four tables
+
+`MAZE_PRESSURE` is a single multiplier per character. Everything the maze uses
+to apply pressure moves together, so a row is one decision about a character
+rather than four that have to be kept consistent with each other. Above 1 is
+harder than the level shipped, below 1 is easier.
+
+| | Pressure | Rats per pack | Quiet between packs | Silver key roll | Charge cooldown |
+|---|---|---|---|---|---|
+| Ranger | 0.70 | 4 | 8.6 s | 29% | 2.00 s |
+| Archer | 0.90 | 5 | 6.7 s | 22% | 1.56 s |
+| Wizard | 1.10 | 6 | 5.5 s | 18% | 1.27 s |
+| Knight | 1.35 | 7 | 4.4 s | 15% | 1.04 s |
+
+The knight is leaned on from both ends, more rats and a warden that barely
+stops charging, because his advantage here is large enough that only one of
+those would have left him comfortable.
+
+`mazePressure()` returns 1 when `mazeRun` is null, so forest and castle cannot
+move. That is checked rather than assumed: outside the maze the knight still
+gets the shipped five-rat pack.
+
+### The one number that was unfair rather than hard
+
+Poison's slow was 0.5, which put a bitten player at 100 px/s against a 215 px/s
+rat. The first bite decided everything after it and there was nothing to be
+done about that, which is not difficulty. At 0.65 you still lose a straight
+race and you are no longer dead on contact.
+
+Both this session and the cloud agent flagged that number independently, which
+is usually the sign that it is the real problem rather than a preference.
+
+### These are a starting point
+
+They were set by reasoning about why each character struggles, not by playing
+four runs to completion. The knight moving from easiest to hardest is the
+largest swing and the most likely to overshoot. If he reads as miserable rather
+than hard, drop him to about 1.15 before touching anything else.
+
+`__game.pressure()` prints the live numbers for whoever is selected.
+
 ## Open questions
 
 1. Does the maze belong in single-player, multiplayer, or both? Part 1 targets
