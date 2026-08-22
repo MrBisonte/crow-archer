@@ -6826,22 +6826,30 @@ function drawEdgeAlerts() {
  */
 const EDGE_TICK_MAX = 8;
 
+/** A boss ticks in its own eye colour, like every other threat marker. */
+function bossTickColor() {
+  return boss.kind === 'minotaur' ? MINOTAUR_PALETTE.eye : '#B040E0';
+}
+
 function drawEdgeTicks() {
   const cx = CONFIG.canvasW / 2, cy = CONFIG.hudHeight + (CONFIG.canvasH - CONFIG.hudHeight) / 2;
   const threats = [];
 
+  // Aggro only, never merely unseen. Trash that cannot be seen stays
+  // unmarked on purpose: the maze deletes crows and keeps a pack of rats
+  // alive at all times, so ticking every unlit one would pin six to eight
+  // markers to the edge permanently. That is a live minimap of the threats
+  // the dark exists to hide, and it gets more useful the darker it gets,
+  // which is backwards. Rats are meant to be found, not mapped.
   for (const c of crows) {
-    const unseen = !litAt(c.x, c.y);
-    if (!unseen && c.state !== 'aggro') continue;
+    if (c.state !== 'aggro') continue;
     threats.push({ x: c.x, y: c.y + CONFIG.hudHeight, col: c.white ? '#FFFFFF' : '#FF1F1F' });
   }
-  for (const s of skeletons) {
-    if (litAt(s.x, s.y)) continue;
-    const pal = SKELETON_PALETTES[s.kind || 'normal'] || SKELETON_PALETTES.normal;
-    threats.push({ x: s.x, y: s.y + CONFIG.hudHeight, col: pal.eye });
-  }
+  // The boss is the opposite case and does tick when unseen. Something
+  // unkillable closing through a wall is the one threat where knowing the
+  // direction, and being able to do little about it, is the point.
   if (boss && boss.bstate !== 'dead' && !litAt(boss.x, boss.y))
-    threats.push({ x: boss.x, y: boss.y + CONFIG.hudHeight, col: '#B040E0' });
+    threats.push({ x: boss.x, y: boss.y + CONFIG.hudHeight, col: bossTickColor() });
 
   if (!threats.length) return;
   threats.sort((a, b) => dist2(cx, cy, a.x, a.y) - dist2(cx, cy, b.x, b.y));
