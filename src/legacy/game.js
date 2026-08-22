@@ -7,6 +7,7 @@ import { FOV, Path } from 'rot-js';
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
 import { MAP_GEN, MAP_RULES } from '../sim/arena-map';
+import { Regrowth } from '../sim/regrowth';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
@@ -698,6 +699,29 @@ let mapSeed = 0;
 let mapKind = 'forest';
 
 /**
+ * Burnt cover growing back. Watches the grid, so every way this game chars a
+ * tile — fire arrows, a lightning storm, a whirlwind — feeds it without
+ * knowing it is there. See sim/regrowth.ts.
+ *
+ * Bodies are what it cannot see for itself, so occupancy is passed in: a tree
+ * maturing under something standing on it would seal that thing inside
+ * terrain. Pickups count for the same reason even though they do not move —
+ * one inside a tree cannot be walked onto, so it is gone until something burns
+ * the tile back down.
+ *
+ * Crows are not asked about: a passive one crosses the map in a straight line
+ * with no terrain check at all, so it would veto tiles it is only flying over.
+ * Neither are the maze's rats, and that one is not a judgement call — regrowth
+ * is off entirely on a map MAP_RULES marks indestructible, and the maze is the
+ * only place a rat has ever stood.
+ */
+const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
+  const ts = CONFIG.tileSize;
+  const onTile = (b) => !!b && Math.floor(b.x / ts) === col && Math.floor(b.y / ts) === row;
+  return onTile(player) || onTile(boss) || skeletons.some(onTile) || pickups.some(onTile);
+});
+
+/**
  * Generates the map, defaulting to 'forest' so a bare call is still a valid
  * one. `kind` comes from three real sources today: brawl's own scripted
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
@@ -720,6 +744,10 @@ function generateMap(kind = 'forest') {
   // the generators that do not want it. See docs/level-3-maze.md.
   tileMap.reset(MAP_GEN[kind].generate(CONFIG.rows, CONFIG.cols, rng,
     (x, y) => sn.noise2D(x, y)));
+  // Regrowth is per-map twice over: which rules apply, and which tiles are
+  // still coming back. Both change here, so retarget does both — half-burnt
+  // tiles from the last map are coordinates on a grid that no longer exists.
+  regrowth.retarget(kind);
   // The objective belongs to the maze and to no other map, so it is built and
   // cleared here, with the grid it is placed on. Every consumer then has one
   // guard, `mazeRun`, instead of its own check on mapKind.
@@ -802,6 +830,10 @@ function smashTile(row, col) {
   const t = tileMap.get(row, col);
   if (t === TILE.TREE) tileMap.set(row, col, TILE.ASH);
   else if (t === TILE.ROCK || t === TILE.HUT) tileMap.set(row, col, TILE.EMPTY);
+  // A sapling clears rather than chars: there is not enough of it to leave
+  // ash, and leaving ash would start it growing again on the spot, which makes
+  // clearing one pointless.
+  else if (t === TILE.SAPLING) tileMap.set(row, col, TILE.EMPTY);
 }
 
 // ── ROT.JS — FOV & A* ─────────────────────────────────────────────────────────
@@ -7854,7 +7886,7 @@ function stepGame(dt) {
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
-      updateMazeObjective(dt);
+      updateMazeObjective(dt); regrowth.tick(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -7867,6 +7899,7 @@ function stepGame(dt) {
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
+      regrowth.tick(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -8070,6 +8103,10 @@ export const devHooks = {
   state: () => appState,
   multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
+  // Whether this map grows cover back, and how many tiles are mid-regrowth.
+  // Enough for a test to watch ash come back without reaching into the module.
+  regrowth: () => ({ active: regrowth.active, pending: regrowth.pendingCount }),
+  smashTile: (row, col) => { smashTile(row, col); },
   mapKind: () => mapKind,
   selectedMapKind: () => selectedMapKind,
   generateMap(kind) { generateMap(kind); },

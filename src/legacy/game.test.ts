@@ -9,6 +9,8 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MAP_RULES, type MapKind } from '../sim/arena-map';
+import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
+import { TILE } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
@@ -272,6 +274,74 @@ describe('waves map select', () => {
     g.crows().length = 0;
     g.stepSim(g.config().crowEscalationInterval * ONE_SECOND * 3);
     expect(g.crows().length).toBeGreaterThan(0);
+  });
+});
+
+describe('cover grows back', () => {
+  /** Seconds of simulation, rounded up to whole frames and one over, so a
+   * delay that lands mid-frame has actually elapsed by the time we look. */
+  const seconds = (s: number): number => Math.ceil(s * ONE_SECOND) + 1;
+
+  /** A tree the player is not standing on, so occupancy is not what is tested. */
+  function findTree(): [number, number] {
+    const tiles = g.tiles();
+    const { rows, cols, tileSize } = g.config();
+    const player = g.player() as { x: number; y: number };
+    const onPlayer = (r: number, c: number): boolean =>
+      Math.floor(player.x / tileSize) === c && Math.floor(player.y / tileSize) === r;
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) {
+        if (tiles.get(r, c) === TILE.TREE && !onPlayer(r, c)) return [r, c];
+      }
+    throw new Error('the forest generated no trees to burn');
+  }
+
+  it('takes a burnt tree back through a walkable sapling to a tree', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    expect(g.regrowth().active).toBe(true);
+
+    const [r, c] = findTree();
+    g.smashTile(r, c);
+    expect(g.tiles().get(r, c)).toBe(TILE.ASH);
+    expect(g.regrowth().pending).toBe(1);
+
+    // Stepped to this tile's own delays rather than to a round number: the
+    // stagger means no two tiles come back together, which is the point of it.
+    g.stepSim(seconds(regrowthDelay(DEFAULT_REGROWTH, 'sprout', r, c)));
+    expect(g.tiles().get(r, c)).toBe(TILE.SAPLING);
+
+    g.stepSim(seconds(regrowthDelay(DEFAULT_REGROWTH, 'mature', r, c)));
+    expect(g.tiles().get(r, c)).toBe(TILE.TREE);
+    expect(g.regrowth().pending).toBe(0);
+  });
+
+  it('grows nothing on the maze, the map that refuses to be broken', () => {
+    g.go('playing');
+    g.generateMap('maze');
+    expect(MAP_RULES.maze.destructibleTerrain).toBe(false);
+    expect(g.regrowth().active).toBe(false);
+
+    // A maze is only rock and floor, so plant something burnable and try:
+    // nothing chars it, so nothing is ever queued to come back.
+    g.tiles().set(3, 3, TILE.TREE);
+    g.smashTile(3, 3);
+    expect(g.tiles().get(3, 3)).toBe(TILE.TREE);
+    expect(g.regrowth().pending).toBe(0);
+  });
+
+  it('drops what was still growing when the map changes under it', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    const [r, c] = findTree();
+    g.smashTile(r, c);
+    expect(g.regrowth().pending).toBe(1);
+
+    g.generateMap('cavern');
+    expect(g.regrowth().pending).toBe(0);
+    expect(g.regrowth().active).toBe(true);
   });
 });
 

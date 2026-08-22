@@ -87,6 +87,19 @@ export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       if (seed % 3 === 0) setPixel(grid, (seed % 12) + 3, (seed % 10) + 9, '#26221a');
     });
   },
+  // Cover on its way back (sim/regrowth.ts): the TREE tile's silhouette at a
+  // third the height, on ground still charred from what burned. Deliberately
+  // small and dark — a player has to be able to tell at a glance that this is
+  // something they can still walk through and still burn.
+  [TILE.SAPLING](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#141410');
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#1e1a10');
+      pixelRect(grid, 7, 11, 2, 4, '#4a3a1e');
+      pixelEllipse(grid, 8, 10, 3, 2.5, '#1e7a1e');
+      pixelEllipse(grid, 7, 9, 1.5, 1.5, '#27962a');
+    });
+  },
   [TILE.HUT](g, x, y, _seed, { tileSize: ts }, hutAbove, hutLeft) {
     paintGrid(g, x, y, ts, (grid) => {
       // Ground beneath, then the outer wall, clay and stone
@@ -168,6 +181,17 @@ export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       pixelRect(grid, 0, 0, 1, 16, '#1a1818');
       if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#302c2a');
       if (seed % 7 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 1, '#302c2a');
+    });
+  },
+  // Half a crate: the garrison restacking what burned. The TREE slot is
+  // burnable cover in every theme, so what grows back is whatever that theme
+  // makes cover out of, and a castle makes it out of crates.
+  [TILE.SAPLING](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#242224');
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#302c2a');
+      pixelRect(grid, 4, 10, 8, 5, '#5c4326');
+      for (let i = 0; i < 5; i++) setPixel(grid, 4 + i, 10 + i, '#3a2a16');
     });
   },
   // A shrine, not a hut: same 2x2/neighbour-aware silhouette (peak, archway,
@@ -313,6 +337,18 @@ export const CAVERN_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       // Spore dust rather than the forest's charcoal: paler, and it settles.
       if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 1, '#2a3030');
       if (seed % 7 === 0) setPixel(grid, (seed % 12) + 3, (seed % 10) + 8, '#39433f');
+    });
+  },
+  // A bud, from spores the burn left behind. Dimmer than the grown cluster,
+  // and the animated palette's glow does not reach it: only TILE.TREE is on
+  // the overlay's flicker list, which is the difference a player reads.
+  [TILE.SAPLING](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#191c20');
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 1, '#2a3030');
+      pixelRect(grid, 7, 11, 2, 4, '#6d7568');
+      pixelEllipse(grid, 8, 10, 3, 2, '#2f7d68');
+      pixelEllipse(grid, 7, 9, 1.5, 1.5, '#4fbf9a');
     });
   },
 };

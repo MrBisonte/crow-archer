@@ -205,7 +205,11 @@ export class Terrain {
         const cy = r * TILE_SIZE + TILE_SIZE / 2;
         if ((cx - x) ** 2 + (cy - y) ** 2 > radius * radius) continue;
         const tile = this.map.get(r, c);
-        if (tile === TILE.ROCK || tile === TILE.TREE || tile === TILE.HUT) {
+        // Saplings go too. Cover that grows back has to be stoppable while it
+        // is doing it, or regrowth is something that happens to the player
+        // rather than something they play against.
+        if (tile === TILE.ROCK || tile === TILE.TREE || tile === TILE.HUT
+          || tile === TILE.SAPLING) {
           this.map.set(r, c, TILE.EMPTY);
         }
       }
@@ -216,7 +220,8 @@ export class Terrain {
    * Burns exactly the tile at this point, if it can burn.
    *
    * Rock does not catch — the same exception the legacy game's fire arrows
-   * make — so this only ever clears a tree or a hut. One tile, not a radius:
+   * make — so this only ever clears a tree, a hut, or a sapling on its way to
+   * being one again. One tile, not a radius:
    * this is a shot landing on what it hit, not a blast. Returns whether
    * anything actually burned, so a caller only bothers telling clients about
    * hits that changed something.
@@ -231,7 +236,7 @@ export class Terrain {
     const r = Math.floor(y / TILE_SIZE);
     const c = Math.floor(x / TILE_SIZE);
     const tile = this.map.get(r, c);
-    if (tile !== TILE.TREE && tile !== TILE.HUT) return false;
+    if (tile !== TILE.TREE && tile !== TILE.HUT && tile !== TILE.SAPLING) return false;
     this.map.set(r, c, TILE.EMPTY);
     return true;
   }

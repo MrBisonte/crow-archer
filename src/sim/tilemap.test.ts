@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
-import { TILE, TileMap, type TileGrid } from './tilemap';
+import { TILE, TileMap, tilePassable, type TileGrid } from './tilemap';
+
+describe('tilePassable', () => {
+  it.each([
+    ['open ground', TILE.EMPTY],
+    ['ash, which is what a burnt tree leaves', TILE.ASH],
+    ['a sapling, so cover coming back can still be walked through', TILE.SAPLING],
+  ])('lets a body cross %s', (_name, tile) => {
+    expect(tilePassable(tile)).toBe(true);
+  });
+
+  it.each([
+    ['rock', TILE.ROCK],
+    ['water', TILE.WATER],
+    ['a tree', TILE.TREE],
+    ['a hut', TILE.HUT],
+  ])('stops a body at %s', (_name, tile) => {
+    expect(tilePassable(tile)).toBe(false);
+  });
+
+  it('stops a body off the grid, where there is no tile at all', () => {
+    expect(tilePassable(undefined)).toBe(false);
+  });
+});
 
 describe('TileMap', () => {
   it('set fires onChange with old and new tile', () => {

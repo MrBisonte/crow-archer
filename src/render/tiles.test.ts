@@ -50,6 +50,14 @@ const stylesOf = (rec: Recorder): string[] =>
 
 const GENERATABLE_TILES = [TILE.EMPTY, TILE.ROCK, TILE.WATER, TILE.TREE, TILE.ASH, TILE.HUT];
 
+/**
+ * Tiles no generator emits but a run can still put on the map. A missing
+ * painter here is invisible rather than loud — StaticTileLayer skips a tile it
+ * has no painter for — so a sapling with no art is a hole in the ground that
+ * blocks nothing and shows nothing.
+ */
+const GROWN_TILES = [TILE.SAPLING];
+
 describe('TILE_THEMES', () => {
   it("has 'forest' as exactly today's TILE_PAINTERS, so every unthemed caller is unaffected", () => {
     expect(TILE_THEMES.forest).toBe(TILE_PAINTERS);
@@ -60,9 +68,23 @@ describe('TILE_THEMES', () => {
   // StaticTileLayer's `if (!painter) return` makes that a silent hole rather
   // than a crash.
   it.each(EVERY_MAP)('gives %s a painter for every tile a map can actually contain', (kind) => {
-    for (const tile of GENERATABLE_TILES) {
+    for (const tile of [...GENERATABLE_TILES, ...GROWN_TILES]) {
       expect(TILE_THEMES[kind][tile]).toBeTypeOf('function');
     }
+  });
+
+  // The stage has to be legible or it is just a slower tree. Every theme draws
+  // its sapling as neither the ash it came from nor the tree it becomes.
+  it.each(EVERY_MAP)('draws %s\'s sapling as neither its ash nor its tree', (kind) => {
+    const paint = (tile: number): string[] => {
+      const rec = fakeContext();
+      TILE_THEMES[kind][tile as keyof (typeof TILE_THEMES)[typeof kind]]!(
+        rec.ctx, 0, 0, 5, { tileSize: 32, hudHeight: 0 }, false, false,
+      );
+      return stylesOf(rec);
+    };
+    expect(paint(TILE.SAPLING)).not.toEqual(paint(TILE.ASH));
+    expect(paint(TILE.SAPLING)).not.toEqual(paint(TILE.TREE));
   });
 
   it.each(EVERY_MAP)('gives %s an animated palette to go with those painters', (kind) => {

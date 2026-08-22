@@ -214,6 +214,17 @@ describe('Terrain', () => {
       expect(t.walkable(p.x, p.y)).toBe(true);
     });
 
+    // Cover that grows back has to be stoppable while it is doing it, or
+    // regrowth happens to the player rather than being something they play
+    // against. See sim/regrowth.ts.
+    it('clears a sapling too, so cover can be stopped on its way back', () => {
+      const t = blank();
+      t.map.set(4, 4, TILE.SAPLING);
+      const p = at(4, 4);
+      t.destroyArea(p.x, p.y, 40);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.EMPTY);
+    });
+
     it('leaves a maze exactly as it was carved, walls and all', () => {
       const t = Terrain.fromSeed(4242, flat, 'maze');
       const before = copyOf(t.map.grid);
@@ -241,6 +252,7 @@ describe('Terrain', () => {
     it.each([
       ['a hut', TILE.HUT],
       ['a tree', TILE.TREE],
+      ['a sapling, which is a tree that has not finished', TILE.SAPLING],
     ])('chars %s to open ground, and says so', (_name, tile) => {
       const t = blank();
       t.map.set(4, 4, tile);
