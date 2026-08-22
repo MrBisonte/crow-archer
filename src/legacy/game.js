@@ -106,6 +106,9 @@ const CONFIG = {
 
   playerSpeed: 200, playerRadius: 8,
   playerMaxHP: 10, playerHitFlashSecs: 0.3,
+  // How long the reticle flags a press the game refused. Short on purpose:
+  // long enough to see, too short to be mistaken for a state you are in.
+  blockedFlashSecs: 0.1,
   killsToTriggerBoss: 10,
 
   // Castle stage (brawl mode's second act). Persistently hostile, so no
@@ -262,7 +265,7 @@ const CONFIG = {
   // Adding a new resource type only requires a new entry here.
   resources: {
     arrows:    { max: 10, restore: 5, color: '#aaff44', dim: '#2d2d2d', icon: '▶', spacing: 13 },
-    dynamites: { max:  3, restore: 1, color: '#ff6600', dim: '#2d2d2d', icon: '■', spacing: 13 },
+    dynamites: { max:  3, restore: 1, color: '#FFB400', dim: '#2d2d2d', icon: '■', spacing: 13 },
     satchels:  { max:  3, restore: 1, color: '#ffcc00', dim: '#2d2d2d', icon: '●', spacing: 13 }
   },
 
@@ -424,6 +427,8 @@ const CHAR_PANELS = [
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
 ];
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
+// Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
+let blockedFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
 // Set by an ice skeleton's bolt landing. Counts down in updatePlayer, which
 // returns before reading input while it is positive, so movement, aiming
@@ -949,6 +954,7 @@ events.on(e => {
 
     case 'ACTION_BLOCKED':
       playSound(sndEmpty);
+      blockedFlash = CONFIG.blockedFlashSecs;
       break;
 
     case 'SATCHEL_ARMED':
@@ -1284,6 +1290,7 @@ function updatePlayer(dt) {
 
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
+  if (blockedFlash > 0) blockedFlash = Math.max(0, blockedFlash - dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
@@ -1462,7 +1469,7 @@ function tryShoot() {
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
-  if (arrows.length >= CONFIG.maxArrowsInFlight) return;
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   let type = 'normal';
   if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
   else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
@@ -1487,7 +1494,7 @@ function tryCrossbowBolt() {
   if (!hasArrows) { tryPitchfork(); return; }
   // Reserve room for the whole burst up front — a partial push would let
   // arrows.length overshoot maxArrowsInFlight and stall the next press.
-  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) return;
+  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   let type = 'normal';
   if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
   else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
@@ -1510,7 +1517,7 @@ function tryCrossbowBolt() {
 
 function tryWizardBolt() {
   if (wizBoltCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  if (arrows.length >= CONFIG.maxArrowsInFlight) return;
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
@@ -5169,17 +5176,82 @@ function drawCountRow(x, r, cur, max, alertCol = null, alertGlow = null) {
   return max * r.spacing + 8;
 }
 
+/**
+ * Shield mark: a stroked hexagon. Was a filled diamond, which the feather
+ * wallet also used, so one glyph stood for two unrelated things three
+ * elements apart in the same row.
+ */
+function hexGlyph(cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 6 + i * Math.PI / 3;
+    const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.stroke();
+}
+
+/** Feather wallet mark: a four-point leaf, filled. */
+function leafGlyph(cx, cy, r) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.quadraticCurveTo(cx + r, cy, cx, cy + r);
+  ctx.quadraticCurveTo(cx - r, cy, cx, cy - r);
+  ctx.closePath(); ctx.fill();
+}
+
+/** Cooldown bar geometry. One home, since the row advance depends on it. */
+const CD_BAR = { w: 78, h: 20, y: 6, gap: 8 };
+
+/**
+ * One ability cooldown bar. Four of these used to be the same twenty lines
+ * pasted with different track, fill, border and label colors; what actually
+ * varies is the fill fraction, the label, and which state it is in.
+ *
+ * State picks the color, not the ability. READY is the same green on every
+ * bar for every character, so "can I use this" is one thing to recognise
+ * instead of four palettes. Which ability a bar belongs to is already
+ * carried by its fixed position in the row.
+ *
+ * The label is the state and nothing else: no ability name, because the name
+ * cost the four characters left over at 8px, and 8px is where the digits in
+ * a countdown stop being separable under the scanline overlay.
+ *
+ * Returns the width to advance by.
+ */
+function drawCooldownBar(x, frac, label, state) {
+  const { w, h, y, gap } = CD_BAR;
+  const lit = state !== 'cooling';
+  ctx.fillStyle = '#0A0F0A'; ctx.fillRect(x, y, w, h);
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = state === 'active' ? 8 + 4*Math.sin(loopT*8) : (lit ? 6 : 0);
+  ctx.fillStyle = lit ? '#39FF14' : '#196407';
+  ctx.fillRect(x, y, w * frac, h);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = lit ? '#39FF14' : '#243424'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  // Dark on the filled bar, bright on the empty track: readable either way.
+  ctx.fillStyle = lit ? '#0A0F0A' : '#39FF14';
+  ctx.font = 'bold 12px "Courier New",monospace'; ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + h/2);
+  ctx.textAlign = 'left'; ctx.font = 'bold 10px "Courier New",monospace';
+  return w + gap;
+}
+
 function drawHUD(t) {
   const isBoss = appState === 'boss_fight';
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
   ctx.font = 'bold 12px "Courier New", monospace'; ctx.textBaseline = 'middle';
 
-  // Score
-  ctx.fillStyle = '#39FF14'; ctx.textAlign = 'left';
+  // Score. Dimmer than the rest on purpose: it is the one number here that
+  // never changes a decision mid-fight, and #39FF14 is reserved for health
+  // and friendly state now.
+  ctx.fillStyle = '#28B30E'; ctx.textAlign = 'left';
   ctx.fillText(`SCORE:${String(score).padStart(3,'0')}`, 8, 16);
 
   // Kill counter or wave counter, depending on mode; or boss HP bar
   if (!isBoss) {
+    ctx.fillStyle = '#39FF14';
     if (gameMode === 'brawl') ctx.fillText(`  KILLS:${String(killCount).padStart(2,'0')}/10`, 96, 16);
     else                      ctx.fillText(`  WAVE:${String(wave).padStart(2,'0')}`, 96, 16);
   } else if (boss) {
@@ -5218,8 +5290,8 @@ function drawHUD(t) {
   // during a boss fight, into the boss HP bar).
   const hpX = isBoss ? 248 : 383;
   const lowHP = playerHP > 0 && playerHP / FEATHERS.maxHP() <= LOW_HP_FRACTION;
-  const hpAlert = lowHP && Math.floor(t*4)%2===0 ? '#ff4444' : null;
-  drawCountRow(hpX, HP_RESOURCE, playerHP, FEATHERS.maxHP(), hpAlert, '#ff2222');
+  const hpAlert = lowHP && Math.floor(t*4)%2===0 ? '#FF1F1F' : null;
+  drawCountRow(hpX, HP_RESOURCE, playerHP, FEATHERS.maxHP(), hpAlert, '#FF1F1F');
 
   // Resources — archer/ranger quiver OR knight/wizard cooldowns. Each branch
   // is named explicitly rather than falling through to a trailing else, so a
@@ -5235,41 +5307,27 @@ function drawHUD(t) {
     for (const k of keys) {
       const r = CONFIG.resources[k];
       const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
-      rx += drawCountRow(rx, r, inv[k], r.max, flash ? '#ff4444' : null);
+      rx += drawCountRow(rx, r, inv[k], r.max, flash ? '#8A1010' : null);
     }
     if (inv.ricochetArrows > 0) { ctx.fillStyle='#44ddff'; ctx.fillText(`[R:${inv.ricochetArrows}]`,rx,16); rx+=52; }
-    if (inv.fireArrows     > 0) { ctx.fillStyle='#ff7700'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
+    if (inv.fireArrows     > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
   } else if (selectedChar === 'knight') {
     // Knight — whirlwind cooldown bar + active buffs
     const wrdRdy  = knightWhirlwindCD <= 0;
     const wrdFrac = wrdRdy ? 1 : (CONFIG.knightWhirlwindCooldown - knightWhirlwindCD) / CONFIG.knightWhirlwindCooldown;
     const wrdActive = knightWhirlwindTimer > 0;
-    ctx.fillStyle='#111120'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#6080FF'; ctx.shadowBlur = wrdActive ? 8 : (wrdRdy ? 4 : 0);
-    ctx.fillStyle = wrdActive ? '#88aaff' : (wrdRdy ? '#4060d0' : '#1a2060');
-    ctx.fillRect(rx, 4, 78*wrdFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#4060C0'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = wrdActive ? '#ccddff' : (wrdRdy ? '#8899cc' : '#444466');
-    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '◎ READY' : `◎ ${knightWhirlwindCD.toFixed(1)}s`);
-    ctx.fillText(wrdLabel, rx+39, 12);
-    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    const wrdLabel = wrdActive ? `${knightWhirlwindTimer.toFixed(1)}s`
+                   : wrdRdy    ? 'READY'
+                               : `${knightWhirlwindCD.toFixed(1)}s`;
+    rx += drawCooldownBar(rx, wrdActive ? 1 : wrdFrac, wrdLabel,
+                          wrdActive ? 'active' : wrdRdy ? 'ready' : 'cooling');
     // Block bar — countdown to the next free charge. The shared ◆SHLD
     // readout further down already flags a banked charge as active, so this
     // one just needs to read "ready" rather than duplicate that text.
     const blkRdy  = knightBlockCD <= 0 || playerShield;
     const blkFrac = blkRdy ? 1 : (CONFIG.knightBlockCooldown - knightBlockCD) / CONFIG.knightBlockCooldown;
-    ctx.fillStyle='#2a1a05'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#FFB400'; ctx.shadowBlur = blkRdy ? 6 : 0;
-    ctx.fillStyle = blkRdy ? '#FFB400' : '#5a3a10';
-    ctx.fillRect(rx, 4, 78*blkFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#FFB400'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = blkRdy ? '#FFE8B0' : '#7a5a30';
-    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    ctx.fillText(blkRdy ? '◎ READY' : `◎ ${knightBlockCD.toFixed(1)}s`, rx+39, 12);
-    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    rx += drawCooldownBar(rx, blkFrac, blkRdy ? 'READY' : `${knightBlockCD.toFixed(1)}s`,
+                          blkRdy ? 'ready' : 'cooling');
     if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
     if (inv.knightFireSwordTimer > 0) {
       ctx.fillStyle='#FF7A1F';
@@ -5282,38 +5340,27 @@ function drawHUD(t) {
     const stormRdy  = stormCD <= 0;
     const stormFrac = stormRdy ? 1 : (CONFIG.stormCooldown - stormCD) / CONFIG.stormCooldown;
     // Bolt bar
-    ctx.fillStyle='#1a1a3a'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#8888FF'; ctx.shadowBlur = boltRdy ? 6 : 0;
-    ctx.fillStyle = boltRdy ? '#8888ff' : '#3a3a8a'; ctx.fillRect(rx, 4, 78*boltFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#8888ff'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = boltRdy ? '#ccccff' : '#555588';
-    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    ctx.fillText(boltRdy ? 'BOLT READY' : `BOLT ${wizBoltCD.toFixed(1)}s`, rx+39, 12);
-    rx += 86;
+    rx += drawCooldownBar(rx, boltFrac, boltRdy ? 'READY' : `${wizBoltCD.toFixed(1)}s`,
+                          boltRdy ? 'ready' : 'cooling');
     // Storm bar
-    ctx.fillStyle='#10101e'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#4444ff'; ctx.shadowBlur = stormRdy ? 6 : 0;
-    ctx.fillStyle = stormRdy ? '#4444ff' : '#1a1a55'; ctx.fillRect(rx, 4, 78*stormFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#4444ff'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = stormRdy ? '#aaaaff' : '#444488';
-    ctx.fillText(stormRdy ? 'STORM RDY' : `STORM ${stormCD.toFixed(1)}s`, rx+39, 12);
-    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    rx += drawCooldownBar(rx, stormFrac, stormRdy ? 'READY' : `${stormCD.toFixed(1)}s`,
+                          stormRdy ? 'ready' : 'cooling');
     // Special ammo
     if (inv.laserStreams > 0) { ctx.fillStyle='#39E0FF'; ctx.fillText(`[L:${inv.laserStreams}]`,rx,16); rx+=50; }
-    if (inv.fireBolts    > 0) { ctx.fillStyle='#ff5500'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
+    if (inv.fireBolts    > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
   }
   if (playerShield) {
     ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 3*Math.sin(t*6);
-    ctx.fillStyle = '#FFB400'; ctx.fillText('◆SHLD', rx, 16);
+    ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 1.5; hexGlyph(rx + 5, 16, 5);
+    ctx.fillStyle = '#FFB400'; ctx.fillText('SHLD', rx + 13, 16);
     ctx.shadowBlur = 0; rx += 52;
   }
   // Feather wallet — dim amber, always visible
   ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
   ctx.fillStyle = '#5a3a00';
-  ctx.fillText(`◆${FEATHERS.wallet()}`, rx, 16);
+  leafGlyph(rx + 4, 16, 5);
+  ctx.fillText(`${FEATHERS.wallet()}`, rx + 11, 16);
   ctx.font = 'bold 12px "Courier New", monospace';
 
   // Mode badge (always visible, dim)
@@ -5684,7 +5731,25 @@ function drawReticle() {
   ctx.save();
   ctx.translate(mouse.x, mouse.y + CONFIG.hudHeight);
   (RETICLE_PAINTERS[selectedChar] || drawRangerReticle)();
+  drawBlockedFlash();
   ctx.restore();
+}
+
+/**
+ * Rings the reticle when the game refuses a press. Drawn over every
+ * character's own reticle rather than inside each painter, because
+ * ACTION_BLOCKED already covers every refusal there is: a cooldown that has
+ * not finished, an empty pool, and the in-flight arrow cap. All of those
+ * used to be silent, so a press that did nothing and a press that fired
+ * looked identical and the weapon took the blame.
+ */
+function drawBlockedFlash() {
+  if (blockedFlash <= 0) return;
+  ctx.globalAlpha = blockedFlash / CONFIG.blockedFlashSecs;   // linear 1 -> 0
+  ctx.strokeStyle = '#8A1010'; ctx.lineWidth = 2;
+  ctx.shadowColor = '#8A1010'; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 }
 
 /** Ranger: a plain crosshair, the natural read for the crossbow's straight bolts. */
