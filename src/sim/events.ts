@@ -86,7 +86,10 @@ export type GameEvent =
   | { type: 'KEY_DROPPED'; x: number; y: number; kind: MazeKeyKind }
   | { type: 'KEY_TAKEN'; x: number; y: number; kind: MazeKeyKind }
   | { type: 'CHEST_OPENED'; x: number; y: number }
-  | { type: 'DOOR_OPENED'; x: number; y: number };
+  | { type: 'DOOR_OPENED'; x: number; y: number }
+  // Striking a torch in the dark. The only thing in the maze that gives sight
+  // back, so it is the one beat that is relief rather than threat.
+  | { type: 'TORCH_LIT'; x: number; y: number };
 
 export type GameEventType = GameEvent['type'];
 export type EventHandler = (e: GameEvent) => void;

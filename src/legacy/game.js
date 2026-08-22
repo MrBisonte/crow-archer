@@ -159,8 +159,12 @@ const CONFIG = {
   // corridor you are in and nothing of the one you are about to enter.
   sightRadiusTiles: 14,
   mazeSightRadiusTiles: 4,
+  torchSightMult: 3,             // what a lit torch buys, permanently
   fogMemorySlope: 0.75,          // how fast a lit tile dims toward the edge of sight
   fogMemoryAlpha: 0.74,          // black over terrain you remember but cannot see
+  torchGlowTiles: 2,             // tiles a lit torch keeps clear of fog, forever
+  mazeTorchCount: 3,
+  mazeTorchMinDistance: 200,     // from the spawn, so the first is not underfoot
 
   // Fire skeleton: same movement and contact damage as normal, but its
   // death is a small blast that punishes standing next to it when it pops.
@@ -318,7 +322,11 @@ const CONFIG = {
   keys: {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
-    menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift'
+    menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift',
+    // Striking a torch is a decision, so it gets a button. Keys, the chest and
+    // the door do not: your inventory has already decided those, and a prompt
+    // in front of a foregone conclusion is a button press, not a choice.
+    use: 'e'
   }
 };
 
@@ -664,26 +672,32 @@ const _fov   = new FOV.PreciseShadowcasting(_rotPassable);
  * How far the player can see right now, in tiles.
  *
  * Open maps keep the radius they have always had, which covers the arena, so
- * nothing about forest or castle changes. The maze runs on a torch's reach.
+ * nothing about forest or castle changes. The maze runs on a torch's reach, and
+ * lighting one triples it for the rest of the run.
  */
 function playerSightTiles() {
-  return fogOfWar() ? CONFIG.mazeSightRadiusTiles : CONFIG.sightRadiusTiles;
+  if (!fogOfWar()) return CONFIG.sightRadiusTiles;
+  const base = CONFIG.mazeSightRadiusTiles;
+  return torchIsLit() ? base * CONFIG.torchSightMult : base;
 }
 
 const fovMap  = new FovMap(CONFIG.rows, CONFIG.cols,
   (col, row, mark) => _fov.compute(col, row, playerSightTiles(), mark));
 
-// Terrain the player has already stood in the light of. Memory rather than
-// sight: it says what the maze looks like, never what is moving in it.
-const seenTiles = new Uint8Array(CONFIG.rows * CONFIG.cols);
+// Terrain the player has already stood in the light of, and terrain a lit torch
+// holds open forever. Both are memory rather than sight: they say what the maze
+// looks like, never what is moving in it.
+const seenTiles  = new Uint8Array(CONFIG.rows * CONFIG.cols);
+const torchTiles = new Uint8Array(CONFIG.rows * CONFIG.cols);
 // Which tile the memory pass last ran from. FovMap only recomputes on a tile
 // change, so marking memory on every step would be 693 writes for nothing.
 let seenFrom = -1;
 
-/** Clears sight and memory. Called whenever a new grid is built. */
+/** Clears sight, memory and torchlight. Called whenever a new grid is built. */
 function resetSight() {
   fovMap.invalidate();
   seenTiles.fill(0);
+  torchTiles.fill(0);
   seenFrom = -1;
 }
 
@@ -1055,6 +1069,12 @@ events.on(e => {
         sizeMin: 2, sizeMax: 5, shadowBlur: 14, shadowColor: '#FFE8B0' });
       break;
 
+    case 'TORCH_LIT':
+      playSound(sndTorchLight);
+      burst(e.x, e.y, { count: 16, colors: ['#FF7A1F','#FFB400','#FFF3C0'],
+        speedMin: 20, speedMax: 90, decay: 2.0, shape: 'spark',
+        sizeMin: 1, sizeMax: 2.5, gravity: -60, shadowBlur: 10, shadowColor: '#FF7A1F' });
+      break;
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -2631,6 +2651,12 @@ function newMazeRun() {
   for (let tries = 0; tries < 12 && dist2(chest.x, chest.y, door.x, door.y) < apart; tries++) {
     chest = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeChestMinDistance) ?? chest;
   }
+  // Few, and scattered rather than placed: finding one has to feel like luck.
+  const torches = [];
+  for (let i = 0; i < CONFIG.mazeTorchCount; i++) {
+    const at = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeTorchMinDistance);
+    if (at) torches.push({ x: at.x, y: at.y, lit: false, flamePhase: Math.random() * Math.PI * 2 });
+  }
   return {
     locks: {
       chest: { x: chest.x, y: chest.y, opened: false },
@@ -2638,9 +2664,49 @@ function newMazeRun() {
     },
     held: { silver: false, golden: false },
     drops: [],            // keys lying on the floor, waiting to be walked over
+    torches,
     metMinotaur: false,   // his first charge or his first stun, whichever came first
     silverDropped: false, // one silver key exists, ever
   };
+}
+
+/**
+ * Has the player lit anything yet?
+ *
+ * Derived from the torches rather than tracked beside them, so "the lights are
+ * on" and "this torch is burning" can never disagree. The first one is the only
+ * one that changes sight; the rest are landmarks.
+ */
+function torchIsLit() {
+  return !!mazeRun && mazeRun.torches.some(t => t.lit);
+}
+
+/**
+ * Strikes a torch, and holds a small patch of the maze open around it forever.
+ *
+ * Sight goes to three times the base and stays there for the run. A timer was
+ * the alternative and it makes the level a stopwatch: a maze is a place you are
+ * meant to search, and light that expires punishes searching. It would also
+ * contradict the map, since the torch itself keeps burning either way.
+ */
+function lightTorch(t) {
+  t.lit = true;
+  const ts = CONFIG.tileSize, reach = CONFIG.torchGlowTiles;
+  const c0 = Math.floor(t.x / ts), r0 = Math.floor(t.y / ts);
+  for (let r = r0 - reach; r <= r0 + reach; r++)
+    for (let c = c0 - reach; c <= c0 + reach; c++)
+      if (r >= 0 && r < CONFIG.rows && c >= 0 && c < CONFIG.cols)
+        torchTiles[r * CONFIG.cols + c] = 1;
+  // The sight radius just changed, and FovMap only recomputes when the tracked
+  // tile does. Without the invalidate the new reach waits for the next step the
+  // player takes, which reads as the torch failing to light. The recompute has
+  // to happen here too, not next frame: this runs after updateFOV, so leaving
+  // the cache empty would render one fully black frame at the exact moment the
+  // level is supposed to open up.
+  fovMap.invalidate();
+  seenFrom = -1;
+  updateFOV();
+  events.emit({ type: 'TORCH_LIT', x: t.x, y: t.y });
 }
 
 /**
@@ -2682,6 +2748,18 @@ function maybeDropSilverKey(s) {
 function updateMazeObjective(dt) {
   if (!mazeRun) return;
   const reach = CONFIG.pickupRadius ** 2;
+  // Torches are the one thing here you choose rather than collect, so they are
+  // the one thing on a button. Consumed on read, the way every other one-shot
+  // key in stepGame is, so holding it down lights one torch and not a row.
+  const use = !!keys[CONFIG.keys.use];
+  if (use) keys[CONFIG.keys.use] = false;
+  for (const t of mazeRun.torches) t.flamePhase += dt * 9;
+  if (use) {
+    // One press lights one torch, so two within arm's reach of each other stay
+    // two decisions.
+    const t = mazeRun.torches.find(t => !t.lit && dist2(player.x, player.y, t.x, t.y) < reach);
+    if (t) lightTorch(t);
+  }
   for (let i = mazeRun.drops.length - 1; i >= 0; i--) {
     const k = mazeRun.drops[i];
     k.bobPhase += dt * (2 * Math.PI / 0.6);
@@ -3635,6 +3713,7 @@ const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // trian
 const sndKeyDrop       = [.3,  .02, 1400, 0, .02, .12, 1, 1, 0, 0, 300, .05]; // triangle chime + pitch jump — small metal landing
 const sndChestOpen     = [.4,  .05, 160, 0, .1,  .22, 2, 1, 120];       // sawtooth rising — a lid coming up
 const sndDoorOpen      = [.6,  .1,   70, 0, .3,  .5,  4, 1, 40];        // low bit noise grinding up — stone giving way
+const sndTorchLight    = [.3,  .3,  420, 0, .06, .18, 4, 1, 90];        // bit noise, rising — a strike catching
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
 function sndGameover() {
@@ -5385,12 +5464,45 @@ function drawMazeKey(k) {
   ctx.restore();
 }
 
+/**
+ * A wall torch: dead stick in a bracket, or a flame.
+ *
+ * A lit one ignores the fog gate on purpose. It is the only landmark the maze
+ * offers, and a landmark you can only see when you are standing on it is not
+ * one. lightTorch holds the fog open around it to match.
+ */
+function drawTorch(t) {
+  ctx.save(); ctx.translate(t.x, t.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 8, 6, 1.6, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4A3A22'; ctx.fillRect(-1.5, -4, 3, 12);   // the stick
+  ctx.fillStyle = '#6B5A38'; ctx.fillRect(-4, 6, 8, 3);       // the bracket
+  if (!t.lit) {
+    ctx.fillStyle = '#2A2218'; ctx.fillRect(-3, -8, 6, 5);    // cold pitch
+    ctx.restore();
+    return;
+  }
+  const f = Math.sin(t.flamePhase), g = Math.sin(t.flamePhase * 1.7);
+  ctx.shadowColor = '#FF9020'; ctx.shadowBlur = 16 + 6*f;
+  ctx.fillStyle = `rgba(255,144,32,${(0.16 + 0.06*f).toFixed(2)})`;
+  ctx.beginPath(); ctx.arc(0, -6, 18 + 3*f, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FF7A1F';
+  ctx.beginPath(); ctx.ellipse(0, -8, 3.4 + 0.6*g, 6 + 1.2*f, 0, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#FFB400';
+  ctx.beginPath(); ctx.ellipse(0, -8, 2 + 0.4*g, 4, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FFF3C0';
+  ctx.beginPath(); ctx.arc(0, -8, 1 + 0.4*Math.abs(f), 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
 /** The maze's furniture and any key lying on its floor. Nothing off the maze. */
 function drawMazeObjective() {
   if (!mazeRun) return;
   for (const [name, at] of Object.entries(mazeRun.locks))
     if (litAt(at.x, at.y)) MAZE_LOCK_PAINTERS[name](at);
   for (const k of mazeRun.drops) if (litAt(k.x, k.y)) drawMazeKey(k);
+  for (const t of mazeRun.torches) if (t.lit || litAt(t.x, t.y)) drawTorch(t);
 }
 
 /**
@@ -5417,6 +5529,8 @@ function drawFog() {
       let a;
       if (fovMap.isVisible(c, r)) {
         a = Math.min(dim, (Math.hypot(c - pc, r - pr) / radius) ** 2 * CONFIG.fogMemorySlope);
+      } else if (torchTiles[i]) {
+        a = 0;
       } else {
         a = seenTiles[i] ? dim : 1;
       }
@@ -6501,6 +6615,7 @@ const CTRL_ACTIONS = [
   { label: 'MOVE RIGHT', key: 'right' },
   { label: 'SHOOT',      key: 'shoot' },
   { label: 'SNIPE/CHARGE', key: 'snipe' },
+  { label: 'LIGHT TORCH', key: 'use'   },
   { label: 'PAUSE',      key: 'pause' }
 ];
 
@@ -7083,6 +7198,7 @@ window.__game = {
     chest: { x: mazeRun.locks.chest.x, y: mazeRun.locks.chest.y },
     door: { x: mazeRun.locks.door.x, y: mazeRun.locks.door.y },
     drops: mazeRun.drops.map(k => ({ kind: k.kind, x: k.x, y: k.y })),
+    torches: mazeRun.torches.map(t => ({ x: t.x, y: t.y, lit: t.lit })),
   } : null),
   // What the player can see, and how much of the map they have banked.
   sight: () => {
@@ -7090,8 +7206,9 @@ window.__game = {
     for (let r = 0; r < CONFIG.rows; r++)
       for (let c = 0; c < CONFIG.cols; c++) if (fovMap.isVisible(c, r)) visible++;
     return {
-      fog: fogOfWar(), radiusTiles: playerSightTiles(), visible,
+      fog: fogOfWar(), radiusTiles: playerSightTiles(), torchLit: torchIsLit(), visible,
       remembered: seenTiles.reduce((n, v) => n + v, 0),
+      torchOpened: torchTiles.reduce((n, v) => n + v, 0),
       tiles: CONFIG.rows * CONFIG.cols,
     };
   },
