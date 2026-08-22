@@ -17,7 +17,8 @@ import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, mak
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
-  makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, animFrame3,
+  makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
+  animFrame3, ANIM_FRAMES,
 } from '../render/pixel-grid';
 import {
   ARCHER_SPRITE, buildArcherGrid,
@@ -6072,9 +6073,10 @@ const CROW_KING_SPRITE = { w: 64, h: 44 };
 // One boss, no kind variants, so a plain palette object — not a
 // Record<Kind,X> table, there is no second row this would ever need.
 const CROW_KING_PALETTE = {
-  body: '#0A0A0A', bodyHi: '#2A0A0A',
+  body: '#0A0A0A', bodyHi: '#2A0A0A', feather: '#1A1A1A',
   wing: '#5A0808', wingHi: '#8A1010',
-  beak: '#3A0606', crown: '#0A0A0A', crownRim: '#5A0808',
+  beak: '#3A0606', beakHi: '#6A1010',
+  crown: '#0A0A0A', crownRim: '#5A0808', crownHi: '#8A1010', jewel: '#FFB400',
   edge: '#000000',
 };
 
@@ -6085,25 +6087,51 @@ function buildCrowKingGrid(frame) {
   const C = CROW_KING_PALETTE;
   const g = makePixelGrid(CROW_KING_SPRITE.w, CROW_KING_SPRITE.h);
 
-  if (frame === 'a')      pixelEllipse(g, 30, 35, 20, 6, C.wing);   // lowered, spread below
-  else if (frame === 'b') pixelEllipse(g, 30, 11, 17, 6, C.wingHi); // raised, folded over the back
-  else                    pixelEllipse(g, 28, 24, 22, 5, C.wing);   // level, spread to the sides
+  const wing = frame === 'a' ? { x: 30, y: 35, rx: 20, ry: 6, c: C.wing }    // lowered, spread below
+             : frame === 'b' ? { x: 30, y: 11, rx: 17, ry: 6, c: C.wingHi }  // raised, folded over the back
+             :                 { x: 28, y: 24, rx: 22, ry: 5, c: C.wing };   // level, spread to the sides
+  pixelEllipse(g, wing.x, wing.y, wing.rx, wing.ry, wing.c);
+  // Flight-feather splits, each cut to the wing's own height where it lands,
+  // so a slab of one colour reads as separate primaries at any flap extreme.
+  for (const i of [-2, -1, 1, 2]) {
+    const dx = (i * wing.rx) / 3;
+    const half = wing.ry * Math.sqrt(Math.max(0, 1 - (dx / wing.rx) ** 2));
+    pixelRect(g, Math.round(wing.x + dx), Math.round(wing.y - half), 1, Math.max(1, Math.round(half * 2)), C.feather);
+  }
 
-  // Crown — 5 spikes, tallest in the middle
+  // Crown — 5 spikes, tallest in the middle. The spikes are the body's own
+  // colour, so without a lit edge down each one and a jewel at each tip the
+  // whole crown is a single silhouette that pixelOutline only seams outside.
   const spikeXs = [16, 24, 32, 40, 48], spikeHs = [5, 8, 11, 8, 5];
-  for (let i = 0; i < 5; i++) pixelTriangleUp(g, spikeXs[i], 9, 4, spikeHs[i], C.crown);
+  for (let i = 0; i < 5; i++) {
+    pixelTriangleUp(g, spikeXs[i], 9, 4, spikeHs[i], C.crown);
+    for (let d = 1; d < spikeHs[i]; d++) {
+      const w = Math.max(0, Math.round(4 - (4 * d) / (spikeHs[i] - 1)));
+      setPixel(g, spikeXs[i] - w, 9 - d, C.crownHi);
+    }
+    setPixel(g, spikeXs[i], Math.max(0, 9 - spikeHs[i] + 1), C.jewel);
+  }
   pixelRect(g, 12, 8, 40, 2, C.crownRim);
+  for (const x of [20, 28, 36, 44]) setPixel(g, x, 8, C.jewel);
 
   // Body, drawn over the wing root and crown base
   pixelEllipse(g, 34, 24, 20, 13, C.body);
   pixelEllipse(g, 27, 18, 9, 5, C.bodyHi);
+  // Neck ruff, and feather chevrons over the breast. The head is the same
+  // mass as the body without a collar to cut it off.
+  pixelCurve(g, [26, 12], [20, 24], [26, 34], C.bodyHi, 30);
+  pixelCurve(g, [27, 13], [21, 24], [27, 33], C.feather, 30);
+  for (const y of [25, 29, 33]) pixelCurve(g, [32, y], [39, y + 3], [46, y], C.feather, 20);
 
   // Beak, pointing left — a sideways taper, apex at the tip, so a column
-  // loop rather than pixelTriangleUp's upward-apex shape.
+  // loop rather than pixelTriangleUp's upward-apex shape. The gape line
+  // along its axis is what makes it two mandibles instead of one wedge.
   for (let i = 0; i < 6; i++) {
     const hw = Math.round((5 * i) / 5);
     pixelRect(g, 4 + i, 22 - hw, 1, hw * 2 + 1, C.beak);
+    setPixel(g, 4 + i, 22 - hw, C.beakHi);
   }
+  for (let i = 1; i < 6; i++) setPixel(g, 4 + i, 22, C.edge);
 
   return pixelOutline(g, C.edge);
 }
@@ -6228,10 +6256,20 @@ function drawBoss() {
  */
 const DARK_ARCHER_SPRITE = { w: 40, h: 42 };
 const DARK_ARCHER_PALETTE = {
-  cloak: '#241030', cloakHi: '#3A1A4A',
-  body: '#382048', head: '#1A0E22', hood: '#150A1C',
+  cloak: '#241030', cloakHi: '#3A1A4A', cloakSh: '#180A22',
+  body: '#382048', bodyHi: '#4A2C5E', bodySh: '#241432', strap: '#120818',
+  head: '#1A0E22', headHi: '#2C1838', hood: '#150A1C', hoodSh: '#0E0614',
+  rune: '#B040E0',
   edge: '#0A0510',
 };
+
+/**
+ * How far down each column of the cloak reaches, repeated across its width.
+ * A 40px cloak cut off straight reads as a bucket; a hem torn into tongues
+ * is the whole silhouette below the waist, and pixelOutline then seams every
+ * tongue on its own.
+ */
+const DARK_ARCHER_HEM = [41, 39, 40, 41, 37, 41, 40, 38, 41, 40];
 
 /** No walk cycle, no wing-flap — like the heroes, one static frame plus a
  * live bob is enough. Bow/arm/bowstring stay live below, same reasoning as
@@ -6240,19 +6278,42 @@ function buildDarkArcherGrid() {
   const C = DARK_ARCHER_PALETTE;
   const g = makePixelGrid(DARK_ARCHER_SPRITE.w, DARK_ARCHER_SPRITE.h);
 
-  // Cloak — widens from the shoulders down to the hem
+  // Cloak — widens from the shoulders down to a hem torn into tongues
+  // (see DARK_ARCHER_HEM), with fold shadows down the drop of the cloth
   for (let y = 14; y <= 41; y++) {
     const halfW = Math.round(10 + 9 * ((y - 14) / 27));
-    pixelRect(g, 20 - halfW, y, halfW * 2, 1, C.cloak);
+    for (let x = 20 - halfW; x < 20 + halfW; x++) {
+      if (y > DARK_ARCHER_HEM[((x % DARK_ARCHER_HEM.length) + DARK_ARCHER_HEM.length) % DARK_ARCHER_HEM.length]) continue;
+      setPixel(g, x, y, C.cloak);
+    }
   }
-  pixelRect(g, 12, 14, 8, 6, C.cloakHi);
+  for (const x of [7, 13, 27, 33]) pixelRect(g, x, 22, 1, 19, C.cloakSh);
 
-  // Body panel, under the hood
+  // Body panel, under the hood: lit down one side, shaded down the other,
+  // with the quiver strap and belt that break up its middle
   pixelRect(g, 10, 18, 20, 16, C.body);
+  pixelRect(g, 10, 18, 4, 16, C.bodyHi);
+  pixelRect(g, 26, 18, 4, 16, C.bodySh);
+  pixelCurve(g, [11, 20], [20, 25], [29, 31], C.strap, 30);
+  pixelRect(g, 10, 30, 20, 2, C.strap);
+  pixelRect(g, 18, 30, 4, 2, C.rune); // belt buckle, the one lit accent
 
   // Head, with the hood's brim shadowing its top
   pixelEllipse(g, 20, 10, 9, 9, C.head);
-  pixelRect(g, 10, 0, 20, 6, C.hood);
+  pixelEllipse(g, 20, 15, 5, 3, C.headHi);
+  pixelRect(g, 12, 8, 16, 2, C.hoodSh);
+
+  // Collar — the head is as wide as the shoulders, so the whole upper half
+  // is one silhouette until something cuts across it
+  pixelRect(g, 11, 17, 18, 2, C.cloakHi);
+  setPixel(g, 13, 18, C.rune); setPixel(g, 26, 18, C.rune); // cloak clasps
+
+  // Hood — peaked rather than a flat lid, drawn last so it sets the face back
+  for (let y = 0; y <= 7; y++) {
+    const halfW = Math.round(4 + 6 * (y / 7));
+    pixelRect(g, 20 - halfW, y, halfW * 2, 1, C.hood);
+  }
+  pixelRect(g, 11, 6, 18, 1, C.cloakHi); // lit brim
 
   return pixelOutline(g, C.edge);
 }
@@ -6348,39 +6409,69 @@ function buildMinotaurGrid(frame) {
   const g = makePixelGrid(MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h);
   const swing = frame === 'a' ? 3 : frame === 'b' ? -3 : 0;
 
-  // Legs, digitigrade-ish, ending in hooves
-  pixelCurve(g, [10, 22], [10 + swing * 0.4, 27], [10 + swing, 31], C.muscle, 4);
-  pixelCurve(g, [16, 22], [16 - swing * 0.4, 27], [16 - swing, 31], C.muscle, 4);
-  pixelRect(g, 8 + swing, 31, 5, 3, C.hoof);
-  pixelRect(g, 14 - swing, 31, 5, 3, C.hoof);
+  /**
+   * A two-pixel limb. A quadratic sampled once per few pixels of its length
+   * leaves a dotted line, and at 26x34 a dotted line reads as damage rather
+   * than as a leg; the sample count here is well over the curve's length, so
+   * every step lands on a cell adjacent to the last.
+   */
+  const limb = (p0, p1, p2, c) => {
+    pixelCurve(g, p0, p1, p2, c, 24);
+    pixelCurve(g, [p0[0] + 1, p0[1]], [p1[0] + 1, p1[1]], [p2[0] + 1, p2[1]], c, 24);
+  };
+
+  // Legs, digitigrade-ish, ending in hooves over a fetlock band. The stride
+  // is a third of the arms' swing: at the full swing the two feet land on
+  // the same column, which was invisible while the legs were dotted lines
+  // and reads as one leg the moment they are solid.
+  // Hooves sit a column apart at every stride: this sprite skips the
+  // pixelOutline pass, so two adjacent hooves in one colour fuse into a
+  // single bar with nothing to seam them.
+  const stride = swing / 3;
+  limb([9, 22], [9 + stride * 0.4, 27], [9 + stride, 31], C.muscle);
+  limb([16, 22], [16 - stride * 0.4, 27], [16 - stride, 31], C.muscle);
+  pixelRect(g, 9 + stride, 30, 2, 1, C.hideDk);
+  pixelRect(g, 16 - stride, 30, 2, 1, C.hideDk);
+  pixelRect(g, 8 + stride, 31, 4, 3, C.hoof);
+  pixelRect(g, 15 - stride, 31, 4, 3, C.hoof);
 
   // Torso: broad chest tapering to the waist
   pixelRect(g, 7, 12, 12, 8, C.hide);
   pixelRect(g, 8, 20, 10, 3, C.hideDk);
   pixelRect(g, 9, 13, 8, 4, C.hideHi);
-  // Pectoral shading
+  // Pectoral shading, one ab line under it, and the belt over the waist
   pixelRect(g, 12, 13, 1, 6, C.hideDk);
+  pixelRect(g, 9, 18, 8, 1, C.hideDk);
+  pixelRect(g, 8, 20, 10, 1, C.ring);
 
-  // Arms, swinging opposite the legs
-  pixelCurve(g, [6, 13], [3, 17 + swing], [3, 21 + swing], C.muscle, 4);
-  pixelCurve(g, [20, 13], [23, 17 - swing], [23, 21 - swing], C.muscle, 4);
+  // Arms, swinging opposite the legs, each with a shoulder cap
+  limb([5, 13], [2, 17 + swing], [2, 21 + swing], C.muscle);
+  limb([19, 13], [22, 17 - swing], [22, 21 - swing], C.muscle);
+  pixelRect(g, 5, 12, 3, 2, C.hideHi);
+  pixelRect(g, 18, 12, 3, 2, C.hideHi);
   pixelRect(g, 1, 21 + swing, 4, 3, C.hideDk);
   pixelRect(g, 21, 21 - swing, 4, 3, C.hideDk);
 
   // Neck
   pixelRect(g, 11, 10, 4, 3, C.hideDk);
 
-  // Bull skull: broad muzzle, heavy brow
+  // Bull skull: broad muzzle, heavy brow, and the eyes under it — the one
+  // palette entry this sprite declared and never used
   pixelEllipse(g, 13, 6, 6, 5, C.hide);
   pixelRect(g, 10, 7, 7, 4, C.hideHi);       // muzzle plate
   pixelRect(g, 11, 10, 5, 1, C.hideDk);      // mouth line
   setPixel(g, 11, 8, C.hideDk); setPixel(g, 15, 8, C.hideDk);   // nostrils
   pixelRect(g, 8, 3, 11, 2, C.hideDk);       // brow ridge
+  setPixel(g, 10, 5, C.eye); setPixel(g, 16, 5, C.eye);
 
-  // Horns, sweeping out and up
-  pixelCurve(g, [7, 4], [3, 2], [1, 0], C.horn, 6);
-  pixelCurve(g, [19, 4], [23, 2], [25, 0], C.horn, 6);
+  // Horns, sweeping out and up — two cells thick and densely sampled, for
+  // the same reason the limbs are
+  for (const dy of [0, 1]) {
+    pixelCurve(g, [7, 4 + dy], [3, 2 + dy], [1, 0 + dy], C.horn, 16);
+    pixelCurve(g, [19, 4 + dy], [23, 2 + dy], [25, 0 + dy], C.horn, 16);
+  }
   setPixel(g, 1, 0, C.hornDk); setPixel(g, 25, 0, C.hornDk);
+  setPixel(g, 2, 1, C.hornDk); setPixel(g, 24, 1, C.hornDk);
   // Nose ring, the one bit of gear
   pixelEllipse(g, 13, 12, 2, 1, C.ring);
 
@@ -6398,7 +6489,8 @@ const DARK_KNIGHT_PALETTE = {
   torso: '#241820', torsoHi: '#3A2030',
   pauldron: '#1A1018', pauldronHi: '#3A2838',
   helm: '#1A1018', helmHi: '#3A2838',
-  visor: '#B040E0', crest: '#5A1030',
+  visor: '#B040E0', crest: '#5A1030', crestHi: '#8A1A48',
+  rivet: '#6A5A70',
   edge: '#0A0510',
 };
 
@@ -6409,39 +6501,90 @@ function buildDarkKnightGrid() {
   const C = DARK_KNIGHT_PALETTE;
   const g = makePixelGrid(DARK_KNIGHT_SPRITE.w, DARK_KNIGHT_SPRITE.h);
 
-  // Crest
-  pixelTriangleUp(g, 20, 10, 4, 10, C.crest);
-
   // Great helm — rect body with a domed top
   pixelRect(g, 10, 10, 20, 18, C.helm);
   pixelEllipse(g, 20, 10, 10, 7, C.helm);
   pixelRect(g, 10, 8, 20, 3, C.helmHi);
+  for (const x of [12, 17, 23, 28]) setPixel(g, x, 9, C.rivet);
 
-  // Visor slits — baked solid, same convention as the player Knight's visor
+  // Crest — a plume standing on the dome, and it has to go down *after* the
+  // helm: drawn before it, the dome swallowed everything but its top two
+  // rows, which is why this boss had no crest to speak of.
+  pixelTriangleUp(g, 20, 6, 5, 7, C.crest);
+  pixelRect(g, 19, 1, 2, 5, C.crestHi);
+
+  // Visor — a nasal bar splits the eye slit and the breath slit below is
+  // barred into a grille, the same read as the player Knight's helm. That
+  // resemblance is the point: this boss is his echo.
   pixelRect(g, 12, 16, 16, 3, C.visor);
+  pixelRect(g, 19, 16, 2, 3, C.helm);
   pixelRect(g, 14, 21, 11, 3, C.visor);
+  for (const x of [17, 20, 23]) pixelRect(g, x, 21, 1, 3, C.helm);
+  pixelRect(g, 12, 26, 16, 2, C.pauldronHi); // gorget under the helm
 
-  // Pauldrons
+  // Pauldrons, banded into lames and spiked on the outer edge
+  pixelTriangleUp(g, 3, 29, 3, 6, C.pauldron);
+  pixelTriangleUp(g, 36, 29, 3, 6, C.pauldron);
   pixelRect(g, 0, 28, 8, 11, C.pauldron);
   pixelRect(g, 32, 28, 8, 11, C.pauldron);
   pixelRect(g, 0, 28, 8, 3, C.pauldronHi);
   pixelRect(g, 32, 28, 8, 3, C.pauldronHi);
+  pixelRect(g, 0, 34, 8, 1, C.helmHi);
+  pixelRect(g, 32, 34, 8, 1, C.helmHi);
 
-  // Torso
+  // Torso — a centre ridge, a belt, and lames stepped down the belly. Left
+  // plain it is twenty-six unbroken rows of one colour, the flattest run of
+  // pixels in the file.
   pixelRect(g, 5, 28, 30, 26, C.torso);
   pixelRect(g, 8, 30, 10, 9, C.torsoHi);
+  pixelRect(g, 19, 28, 2, 13, C.torsoHi);
+  pixelRect(g, 5, 41, 30, 2, C.helm);
+  pixelRect(g, 17, 41, 6, 2, C.crest);
+  for (const y of [45, 48, 51]) pixelRect(g, 5, y, 30, 1, C.helm);
 
-  // Legs
+  // Legs, with a knee cop, a greave band and a sabaton wider than the shin
   pixelRect(g, 7, 52, 11, 16, C.leg);
   pixelRect(g, 22, 52, 11, 16, C.leg);
   pixelRect(g, 7, 52, 11, 3, C.legHi);
   pixelRect(g, 22, 52, 11, 3, C.legHi);
+  pixelRect(g, 8, 58, 9, 2, C.legHi);
+  pixelRect(g, 23, 58, 9, 2, C.legHi);
+  pixelRect(g, 7, 64, 11, 1, C.pauldronHi);
+  pixelRect(g, 22, 64, 11, 1, C.pauldronHi);
+  pixelRect(g, 6, 66, 13, 3, C.helm);
+  pixelRect(g, 21, 66, 13, 3, C.helm);
+  pixelRect(g, 6, 66, 13, 1, C.pauldronHi);
+  pixelRect(g, 21, 66, 13, 1, C.pauldronHi);
 
   return pixelOutline(g, C.edge);
 }
 
 let _darkKnightGrid = null;
 function darkKnightGrid() { return _darkKnightGrid || (_darkKnightGrid = buildDarkKnightGrid()); }
+
+/**
+ * Every baked pixel-art grid this module owns, in one place.
+ *
+ * Sprite art is a PixelGrid (see src/render/pixel-grid.ts) long before it is
+ * a canvas, so listing the builders here is what lets the headless tests read
+ * the art itself — dimensions, palette, silhouette — with no DOM and no frame
+ * loop, the same way devHooks exposes the simulation. A row carries the
+ * sprite box the draw code passes to spriteCanvas, the exact kinds and frames
+ * its builder is ever called with, and one uniform way to build one; the
+ * builders' own signatures differ, and the difference stops here.
+ *
+ * The heroes are not rows: their grids live in src/render/character-grids.ts,
+ * which is plain TypeScript and imported by its own test directly.
+ */
+const SPRITE_GRIDS = {
+  crow:       { sprite: CROW_SPRITE,        kinds: ['normal', 'white'],       frames: ANIM_FRAMES, build: buildCrowGrid },
+  skeleton:   { sprite: SKELETON_SPRITE,    kinds: ['normal', 'fire', 'ice'], frames: ANIM_FRAMES, build: buildSkeletonGrid },
+  rat:        { sprite: RAT_SPRITE,         kinds: ['rat'],                   frames: ANIM_FRAMES, build: buildRatGrid },
+  crowking:   { sprite: CROW_KING_SPRITE,   kinds: ['crowking'],              frames: ANIM_FRAMES, build: (_kind, frame) => buildCrowKingGrid(frame) },
+  minotaur:   { sprite: MINOTAUR_SPRITE,    kinds: ['minotaur'],              frames: ANIM_FRAMES, build: (_kind, frame) => buildMinotaurGrid(frame) },
+  darkarcher: { sprite: DARK_ARCHER_SPRITE, kinds: ['dark_archer'],           frames: ['still'],   build: () => buildDarkArcherGrid() },
+  darkknight: { sprite: DARK_KNIGHT_SPRITE, kinds: ['dark_knight'],           frames: ['still'],   build: () => buildDarkKnightGrid() },
+};
 
 function drawDarkKnight() {
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
@@ -8095,6 +8238,17 @@ export const devHooks = {
   skeletons: () => skeletons,
   mouse: () => mouse,
   counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, hp: playerHP }),
+  // The pixel art, as the data it is (see SPRITE_GRIDS). One reading of what
+  // sprites exist, and one way to build any of their grids, so the art can be
+  // checked headlessly the same way the simulation is.
+  spriteGrids: () => Object.entries(SPRITE_GRIDS).map(([name, s]) => ({
+    name, w: s.sprite.w, h: s.sprite.h, kinds: [...s.kinds], frames: [...s.frames],
+  })),
+  spriteGrid(name, kind, frame) {
+    const spec = SPRITE_GRIDS[name];
+    if (!spec) throw new Error(`no sprite grid named "${name}"`);
+    return spec.build(kind, frame);
+  },
 };
 
 /**

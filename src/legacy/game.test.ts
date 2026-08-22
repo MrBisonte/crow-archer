@@ -9,6 +9,11 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { boot, devHooks as g } from './game.js';
+import type { PixelGrid } from '../render/pixel-grid';
+import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
+import {
+  gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
+} from '../render/grid-testkit';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
 const ONE_SECOND = 60;
@@ -271,4 +276,84 @@ describe('waves map select', () => {
     press('Enter');
     expect(g.mapKind()).toBe('forest');
   });
+});
+
+// ---------------------------------------------------------------------------
+// Pixel art
+// ---------------------------------------------------------------------------
+//
+// Sprite art is data long before it is pixels (see src/render/pixel-grid.ts),
+// and devHooks.spriteGrids/spriteGrid hand over every grid this module bakes,
+// so the art is checked the same way the simulation is: headlessly, with no
+// canvas and no frame loop. What each reading means lives in one place,
+// src/render/grid-testkit.ts.
+
+installStubCanvas();
+
+interface SpriteInfo {
+  name: string;
+  w: number;
+  h: number;
+  kinds: string[];
+  frames: string[];
+}
+
+const SPRITES = g.spriteGrids() as SpriteInfo[];
+
+const gridOf = (name: string, kind: string, frame: string): PixelGrid =>
+  g.spriteGrid(name, kind, frame) as PixelGrid;
+
+/**
+ * Palette sizes before the detail pass, per sprite.
+ *
+ * Distinct colours rather than filled cells is what "gained detail" means for
+ * these. The dark archer's hem was torn into tongues, which *removes* cells
+ * while plainly adding detail, and the crow king's crown and feather work
+ * recolours a mass that was already solid, so a filled-cell floor would need
+ * an exception per sprite. A palette that only ever grows needs none.
+ */
+const PALETTE_BEFORE: Record<string, number> = {
+  crowking: 5,
+  minotaur: 8,
+  darkarcher: 6,
+  darkknight: 9,
+};
+
+describe('sprite grids', () => {
+  it('expose every grid the draw code bakes', () => {
+    expect(SPRITES.map((s) => s.name).sort()).toEqual(
+      ['crow', 'crowking', 'darkarcher', 'darkknight', 'minotaur', 'rat', 'skeleton'],
+    );
+  });
+
+  for (const sprite of SPRITES) {
+    describe(sprite.name, () => {
+      for (const kind of sprite.kinds) {
+        for (const frame of sprite.frames) {
+          it(`builds ${kind}|${frame} as a well-formed grid`, () => {
+            const grid = gridOf(sprite.name, kind, frame);
+            expect(gridSize(grid)).toEqual({ w: sprite.w, h: sprite.h });
+            expect(raggedRows(grid)).toEqual([]);
+            expect(invalidColours(grid)).toEqual([]);
+          });
+
+          it(`bakes ${kind}|${frame} through the shared sprite cache`, () => {
+            const grid = gridOf(sprite.name, kind, frame);
+            const key = `test|${sprite.name}|${kind}|${frame}`;
+            expect(() => spriteCanvas(key, grid, sprite.w, sprite.h)).not.toThrow();
+            expect(() => spriteFlashCanvas(key, grid, sprite.w, sprite.h, '#FFFFFF')).not.toThrow();
+          });
+        }
+      }
+
+      const before = PALETTE_BEFORE[sprite.name];
+      if (before !== undefined) {
+        it('draws from a wider palette than it did before the detail pass', () => {
+          for (const kind of sprite.kinds)
+            for (const frame of sprite.frames)
+              expect(gridColours(gridOf(sprite.name, kind, frame)).size).toBeGreaterThan(before);
+        });
+      }
+    });
+  }
 });
