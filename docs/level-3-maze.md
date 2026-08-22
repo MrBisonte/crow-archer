@@ -25,7 +25,9 @@ playable and independently revertable.
 | 2. What lives in it | The enemy that makes a corridor frightening | `boss.kind`'s branch-not-table decision |
 | 3. The objective | A win condition that is traversal, not extermination | `bossStage` doing two jobs |
 
-Part 1 is specified below. Parts 2 and 3 are proposals, sketched at the end.
+All three are built. Part 3 delivered the objective and left the stage wiring
+alone, so `bossStage` still does two jobs and the maze is still not on the path
+a normal run takes. Each part says what it decided and what it cost.
 
 ## Part 1: the maze map
 
@@ -412,42 +414,127 @@ too many.
 
 ## Part 3: the objective and stage wiring
 
-Proposal.
+**The objective is built. The stage wiring is not.** Those were one heading
+because they arrived together in the sketch. They turned out to be independent,
+and only one of them was needed to make the level finishable.
 
-A maze whose win condition is "kill everything" is just a cramped arena. The
-level wants traversal: reach the exit, or find a thing and get out. That is a
-different verb from every level so far, and it is the part most likely to make
-the game feel like it has three levels rather than two levels and a variant.
+A maze whose win condition is "kill everything" is a cramped arena. This one is
+traversal. Damage against the warden buys distance and never progress, so the
+way out has to be something you carry, not something you kill.
 
-This is also where the current stage wiring runs out. `bossStage`
-(`src/legacy/game.js:429`) is a 1-based index into
-`BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight']` at :2351, and it
-does two unrelated jobs: it picks which boss spawns, and it implies which map
-you are on. The castle transition is a literal hardcoded beat inside
-`updateBossDeath` at :2917-2918:
+### The chain
+
+1. A chest sits far from the spawn, locked.
+2. A door sits at the far end. It is the exit.
+3. A rat drops the silver key, at one in five, and only after the player's
+   first real encounter with the minotaur.
+4. The silver key opens the chest. The chest holds the golden key.
+5. The golden key opens the door, and the door ends the level.
+
+Step 3 is the only rule that is not self-explanatory, and it is the one that
+makes the level read in order. Before you meet him, rats are vermin. After, they
+are the way out. A drop that could fire on the first kill would hand over the
+chain before the level has said anything, so `mazeRun.metMinotaur` gates it. He
+counts as met the first time he commits to a charge or the first time a hit
+stuns him, whichever lands first: both mean the player has seen what he is.
+
+One silver key exists, ever. The roll stops when a key is on the floor, not when
+one is in hand, so a player who walks past it cannot farm a second.
+
+### Shape
+
+All of it lives in one nullable object, `mazeRun` in `src/legacy/game.js`, built
+and cleared inside `generateMap` alongside the grid it sits on. Null on every
+map that is not the maze. That is what keeps forest and castle untouched by
+construction rather than by six separate checks on `mapKind`: every consumer,
+the update, the HUD row, the draw pass and the rat's drop roll, opens with the
+same one-line guard.
+
+The chest and the door are two rows in `MAZE_LOCKS`, keyed by which key they
+eat and what opening them buys. They are one interaction, and treating them as
+two branches would have meant editing that interaction twice forever. Painting
+them is a second table, `MAZE_LOCK_PAINTERS`, in the shape `RETICLE_PAINTERS`
+already uses.
+
+Nothing new is bound to the keyboard. Pickups already teach that walking onto a
+thing is how you use it, the level's verb is traversal, and reaching the exit
+should be the act of leaving rather than a prompt in front of it. Keys, chest
+and door all resolve at `CONFIG.pickupRadius`, so a key collects at exactly the
+reach a quiver does. The cost is that a player standing on the chest with the
+wrong key gets no feedback at all, which a keypress would have given for free.
+That is the trade and it is worth revisiting if playtesting says people miss it.
+
+Held keys draw in the HUD with the icon-per-unit loop the quiver uses, from a
+`MAZE_KEYS` table with the same row shape as `CONFIG.resources`. They are
+deliberately not rows in that table: `resetInv` hands the player a full set of
+everything in it, and a key you start the level holding is not a key.
+
+Four events carry the beats: `KEY_DROPPED`, `KEY_TAKEN`, `CHEST_OPENED`,
+`DOOR_OPENED`. Three were specified. `KEY_TAKEN` is the fourth because
+`PICKUP_TAKEN` promises ammo and power-ups, and a key grants neither, so
+widening `PickupKind` would have made the wire type lie. Each is declared in
+`src/sim/events.ts` and handled in the one `events.on` switch, which
+`events.coverage.test.ts` enforces in both directions.
+
+### Placing two things that both have to be far away
+
+`openTileAwayFrom` answers for one anchor at a time, and this problem has two:
+the chest and the door both have to clear the spawn, and they have to clear each
+other. Rather than write a second sampler, `newMazeRun` draws the door first as
+the far end, then re-rolls the chest until it clears the door as well. The retry
+is capped at twelve. On a 33 by 21 grid the two constraints can genuinely fight,
+and an awkward layout beats a hang.
+
+The distances are pixels on a 1056 by 672 arena: 620 from the spawn to the door,
+380 to the chest, 300 between them. Measured on a real seed that puts the chest
+866 pixels from the spawn and the door 708, which is most of the way across the
+map in both cases.
+
+### What the warden needed
+
+`updateBoss` only ran inside `boss_fight`, so the minotaur stood still while the
+player explored. He now ticks in `playing` too, gated on
+`BOSS_HUNTS_WHILE_EXPLORING`, one row per boss kind. The three arena bosses read
+false and are provably frozen outside their own fight. A table rather than a
+kind check because the fact worth recording is not "the minotaur is special", it
+is "being alive outside a boss fight is a property a boss either has or does
+not", and a fifth boss should have to answer it.
+
+### What is still a proposal
+
+The stage wiring, unchanged and still true. `bossStage` is a 1-based index into
+`BOSS_STAGES` and does two unrelated jobs: it picks which boss spawns and it
+implies which map you are on. The castle transition is a hardcoded pair of lines
+inside `updateBossDeath`:
 
 ```js
 bossStage = 2;
 generateMap('castle');
 ```
 
-There is no level concept to extend. Adding a third level means either a fourth
-boss stage that is not a boss, or splitting level identity out of `bossStage`
-into its own progression. The second is correct and is the same
-`Record<Kind, X>` move made everywhere else in this codebase.
+Nothing routes a normal run into the maze. The level is reachable through the
+dev hook (`__game.generateMap('maze')`) and through the multiplayer lobby's map
+picker, exactly as it was after Part 1. Splitting level identity out of
+`bossStage` into its own progression is the correct move and it is the same
+`Record<Kind, X>` shape made everywhere else here, but it is a change to how the
+whole game advances, and the objective did not need it to be finishable and
+testable. Doing both at once would have hidden a win-condition bug inside a
+progression rewrite.
 
-Part 3 is also where the state-table refactor proposed for `appState` pays for
-itself. `castle_intro` already had to bypass `transitionTo` by assigning
-`appState` directly (:2930) because the transition helper unconditionally calls
-`initGame()` and would have wiped the run. A third level adds a second such
-screen and a second bypass. One table with an explicit `keepsRun` property
-removes both.
+The `appState` state table is still owed for the same reason. `castle_intro`
+bypasses `transitionTo` by assigning `appState` directly, because the helper
+unconditionally calls `initGame()` and would wipe the run. A maze intro screen
+would be a second bypass. One table with an explicit `keepsRun` property removes
+both, and until it exists the harness has to route through `paused` to change
+state without restarting, which is a smell the tests now depend on.
 
 ## Open questions
 
 1. Does the maze belong in single-player, multiplayer, or both? Part 1 targets
    multiplayer first only because that path needs no new state machine, not
-   because it is the better home.
+   because it is the better home. Part 3 answers half of it: the objective is
+   single-player only, and it lives in the legacy file rather than `src/sim/`,
+   so multiplayer still gets terrain and no reason to be there.
 2. Is a maze that ranged characters find frustrating a design failure or the
    level's identity?
 3. ~~Should maze walls be destructible?~~ **Settled: no.** See the
