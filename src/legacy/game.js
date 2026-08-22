@@ -6864,8 +6864,15 @@ function loop(ts) {
   const _pt1 = PERF ? performance.now() : 0;
   render(loopT);
   if (PERF) { PERF.push(_updMs, performance.now() - _pt1); PERF.draw(); }
-  requestAnimationFrame(loop);
+  if (liveLoop) requestAnimationFrame(loop);
 }
+
+// Whether the browser's own frame clock still drives the loop. A harness turns
+// this off (see __game.takeClock) because the two clocks share one accumulator
+// and race: real time runs faster than a scripted step(), so one live frame
+// arriving between two calls subtracts however many seconds of wall clock have
+// passed and the sim silently stops advancing until that debt is repaid.
+let liveLoop = true;
 
 FEATHERS.init();
 requestAnimationFrame(loop);
@@ -6877,6 +6884,16 @@ window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
 // module state, so headless verification works while the tab is backgrounded.
 let __devTs = 0;
 window.__game = {
+  // Hands the clock to the harness: stops the browser driving the loop and
+  // zeroes the shared accumulator, so step(n) advances exactly n fixed steps.
+  // Without it a scripted run is at the mercy of whichever clock ran last.
+  takeClock() {
+    liveLoop = false;
+    accumulator = 0;
+    lastTs = __devTs = performance.now();
+    return { accumulator, devTs: __devTs };
+  },
+  clock: () => ({ accumulator, lastTs, devTs: __devTs, live: liveLoop }),
   step(n = 1) {
     if (__devTs === 0) __devTs = performance.now();
     // Advance by exactly one fixed step per call, so step(n) runs n sim steps.
