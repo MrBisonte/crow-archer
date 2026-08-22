@@ -143,6 +143,16 @@ const CONFIG = {
   minotaurStunSecs: 1.5,         // what a hit buys you, instead of progress
   minotaurSmashRadius: 1,        // tiles cleared where a charge ends in wall
 
+  // The maze's objective chain. Distances are pixels on a 1056x672 arena, so
+  // "far" here means most of the way across it. The door is the far end, the
+  // chest is a detour, and the separation stops one being the other's landmark.
+  mazeChestMinDistance: 380,
+  mazeDoorMinDistance: 620,
+  mazeObjectiveSeparation: 300,
+  // Per rat kill, and only once the warden has shown himself. One in five
+  // makes the hunt a handful of kills rather than a grind or a formality.
+  mazeSilverKeyDropChance: 0.2,
+
   // Fire skeleton: same movement and contact damage as normal, but its
   // death is a small blast that punishes standing next to it when it pops.
   fireSkeletonBlastRadius: 50, fireSkeletonBlastDamage: 1,
@@ -559,6 +569,20 @@ function generateMap(kind = 'forest') {
   // the generators that do not want it. See docs/level-3-maze.md.
   tileMap.reset(MAP_GEN[kind].generate(CONFIG.rows, CONFIG.cols, rng,
     (x, y) => sn.noise2D(x, y)));
+  // The objective belongs to the maze and to no other map, so it is built and
+  // cleared here, with the grid it is placed on. Every consumer then has one
+  // guard, `mazeRun`, instead of its own check on mapKind.
+  mazeRun = kind === 'maze' ? newMazeRun() : null;
+}
+
+/**
+ * Where a run starts, snapped to open floor. Three callers wanted the same
+ * point — the fresh run, the harness reposition, and the maze objective, which
+ * has to be placed far from it — so the constant lives here rather than in the
+ * first two and then a third copy.
+ */
+function spawnPoint() {
+  return nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
 }
 
 /**
@@ -902,6 +926,42 @@ events.on(e => {
         speedMin: 8, speedMax: 30, decay: 1.9, shape: 'spark',
         sizeMin: 1, sizeMax: 2, gravity: -55, shadowBlur: 4, shadowColor: '#6ABF2A' });
       break;
+
+    // The objective chain. Each beat reads its colour from MAZE_KEYS or the
+    // lock it belongs to, so the maze decides what a key is and this decides
+    // only how loud it lands.
+    case 'KEY_DROPPED': {
+      playSound(sndKeyDrop);
+      const key = MAZE_KEYS[e.kind];
+      burst(e.x, e.y, { count: 14, colors: [key.color, '#FFFFFF'],
+        speedMin: 30, speedMax: 110, decay: 1.8, shape: 'spark',
+        sizeMin: 1, sizeMax: 2.5, gravity: -20, shadowBlur: 8, shadowColor: key.color });
+      floaters.push({ x: e.x, y: e.y - 8, alpha: 1.0, vy: -34,
+        text: `${e.kind.toUpperCase()} KEY`, color: key.color });
+      break; }
+
+    case 'KEY_TAKEN': {
+      playSound(sndPickup);
+      const key = MAZE_KEYS[e.kind];
+      burst(e.x, e.y, { count: 12, colors: [key.color, '#FFFFFF'],
+        speedMin: 40, speedMax: 140, decay: 2.2, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 3, shadowBlur: 10, shadowColor: key.color });
+      break; }
+
+    case 'CHEST_OPENED':
+      playSound(sndChestOpen); triggerShake(4, 180);
+      burst(e.x, e.y, { count: 22, colors: ['#FFB400','#FFD866','#FFFFFF','#7A4A18'],
+        speedMin: 40, speedMax: 150, decay: 1.5,
+        shapeMix: [['spark', 0.6], ['circle', 0.4]],
+        sizeMin: 1.5, sizeMax: 3, gravity: -30, shadowBlur: 10, shadowColor: '#FFB400' });
+      break;
+
+    case 'DOOR_OPENED':
+      playSound(sndDoorOpen); triggerShake(10, 500);
+      burst(e.x, e.y, { count: 30, colors: ['#FFE8B0','#FFB400','#FFFFFF'],
+        speedMin: 30, speedMax: 200, decay: 1.2, shape: 'circle',
+        sizeMin: 2, sizeMax: 5, shadowBlur: 14, shadowColor: '#FFE8B0' });
+      break;
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -1204,9 +1264,7 @@ function initGame() {
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
-  // Snapped rather than taken literally: see nearestOpenTile. On forest and
-  // castle the clear zone means this returns the same point it always did.
-  const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+  const spawn = spawnPoint();
   player = { x: spawn.x, y: spawn.y, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
   skeletons = []; // only populated once brawl mode reaches its castle stage
@@ -2096,6 +2154,7 @@ function killSkeleton(j) {
       damagePlayer(CONFIG.fireSkeletonBlastDamage);
     }
   }
+  maybeDropSilverKey(s);
   const dropChance = 0.25 + HANDICAP.dropBoost();
   dropStreak++;
   if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(s.x, s.y); }
@@ -2404,6 +2463,143 @@ function updateFloaters(dt) {
   for (let i = floaters.length - 1; i >= 0; i--) {
     const f = floaters[i]; f.y += f.vy * dt; f.alpha -= dt * 2.2;
     if (f.alpha <= 0) floaters.splice(i, 1);
+  }
+}
+
+// ── THE MAZE'S OBJECTIVE ──────────────────────────────────────────────────────
+//
+// A silver key opens a chest, the chest holds a golden key, the golden key
+// opens the door, and the door is the level. Traversal rather than
+// extermination, which is the whole reason the warden cannot be killed: if
+// damage bought progress, the maze would be an arena with corners.
+
+/**
+ * The objective's entire state, or null on a map that has none.
+ *
+ * One nullable object rather than six loose flags: every consumer gets a
+ * single guard, and generateMap has a single place to clear.
+ */
+let mazeRun = null;
+
+/**
+ * The maze's two keys.
+ *
+ * Same row shape as CONFIG.resources so drawHUD paints them with the
+ * icon-per-unit loop it already runs for the quiver. They are not resources,
+ * though: resetInv hands the player a full set of everything in that table,
+ * and a key you start the level holding is not a key.
+ */
+const MAZE_KEYS = {
+  silver: { color: '#D0D8E8', dim: '#2d2d2d', icon: '⚷', spacing: 13 },
+  golden: { color: '#FFB400', dim: '#2d2d2d', icon: '⚷', spacing: 13 },
+};
+
+/**
+ * What each lock wants, and what opening it buys.
+ *
+ * Two rows rather than an `if`: the chest and the door are one interaction,
+ * and the only things that differ are the key it eats and the payoff. A third
+ * lockable thing is a row, not an edit inside updateMazeObjective.
+ */
+const MAZE_LOCKS = {
+  chest: {
+    needs: 'silver',
+    open: (x, y) => {
+      mazeRun.held.golden = true;
+      events.emit({ type: 'CHEST_OPENED', x, y });
+    },
+  },
+  door: {
+    needs: 'golden',
+    open: (x, y) => {
+      events.emit({ type: 'DOOR_OPENED', x, y });
+      transitionTo('win');
+    },
+  },
+};
+
+/**
+ * Places the chest and the door, once, on the grid that was just carved.
+ *
+ * openTileAwayFrom answers for one anchor at a time and both anchors matter
+ * here, so the door is drawn first as the far end and the chest is re-rolled
+ * until it clears the door as well as the spawn. The retry is bounded because
+ * on a 33x21 grid the two constraints can fight, and an awkward layout beats
+ * a hang.
+ */
+function newMazeRun() {
+  const spawn = spawnPoint();
+  const door = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeDoorMinDistance) ?? spawn;
+  let chest = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeChestMinDistance) ?? spawn;
+  const apart = CONFIG.mazeObjectiveSeparation ** 2;
+  for (let tries = 0; tries < 12 && dist2(chest.x, chest.y, door.x, door.y) < apart; tries++) {
+    chest = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeChestMinDistance) ?? chest;
+  }
+  return {
+    locks: {
+      chest: { x: chest.x, y: chest.y, opened: false },
+      door:  { x: door.x,  y: door.y,  opened: false },
+    },
+    held: { silver: false, golden: false },
+    drops: [],            // keys lying on the floor, waiting to be walked over
+    metMinotaur: false,   // his first charge or his first stun, whichever came first
+    silverDropped: false, // one silver key exists, ever
+  };
+}
+
+/**
+ * The first time the warden does something to you.
+ *
+ * Committing to a charge and taking a stun both count, whichever lands first:
+ * either way the player has met him, and meeting him is what turns the rats
+ * from vermin into the way forward. Rolling for the key before that would let
+ * a lucky opening kill hand over the chain before the level has said anything.
+ */
+function noteMinotaurEncounter() {
+  if (mazeRun) mazeRun.metMinotaur = true;
+}
+
+/**
+ * Rolls one dead rat for the silver key.
+ *
+ * Stops rolling the moment a key exists, so a player who walks past the one on
+ * the floor does not farm a second. Only rats carry it: the castle's skeletons
+ * share this death path and have nothing to do with the maze.
+ */
+function maybeDropSilverKey(s) {
+  if (!mazeRun || s.kind !== 'rat') return;
+  if (!mazeRun.metMinotaur || mazeRun.silverDropped) return;
+  if (Math.random() >= CONFIG.mazeSilverKeyDropChance) return;
+  mazeRun.silverDropped = true;
+  mazeRun.drops.push({ kind: 'silver', x: s.x, y: s.y, bobPhase: Math.random() * Math.PI * 2 });
+  events.emit({ type: 'KEY_DROPPED', x: s.x, y: s.y, kind: 'silver' });
+}
+
+/**
+ * Walk over a key to take it, walk into a lock to open it.
+ *
+ * No new keybind. The level's verb is traversal and pickups already teach that
+ * touching a thing is how you use it, so reaching the door is the act of
+ * leaving rather than a prompt in front of it. Distances reuse
+ * CONFIG.pickupRadius, so a key collects at exactly the reach a quiver does.
+ */
+function updateMazeObjective(dt) {
+  if (!mazeRun) return;
+  const reach = CONFIG.pickupRadius ** 2;
+  for (let i = mazeRun.drops.length - 1; i >= 0; i--) {
+    const k = mazeRun.drops[i];
+    k.bobPhase += dt * (2 * Math.PI / 0.6);
+    if (dist2(player.x, player.y, k.x, k.y) >= reach) continue;
+    mazeRun.held[k.kind] = true;
+    events.emit({ type: 'KEY_TAKEN', x: k.x, y: k.y, kind: k.kind });
+    mazeRun.drops.splice(i, 1);
+  }
+  for (const [name, lock] of Object.entries(MAZE_LOCKS)) {
+    const at = mazeRun.locks[name];
+    if (at.opened || !mazeRun.held[lock.needs]) continue;
+    if (dist2(player.x, player.y, at.x, at.y) >= reach) continue;
+    at.opened = true;
+    lock.open(at.x, at.y);
   }
 }
 
@@ -2876,6 +3072,7 @@ function minotaurSeesPlayer() {
  * updateBossDaze already ticks it.
  */
 function stunMinotaur() {
+  noteMinotaurEncounter();
   boss.dazeTimer = Math.max(boss.dazeTimer, CONFIG.minotaurStunSecs);
   if (boss.bstate === 'charge' || boss.bstate === 'wind') endMinotaurCharge(false);
   boss.cooldown = Math.max(boss.cooldown, CONFIG.minotaurChargeCooldown);
@@ -2938,6 +3135,7 @@ function updateMinotaur(dt) {
     if (boss.stateTimer >= CONFIG.minotaurWindupSecs) {
       boss.bstate = 'charge'; boss.stateTimer = 0; boss.chargeTimer = 0;
       boss.path = null;
+      noteMinotaurEncounter();
       events.emit({ type: 'MINOTAUR_CHARGE', x: boss.x, y: boss.y });
     }
     return;
@@ -3334,6 +3532,9 @@ const sndCrossbow      = [.28, .04, 550, 0, .03, .06, 4, 1, -120];      // bit n
 const sndPoisonBite    = [.22, .04, 260, 0, .04, .07, 4, 1, -140];     // bit noise, pitch dropping — a wet nip
 const sndPoisonTick    = [.14, .02, 180, 0, .05, .09, 2, 1, -60];      // low sawtooth throb — the venom working
 const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // triangle blip, upward pitch — arm confirm
+const sndKeyDrop       = [.3,  .02, 1400, 0, .02, .12, 1, 1, 0, 0, 300, .05]; // triangle chime + pitch jump — small metal landing
+const sndChestOpen     = [.4,  .05, 160, 0, .1,  .22, 2, 1, 120];       // sawtooth rising — a lid coming up
+const sndDoorOpen      = [.6,  .1,   70, 0, .3,  .5,  4, 1, 40];        // low bit noise grinding up — stone giving way
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
 function sndGameover() {
@@ -5000,6 +5201,97 @@ function drawHostileBolts() {
   }
 }
 
+/**
+ * The chest, closed with its lock plate lit or spent with its lid tipped back.
+ */
+function drawChest(at) {
+  const open = at.opened;
+  ctx.save(); ctx.translate(at.x, at.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(0, 9, 11, 2.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.shadowColor = '#FFB400'; ctx.shadowBlur = open ? 0 : 6 + 4*Math.sin(loopT*3);
+  ctx.fillStyle = '#6B4423'; ctx.fillRect(-11, -2, 22, 11);
+  ctx.fillStyle = '#4A2E17'; ctx.fillRect(-11, 6, 22, 3);
+  if (open) {
+    ctx.fillStyle = '#0A0A08'; ctx.fillRect(-10, -3, 20, 4);
+    ctx.fillStyle = '#5A381D'; ctx.fillRect(-11, -11, 22, 5);
+  } else {
+    ctx.fillStyle = '#7C5129'; ctx.fillRect(-11, -8, 22, 7);
+    ctx.fillStyle = '#8A5B2E'; ctx.fillRect(-11, -8, 22, 2);
+  }
+  ctx.fillStyle = '#C8A040';
+  ctx.fillRect(-7, open ? -11 : -8, 2, open ? 5 : 11);
+  ctx.fillRect( 5, open ? -11 : -8, 2, open ? 5 : 11);
+  if (!open) {
+    ctx.fillStyle = '#E0C060'; ctx.fillRect(-3, -3, 6, 6);
+    ctx.fillStyle = '#2A1A08'; ctx.fillRect(-1, -1, 2, 3);
+  }
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/**
+ * The exit, timber in a stone arch until the golden key turns it into daylight.
+ */
+function drawDoor(at) {
+  ctx.save(); ctx.translate(at.x, at.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(0, 14, 13, 3, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4A4740'; ctx.fillRect(-13, -18, 26, 32);
+  ctx.fillStyle = '#5C584F'; ctx.fillRect(-13, -18, 26, 3);
+  if (at.opened) {
+    const pulse = 0.6 + 0.4*Math.sin(loopT*2.5);
+    ctx.shadowColor = '#FFE8B0'; ctx.shadowBlur = 10 + 6*pulse;
+    ctx.fillStyle = `rgba(255,232,176,${(0.55 + 0.35*pulse).toFixed(2)})`;
+    ctx.fillRect(-8, -14, 16, 28);
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = '#3A2412'; ctx.fillRect(-8, -14, 16, 28);
+    ctx.fillStyle = '#4E3018'; ctx.fillRect(-8, -14, 16, 2);
+    ctx.fillStyle = '#2C1B0D';
+    for (let y = -8; y < 14; y += 7) ctx.fillRect(-8, y, 16, 1);
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 5 + 3*Math.sin(loopT*3);
+    ctx.fillStyle = '#C8A040'; ctx.fillRect(-3, -2, 6, 7);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#1A1006'; ctx.fillRect(-1, 0, 2, 4);
+  }
+  ctx.restore();
+}
+
+// One painter per lock, the same Record<kind, painter> shape RETICLE_PAINTERS
+// uses further down, so drawMazeObjective never branches on which one it has.
+const MAZE_LOCK_PAINTERS = { chest: drawChest, door: drawDoor };
+
+/** A key on the floor: bow, shaft, two teeth, over a pickup's pedestal halo. */
+function drawMazeKey(k) {
+  const look = MAZE_KEYS[k.kind];
+  ctx.save(); ctx.translate(k.x, k.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 8, 7, 1.8, 0, 0, Math.PI*2); ctx.fill();
+  ctx.shadowColor = look.color; ctx.shadowBlur = 12;
+  ctx.globalAlpha = 0.22 + 0.12*Math.sin(k.bobPhase);
+  ctx.fillStyle = look.color;
+  ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.translate(0, -2 + Math.sin(k.bobPhase)*2);
+  ctx.shadowBlur = 8;
+  ctx.strokeStyle = look.color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(-4, 0, 3.2, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = look.color;
+  ctx.fillRect(-1, -1, 9, 2);
+  ctx.fillRect(5, -4, 2, 4);
+  ctx.fillRect(8, -3, 2, 3);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/** The maze's furniture and any key lying on its floor. Nothing off the maze. */
+function drawMazeObjective() {
+  if (!mazeRun) return;
+  for (const [name, at] of Object.entries(mazeRun.locks)) MAZE_LOCK_PAINTERS[name](at);
+  for (const k of mazeRun.drops) drawMazeKey(k);
+}
+
 function drawPickups() {
   for (const p of pickups) {
     const ep         = p.bobPhase || 0;
@@ -5847,6 +6139,21 @@ function drawHUD(t) {
     if (inv.laserStreams > 0) { ctx.fillStyle='#39E0FF'; ctx.fillText(`[L:${inv.laserStreams}]`,rx,16); rx+=50; }
     if (inv.fireBolts    > 0) { ctx.fillStyle='#ff5500'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
   }
+  // The maze's keys, one icon per key, lit when held. Same icon-per-unit loop
+  // as the quiver above, and only while a maze run is live, so forest and
+  // castle keep the HUD they had.
+  if (mazeRun) {
+    ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    for (const [kind, k] of Object.entries(MAZE_KEYS)) {
+      const held = mazeRun.held[kind];
+      ctx.shadowColor = k.color; ctx.shadowBlur = held ? 6 : 0;
+      ctx.fillStyle = held ? k.color : k.dim;
+      ctx.fillText(k.icon, rx, 16);
+      ctx.shadowBlur = 0;
+      rx += k.spacing;
+    }
+    rx += 8;
+  }
   if (playerShield) {
     ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 3*Math.sin(t*6);
@@ -6311,7 +6618,7 @@ function render(t) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
-    drawTiles(); FORESHADOW.drawSkyTint(); drawPickups(); drawFires(); drawParticles();
+    drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawPickups(); drawFires(); drawParticles();
     crows.forEach(drawCrow);
     skeletons.forEach(drawSkeleton);
     drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
@@ -6491,6 +6798,7 @@ function stepGame(dt) {
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
+      updateMazeObjective(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -6606,6 +6914,16 @@ window.__game = {
         daze: boss.dazeTimer, phase: bossDazePhase(), sees: minotaurSeesPlayer() }
     : null),
   spawnMinotaur() { bossStage = 4; spawnBoss(); boss.bstate = 'prowl'; return boss.kind; },
+  // The whole objective chain in one read: which keys are held, which locks
+  // are open, whether the warden has been met yet, and where the furniture is.
+  maze: () => (mazeRun ? {
+    silver: mazeRun.held.silver, golden: mazeRun.held.golden,
+    chestOpened: mazeRun.locks.chest.opened, doorOpened: mazeRun.locks.door.opened,
+    metMinotaur: mazeRun.metMinotaur, silverDropped: mazeRun.silverDropped,
+    chest: { x: mazeRun.locks.chest.x, y: mazeRun.locks.chest.y },
+    door: { x: mazeRun.locks.door.x, y: mazeRun.locks.door.y },
+    drops: mazeRun.drops.map(k => ({ kind: k.kind, x: k.x, y: k.y })),
+  } : null),
   knightCharge: () => ({
     charging: knightCharge.on, frac: knightChargeFrac(),
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,
@@ -6633,7 +6951,7 @@ window.__game = {
   // reposition initGame does for itself, exposed so a harness can switch maps
   // mid-run without that artefact looking like a spawn bug.
   respawnPlayer() {
-    const p = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+    const p = spawnPoint();
     player.x = p.x; player.y = p.y;
     return { x: p.x, y: p.y };
   },

@@ -25,6 +25,9 @@ export type WeaponKind = 'arrow' | 'bolt' | 'crossbow' | 'pitchfork' | 'spear' |
 
 export type PickupKind = 'ricochet' | 'fire' | 'shield';
 
+/** The maze's two keys, in the order the level hands them out. */
+export type MazeKeyKind = 'silver' | 'golden';
+
 export type GameEvent =
   // Combat results
   | { type: 'CROW_KILLED'; x: number; y: number; white: boolean; earned: number }
@@ -75,7 +78,15 @@ export type GameEvent =
   // Two events rather than one with a flag: they sound and look different, and
   // the render layer should not have to branch to find that out.
   | { type: 'PLAYER_POISONED'; x: number; y: number }
-  | { type: 'PLAYER_POISON_TICK'; x: number; y: number };
+  | { type: 'PLAYER_POISON_TICK'; x: number; y: number }
+  // The maze's objective chain. A rat gives up the silver key, the chest gives
+  // up the golden one, the door is the way out. KEY_TAKEN is separate from
+  // PICKUP_TAKEN because a key restores no ammo and grants no power: the two
+  // are the same gesture and different facts.
+  | { type: 'KEY_DROPPED'; x: number; y: number; kind: MazeKeyKind }
+  | { type: 'KEY_TAKEN'; x: number; y: number; kind: MazeKeyKind }
+  | { type: 'CHEST_OPENED'; x: number; y: number }
+  | { type: 'DOOR_OPENED'; x: number; y: number };
 
 export type GameEventType = GameEvent['type'];
 export type EventHandler = (e: GameEvent) => void;
