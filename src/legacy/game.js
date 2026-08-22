@@ -461,7 +461,8 @@ const LOW_HP_FRACTION = 0.25;
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
-// appState: menu | multiplayer | controls | playing | paused | boss_entrance | boss_fight | win | gameover
+// appState: menu | charselect | mapselect | multiplayer | controls | playing
+// | paused | boss_entrance | boss_fight | stage_intro | inventory | win | gameover
 let appState = 'menu', controlsFrom = 'menu', pausedFrom = 'playing';
 
 let gameMode = 'brawl'; // 'brawl' | 'waves'  — persists across restarts
@@ -531,6 +532,68 @@ const CHAR_PANELS = [
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
 ];
+
+/**
+ * The map-select screen shown between character-select and the run, Waves
+ * mode only. Same shape as CHAR_PANELS for the same reason: drawMapSelect()
+ * and the mapselect input handler both read this table, so a third map kind
+ * is a row here, not a second list to keep in sync.
+ *
+ * Brawl skips this screen entirely and always starts on forest — see the
+ * architecture doc's map-selection table. Membership is derived from
+ * MAP_RULES (imported above, from arena-map.ts) rather than a hand-kept
+ * list: a map earns a panel by having crows, the same fact mapHasCrows()
+ * already reads off MAP_RULES, so the maze (crows: false — it's a scripted
+ * brawl stage, not a free choice) excludes itself instead of needing to be
+ * remembered. MAP_PANEL_INFO's presentation fields (key/color/lines) are
+ * still a hand-kept table, unavoidably — display strings aren't derivable
+ * from a boolean — so the construction below fails loudly at load if a row
+ * is missing instead of drawing a blank panel.
+ */
+// The one shade every unselected panel dims to, in both this table and
+// CHAR_PANELS above — not a per-panel choice, so it lives once here rather
+// than repeated on every row.
+const DIM_PANEL_BG = 'rgba(255,255,255,0.025)';
+const MAP_PANEL_INFO = {
+  forest: { key:'F', color:'#39FF14', bg:'rgba(57,255,20,0.08)', dim:'#1a7a08', dimBg: DIM_PANEL_BG,
+    lines:['Open ground, scattered cover','Long sightlines, easy crow paths','The classic run'] },
+  castle: { key:'C', color:'#AAB4C0', bg:'rgba(170,180,192,0.10)', dim:'#4A5560', dimBg: DIM_PANEL_BG,
+    lines:['Denser walls, tighter corridors','Crows funnel, fights stay close','A sharper, closer fight'] },
+};
+const MAP_PANELS = Object.keys(MAP_RULES)
+  .filter(kind => MAP_RULES[kind].crows)
+  .map(kind => {
+    const info = MAP_PANEL_INFO[kind];
+    // Fails at load rather than the first time the mapselect screen renders
+    // an undefined-riddled panel: a map added to MAP_RULES with crows:true
+    // still needs a row here, this just makes forgetting one loud and early.
+    if (!info) throw new Error(`MAP_PANEL_INFO has no entry for '${kind}' (MAP_RULES marks it crows: true)`);
+    return { kind, ...info };
+  });
+
+/**
+ * One step of arrow-key-cycle-or-hotkey-match selection over a panel table,
+ * shared by charselect (CHAR_PANELS/selectedChar) and mapselect
+ * (MAP_PANELS/selectedMapKind) so the two don't separately reimplement the
+ * same wraparound arithmetic. `field` is which property of each panel holds
+ * the value being selected ('char' or 'kind').
+ *
+ * Arrow branches are `if`/`else if`: holding both in the same tick picks one
+ * direction rather than computing the second from an index the first branch
+ * already moved past.
+ */
+function cyclePanelSelection(panels, current, field) {
+  const values = panels.map(p => p[field]);
+  const n = values.length, i = values.indexOf(current);
+  if (keys['ArrowLeft'])       { const next = values[(i+n-1)%n]; keys['ArrowLeft']=false; return next; }
+  else if (keys['ArrowRight']) { const next = values[(i+1)%n];   keys['ArrowRight']=false; return next; }
+  for (const p of panels) {
+    const lower = p.key.toLowerCase();
+    if (keys[lower] || keys[p.key]) { keys[lower] = keys[p.key] = false; return p[field]; }
+  }
+  return current;
+}
+
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
 // Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
 let blockedFlash = 0;
@@ -560,6 +623,10 @@ let sniperMode = false;
 
 // Character selection — persists for the session, reset only on new run
 let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
+
+// Map selection for Waves mode — persists for the session. Brawl ignores this
+// and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
+let selectedMapKind = 'forest';   // 'forest' | 'castle'
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
@@ -626,10 +693,10 @@ let mapSeed = 0;
 let mapKind = 'forest';
 
 /**
- * Generates the map, defaulting to 'forest', today's only map in real play,
- * so every existing call site is unaffected by a second one existing. `kind`
- * is only ever 'castle' from the dev harness right now — nothing in real
- * gameplay picks it yet, that is brawl mode's second stage.
+ * Generates the map, defaulting to 'forest' so a bare call is still a valid
+ * one. `kind` comes from three real sources today: brawl's own scripted
+ * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
+ * screen (`selectedMapKind`, forest or castle), and the dev harness.
  */
 function generateMap(kind = 'forest') {
   mapKind = kind;
@@ -1487,7 +1554,9 @@ events.on(e => {
 });
 
 function initGame() {
-  generateMap();
+  // Brawl is always forest — see the architecture doc's map-selection table.
+  // Waves honours whatever was picked on the mapselect screen.
+  generateMap(gameMode === 'waves' ? selectedMapKind : 'forest');
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
@@ -3012,10 +3081,13 @@ function checkPickupCollection() {
 function updateEscalation(dt) {
   escalationTimer += dt;
   if (waveAnnounce > 0) waveAnnounce -= dt;
-  // The castle stage's population is entirely wave-driven (startCastleWave),
-  // not this timer — see killSkeleton. Only waveAnnounce still needs to
-  // count down here so a castle-wave banner fades on schedule.
-  if (mapKind === 'castle') return;
+  // Brawl's castle stage is entirely wave-driven (startCastleWave), not this
+  // timer — see killSkeleton. Only waveAnnounce still needs to count down
+  // here so a castle-wave banner fades on schedule. Waves mode never calls
+  // startCastleWave, so gate on gameMode too: without it, picking Castle on
+  // the mapselect screen returned here every tick and the run never spawned
+  // another crow past the opening batch.
+  if (gameMode === 'brawl' && mapKind === 'castle') return;
   // The maze's population is the rat pack and the warden. See MAP_RULES.crows.
   if (!mapHasCrows()) return;
   if (escalationTimer >= CONFIG.crowEscalationInterval) {
@@ -7137,7 +7209,14 @@ function _drawCharPreview(cx, cy, char, t) {
   ctx.restore();
 }
 
-function drawCharSelect(t) {
+/**
+ * Shared backdrop for the charselect/mapselect panel screens: the black
+ * fill, ambient crows, scanline sweep, corner frame, and the title/subtitle
+ * pair. Split out because it was identical, verbatim, in both draw
+ * functions — the panel grid each one draws over it is genuinely different
+ * (character previews and difficulty vs. a terrain swatch) and stays put.
+ */
+function _selectionScreenBackdrop(title, subtitle) {
   ctx.fillStyle='#000'; ctx.fillRect(0,0,CONFIG.canvasW,CONFIG.canvasH);
   _screenCrows(4, 0.038, 20);
   _scanSweep('rgba(57,255,20,0.022)', 88);
@@ -7146,10 +7225,14 @@ function drawCharSelect(t) {
   ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.shadowColor='#39FF14'; ctx.shadowBlur=8;
   ctx.fillStyle='#39FF14'; ctx.font='22px "Courier New",monospace';
-  ctx.fillText('── CHOOSE YOUR CHAMPION ──', CONFIG.canvasW/2, 65);
+  ctx.fillText(title, CONFIG.canvasW/2, 65);
   ctx.shadowBlur=0;
   ctx.font='12px "Courier New",monospace'; ctx.fillStyle='#1a7a08';
-  ctx.fillText(`MODE: ${gameMode.toUpperCase()}`, CONFIG.canvasW/2, 100);
+  ctx.fillText(subtitle, CONFIG.canvasW/2, 100);
+}
+
+function drawCharSelect(t) {
+  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${gameMode.toUpperCase()}`);
 
   // Panel width shrinks to fit however many CHAR_PANELS holds today — four
   // panels at the old 296px width would run 182px wider than the canvas.
@@ -7190,6 +7273,43 @@ function drawCharSelect(t) {
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
   const keyHint = CHAR_PANELS.map(p => `[${p.key}]`).join(' ');
   ctx.fillText(`← →  /  ${keyHint}  SWITCH    ENTER  CONFIRM`, CONFIG.canvasW/2, CONFIG.canvasH-22);
+}
+
+/** Waves-only screen between charselect and the run. Same layout family as
+ * drawCharSelect above, over MAP_PANELS instead of CHAR_PANELS. */
+function drawMapSelect(t) {
+  _selectionScreenBackdrop('── CHOOSE YOUR GROUND ──', `${selectedChar.toUpperCase()}  ·  WAVES`);
+
+  const gapX = 24, panelH = 280;
+  const panelW = Math.floor((640 - gapX * (MAP_PANELS.length - 1)) / MAP_PANELS.length);
+  const totalW = panelW*MAP_PANELS.length + gapX*(MAP_PANELS.length-1);
+  const startX = CONFIG.canvasW/2 - totalW/2;
+  const panelY = 160;
+
+  MAP_PANELS.forEach((p, idx) => {
+    const px = startX + idx * (panelW + gapX);
+    const sel = selectedMapKind === p.kind;
+    ctx.fillStyle = sel ? p.bg : p.dimBg;
+    ctx.fillRect(px, panelY, panelW, panelH);
+    if (sel) { ctx.shadowColor=p.color; ctx.shadowBlur=16; }
+    ctx.strokeStyle = sel ? p.color : p.dim; ctx.lineWidth=1.5;
+    ctx.strokeRect(px, panelY, panelW, panelH); ctx.shadowBlur=0;
+    ctx.fillStyle = sel ? p.color : p.dim;
+    ctx.font='19px "Courier New",monospace';
+    ctx.fillText(`[${p.key}] ${p.kind.toUpperCase()}`, px+panelW/2, panelY+34);
+    // Terrain swatch — flat color, not art, just enough to read as "ground"
+    ctx.globalAlpha = sel ? 0.85 : 0.3;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(px+24, panelY+60, panelW-48, 96);
+    ctx.globalAlpha = 1;
+    ctx.font='11px "Courier New",monospace';
+    ctx.fillStyle = sel ? p.color : p.dim;
+    p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+192+i*22));
+  });
+
+  ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
+  const keyHint = MAP_PANELS.map(p => `[${p.key}]`).join(' ');
+  ctx.fillText(`← →  /  ${keyHint}  SWITCH    ENTER  CONFIRM    ESC  BACK`, CONFIG.canvasW/2, CONFIG.canvasH-22);
 }
 
 function drawMenu(t) {
@@ -7590,6 +7710,7 @@ function render(t) {
   } else if (appState === 'multiplayer'){ multiplayerSession?.frame(keys, { x: mouse.x, y: mouse.y, fire: mouseLeftHeld, special: mouseRightHeld });
   } else if (appState === 'menu')       { drawMenu(t);
   } else if (appState === 'charselect') { drawCharSelect(t);
+  } else if (appState === 'mapselect')  { drawMapSelect(t);
   } else if (appState === 'controls')   { drawControls(t);
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
@@ -7696,16 +7817,19 @@ function stepGame(dt) {
     case 'charselect': {
       // Reads CHAR_PANELS rather than its own list, so a character exists on
       // screen and here at once — see the comment on CHAR_PANELS.
-      const chars = CHAR_PANELS.map(p => p.char);
-      const n = chars.length, ci = chars.indexOf(selectedChar);
-      if (keys['ArrowLeft'])  { selectedChar = chars[(ci+n-1)%n]; keys['ArrowLeft']=false; }
-      if (keys['ArrowRight']) { selectedChar = chars[(ci+1)%n];   keys['ArrowRight']=false; }
-      for (const p of CHAR_PANELS) {
-        const lower = p.key.toLowerCase();
-        if (keys[lower] || keys[p.key]) { selectedChar = p.char; keys[lower] = keys[p.key] = false; }
-      }
-      if (keys['Enter']) { transitionTo('playing'); keys['Enter']=false; }
+      selectedChar = cyclePanelSelection(CHAR_PANELS, selectedChar, 'char');
+      // Waves lets the player pick the ground; brawl's map is fixed, so it
+      // skips straight to the run the way it always has.
+      if (keys['Enter']) { transitionTo(gameMode === 'waves' ? 'mapselect' : 'playing'); keys['Enter']=false; }
       if (keys['Escape']) { transitionTo('menu'); keys['Escape']=false; }
+      break; }
+
+    case 'mapselect': {
+      // Same cycling shape as charselect above, over MAP_PANELS instead of
+      // CHAR_PANELS — see the comment on MAP_PANELS.
+      selectedMapKind = cyclePanelSelection(MAP_PANELS, selectedMapKind, 'kind');
+      if (keys['Enter']) { transitionTo('playing'); keys['Enter']=false; }
+      if (keys['Escape']) { transitionTo('charselect'); keys['Escape']=false; }
       break; }
 
     case 'controls':
@@ -7929,6 +8053,8 @@ export const devHooks = {
   // Drive a real state transition, and pick a character, for scripted runs.
   go(s) { transitionTo(s); },
   pick(c) { selectedChar = c; },
+  selectedChar: () => selectedChar,
+  pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },
   spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },
   key(k) {
@@ -7939,6 +8065,7 @@ export const devHooks = {
   multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
   mapKind: () => mapKind,
+  selectedMapKind: () => selectedMapKind,
   generateMap(kind) { generateMap(kind); },
   // Regenerating the map under a player already placed leaves them wherever
   // they were, which on a carved map is often inside a wall. This is the
