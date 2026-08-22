@@ -105,6 +105,13 @@ const CONFIG = {
 
   playerSpeed: 200, playerRadius: 8,
   playerMaxHP: 10, playerHitFlashSecs: 0.3,
+  // Enemy hit feedback. The sprite goes flat white for hitFlashWhiteSecs and
+  // the knock offset decays across the whole hitFlashSecs, so the recoil
+  // outlasts the flash instead of ending with it.
+  hitFlashSecs: 0.15, hitFlashWhiteSecs: 0.07, hitKnockPx: 3,
+  // How long the reticle flags a press the game refused. Short on purpose:
+  // long enough to see, too short to be mistaken for a state you are in.
+  blockedFlashSecs: 0.1,
   killsToTriggerBoss: 10,
 
   // Castle stage (brawl mode's second act). Persistently hostile, so no
@@ -322,7 +329,7 @@ const CONFIG = {
   // Adding a new resource type only requires a new entry here.
   resources: {
     arrows:    { max: 10, restore: 5, color: '#aaff44', dim: '#2d2d2d', icon: '▶', spacing: 13 },
-    dynamites: { max:  3, restore: 1, color: '#ff6600', dim: '#2d2d2d', icon: '■', spacing: 13 },
+    dynamites: { max:  3, restore: 1, color: '#FFB400', dim: '#2d2d2d', icon: '■', spacing: 13 },
     satchels:  { max:  3, restore: 1, color: '#ffcc00', dim: '#2d2d2d', icon: '●', spacing: 13 }
   },
 
@@ -386,7 +393,7 @@ function applyPace(name) {
   CONFIG.resources.satchels.max  = preset.baseDynamites;
 }
 
-applyPace(new URLSearchParams(location.search).get('pace') ?? CONFIG.pace);
+applyPace(CONFIG.pace);
 
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
@@ -445,8 +452,21 @@ const BOSS_ENTRY_TEXT = {
 };
 
 // Above this capacity the HUD shows a count instead of one icon per unit.
-// 12 icons at 13 px still fit beside the boss HP bar; more do not.
+// 12 icons still fit beside the boss HP bar at either pitch the HUD uses
+// (13 px for quiver resources, 14 px for hearts); more do not.
 const HUD_ICON_LIMIT = 12;
+
+// Hearts are a counted row like any quiver resource, so they carry the same
+// descriptor shape and go through the same drawer. Keeping them a resource in
+// all but name is what stops the row from growing past its slot: HP upgrades
+// raise the max, and only drawCountRow knows where the icons stop fitting.
+const HP_RESOURCE = { icon: '♥', color: '#39FF14', dim: '#333', spacing: 14 };
+
+// When the HUD starts shouting about health. A fraction, not a hit count:
+// HP upgrades mean a flat "3 left" is the last hit at max 10 and most of a
+// third of the bar at max 20, so an absolute threshold fires later and later
+// into a run as the player buys HP.
+const LOW_HP_FRACTION = 0.25;
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
@@ -521,6 +541,8 @@ const CHAR_PANELS = [
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
 ];
 let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
+// Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
+let blockedFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
 // Set by an ice skeleton's bolt landing. Counts down in updatePlayer, which
 // returns before reading input while it is positive, so movement, aiming
@@ -624,12 +646,11 @@ function generateMap(kind = 'forest') {
   const rng = mulberry32(mapSeed);
   // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
   const sn = new SimplexNoise(rng);
-  // tileLayer/tileOverlay are built once at startup, so the theme has to be
-  // set here too, not just the tiles. The theme goes on first, without a
-  // repaint of its own, so the reset below is the single pass that paints
-  // every tile: doing it the other way round repaints the whole map twice.
-  tileLayer.usePainters(TILE_THEMES[kind]);
-  tileOverlay.setPalette(ANIMATED_THEMES[kind]);
+  // Announced rather than applied: which painters a theme uses is a render
+  // decision, and this function is simulation. The listener boot() registers
+  // swaps them, and it runs before the reset below so the map is painted once
+  // instead of once per theme.
+  events.emit({ type: 'MAP_GENERATED', kind });
   // MAP_GEN holds a generator per kind, not a density: the maze is carved
   // rather than thresholded, so the noise source is offered and ignored by
   // the generators that do not want it. See docs/level-3-maze.md.
@@ -643,7 +664,10 @@ function generateMap(kind = 'forest') {
   // map's birds with it, or they keep flying through the new map's walls and
   // keep counting toward a win condition this map does not use.
   if (!mapHasCrows()) crows = [];
-  // Sight is about the grid too: memory of the last map is a lie about this one.
+  // Sight is grid-shaped too, so memory of the last map is a lie about this
+  // one. It stays here rather than behind MAP_GENERATED: placing torches needs
+  // the grid and puts real objects in the world, which is simulation, even
+  // though what the fog then draws is not.
   resetSight();
 }
 
@@ -842,9 +866,11 @@ const keys  = {};
 const mouse = { x: 400, y: 256 };
 let shootPressed = false;
 
-const canvas = document.getElementById('game');
-canvas.width = CONFIG.canvasW; canvas.height = CONFIG.canvasH;
-const ctx = canvas.getContext('2d');
+// Bound by boot(), not at import: this module has to load under vitest, where
+// there is no document. Everything that reads them runs downstream of boot().
+let canvas = null;
+let ctx = null;
+let booted = false;
 
 function initAudio() {
   // Resume the shared AudioContext on the first user gesture (Chrome autoplay policy)
@@ -946,70 +972,75 @@ function releaseCharge() {
   if (inGame() && selectedChar === 'archer') throwDynamite(Math.min(1, (performance.now() - charge.t0) / 1000));
 }
 
-// Listens on the window, not the canvas, and clamps into it.
-//
-// On the canvas alone, aim silently froze the moment the pointer crossed the
-// edge: the last event inside was the last aim update, so a shot fired while
-// reaching for something off to the side went wherever the pointer had last
-// been seen rather than where it was pointing. Clamping keeps the aim pinned
-// to the nearest edge instead, which is what the player means when they push
-// past the border, and costs nothing while the pointer is inside.
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-window.addEventListener('mousemove', e => {
-  const r = canvas.getBoundingClientRect();
-  if (r.width === 0 || r.height === 0) return;   // canvas not laid out yet
-  mouse.x = clamp((e.clientX - r.left) * (CONFIG.canvasW / r.width), 0, CONFIG.canvasW);
-  mouse.y = clamp((e.clientY - r.top) * (CONFIG.canvasH / r.height), 0, CONFIG.canvasH);
-});
 let mouseRightHeld = false;
 // Held, not just pressed: multiplayer samples the button once per frame rather
 // than reacting to the event, the same way it reads the keyboard.
 let mouseLeftHeld = false;
-canvas.addEventListener('mousedown', e => {
-  initAudio();
-  if (e.button === 0) {
-    mouseLeftHeld = true;
-    if (inGame()) shootPressed = true;
-    // A stage intro waits for exactly this: one click, no key, since it is
-    // shown mid-run with the keyboard already busy with movement held down.
-    else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
-  }
-  if (e.button === 2) { mouseRightHeld = true; startCharge(); }
-});
-canvas.addEventListener('mouseup',    e => {
-  if (e.button === 0) mouseLeftHeld = false;
-  if (e.button === 2) { mouseRightHeld = false; releaseCharge(); }
-});
-canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-document.addEventListener('keydown', e => {
-  initAudio();
-  if (remapTarget !== null && appState === 'controls') {
-    if (e.key !== 'Escape') CONFIG.keys[remapTarget] = e.key;
-    remapTarget = null; e.preventDefault(); return;
-  }
-  if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
-  if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
-  if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
-  keys[e.key] = true;
-  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
-});
-document.addEventListener('keyup', e => {
-  keys[e.key] = false;
-  if (e.key === 'f' || e.key === 'F') releaseCharge();
-  if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
-});
-
-canvas.addEventListener('click', e => {
-  initAudio();
-  if (appState !== 'controls') return;
-  const r  = canvas.getBoundingClientRect();
-  const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
-  CTRL_ACTIONS.forEach((action, i) => {
-    const rowY = 160 + i * 46;
-    if (cy >= rowY - 20 && cy < rowY + 26) { remapTarget = action.key; controlsSelection = i; }
+/**
+ * Binds every pointer and keyboard listener to the canvas. Called by boot(),
+ * so importing this module never reaches for document.
+ */
+function installInput() {
+  // On the window, not the canvas, and clamped into it. On the canvas alone,
+  // aim silently froze the moment the pointer crossed the edge: the last event
+  // inside was the last aim update, so a shot fired while reaching for
+  // something off to the side went where the pointer had last been seen rather
+  // than where it was pointing. Clamping pins aim to the nearest edge instead,
+  // which is what a player means by pushing past the border.
+  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+  window.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return;   // canvas not laid out yet
+    mouse.x = clamp((e.clientX - r.left) * (CONFIG.canvasW / r.width), 0, CONFIG.canvasW);
+    mouse.y = clamp((e.clientY - r.top) * (CONFIG.canvasH / r.height), 0, CONFIG.canvasH);
   });
-});
+  canvas.addEventListener('mousedown', e => {
+    initAudio();
+    if (e.button === 0) {
+      mouseLeftHeld = true;
+      if (inGame()) shootPressed = true;
+      // A stage intro waits for exactly this: one click, no key, since it is
+      // shown mid-run with the keyboard already busy with movement held down.
+      else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
+    }
+    if (e.button === 2) { mouseRightHeld = true; startCharge(); }
+  });
+  canvas.addEventListener('mouseup',    e => {
+    if (e.button === 0) mouseLeftHeld = false;
+    if (e.button === 2) { mouseRightHeld = false; releaseCharge(); }
+  });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  document.addEventListener('keydown', e => {
+    initAudio();
+    if (remapTarget !== null && appState === 'controls') {
+      if (e.key !== 'Escape') CONFIG.keys[remapTarget] = e.key;
+      remapTarget = null; e.preventDefault(); return;
+    }
+    if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
+    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
+    if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
+    keys[e.key] = true;
+    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+  });
+  document.addEventListener('keyup', e => {
+    keys[e.key] = false;
+    if (e.key === 'f' || e.key === 'F') releaseCharge();
+    if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
+  });
+
+  canvas.addEventListener('click', e => {
+    initAudio();
+    if (appState !== 'controls') return;
+    const r  = canvas.getBoundingClientRect();
+    const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
+    CTRL_ACTIONS.forEach((action, i) => {
+      const rowY = 160 + i * 46;
+      if (cy >= rowY - 20 && cy < rowY + 26) { remapTarget = action.key; controlsSelection = i; }
+    });
+  });
+}
 
 // ── ENTITIES ──────────────────────────────────────────────────────────────────
 
@@ -1045,11 +1076,56 @@ const playerInput = new LocalInput(() => {
 // network-relevant ones), so cosmetics never touch the simulation.
 const events = new EventBus();
 
+/**
+ * Screen-shake ladder, one home so the ordering is reviewable at a glance.
+ *
+ * ScreenShake is strongest-wins: a weaker trigger during a stronger one is
+ * ignored outright, never summed. So these magnitudes are not decoration, they
+ * are the arbitration rule. Whichever event has the highest number is the one
+ * the screen reports when several land in the same frame, which means the list
+ * has to be ordered by how much the player needs to know a thing happened,
+ * not by how energetic it looks.
+ *
+ * Read it top to bottom: a miss is the quietest thing in the game, taking a
+ * hit outranks landing one, and only the boss and the run ending outrank that.
+ *
+ * Deliberately absent, and not an oversight to be corrected later: killing a
+ * crow or a skeleton does not shake at all. Critters die constantly and in
+ * groups, up to 22 alive at once on nightmare, so a per-kill shake is a
+ * permanent rumble rather than information. The boss is the opposite case
+ * and does shake, on contact, on death, and now per landed hit.
+ */
+const SHAKE = {
+  arrowMiss:      [2,  100],
+  meleeHit:       [3,  140],
+  shieldBlocked:  [3,  150],
+  playerFrozen:   [4,  200],
+  whirlwindStart: [4,  250],
+  foreshadow:     [5,  350],
+  heavyMelee:     [6,  200],
+  fireSkelBlast:  [6,  250],
+  crowsAggro:     [6,  300],
+  playerHit:      [7,  240],
+  explosion:      [9,  300],
+  bossSlam:       [12, 400],
+  gameOver:       [12, 600],
+  bossDeath:      [14, 600],
+  stormCast:      [14, 600],
+};
+
 // Sound and shake per boss-hit source. The sim states what landed; the table
 // decides how it sounds.
 const BOSS_HIT_FX = {
-  pitchfork: [6, 200], spear: [5, 200],
-  arrow: null, javelin: null, whirlwind: null, storm: null, dynamite: null, satchel: null,
+  // Landing one of these is a large fraction of the fight: the crow king dies
+  // in 5 archer hits, 14 wizard bolts. Ranged sources used to be silent here,
+  // so a knight felt every hit on the boss and an archer felt none.
+  pitchfork: [6, 200], spear: [5, 200], javelin: [5, 180], arrow: [4, 140],
+  // Still null, because each already shakes through its own event and would
+  // otherwise fire twice for one action, or many times for one cast:
+  // dynamite and satchel via EXPLOSION, storm via STORM_CAST, and whirlwind
+  // ticks its damage every 0.2s for 3s, which is the critter-kill problem
+  // wearing a different hat.
+  whirlwind: null, storm: null, dynamite: null, satchel: null,
 };
 // Sound and shake per attack the player starts.
 const WEAPON_FX = {
@@ -1139,7 +1215,7 @@ events.on(e => {
         speedMin: 40, speedMax: 120, decay: 1.8,
         shapeMix: [['circle', 0.8], ['spark', 0.2]],
         sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#FFB400',
-        forceColor: '#FFB400'
+        forceColor: '#FFB400', pri: PRI.KILL
       });
       floaters.push({ x: e.x, y: e.y, alpha: 1.0, vy: -42 });
       floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
@@ -1155,13 +1231,14 @@ events.on(e => {
         count: 14, colors: skelColors,
         speedMin: 40, speedMax: 120, decay: 1.8,
         shapeMix: [['circle', 0.7], ['spark', 0.3]],
-        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: skelGlow
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: skelGlow,
+        pri: PRI.KILL
       });
       break;
     }
 
     case 'FIRE_SKELETON_BLAST':
-      playSound(sndExplosion); triggerShake(6, 250);
+      playSound(sndExplosion); triggerShake(...SHAKE.fireSkelBlast);
       burst(e.x, e.y, {
         count: 20, colors: ['#FFB400','#FF6020','#FFFFFF','#8A1010'],
         speedMin: 80, speedMax: 220, decay: 2.0,
@@ -1174,7 +1251,7 @@ events.on(e => {
       break;
 
     case 'PLAYER_FROZEN':
-      triggerShake(4, 200);
+      triggerShake(...SHAKE.playerFrozen);
       burst(e.x, e.y, {
         count: 12, colors: ['#40D0F0','#A0E8FF','#FFFFFF'],
         speedMin: 30, speedMax: 90, decay: 2.2, shape: 'spark',
@@ -1184,15 +1261,15 @@ events.on(e => {
 
     case 'MELEE_HIT':
       if (e.kind === 'pitchfork') {
-        triggerShake(6, 200);
+        triggerShake(...SHAKE.heavyMelee);
         burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
           speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
-          gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14' });
+          gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14', pri: PRI.IMPACT });
       } else {
-        triggerShake(3, 120);
+        triggerShake(...SHAKE.meleeHit);
         burst(e.x, e.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
           speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
-          shadowBlur: e.fire ? 8 : 3,
+          shadowBlur: e.fire ? 8 : 3, pri: PRI.IMPACT,
           shadowColor: e.fire ? '#FF7A1F' : '#C0C0C0' });
       }
       break;
@@ -1204,7 +1281,7 @@ events.on(e => {
       break; }
 
     case 'ARROW_MISS':
-      playSound(sndMiss); triggerShake(3, 200);
+      playSound(sndMiss); triggerShake(...SHAKE.arrowMiss);
       break;
 
     case 'JAVELIN_BOUNCE':
@@ -1213,7 +1290,7 @@ events.on(e => {
       break;
 
     case 'EXPLOSION':
-      playSound(sndExplosion); triggerShake(10, 450);
+      playSound(sndExplosion); triggerShake(...SHAKE.explosion);
       if (e.onWater) {
         burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
           speedMin: 80, speedMax: 200, decay: 1.6,
@@ -1247,6 +1324,7 @@ events.on(e => {
 
     case 'ACTION_BLOCKED':
       playSound(sndEmpty);
+      blockedFlash = CONFIG.blockedFlashSecs;
       break;
 
     case 'SATCHEL_ARMED':
@@ -1268,7 +1346,7 @@ events.on(e => {
       break;
 
     case 'WHIRLWIND_START':
-      playSound(sndExplosion); triggerShake(4, 250);
+      playSound(sndExplosion); triggerShake(...SHAKE.whirlwindStart);
       burst(e.x, e.y, {
         count: 20, colors: ['#C0C0C0','#9090A0','#FFFFFF','#7080B0'],
         speedMin: 50, speedMax: 130, decay: 2.8, shape: 'spark',
@@ -1293,7 +1371,7 @@ events.on(e => {
       break;
 
     case 'STORM_CAST':
-      playSound(sndLightning); triggerShake(14, 600);
+      playSound(sndLightning); triggerShake(...SHAKE.stormCast);
       burst(e.x, e.y, { count: 32, colors: ['#FFFFFF','#AAAAFF','#8888FF','#FFB400'],
         speedMin: 60, speedMax: 360, decay: 2.5, shape: 'spark',
         shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
@@ -1308,14 +1386,14 @@ events.on(e => {
       break;
 
     case 'PLAYER_HIT':
-      triggerShake(4, 200);
+      triggerShake(...SHAKE.playerHit);
       break;
 
     case 'SHIELD_BLOCKED':
-      triggerShake(3, 150);
+      triggerShake(...SHAKE.shieldBlocked);
       burst(e.x, e.y, { count: 10, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
         speedMin: 60, speedMax: 200, decay: 2.5, shape: 'spark',
-        shadowBlur: 10, shadowColor: '#FFB400' });
+        shadowBlur: 10, shadowColor: '#FFB400', pri: PRI.CRITICAL });
       break;
 
     case 'PICKUP_TAKEN':
@@ -1337,15 +1415,15 @@ events.on(e => {
       break;
 
     case 'GAME_OVER':
-      triggerShake(12, 600); playSound(sndGameover);
+      triggerShake(...SHAKE.gameOver); playSound(sndGameover);
       break;
 
     case 'CROWS_AGGRO':
-      playSound(sndAggro); triggerShake(6, 300);
+      playSound(sndAggro); triggerShake(...SHAKE.crowsAggro);
       break;
 
     case 'BOSS_CONTACT':
-      triggerShake(6, 250);
+      triggerShake(...SHAKE.bossSlam);
       break;
 
     case 'BOSS_BATS':
@@ -1371,7 +1449,7 @@ events.on(e => {
       break;
 
     case 'BOSS_DEATH_START':
-      playSound(sndBossDeath); triggerShake(14, 500);
+      playSound(sndBossDeath); triggerShake(...SHAKE.bossDeath);
       break;
 
     // Staggered 3-wave death burst: a=0ms, b=+80ms, c=+160ms
@@ -1498,6 +1576,37 @@ function spawnPickup(wx, wy) {
       if (tryPlace(col + dc, row + dr)) return;
 }
 
+const PARTICLE_CAP = 120;
+/**
+ * Particle importance. The cap used to evict oldest-first, which drops the
+ * newest information in exactly the busiest frames: a boss fight in a crowd
+ * is when the player most needs to see that they were hit, and when a plain
+ * FIFO is most likely to have thrown it away for smoke.
+ *
+ * PRI.CRITICAL is never evicted. Anything below it yields to something more
+ * important, and a spawn that finds nothing weaker than itself is dropped
+ * rather than pushing the array past the cap.
+ */
+const PRI = { AMBIENT: 0, IMPACT: 1, KILL: 2, CRITICAL: 3 };
+
+/**
+ * Frees one slot for a particle of importance `pri`, evicting the lowest
+ * tier first and the oldest within that tier (index order is age order).
+ * Returns false when nothing weaker exists, meaning: drop the newcomer.
+ */
+function makeParticleRoom(pri) {
+  if (particles.length < PARTICLE_CAP) return true;
+  let worst = -1, worstPri = Infinity;
+  for (let i = 0; i < particles.length; i++) {
+    const q = particles[i].pri;
+    if (q >= PRI.CRITICAL) continue;
+    if (q < worstPri) { worstPri = q; worst = i; }
+  }
+  if (worst < 0 || worstPri > pri) return false;
+  particles.splice(worst, 1);
+  return true;
+}
+
 function burst(wx, wy, opts) {
   const {
     count = 8, colors = ['#ffffff'],
@@ -1506,10 +1615,13 @@ function burst(wx, wy, opts) {
     sizeMin = 1.5, sizeMax = 2.5,
     shadowBlur = 0, shadowColor = '#ffffff',
     shrink = false, shapeMix = null, shape = 'circle',
-    forceColor = null
+    forceColor = null, pri = PRI.AMBIENT
   } = opts;
-  while (particles.length >= 120) particles.shift();
   for (let i = 0; i < count; i++) {
+    // Per particle, not once before the loop: the old trim freed a single
+    // slot and then pushed the whole burst, so a 36-particle blast left 155
+    // in a 120-capped array and the cap did not hold at all.
+    if (!makeParticleRoom(pri)) break;
     const a   = Math.random() * Math.PI * 2;
     const spd = speedMin + Math.random() * (speedMax - speedMin);
     const pShape = shapeMix
@@ -1521,7 +1633,7 @@ function burst(wx, wy, opts) {
       x: wx, y: wy,
       vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
       color: col, alpha: 1, decay, shape: pShape,
-      r, gravity, damping, shadowBlur, shadowColor, shrink
+      r, gravity, damping, shadowBlur, shadowColor, shrink, pri
     });
   }
 }
@@ -1587,6 +1699,7 @@ function updatePlayer(dt) {
 
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
+  if (blockedFlash > 0) blockedFlash = Math.max(0, blockedFlash - dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
@@ -1764,7 +1877,7 @@ function tryShoot() {
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
-  if (arrows.length >= CONFIG.maxArrowsInFlight) return;
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   let type = 'normal';
   if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
   else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
@@ -1789,7 +1902,7 @@ function tryCrossbowBolt() {
   if (!hasArrows) { tryPitchfork(); return; }
   // Reserve room for the whole burst up front — a partial push would let
   // arrows.length overshoot maxArrowsInFlight and stall the next press.
-  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) return;
+  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   let type = 'normal';
   if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
   else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
@@ -1812,7 +1925,7 @@ function tryCrossbowBolt() {
 
 function tryWizardBolt() {
   if (wizBoltCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  if (arrows.length >= CONFIG.maxArrowsInFlight) return;
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
@@ -2002,10 +2115,11 @@ function updateArrows(dt) {
         a.trailTimer += 0.03;
         const rng = Math.random();
         const fc = rng < 0.6 ? '#FF7A1F' : rng < 0.9 ? '#FFB400' : '#FFFFFF';
-        particles.push({
+        if (makeParticleRoom(PRI.AMBIENT)) particles.push({
           x: a.x, y: a.y, vx: (Math.random()-.5)*20, vy: (Math.random()-.5)*20,
           color: fc, alpha: 1, decay: 3.0, shape: 'circle',
-          r: 1.5 + Math.random(), gravity: -40, damping: 0, shadowBlur: 8, shadowColor: fc, shrink: false
+          r: 1.5 + Math.random(), gravity: -40, damping: 0, shadowBlur: 8, shadowColor: fc,
+          shrink: false, pri: PRI.AMBIENT
         });
       }
     }
@@ -2155,14 +2269,14 @@ function updateArrows(dt) {
     const hitR = a.hitRadius || CONFIG.arrowHitRadius;
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
-        damageCrow(j); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageCrow(j, 1, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
     if (hit) continue;
     for (let j = skeletons.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, skeletons[j].x, skeletons[j].y) < hitR*hitR) {
-        damageSkeleton(j); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageSkeleton(j, 1, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
@@ -2187,11 +2301,12 @@ function updateFires(dt) {
       const ox = (Math.random()-.5)*20, oy = (Math.random()-.5)*20;
       const spd = 20 + Math.random()*40;
       const ea = Math.random()*Math.PI*2;
-      particles.push({
+      if (makeParticleRoom(PRI.AMBIENT)) particles.push({
         x: f.x + ox, y: f.y + oy,
         vx: Math.cos(ea)*spd, vy: Math.sin(ea)*spd,
         color: ec, alpha: 1, decay: 1.5, shape: 'spark',
-        r: 1.5, gravity: -80, damping: 0, shadowBlur: 6, shadowColor: ec, shrink: false
+        r: 1.5, gravity: -80, damping: 0, shadowBlur: 6, shadowColor: ec,
+        shrink: false, pri: PRI.AMBIENT
       });
     }
     f.damageTimer -= dt;
@@ -2218,11 +2333,28 @@ function onArrowMiss() {
  * Below wave 1's baseline of 1 HP, this behaves exactly as killCrow(j)
  * always did: one hit, dead.
  */
-function damageCrow(j, amount = 1) {
+/**
+ * Unit vector for a projectile's travel, for the hit recoil. Null for damage
+ * with no direction to it (a blast, a fire patch), which then reads as a
+ * flash with no shove, which is what those should look like.
+ */
+function hitKnockOffset(e) {
+  if (!e.knock || e.hitFlash <= 0) return ZERO_KNOCK;
+  const d = CONFIG.hitKnockPx * (e.hitFlash / CONFIG.hitFlashSecs);
+  return { x: e.knock.x * d, y: e.knock.y * d };
+}
+const ZERO_KNOCK = { x: 0, y: 0 };
+
+function knockFrom(vx, vy) {
+  const m = Math.hypot(vx, vy);
+  return m ? { x: vx / m, y: vy / m } : null;
+}
+
+function damageCrow(j, amount = 1, knock = null) {
   const c = crows[j];
   if (!c) return;
   c.hp -= amount;
-  if (c.hp > 0) { c.hitFlash = 0.15; return; }
+  if (c.hp > 0) { c.hitFlash = CONFIG.hitFlashSecs; c.knock = knock; return; }
   killCrow(j);
 }
 
@@ -2304,11 +2436,11 @@ function spawnSkeleton(kind = 'normal') {
   });
 }
 
-function damageSkeleton(j, amount = 1) {
+function damageSkeleton(j, amount = 1, knock = null) {
   const s = skeletons[j];
   if (!s) return;
   s.hp -= amount;
-  if (s.hp > 0) { s.hitFlash = 0.15; return; }
+  if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return; }
   killSkeleton(j);
 }
 
@@ -3914,7 +4046,7 @@ const FORESHADOW = (() => {
     if (!m) return;
     _skyTarget = m.tint;
     _banner    = { text: m.text, timer: 2.8 };
-    if (m.shake)   triggerShake(5, 350);
+    if (m.shake)   triggerShake(...SHAKE.foreshadow);
     if (m.screech) playSound(sndBossScreech);
   }
 
@@ -4314,9 +4446,10 @@ function updateShake(dt)       { shake.update(dt); }
 function shakeOffset(t)        { return shake.offset(t); }
 
 const tileLayout  = { tileSize: CONFIG.tileSize, hudHeight: CONFIG.hudHeight };
-const tileLayer   = new StaticTileLayer(tileMap, tileLayout);
-const tileOverlay = new AnimatedTileOverlay(tileMap, tileLayout);
-const vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
+// Each builds its own offscreen canvas, so boot() constructs them.
+let tileLayer = null;
+let tileOverlay = null;
+let vignetteCanvas = null;
 
 function drawTiles() {
   tileLayer.draw(ctx);
@@ -5313,7 +5446,7 @@ function drawCrow(c) {
   const bobYAmp   = isWhite ? 1.2 : 0.8;
   const bobY      = bobYAmp * Math.sin(loopT * 3 + ep);
   const pulsePhase = loopT * 6;
-  const flashOn = c.hitFlash > 0 && Math.floor(c.hitFlash * 20) % 2 === 0;
+  const flashOn = c.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
 
   const kind  = isWhite ? 'white' : 'normal';
   const frame = animFrame3(c.wingPhase);
@@ -5323,7 +5456,8 @@ function drawCrow(c) {
   const shadowFill = isWhite ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
   const eyeBlur  = isWhite ? 4 + 2*Math.sin(loopT*4 + ep) : 3;
 
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(cx, cy);
+  const cKnock = hitKnockOffset(c);
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(cx + cKnock.x, cy + cKnock.y);
 
   // 1. Ground shadow
   ctx.shadowBlur = 0;
@@ -5338,7 +5472,9 @@ function drawCrow(c) {
   const cCanvas = flashOn
     ? spriteFlashCanvas(`crow|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h, '#ffffff')
     : spriteCanvas(`crow|${kind}|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
   ctx.drawImage(cCanvas, cSpriteDx, cSpriteDy);
+  ctx.shadowBlur = 0;
 
   // 3. Eye — stamped glow, one per (color, blur step) across the whole flock
   const eyeStamp = glowDotStamp(eyeCol, 1.2, eyeBlur);
@@ -5474,7 +5610,7 @@ function skeletonGrid(kind, frame) {
 // techniques, not its geometry — always aggro, so no state-transition ring.
 function drawSkeleton(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
-  const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
+  const flashOn = s.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
   const kind = s.kind || 'normal';
   const palette = SKELETON_PALETTES[kind] || SKELETON_PALETTES.normal;
   const look = SKELETON_LOOK[kind] || SKELETON_LOOK.normal;
@@ -5482,7 +5618,8 @@ function drawSkeleton(s) {
   const frame = animFrame3(s.walkPhase);
   const grid = skeletonGrid(kind, frame);
 
-  ctx.save(); ctx.translate(cx, cy);
+  const sKnock = hitKnockOffset(s);
+  ctx.save(); ctx.translate(cx + sKnock.x, cy + sKnock.y);
 
   // 1. Ground shadow
   ctx.shadowBlur = 0;
@@ -5505,7 +5642,12 @@ function drawSkeleton(s) {
   const kCanvas = flashOn
     ? spriteFlashCanvas(`skeleton|${kind}|${frame}`, grid, look.sprite.w, look.sprite.h, '#ffffff')
     : spriteCanvas(`skeleton|${kind}|${frame}`, grid, look.sprite.w, look.sprite.h);
+  // #30's glow behind a flashing body, so a hit reads through a crowd. Kept
+  // with the maze's per-kind sprite size: a rat is 14x10 and a skeleton
+  // 14x24, so the dimensions have to come from the look row, not a constant.
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
+  ctx.shadowBlur = 0;
 
   // 3. Eye sockets — stamped glow, same technique as the crow's eye
   const eyeStamp = glowDotStamp(eyeCol, 1, 3);
@@ -6392,17 +6534,117 @@ function drawBossEntrance() {
   }
 }
 
+/**
+ * One counted row in the HUD: an icon per unit while the max still fits, a
+ * compact `icon NN/MM` once it does not. Hearts and quiver resources share
+ * this, so an upgraded max can never overrun whatever sits to the row's right.
+ *
+ * `r` is a descriptor carrying icon, color, dim and spacing. CONFIG.resources
+ * entries already have that shape; HP_RESOURCE gives hearts the same one.
+ * A non-null `alertCol` recolors the filled units only, which is what both
+ * callers want: the low-HP pulse and the empty-pickup flash are one signal.
+ *
+ * Returns the width drawn, for callers that flow instead of sitting at a
+ * fixed x.
+ */
+function drawCountRow(x, r, cur, max, alertCol = null, alertGlow = null) {
+  const paint = (on) => {
+    const hot = Boolean(alertCol) && on;
+    ctx.fillStyle  = hot ? alertCol : (on ? r.color : r.dim);
+    ctx.shadowBlur = hot && alertGlow ? 8 : 0;
+    if (ctx.shadowBlur) ctx.shadowColor = alertGlow;
+  };
+  if (max > HUD_ICON_LIMIT) {
+    const label = `${r.icon}${String(cur).padStart(2, '0')}/${max}`;
+    paint(cur > 0);
+    ctx.fillText(label, x, 16);
+    ctx.shadowBlur = 0;
+    return ctx.measureText(label).width + 10;
+  }
+  for (let i = 0; i < max; i++) {
+    paint(i < cur);
+    ctx.fillText(r.icon, x + i * r.spacing, 16);
+  }
+  ctx.shadowBlur = 0;
+  return max * r.spacing + 8;
+}
+
+/**
+ * Shield mark: a stroked hexagon. Was a filled diamond, which the feather
+ * wallet also used, so one glyph stood for two unrelated things three
+ * elements apart in the same row.
+ */
+function hexGlyph(cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 6 + i * Math.PI / 3;
+    const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.stroke();
+}
+
+/** Feather wallet mark: a four-point leaf, filled. */
+function leafGlyph(cx, cy, r) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.quadraticCurveTo(cx + r, cy, cx, cy + r);
+  ctx.quadraticCurveTo(cx - r, cy, cx, cy - r);
+  ctx.closePath(); ctx.fill();
+}
+
+/** Cooldown bar geometry. One home, since the row advance depends on it. */
+const CD_BAR = { w: 78, h: 20, y: 6, gap: 8 };
+
+/**
+ * One ability cooldown bar. Four of these used to be the same twenty lines
+ * pasted with different track, fill, border and label colors; what actually
+ * varies is the fill fraction, the label, and which state it is in.
+ *
+ * State picks the color, not the ability. READY is the same green on every
+ * bar for every character, so "can I use this" is one thing to recognise
+ * instead of four palettes. Which ability a bar belongs to is already
+ * carried by its fixed position in the row.
+ *
+ * The label is the state and nothing else: no ability name, because the name
+ * cost the four characters left over at 8px, and 8px is where the digits in
+ * a countdown stop being separable under the scanline overlay.
+ *
+ * Returns the width to advance by.
+ */
+function drawCooldownBar(x, frac, label, state) {
+  const { w, h, y, gap } = CD_BAR;
+  const lit = state !== 'cooling';
+  ctx.fillStyle = '#0A0F0A'; ctx.fillRect(x, y, w, h);
+  ctx.shadowColor = '#39FF14';
+  ctx.shadowBlur = state === 'active' ? 8 + 4*Math.sin(loopT*8) : (lit ? 6 : 0);
+  ctx.fillStyle = lit ? '#39FF14' : '#196407';
+  ctx.fillRect(x, y, w * frac, h);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = lit ? '#39FF14' : '#243424'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  // Dark on the filled bar, bright on the empty track: readable either way.
+  ctx.fillStyle = lit ? '#0A0F0A' : '#39FF14';
+  ctx.font = 'bold 12px "Courier New",monospace'; ctx.textAlign = 'center';
+  ctx.fillText(label, x + w/2, y + h/2);
+  ctx.textAlign = 'left'; ctx.font = 'bold 10px "Courier New",monospace';
+  return w + gap;
+}
+
 function drawHUD(t) {
   const isBoss = appState === 'boss_fight';
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
   ctx.font = 'bold 12px "Courier New", monospace'; ctx.textBaseline = 'middle';
 
-  // Score
-  ctx.fillStyle = '#39FF14'; ctx.textAlign = 'left';
+  // Score. Dimmer than the rest on purpose: it is the one number here that
+  // never changes a decision mid-fight, and #39FF14 is reserved for health
+  // and friendly state now.
+  ctx.fillStyle = '#28B30E'; ctx.textAlign = 'left';
   ctx.fillText(`SCORE:${String(score).padStart(3,'0')}`, 8, 16);
 
   // Kill counter or wave counter, depending on mode; or boss HP bar
   if (!isBoss) {
+    ctx.fillStyle = '#39FF14';
     if (gameMode === 'brawl') ctx.fillText(`  KILLS:${String(killCount).padStart(2,'0')}/10`, 96, 16);
     else                      ctx.fillText(`  WAVE:${String(wave).padStart(2,'0')}`, 96, 16);
   } else if (boss && !Number.isFinite(boss.hpMax)) {
@@ -6446,17 +6688,13 @@ function drawHUD(t) {
     ctx.font='bold 12px "Courier New",monospace';
   }
 
-  // HP hearts
+  // HP hearts. Same drawer as the quiver below, so a maxed-out HP upgrade
+  // collapses to a count rather than running into the resource column (or,
+  // during a boss fight, into the boss HP bar).
   const hpX = isBoss ? 248 : 383;
-  const lowHP = playerHP <= 3 && playerHP > 0;
-  for (let i = 0; i < FEATHERS.maxHP(); i++) {
-    const active = i < playerHP;
-    const pulse = lowHP && active && Math.floor(t*4)%2===0;
-    ctx.fillStyle = pulse ? '#ff4444' : (active ? '#39FF14' : '#333');
-    if (pulse) { ctx.shadowColor = '#ff2222'; ctx.shadowBlur = 8; }
-    ctx.fillText('♥', hpX + i*14, 16);
-    if (pulse) ctx.shadowBlur = 0;
-  }
+  const lowHP = playerHP > 0 && playerHP / FEATHERS.maxHP() <= LOW_HP_FRACTION;
+  const hpAlert = lowHP && Math.floor(t*4)%2===0 ? '#FF1F1F' : null;
+  drawCountRow(hpX, HP_RESOURCE, playerHP, FEATHERS.maxHP(), hpAlert, '#FF1F1F');
 
   // Resources — archer/ranger quiver OR knight/wizard cooldowns. Each branch
   // is named explicitly rather than falling through to a trailing else, so a
@@ -6472,54 +6710,27 @@ function drawHUD(t) {
     for (const k of keys) {
       const r = CONFIG.resources[k];
       const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
-      // One icon per unit reads well up to a point. Past it the row would run
-      // off the HUD, so show a single icon and a count instead.
-      if (r.max > HUD_ICON_LIMIT) {
-        ctx.fillStyle = flash ? '#ff4444' : (inv[k] > 0 ? r.color : r.dim);
-        const label = `${r.icon}${String(inv[k]).padStart(2,'0')}/${r.max}`;
-        ctx.fillText(label, rx, 16);
-        rx += label.length * 6 + 10;
-      } else {
-        for (let i = 0; i < r.max; i++) {
-          ctx.fillStyle = i < inv[k] ? (flash ? '#ff4444' : r.color) : r.dim;
-          ctx.fillText(r.icon, rx + i * r.spacing, 16);
-        }
-        rx += r.max * r.spacing + 8;
-      }
+      rx += drawCountRow(rx, r, inv[k], r.max, flash ? '#8A1010' : null);
     }
     if (inv.ricochetArrows > 0) { ctx.fillStyle='#44ddff'; ctx.fillText(`[R:${inv.ricochetArrows}]`,rx,16); rx+=52; }
-    if (inv.fireArrows     > 0) { ctx.fillStyle='#ff7700'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
+    if (inv.fireArrows     > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
   } else if (selectedChar === 'knight') {
     // Knight — whirlwind cooldown bar + active buffs
     const wrdRdy  = knightWhirlwindCD <= 0;
     const wrdFrac = wrdRdy ? 1 : (CONFIG.knightWhirlwindCooldown - knightWhirlwindCD) / CONFIG.knightWhirlwindCooldown;
     const wrdActive = knightWhirlwindTimer > 0;
-    ctx.fillStyle='#111120'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#6080FF'; ctx.shadowBlur = wrdActive ? 8 : (wrdRdy ? 4 : 0);
-    ctx.fillStyle = wrdActive ? '#88aaff' : (wrdRdy ? '#4060d0' : '#1a2060');
-    ctx.fillRect(rx, 4, 78*wrdFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#4060C0'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = wrdActive ? '#ccddff' : (wrdRdy ? '#8899cc' : '#444466');
-    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    const wrdLabel = wrdActive ? `SPIN ${knightWhirlwindTimer.toFixed(1)}s` : (wrdRdy ? '◎ READY' : `◎ ${knightWhirlwindCD.toFixed(1)}s`);
-    ctx.fillText(wrdLabel, rx+39, 12);
-    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    const wrdLabel = wrdActive ? `${knightWhirlwindTimer.toFixed(1)}s`
+                   : wrdRdy    ? 'READY'
+                               : `${knightWhirlwindCD.toFixed(1)}s`;
+    rx += drawCooldownBar(rx, wrdActive ? 1 : wrdFrac, wrdLabel,
+                          wrdActive ? 'active' : wrdRdy ? 'ready' : 'cooling');
     // Block bar — countdown to the next free charge. The shared ◆SHLD
     // readout further down already flags a banked charge as active, so this
     // one just needs to read "ready" rather than duplicate that text.
     const blkRdy  = knightBlockCD <= 0 || playerShield;
     const blkFrac = blkRdy ? 1 : (CONFIG.knightBlockCooldown - knightBlockCD) / CONFIG.knightBlockCooldown;
-    ctx.fillStyle='#2a1a05'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#FFB400'; ctx.shadowBlur = blkRdy ? 6 : 0;
-    ctx.fillStyle = blkRdy ? '#FFB400' : '#5a3a10';
-    ctx.fillRect(rx, 4, 78*blkFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#FFB400'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = blkRdy ? '#FFE8B0' : '#7a5a30';
-    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    ctx.fillText(blkRdy ? '◎ READY' : `◎ ${knightBlockCD.toFixed(1)}s`, rx+39, 12);
-    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    rx += drawCooldownBar(rx, blkFrac, blkRdy ? 'READY' : `${knightBlockCD.toFixed(1)}s`,
+                          blkRdy ? 'ready' : 'cooling');
     if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
     if (inv.knightFireSwordTimer > 0) {
       ctx.fillStyle='#FF7A1F';
@@ -6532,27 +6743,14 @@ function drawHUD(t) {
     const stormRdy  = stormCD <= 0;
     const stormFrac = stormRdy ? 1 : (CONFIG.stormCooldown - stormCD) / CONFIG.stormCooldown;
     // Bolt bar
-    ctx.fillStyle='#1a1a3a'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#8888FF'; ctx.shadowBlur = boltRdy ? 6 : 0;
-    ctx.fillStyle = boltRdy ? '#8888ff' : '#3a3a8a'; ctx.fillRect(rx, 4, 78*boltFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#8888ff'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = boltRdy ? '#ccccff' : '#555588';
-    ctx.font='bold 8px "Courier New",monospace'; ctx.textAlign='center';
-    ctx.fillText(boltRdy ? 'BOLT READY' : `BOLT ${wizBoltCD.toFixed(1)}s`, rx+39, 12);
-    rx += 86;
+    rx += drawCooldownBar(rx, boltFrac, boltRdy ? 'READY' : `${wizBoltCD.toFixed(1)}s`,
+                          boltRdy ? 'ready' : 'cooling');
     // Storm bar
-    ctx.fillStyle='#10101e'; ctx.fillRect(rx, 4, 78, 11);
-    ctx.shadowColor='#4444ff'; ctx.shadowBlur = stormRdy ? 6 : 0;
-    ctx.fillStyle = stormRdy ? '#4444ff' : '#1a1a55'; ctx.fillRect(rx, 4, 78*stormFrac, 11);
-    ctx.shadowBlur=0;
-    ctx.strokeStyle='#4444ff'; ctx.lineWidth=0.7; ctx.strokeRect(rx,4,78,11);
-    ctx.fillStyle = stormRdy ? '#aaaaff' : '#444488';
-    ctx.fillText(stormRdy ? 'STORM RDY' : `STORM ${stormCD.toFixed(1)}s`, rx+39, 12);
-    rx += 86; ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    rx += drawCooldownBar(rx, stormFrac, stormRdy ? 'READY' : `${stormCD.toFixed(1)}s`,
+                          stormRdy ? 'ready' : 'cooling');
     // Special ammo
     if (inv.laserStreams > 0) { ctx.fillStyle='#39E0FF'; ctx.fillText(`[L:${inv.laserStreams}]`,rx,16); rx+=50; }
-    if (inv.fireBolts    > 0) { ctx.fillStyle='#ff5500'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
+    if (inv.fireBolts    > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
   }
   // The maze's keys, one icon per key, lit when held. Same icon-per-unit loop
   // as the quiver above, and only while a maze run is live, so forest and
@@ -6572,13 +6770,15 @@ function drawHUD(t) {
   if (playerShield) {
     ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 3*Math.sin(t*6);
-    ctx.fillStyle = '#FFB400'; ctx.fillText('◆SHLD', rx, 16);
+    ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 1.5; hexGlyph(rx + 5, 16, 5);
+    ctx.fillStyle = '#FFB400'; ctx.fillText('SHLD', rx + 13, 16);
     ctx.shadowBlur = 0; rx += 52;
   }
   // Feather wallet — dim amber, always visible
   ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
   ctx.fillStyle = '#5a3a00';
-  ctx.fillText(`◆${FEATHERS.wallet()}`, rx, 16);
+  leafGlyph(rx + 4, 16, 5);
+  ctx.fillText(`${FEATHERS.wallet()}`, rx + 11, 16);
   ctx.font = 'bold 12px "Courier New", monospace';
 
   // Mode badge (always visible, dim)
@@ -6599,9 +6799,9 @@ function drawHUD(t) {
   }
 
   // HUD separator — glows on low HP
-  ctx.shadowColor = lowHP ? '#ff2222' : '#39FF14';
-  ctx.shadowBlur  = lowHP ? 6 + 3*Math.sin(t*8) : 3;
-  ctx.strokeStyle = lowHP ? '#ff4444' : '#39FF14'; ctx.lineWidth = 2;
+  ctx.shadowColor = lowHP ? '#FF1F1F' : '#39FF14';
+  ctx.shadowBlur  = lowHP ? 6 + 6*Math.sin(t*8) : 3;
+  ctx.strokeStyle = lowHP ? '#FF1F1F' : '#39FF14'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(0, CONFIG.hudHeight-1); ctx.lineTo(CONFIG.canvasW, CONFIG.hudHeight-1); ctx.stroke();
   ctx.shadowBlur = 0;
 }
@@ -6951,7 +7151,25 @@ function drawReticle() {
   ctx.save();
   ctx.translate(mouse.x, mouse.y + CONFIG.hudHeight);
   (RETICLE_PAINTERS[selectedChar] || drawRangerReticle)();
+  drawBlockedFlash();
   ctx.restore();
+}
+
+/**
+ * Rings the reticle when the game refuses a press. Drawn over every
+ * character's own reticle rather than inside each painter, because
+ * ACTION_BLOCKED already covers every refusal there is: a cooldown that has
+ * not finished, an empty pool, and the in-flight arrow cap. All of those
+ * used to be silent, so a press that did nothing and a press that fired
+ * looked identical and the weapon took the blame.
+ */
+function drawBlockedFlash() {
+  if (blockedFlash <= 0) return;
+  ctx.globalAlpha = blockedFlash / CONFIG.blockedFlashSecs;   // linear 1 -> 0
+  ctx.strokeStyle = '#8A1010'; ctx.lineWidth = 2;
+  ctx.shadowColor = '#8A1010'; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 }
 
 /** Ranger: a plain crosshair, the natural read for the crossbow's straight bolts. */
@@ -7100,7 +7318,8 @@ function render(t) {
 
 // Frame-time probe, dev only. Enable with ?perf=1.
 // Tracks update and render cost separately over the last 120 frames.
-const PERF = new URLSearchParams(location.search).has('perf') ? {
+let PERF = null;
+const makePerf = () => ({
   upd: new Float32Array(120), ren: new Float32Array(120), i: 0, n: 0,
   push(u, r) {
     this.upd[this.i] = u; this.ren[this.i] = r;
@@ -7119,7 +7338,7 @@ const PERF = new URLSearchParams(location.search).has('perf') ? {
     ctx.fillText(`UPD AVG ${ua.toFixed(2)} MAX ${um.toFixed(2)}`, 4, CONFIG.canvasH - 24);
     ctx.fillText(`REN AVG ${ra.toFixed(2)} MAX ${rm.toFixed(2)}`, 4, CONFIG.canvasH - 13);
   }
-} : null;
+});
 
 let lastTs = 0, loopT = 0;
 
@@ -7292,22 +7511,27 @@ function loop(ts) {
 }
 
 // Whether the browser's own frame clock still drives the loop. A harness turns
-// this off (see __game.takeClock) because the two clocks share one accumulator
-// and race: real time runs faster than a scripted step(), so one live frame
-// arriving between two calls subtracts however many seconds of wall clock have
-// passed and the sim silently stops advancing until that debt is repaid.
+// this off (see devHooks.takeClock) because the two clocks share one
+// accumulator and race: real time runs faster than a scripted step(), so one
+// live frame arriving between two calls subtracts however many seconds of wall
+// clock have passed and the sim silently stops advancing until that debt is
+// repaid.
 let liveLoop = true;
-
-FEATHERS.init();
-requestAnimationFrame(loop);
-
-// Pure classes exposed for the test harness in tests.html.
-window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
 
 // Dev hook: steps the loop with fixed timestamps and exposes read access to
 // module state, so headless verification works while the tab is backgrounded.
 let __devTs = 0;
-window.__game = {
+
+/**
+ * Read and drive access to module state. boot() also hangs this on
+ * `window.__game` for the browser console. Tests import it directly, which is
+ * what keeping this module free of import-time side effects buys.
+ *
+ * FEATHERS.init() and the first requestAnimationFrame used to sit here at
+ * module scope. They belong to boot() now, which is the whole point of the
+ * seam: importing this file must not start a game.
+ */
+export const devHooks = {
   // Hands the clock to the harness: stops the browser driving the loop and
   // zeroes the shared accumulator, so step(n) advances exactly n fixed steps.
   // Without it a scripted run is at the mercy of whichever clock ran last.
@@ -7323,6 +7547,20 @@ window.__game = {
     // Advance by exactly one fixed step per call, so step(n) runs n sim steps.
     for (let i = 0; i < n; i++) { __devTs += FIXED_DT * 1000; loop(__devTs); }
   },
+  /**
+   * Advances the simulation only, one fixed step per count, with no frame and
+   * no render. Needs no canvas, so this is what the headless tests drive;
+   * step() and frame() above go through the real loop and need a booted page.
+   */
+  stepSim(n = 1) { for (let i = 0; i < n; i++) { updateShake(FIXED_DT); stepGame(FIXED_DT); } },
+  gameTime: () => gameTime,
+  config: () => CONFIG,
+  // The live key map and the one-shot fire latch, so a test can drive the same
+  // input path a real keyboard does instead of a parallel one.
+  keys: () => keys,
+  shoot() { shootPressed = true; },
+  killCount: () => killCount,
+  hp: () => playerHP,
   // One frame with a raw millisecond gap, to test accumulator multi-stepping.
   frame(ms) {
     if (__devTs === 0) __devTs = performance.now();
@@ -7434,3 +7672,53 @@ window.__game = {
   mouse: () => mouse,
   counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, hp: playerHP }),
 };
+
+/**
+ * Binds this module to a browser and starts the frame loop.
+ *
+ * Every DOM, storage and timer touch in this file happens here or downstream of
+ * here. Nothing runs at import, so `import { devHooks } from './game.js'` works
+ * under vitest with no document, which is what makes the simulation testable.
+ */
+export function boot() {
+  // Listeners and the frame loop must not be registered twice; a second call
+  // would double every keypress and run two loops.
+  if (booted) return;
+  booted = true;
+
+  const query = new URLSearchParams(location.search);
+
+  // The pace preset is already applied at import; this only layers the ?pace=
+  // override on top, and applyPace is plain assignment so re-running is safe.
+  applyPace(query.get('pace') ?? CONFIG.pace);
+
+  canvas = document.getElementById('game');
+  canvas.width = CONFIG.canvasW; canvas.height = CONFIG.canvasH;
+  ctx = canvas.getContext('2d');
+
+  tileLayer      = new StaticTileLayer(tileMap, tileLayout);
+  tileOverlay    = new AnimatedTileOverlay(tileMap, tileLayout);
+  vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
+
+  if (query.has('perf')) PERF = makePerf();
+
+  installInput();
+
+  // Render-side reaction to a new map. Registered here, not at module scope,
+  // because it touches the offscreen layers boot() just built.
+  events.on(e => {
+    switch (e.type) {
+      case 'MAP_GENERATED':
+        tileLayer.usePainters(TILE_THEMES[e.kind]);
+        tileOverlay.setPalette(ANIMATED_THEMES[e.kind]);
+        break;
+    }
+  });
+
+  // Pure classes exposed for the test harness in tests.html.
+  window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
+  window.__game = devHooks;
+
+  FEATHERS.init();
+  requestAnimationFrame(loop);
+}
