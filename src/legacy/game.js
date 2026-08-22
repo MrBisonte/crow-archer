@@ -2560,6 +2560,21 @@ const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight', 'minotaur'];
  * branch inside that contract, it is a second contract. Same Record<kind, fn>
  * shape as BOSS_HIT_FX above rather than an `if` inside damageBoss.
  */
+/**
+ * Which bosses exist outside a boss fight.
+ *
+ * The three arena bosses are only ever alive inside `boss_fight`, after an
+ * entrance that burns the arena clear for them, so nothing has to update them
+ * while the player explores. The minotaur is not fought, he is escaped: he
+ * hunts through the whole level, which means updateBoss now runs in `playing`
+ * too. One row per kind rather than an `if (boss.kind === 'minotaur')` at the
+ * call site, so a fifth boss has to answer the question instead of inheriting
+ * whichever answer the branch happened to give it.
+ */
+const BOSS_HUNTS_WHILE_EXPLORING = {
+  crowking: false, dark_archer: false, dark_knight: false, minotaur: true,
+};
+
 const BOSS_ON_HIT = {
   crowking:    (amount) => { dazeBoss(); applyBossDamage(amount); },
   dark_archer: (amount) => applyBossDamage(amount),
@@ -6470,6 +6485,10 @@ function stepGame(dt) {
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
+      // The maze's warden hunts you the whole level, so he ticks here as well
+      // as in a boss fight. See BOSS_HUNTS_WHILE_EXPLORING for why this is a
+      // table lookup and not a kind check.
+      if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
