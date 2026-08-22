@@ -559,6 +559,10 @@ const MAP_PANEL_INFO = {
     lines:['Open ground, scattered cover','Long sightlines, easy crow paths','The classic run'] },
   castle: { key:'C', color:'#AAB4C0', bg:'rgba(170,180,192,0.10)', dim:'#4A5560', dimBg: DIM_PANEL_BG,
     lines:['Denser walls, tighter corridors','Crows funnel, fights stay close','A sharper, closer fight'] },
+  // V, not C: the castle has that. Same reason the multiplayer lobby's map
+  // keys are mnemonics, and the same reason RANGER answers to X.
+  cavern: { key:'V', color:'#5AD8B0', bg:'rgba(90,216,176,0.10)', dim:'#2A6858', dimBg: DIM_PANEL_BG,
+    lines:['Rough chambers, still pools','Wide rooms, short blind necks','Rock cover, fungus that burns'] },
 };
 const MAP_PANELS = Object.keys(MAP_RULES)
   .filter(kind => MAP_RULES[kind].crows)
@@ -626,7 +630,8 @@ let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
 
 // Map selection for Waves mode — persists for the session. Brawl ignores this
 // and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
-let selectedMapKind = 'forest';   // 'forest' | 'castle'
+// One of MAP_PANELS' kinds, which is every MAP_RULES map with crows.
+let selectedMapKind = 'forest';
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
@@ -696,7 +701,8 @@ let mapKind = 'forest';
  * Generates the map, defaulting to 'forest' so a bare call is still a valid
  * one. `kind` comes from three real sources today: brawl's own scripted
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
- * screen (`selectedMapKind`, forest or castle), and the dev harness.
+ * screen (`selectedMapKind`, any map MAP_RULES gives crows), and the dev
+ * harness.
  */
 function generateMap(kind = 'forest') {
   mapKind = kind;

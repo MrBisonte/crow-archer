@@ -12,7 +12,9 @@
  * rules apart here means neither is re-decided at a call site.
  */
 
-import { MazeTerrain, NoiseTerrain, type MapGenerator } from './map-generators';
+import {
+  CavernTerrain, MazeTerrain, NoiseTerrain, type MapGenerator,
+} from './map-generators';
 import { type Noise2D } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
@@ -23,10 +25,10 @@ import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
  * render/tiles.ts) — the same reason CharacterKind became a table instead of
  * a branch, not the reason GameMode stayed one.
  */
-export type MapKind = 'forest' | 'castle' | 'maze';
+export type MapKind = 'forest' | 'castle' | 'maze' | 'cavern';
 
 /**
- * How each map builds its grid, one row per MapKind so a fourth map fails to
+ * How each map builds its grid, one row per MapKind so a fifth map fails to
  * compile until it has a generator.
  *
  * This held a plain `{ density: number }` while every map was the same noise
@@ -39,12 +41,15 @@ export type MapKind = 'forest' | 'castle' | 'maze';
  * stop an arrow, so two players 400 px apart almost never have a clear line
  * otherwise. castle's density is a starting point, tuned for readable
  * pillars over a thicket. maze's braid is the fraction of dead ends reopened
- * into loops. All three are free to adjust; nothing downstream reads them.
+ * into loops. cavern's fill and smoothing are what decide whether it reads as
+ * chambers or as gravel: below about four rounds the scatter never collapses
+ * into rooms. All of them are free to adjust; nothing downstream reads them.
  */
 export const MAP_GEN: Record<MapKind, MapGenerator> = {
   forest: new NoiseTerrain({ density: 0.45 }),
   castle: new NoiseTerrain({ density: 0.5 }),
   maze: new MazeTerrain({ braid: 0.15 }),
+  cavern: new CavernTerrain({ fill: 0.44, smoothing: 4, pools: 0.1, fungus: 0.1 }),
 };
 
 /**
@@ -57,18 +62,22 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
  * forest and castle are built from scattered noise, so blowing a hole in one
  * opens a shortcut and nothing else. A maze *is* its walls: clearing them with
  * a Lightning Storm or a Whirlwind turns the level into an open room and
- * deletes the only thing making an unkillable warden dangerous.
+ * deletes the only thing making an unkillable warden dangerous. A cavern is
+ * scattered rock again, only grown rather than thresholded, so it goes back to
+ * the forest's answer: its walls are cover, not the level.
  *
- * `fogOfWar` is the same argument about sight. Forest and castle are arenas you
- * read at a glance, and hiding two thirds of one would only make it fiddly. A
- * maze is a level about not knowing what is round the corner, so the corner has
- * to actually hide something.
+ * `fogOfWar` is the same argument about sight. Forest, castle and cavern are
+ * arenas you read at a glance, and hiding two thirds of one would only make it
+ * fiddly. A maze is a level about not knowing what is round the corner, so the
+ * corner has to actually hide something.
  *
  * `crows` is where they live. A passive crow crosses the map in a straight line
  * with no terrain check, which reads as a bird over an arena and as a bug in a
  * corridor. In single player it carries a second cost: ten crow kills is the
  * forest's own win condition, and a maze that quietly swaps itself for a boss
- * fight halfway through has two win conditions and means neither.
+ * fight halfway through has two win conditions and means neither. A cavern's
+ * chambers are wide enough to be flown across, which is the whole reason its
+ * generator smooths the scatter instead of leaving it.
  */
 export const MAP_RULES: Record<MapKind, {
   destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean;
@@ -76,6 +85,7 @@ export const MAP_RULES: Record<MapKind, {
   forest: { destructibleTerrain: true, fogOfWar: false, crows: true },
   castle: { destructibleTerrain: true, fogOfWar: false, crows: true },
   maze: { destructibleTerrain: false, fogOfWar: true, crows: false },
+  cavern: { destructibleTerrain: true, fogOfWar: false, crows: true },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */

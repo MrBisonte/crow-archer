@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAP_RULES, type MapKind } from '../sim/arena-map';
 import { Button } from '../sim/input';
 import { Team } from '../sim/team';
 import {
@@ -57,6 +58,20 @@ describe('parseClientMessage', () => {
       { type: 'PING', sent: 1000 },
     ];
     for (const m of msgs) expect(parseClientMessage(m)).toEqual(m);
+  });
+
+  // The validator's map list is written out by hand, and a map missing from it
+  // does not fail loudly: SET_MAP is rejected at the room boundary, so the host
+  // presses the key, the server drops the message, and the lobby just keeps
+  // showing the old map. Reading the kinds off MAP_RULES is what makes a
+  // forgotten one fail here instead of in a match nobody could start.
+  it.each(Object.keys(MAP_RULES) as MapKind[])('accepts SET_MAP for %s', (mapKind) => {
+    const msg: ClientMessage = { type: 'SET_MAP', mapKind };
+    expect(parseClientMessage(overWire(msg))).toEqual(msg);
+  });
+
+  it('still refuses a map that does not exist', () => {
+    expect(parseClientMessage({ type: 'SET_MAP', mapKind: 'volcano' })).toBeNull();
   });
 
   it('keeps a wrong HELLO version for the server to judge', () => {

@@ -8,10 +8,18 @@
  * DOM at all. `devHooks.stepSim` advances the sim without a frame or a render.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { MAP_RULES, type MapKind } from '../sim/arena-map';
 import { boot, devHooks as g } from './game.js';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
 const ONE_SECOND = 60;
+
+/**
+ * The maps the mapselect screen offers, derived the same way MAP_PANELS
+ * derives them. Naming them here instead would be a third copy of a list the
+ * game deliberately keeps in one place.
+ */
+const CROW_MAPS = (Object.keys(MAP_RULES) as MapKind[]).filter((kind) => MAP_RULES[kind].crows);
 
 /** Walks the boss entrance until the boss exists, then opens the fight. */
 function enterBossFight(): void {
@@ -212,19 +220,74 @@ describe('waves map select', () => {
     expect(g.state()).toBe('charselect');
   });
 
-  it('arrow keys cycle and wrap between the two panels', () => {
-    g.pickMap('forest');
+  // Walks the whole cycle once instead of naming the panels, because the
+  // panel list is derived: MAP_PANELS is every MAP_RULES map with crows, in
+  // table order. Written out by hand this test had to be edited to add a third
+  // map, which is exactly the hand-kept second list that derivation removed.
+  it('arrow keys cycle through every crow map in table order, and wrap', () => {
+    g.pickMap(CROW_MAPS[0]!);
     openWavesMapSelect();
     expect(g.state()).toBe('mapselect');
 
-    press('ArrowRight');
-    press('Enter');
-    expect(g.mapKind()).toBe('castle');
+    const walked = [g.selectedMapKind()];
+    for (let i = 0; i < CROW_MAPS.length; i++) {
+      press('ArrowRight');
+      walked.push(g.selectedMapKind());
+    }
+    // Every panel once, then back to where it started.
+    expect(walked).toEqual([...CROW_MAPS, CROW_MAPS[0]]);
 
-    g.pickMap('castle');
-    openWavesMapSelect();
-    press('ArrowRight'); // wraps past the last panel back to the first
+    press('ArrowLeft'); // and the other way, off the first panel
+    expect(g.selectedMapKind()).toBe(CROW_MAPS[CROW_MAPS.length - 1]);
+  });
+
+  it('leaves the maze off the screen entirely, because MAP_RULES gives it no crows', () => {
+    expect(MAP_RULES.maze.crows).toBe(false);
+    expect(CROW_MAPS).not.toContain('maze');
+  });
+
+  it('waves on the cavern starts there and spawns the opening crows', () => {
+    g.go('menu');
+    press('w');
     press('Enter');
-    expect(g.mapKind()).toBe('forest');
+    press('v'); // CAVERN — V, because the castle has C
+    press('Enter');
+    expect(g.state()).toBe('playing');
+    expect(g.mapKind()).toBe('cavern');
+    expect(g.crows().length).toBe(g.config().crowStartCount);
+  });
+
+  // The Waves+Castle bug, which was a population rule keyed on mapKind where
+  // it should have been keyed on gameMode and MAP_RULES. A new map kind
+  // reintroduces it the moment anything special-cases the kind by name, so the
+  // check comes with the kind rather than after someone reports it.
+  it('regression: waves on the cavern keeps escalating past the opening wave', () => {
+    g.go('menu');
+    press('w');
+    press('Enter');
+    press('v');
+    press('Enter');
+    expect(g.mapKind()).toBe('cavern');
+
+    g.crows().length = 0;
+    g.stepSim(g.config().crowEscalationInterval * ONE_SECOND * 3);
+    expect(g.crows().length).toBeGreaterThan(0);
+  });
+});
+
+describe('crows follow MAP_RULES, not the map name', () => {
+  it('takes the birds to a map that has them and leaves them behind on one that does not', () => {
+    g.go('playing'); // forest, with the pace preset's opening crows
+    expect(g.crows().length).toBeGreaterThan(0);
+
+    // crows: true, so the flock carries over rather than being cleared.
+    g.generateMap('cavern');
+    expect(MAP_RULES.cavern.crows).toBe(true);
+    expect(g.crows().length).toBeGreaterThan(0);
+
+    // crows: false. Left in place they would keep flying through the walls of
+    // a map with no crow win condition at all.
+    g.generateMap('maze');
+    expect(g.crows().length).toBe(0);
   });
 });

@@ -245,11 +245,84 @@ export const MAZE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
   },
 };
 
+/**
+ * The cavern: wet limestone underfoot, stalagmites for cover, and fungus where
+ * the forest has trees.
+ *
+ * Cold and blue where the castle is a neutral grey and the maze a warm brown,
+ * because those three are the only things telling a player at a glance which
+ * map they are on. The silhouettes do the rest of that work: ROCK is a cluster
+ * of points rather than the castle's flat-topped pillar or the maze's
+ * edge-to-edge wall, and it is deliberately smaller than its tile, because a
+ * cavern's rock is something you take cover behind rather than the level
+ * itself.
+ *
+ * HUT is the castle's shrine, inherited: `CavernTerrain` emits no huts, and
+ * nothing in a run can introduce one, so this row exists only to keep the
+ * table total — the same reason and the same borrowing the maze does.
+ */
+export const CAVERN_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
+  ...CASTLE_TILE_PAINTERS,
+  [TILE.EMPTY](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#22262e');
+      pixelRect(grid, 0, 0, 16, 1, '#1a1e25');
+      pixelRect(grid, 0, 0, 1, 16, '#1a1e25');
+      // Wet grit, and the odd mineral fleck catching the light.
+      if (seed % 4 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 1, '#2b303a');
+      if (seed % 7 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 7, 2, 2, '#282d36');
+      if (seed % 9 === 0) setPixel(grid, (seed % 13) + 1, (seed % 12) + 3, '#3a4250');
+    });
+  },
+  // A cluster of stalagmites: three points of differing height, tallest
+  // centre-left, so a wall of them reads as broken teeth rather than a fence.
+  [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#22262e');
+      pixelEllipse(grid, 8, 14, 6, 2, 'rgba(0,0,0,0.35)');
+      pixelTriangleUp(grid, 5 + (seed % 2), 14, 4, 9, '#464f60');
+      pixelTriangleUp(grid, 11, 14, 3, 6, '#3d4554');
+      pixelTriangleUp(grid, 8, 15, 5, 11, '#59637a');
+      // Damp highlight down the tall one's lit face.
+      pixelRect(grid, 7, 6, 1, 6, '#788197');
+      pixelRect(grid, 8, 5, 1, 4, '#8e99b4');
+    });
+  },
+  // A still pool, lit from nowhere. Flat fill; the live overlay does the rest.
+  [TILE.WATER](g, x, y, _seed, { tileSize: ts }) {
+    g.fillStyle = '#0f3c44'; g.fillRect(x, y, ts, ts);
+  },
+  // Fungus, so "burns to ash" still means something underground: a pale stalk
+  // under a cap that glows the colour the animated palette flickers.
+  [TILE.TREE](g, x, y, _seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#22262e');
+      pixelEllipse(grid, 8, 14, 5, 2, 'rgba(0,0,0,0.30)');
+      pixelRect(grid, 7, 8, 2, 7, '#8f9a86');
+      pixelRect(grid, 11, 11, 2, 4, '#8f9a86');
+      pixelEllipse(grid, 8, 6, 5, 4, '#2f7d68');
+      pixelEllipse(grid, 7, 5, 3, 2.5, '#4fbf9a');
+      pixelEllipse(grid, 12, 10, 2.5, 2, '#2f7d68');
+    });
+  },
+  [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#191c20');
+      pixelRect(grid, 0, 0, 16, 1, '#131518');
+      pixelRect(grid, 0, 0, 1, 16, '#131518');
+      // Spore dust rather than the forest's charcoal: paler, and it settles.
+      if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 1, '#2a3030');
+      if (seed % 7 === 0) setPixel(grid, (seed % 12) + 3, (seed % 10) + 8, '#39433f');
+    });
+  },
+};
+
 /** Which painter table draws each map's tiles. One row per MapKind. */
 export const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>> = {
   forest: TILE_PAINTERS,
   castle: CASTLE_TILE_PAINTERS,
   maze: MAZE_TILE_PAINTERS,
+  cavern: CAVERN_TILE_PAINTERS,
 };
 
 /**
@@ -368,10 +441,23 @@ const MAZE_PALETTE: AnimatedPalette = {
   treeFlicker: (a) => `rgba(220,140,50,${a.toFixed(2)})`,
 };
 
+/**
+ * Unlike the maze's, this one is live: a cavern generates both pools and
+ * fungus. The flicker is the cap's own glow rather than a highlight or an
+ * ember, so it is the one theme where the tree slot lights the floor instead
+ * of catching light from somewhere else.
+ */
+const CAVERN_PALETTE: AnimatedPalette = {
+  waterBase: ['#0f3c44', '#134a54'],
+  waterRipple: ['#1d5f6c', '#0b2e36'],
+  treeFlicker: (a) => `rgba(90,220,170,${a.toFixed(2)})`,
+};
+
 export const ANIMATED_THEMES: Record<MapKind, AnimatedPalette> = {
   forest: FOREST_PALETTE,
   castle: CASTLE_PALETTE,
   maze: MAZE_PALETTE,
+  cavern: CAVERN_PALETTE,
 };
 
 /**
