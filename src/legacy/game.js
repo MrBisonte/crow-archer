@@ -127,10 +127,14 @@ const CONFIG = {
   // getting ahead is the only reason to fight rats at all.
   ratRespawnSecs: 6,
   // A bite is barely a hit; the poison is the point. 3 damage spread over 3
-  // seconds at one point a second, plus a half-speed crawl for the same
-  // window. Getting bitten once is survivable, getting swarmed is not, and
-  // the slow is what turns a second bite into a third.
-  ratPoisonSecs: 3, ratPoisonDamagePerTick: 1, ratPoisonTickSecs: 1, ratPoisonSlowMult: 0.5,
+  // seconds at one point a second, plus a crawl for the same window. Getting
+  // bitten once is survivable, getting swarmed is not, and the slow is what
+  // turns a second bite into a third.
+  //
+  // The slow was 0.5, which put you at 100 against a 215 rat: one bite and the
+  // pack had you, with nothing you could do about it. 0.65 still means you
+  // lose a straight race and no longer means the first bite decided it.
+  ratPoisonSecs: 3, ratPoisonDamagePerTick: 1, ratPoisonTickSecs: 1, ratPoisonSlowMult: 0.65,
   // The maze's warden. Unkillable by design, so none of these are HP: they are
   // the shape of a chase. Prowl is a little slower than the player so walking
   // away works until a corridor ends; the charge is much faster than anyone.
@@ -2737,11 +2741,12 @@ function newMazeRun() {
  * worth shooting.
  */
 function updateRatPack(dt) {
-  if (skeletons.length > 0) { mazeRun.ratTimer = CONFIG.ratRespawnSecs; return; }
+  if (skeletons.length > 0) { mazeRun.ratTimer = ratRespawnSecs(); return; }
   mazeRun.ratTimer -= dt;
   if (mazeRun.ratTimer > 0) return;
-  mazeRun.ratTimer = CONFIG.ratRespawnSecs;
-  for (let i = 0; i < CONFIG.ratPackSize; i++) spawnSkeleton('rat');
+  mazeRun.ratTimer = ratRespawnSecs();
+  const n = ratsPerPack();
+  for (let i = 0; i < n; i++) spawnSkeleton('rat');
 }
 
 /**
@@ -2805,7 +2810,7 @@ function noteMinotaurEncounter() {
 function maybeDropSilverKey(s) {
   if (!mazeRun || s.kind !== 'rat') return;
   if (!mazeRun.metMinotaur || mazeRun.silverDropped) return;
-  if (Math.random() >= CONFIG.mazeSilverKeyDropChance) return;
+  if (Math.random() >= CONFIG.mazeSilverKeyDropChance / mazePressure()) return;
   mazeRun.silverDropped = true;
   mazeRun.drops.push({ kind: 'silver', x: s.x, y: s.y, bobPhase: Math.random() * Math.PI * 2 });
   events.emit({ type: 'KEY_DROPPED', x: s.x, y: s.y, kind: 'silver' });
@@ -3018,6 +3023,45 @@ const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight', 'minotaur'];
  * call site, so a fifth boss has to answer the question instead of inheriting
  * whichever answer the branch happened to give it.
  */
+/**
+ * How hard the maze pushes each character, as one multiplier.
+ *
+ * The level is last, so it is allowed to be hard, but the difficulty it landed
+ * on was the wrong shape: the knight cleared it most easily because melee
+ * shreds a rat pack, and the two characters the level was supposed to test
+ * hardest were the ones dying in the hunt. This is the ordering it should
+ * have, easiest first: ranger, archer, wizard, knight.
+ *
+ * One scalar rather than four tables. Everything the maze uses to apply
+ * pressure moves together, so a row here is a single decision about a
+ * character and not four that have to be kept consistent with each other.
+ * Above 1 is harder than the level shipped, below 1 is easier.
+ *
+ * These are a starting point, not a measurement. Tune them by playing.
+ */
+const MAZE_PRESSURE = {
+  ranger: 0.70,   // three bolts a press already answers a pack; give it room
+  archer: 0.90,
+  wizard: 1.10,   // a 2 s bolt against five rats is the level's real test
+  knight: 1.35,   // melee is strongest here, so the maze leans hardest on him
+};
+
+/** The pressure for whoever is playing. 1 outside the maze, so nothing else moves. */
+function mazePressure() {
+  if (!mazeRun) return 1;
+  return MAZE_PRESSURE[selectedChar] ?? 1;
+}
+
+/** Rats per pack, never fewer than two: one rat is not a pack. */
+function ratsPerPack() {
+  return Math.max(2, Math.round(CONFIG.ratPackSize * mazePressure()));
+}
+
+/** Quiet between packs. More pressure buys less of it. */
+function ratRespawnSecs() {
+  return CONFIG.ratRespawnSecs / mazePressure();
+}
+
 const BOSS_HUNTS_WHILE_EXPLORING = {
   crowking: false, dark_archer: false, dark_knight: false, minotaur: true,
 };
@@ -3358,7 +3402,7 @@ function stunMinotaur() {
   noteMinotaurEncounter();
   boss.dazeTimer = Math.max(boss.dazeTimer, dazeTimerForStun(CONFIG.minotaurStunSecs));
   if (boss.bstate === 'charge' || boss.bstate === 'wind') endMinotaurCharge(false);
-  boss.cooldown = Math.max(boss.cooldown, CONFIG.minotaurChargeCooldown);
+  boss.cooldown = Math.max(boss.cooldown, CONFIG.minotaurChargeCooldown / mazePressure());
 }
 
 /** Drops him out of a charge into recovery, smashing the wall if he hit one. */
@@ -3377,7 +3421,7 @@ function endMinotaurCharge(hitWall) {
   }
   boss.bstate = 'recover';
   boss.stateTimer = 0;
-  boss.cooldown = CONFIG.minotaurChargeCooldown;
+  boss.cooldown = CONFIG.minotaurChargeCooldown / mazePressure();
 }
 
 /**
@@ -7314,6 +7358,13 @@ window.__game = {
   // The whole objective chain in one read: which keys are held, which locks
   // are open, whether the warden has been met yet, and where the furniture is.
   intro: () => pendingIntro,
+  pressure: () => ({
+    char: selectedChar, pressure: mazePressure(),
+    ratsPerPack: ratsPerPack(), ratRespawnSecs: +ratRespawnSecs().toFixed(2),
+    silverDropChance: +(CONFIG.mazeSilverKeyDropChance / mazePressure()).toFixed(3),
+    chargeCooldown: +(CONFIG.minotaurChargeCooldown / mazePressure()).toFixed(2),
+    poisonSlow: CONFIG.ratPoisonSlowMult,
+  }),
   // The same two lines the click handler runs, so a harness advances the
   // stage hand-off through the real path rather than assigning appState.
   dismissIntro() { if (appState !== 'stage_intro') return false; pendingIntro = null; appState = 'playing'; return true; },
