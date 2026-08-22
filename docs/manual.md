@@ -145,7 +145,7 @@ flowchart LR
 |--------|-------------|
 | **FORESHADOW** | Sky tint darkens and banners appear at kill milestones leading up to the boss |
 | **STREAK** | Announcer chain: Double Kill, Multi Kill, Mega Kill, Ultra Kill, Monster Kill |
-| **FEATHERS** | Meta-currency earned from kills, persisted in `localStorage`. Spend on upgrades (arrows, HP, range, speed) in the inventory screen |
+| **FEATHERS** | Meta-currency earned from kills, persisted in `localStorage`. Spend on the upgrade tree (`src/sim/upgrades.ts`) in the inventory screen: arrow capacity, HP, pitchfork range, move speed, tool capacity, arrows per pickup, a feather bounty, and a shield on every run |
 | **HANDICAP** | `CONFIG.handicap` (0 to 100) rubber-bands crow speed and drop rate for accessibility |
 | **BOUNTIES** | Two active micro-objectives tied to kill streaks, bonus rewards on completion |
 

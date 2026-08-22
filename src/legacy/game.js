@@ -11,6 +11,11 @@ import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
+import {
+  UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
+  featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
+  perkHeld, purchase, statValue,
+} from '../sim/upgrades';
 import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
@@ -385,6 +390,11 @@ function applyPace(name) {
   CONFIG.maxArrowsInFlight     = preset.maxArrowsInFlight;
   CONFIG.baseArrows            = preset.baseArrows;
   CONFIG.baseDynamites         = preset.baseDynamites;
+  // Every base* figure here is the un-upgraded starting point FEATHERS stacks
+  // its levels on, which is why the restore rate gets one too: without it,
+  // FEATHERS.applyToGame() would have to add its bonus to whatever the last
+  // run left behind, and the rate would climb every time a run started.
+  CONFIG.baseArrowRestore      = preset.arrowRestore;
   CONFIG.resources.arrows.max     = preset.baseArrows;
   CONFIG.resources.arrows.restore = preset.arrowRestore;
   CONFIG.resources.dynamites.max = preset.baseDynamites;
@@ -1565,7 +1575,9 @@ function initGame() {
   knightChargeTick = 0; knightChargeCD = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
-  playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
+  // WARD FEATHER, if it has been bought, is the only thing that opens a run
+  // with the shield already up; without it this is the plain reset it was.
+  playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -4244,30 +4256,16 @@ const STREAK = (() => {
 })();
 
 // ── FEATHERS: meta-currency + persistent upgrade tree ─────────────────────────
+//
+// The tree itself — which axes exist, what a level costs, and what it is worth
+// — lives in ../sim/upgrades.ts, where it is pure and can be checked without a
+// canvas. What stays here is everything that needs a browser: the wallet, the
+// save file, the cursor and the screen.
 const FEATHERS = (() => {
   const LS_KEY  = 'crow_archer_v1';
-  const UPGRADES = [
-    {
-      id: 'arrows',  label: 'QUIVER DEPTH',  desc: '+2 arrow capacity / level',
-      costs: [5, 12, 25], maxLv: 3,
-    },
-    {
-      id: 'hp',      label: 'VITALITY',      desc: '+1 max HP / level',
-      costs: [8, 20, 40], maxLv: 3,
-    },
-    {
-      id: 'pfRange', label: 'TINE REACH',    desc: '+8 px pitchfork range / level',
-      costs: [6, 15, 30], maxLv: 3,
-    },
-    {
-      id: 'speed',   label: 'SWIFTNESS',     desc: '+20 move speed / level',
-      costs: [7, 18, 35], maxLv: 3,
-    },
-  ];
-  const DEFAULTS = { arrows: 0, hp: 0, pfRange: 0, speed: 0 };
 
   let _feathers = 0;
-  let _levels   = { ...DEFAULTS };
+  let _levels   = { ...NO_UPGRADES };
   let _cursor   = 0;
 
   function _save() {
@@ -4279,8 +4277,8 @@ const FEATHERS = (() => {
       const raw = localStorage.getItem(LS_KEY);
       const d   = raw ? JSON.parse(raw) : null;
       if (d) {
-        _feathers = d.feathers || 0;
-        _levels   = Object.assign({ ...DEFAULTS }, d.levels || {});
+        _feathers = feathersFrom(d.feathers);
+        _levels   = levelsFrom(d.levels);
       }
     } catch (_) { /* ignore */ }
   }
@@ -4288,35 +4286,42 @@ const FEATHERS = (() => {
   function onCrowKill(isWhite) {
     const base   = isWhite ? 2 : 1;
     const bonus  = Math.random() < 0.5 ? 1 : 0;
-    const earned = base + bonus;
+    const earned = featherYield(_levels, base + bonus);
     _feathers += earned;
     _save();
     return earned;
   }
 
-  function maxHP()   { return CONFIG.playerMaxHP  + (_levels.hp      || 0); }
-  function pfRange() { return CONFIG.pitchforkRange + (_levels.pfRange || 0) * 8; }
-  function speed()   { return CONFIG.playerSpeed    + (_levels.speed   || 0) * 20; }
+  function maxHP()   { return statValue(_levels, 'hp',      CONFIG.playerMaxHP); }
+  function pfRange() { return statValue(_levels, 'pfRange', CONFIG.pitchforkRange); }
+  function speed()   { return statValue(_levels, 'speed',   CONFIG.playerSpeed); }
   function wallet()  { return _feathers; }
+  // Whether a run opens with the shield already up, through the same
+  // playerShield a pickup and the knight's block already raise.
+  function wardStart() { return perkHeld(_levels, 'ward'); }
 
   function applyToGame() {
-    // Arrow capacity from upgrade level must be refreshed at game start.
-    // The base comes from the pace preset, so upgrades stack on it.
-    CONFIG.resources.arrows.max = CONFIG.baseArrows + (_levels.arrows || 0) * 2;
+    // Resource figures derived from upgrade levels must be refreshed at game
+    // start. Every base comes from the pace preset, so upgrades stack on the
+    // preset rather than on whatever the previous run left behind.
+    CONFIG.resources.arrows.max     = statValue(_levels, 'arrows',  CONFIG.baseArrows);
+    CONFIG.resources.arrows.restore = statValue(_levels, 'restore', CONFIG.baseArrowRestore);
+    // One axis for "the tool this hero throws": the archer's dynamite and the
+    // ranger's satchels are the same tier and already share a preset figure,
+    // so raising one without the other would make the axis a hero tax.
+    CONFIG.resources.dynamites.max  = statValue(_levels, 'tools', CONFIG.baseDynamites);
+    CONFIG.resources.satchels.max   = statValue(_levels, 'tools', CONFIG.baseDynamites);
   }
 
   function moveCursor(dir) {
-    _cursor = (_cursor + dir + UPGRADES.length) % UPGRADES.length;
+    _cursor = (_cursor + dir + UPGRADE_ORDER.length) % UPGRADE_ORDER.length;
   }
 
   function buyCurrent() {
-    const u  = UPGRADES[_cursor];
-    const lv = _levels[u.id] || 0;
-    if (lv >= u.maxLv) return false;
-    const cost = u.costs[lv];
-    if (_feathers < cost) return false;
-    _feathers -= cost;
-    _levels[u.id] = lv + 1;
+    const result = purchase({ feathers: _feathers, levels: _levels }, UPGRADE_ORDER[_cursor]);
+    if (result.kind !== 'bought') return false;
+    _feathers = result.progress.feathers;
+    _levels   = result.progress.levels;
     _save();
     return true;
   }
@@ -4340,19 +4345,29 @@ const FEATHERS = (() => {
     ctx.fillText(`◆ ${_feathers}  FEATHERS  (persists across runs)`, CONFIG.canvasW / 2, 96);
     ctx.shadowBlur = 0;
 
+    // Row pitch shrinks to fit however many upgrades the table holds today,
+    // the way the char-select panels size themselves to CHAR_PANELS. Four
+    // rows still lay out at the 96 this screen has always used; it only
+    // tightens once the tree grows past what the canvas fits at that pitch.
+    const rowTop = 170;
+    const rowFoot = CONFIG.canvasH - 54; // clear of the key hint along the bottom
+    const pitch = Math.min(96, Math.floor((rowFoot - rowTop) / UPGRADE_ORDER.length));
+    const bandH = Math.min(76, pitch - 8);
+
     // Upgrade rows
-    UPGRADES.forEach((u, i) => {
-      const lv    = _levels[u.id] || 0;
+    UPGRADE_ORDER.forEach((id, i) => {
+      const u     = UPGRADES[id];
+      const lv    = levelOf(_levels, id);
       const sel   = i === _cursor;
-      const maxed = lv >= u.maxLv;
-      const cost  = maxed ? null : u.costs[lv];
-      const oy    = 170 + i * 96;
+      const maxed = isMaxed(_levels, id);
+      const cost  = nextCost(_levels, id);
+      const oy    = rowTop + i * pitch;
       const barX  = CONFIG.canvasW / 2 - 260;
       const barR  = CONFIG.canvasW / 2 + 260;
 
       if (sel) {
         ctx.fillStyle = 'rgba(57,255,20,0.08)';
-        ctx.fillRect(CONFIG.canvasW / 2 - 280, oy - 32, 560, 76);
+        ctx.fillRect(CONFIG.canvasW / 2 - 280, oy + 6 - bandH / 2, 560, bandH);
         ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 14;
       }
 
@@ -4365,7 +4380,7 @@ const FEATHERS = (() => {
       // Level pips (right-aligned)
       ctx.textAlign = 'right';
       ctx.fillStyle = maxed ? '#FFB400' : (sel ? '#39FF14' : '#1a7a08');
-      ctx.fillText('■'.repeat(lv) + '□'.repeat(u.maxLv - lv), barR, oy - 12);
+      ctx.fillText('■'.repeat(lv) + '□'.repeat(maxLevel(id) - lv), barR, oy - 12);
 
       // Description
       ctx.textAlign = 'left';
@@ -4389,7 +4404,7 @@ const FEATHERS = (() => {
     ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [B]  BACK', CONFIG.canvasW / 2, CONFIG.canvasH - 22);
   }
 
-  return { init, onCrowKill, maxHP, pfRange, speed, wallet, applyToGame, moveCursor, buyCurrent, draw };
+  return { init, onCrowKill, maxHP, pfRange, speed, wallet, wardStart, applyToGame, moveCursor, buyCurrent, draw };
 })();
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
