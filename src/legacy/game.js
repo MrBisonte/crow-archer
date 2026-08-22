@@ -345,6 +345,12 @@ const HUD_ICON_LIMIT = 12;
 // raise the max, and only drawCountRow knows where the icons stop fitting.
 const HP_RESOURCE = { icon: '♥', color: '#39FF14', dim: '#333', spacing: 14 };
 
+// When the HUD starts shouting about health. A fraction, not a hit count:
+// HP upgrades mean a flat "3 left" is the last hit at max 10 and most of a
+// third of the bar at max 20, so an absolute threshold fires later and later
+// into a run as the player buys HP.
+const LOW_HP_FRACTION = 0.25;
+
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
 // appState: menu | multiplayer | controls | playing | paused | boss_entrance | boss_fight | win | gameover
@@ -779,6 +785,37 @@ const playerInput = new LocalInput(() => {
 // network-relevant ones), so cosmetics never touch the simulation.
 const events = new EventBus();
 
+/**
+ * Screen-shake ladder, one home so the ordering is reviewable at a glance.
+ *
+ * ScreenShake is strongest-wins: a weaker trigger during a stronger one is
+ * ignored outright, never summed. So these magnitudes are not decoration, they
+ * are the arbitration rule. Whichever event has the highest number is the one
+ * the screen reports when several land in the same frame, which means the list
+ * has to be ordered by how much the player needs to know a thing happened,
+ * not by how energetic it looks.
+ *
+ * Read it top to bottom: a miss is the quietest thing in the game, taking a
+ * hit outranks landing one, and only the boss and the run ending outrank that.
+ */
+const SHAKE = {
+  arrowMiss:      [2,  100],
+  meleeHit:       [3,  140],
+  shieldBlocked:  [3,  150],
+  playerFrozen:   [4,  200],
+  whirlwindStart: [4,  250],
+  foreshadow:     [5,  350],
+  heavyMelee:     [6,  200],
+  fireSkelBlast:  [6,  250],
+  crowsAggro:     [6,  300],
+  playerHit:      [7,  240],
+  explosion:      [9,  300],
+  bossSlam:       [12, 400],
+  gameOver:       [12, 600],
+  bossDeath:      [14, 600],
+  stormCast:      [14, 600],
+};
+
 // Sound and shake per boss-hit source. The sim states what landed; the table
 // decides how it sounds.
 const BOSS_HIT_FX = {
@@ -826,7 +863,7 @@ events.on(e => {
     }
 
     case 'FIRE_SKELETON_BLAST':
-      playSound(sndExplosion); triggerShake(6, 250);
+      playSound(sndExplosion); triggerShake(...SHAKE.fireSkelBlast);
       burst(e.x, e.y, {
         count: 20, colors: ['#FFB400','#FF6020','#FFFFFF','#8A1010'],
         speedMin: 80, speedMax: 220, decay: 2.0,
@@ -839,7 +876,7 @@ events.on(e => {
       break;
 
     case 'PLAYER_FROZEN':
-      triggerShake(4, 200);
+      triggerShake(...SHAKE.playerFrozen);
       burst(e.x, e.y, {
         count: 12, colors: ['#40D0F0','#A0E8FF','#FFFFFF'],
         speedMin: 30, speedMax: 90, decay: 2.2, shape: 'spark',
@@ -849,12 +886,12 @@ events.on(e => {
 
     case 'MELEE_HIT':
       if (e.kind === 'pitchfork') {
-        triggerShake(6, 200);
+        triggerShake(...SHAKE.heavyMelee);
         burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
           speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
           gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14' });
       } else {
-        triggerShake(3, 120);
+        triggerShake(...SHAKE.meleeHit);
         burst(e.x, e.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
           speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
           shadowBlur: e.fire ? 8 : 3,
@@ -869,7 +906,7 @@ events.on(e => {
       break; }
 
     case 'ARROW_MISS':
-      playSound(sndMiss); triggerShake(3, 200);
+      playSound(sndMiss); triggerShake(...SHAKE.arrowMiss);
       break;
 
     case 'JAVELIN_BOUNCE':
@@ -878,7 +915,7 @@ events.on(e => {
       break;
 
     case 'EXPLOSION':
-      playSound(sndExplosion); triggerShake(10, 450);
+      playSound(sndExplosion); triggerShake(...SHAKE.explosion);
       if (e.onWater) {
         burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
           speedMin: 80, speedMax: 200, decay: 1.6,
@@ -933,7 +970,7 @@ events.on(e => {
       break;
 
     case 'WHIRLWIND_START':
-      playSound(sndExplosion); triggerShake(4, 250);
+      playSound(sndExplosion); triggerShake(...SHAKE.whirlwindStart);
       burst(e.x, e.y, {
         count: 20, colors: ['#C0C0C0','#9090A0','#FFFFFF','#7080B0'],
         speedMin: 50, speedMax: 130, decay: 2.8, shape: 'spark',
@@ -958,7 +995,7 @@ events.on(e => {
       break;
 
     case 'STORM_CAST':
-      playSound(sndLightning); triggerShake(14, 600);
+      playSound(sndLightning); triggerShake(...SHAKE.stormCast);
       burst(e.x, e.y, { count: 32, colors: ['#FFFFFF','#AAAAFF','#8888FF','#FFB400'],
         speedMin: 60, speedMax: 360, decay: 2.5, shape: 'spark',
         shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
@@ -973,11 +1010,11 @@ events.on(e => {
       break;
 
     case 'PLAYER_HIT':
-      triggerShake(4, 200);
+      triggerShake(...SHAKE.playerHit);
       break;
 
     case 'SHIELD_BLOCKED':
-      triggerShake(3, 150);
+      triggerShake(...SHAKE.shieldBlocked);
       burst(e.x, e.y, { count: 10, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
         speedMin: 60, speedMax: 200, decay: 2.5, shape: 'spark',
         shadowBlur: 10, shadowColor: '#FFB400' });
@@ -1002,15 +1039,15 @@ events.on(e => {
       break;
 
     case 'GAME_OVER':
-      triggerShake(12, 600); playSound(sndGameover);
+      triggerShake(...SHAKE.gameOver); playSound(sndGameover);
       break;
 
     case 'CROWS_AGGRO':
-      playSound(sndAggro); triggerShake(6, 300);
+      playSound(sndAggro); triggerShake(...SHAKE.crowsAggro);
       break;
 
     case 'BOSS_CONTACT':
-      triggerShake(6, 250);
+      triggerShake(...SHAKE.bossSlam);
       break;
 
     case 'BOSS_BATS':
@@ -1036,7 +1073,7 @@ events.on(e => {
       break;
 
     case 'BOSS_DEATH_START':
-      playSound(sndBossDeath); triggerShake(14, 500);
+      playSound(sndBossDeath); triggerShake(...SHAKE.bossDeath);
       break;
 
     // Staggered 3-wave death burst: a=0ms, b=+80ms, c=+160ms
@@ -3012,7 +3049,7 @@ const FORESHADOW = (() => {
     if (!m) return;
     _skyTarget = m.tint;
     _banner    = { text: m.text, timer: 2.8 };
-    if (m.shake)   triggerShake(5, 350);
+    if (m.shake)   triggerShake(...SHAKE.foreshadow);
     if (m.screech) playSound(sndBossScreech);
   }
 
@@ -5180,7 +5217,7 @@ function drawHUD(t) {
   // collapses to a count rather than running into the resource column (or,
   // during a boss fight, into the boss HP bar).
   const hpX = isBoss ? 248 : 383;
-  const lowHP = playerHP <= 3 && playerHP > 0;
+  const lowHP = playerHP > 0 && playerHP / FEATHERS.maxHP() <= LOW_HP_FRACTION;
   const hpAlert = lowHP && Math.floor(t*4)%2===0 ? '#ff4444' : null;
   drawCountRow(hpX, HP_RESOURCE, playerHP, FEATHERS.maxHP(), hpAlert, '#ff2222');
 
@@ -5297,9 +5334,9 @@ function drawHUD(t) {
   }
 
   // HUD separator — glows on low HP
-  ctx.shadowColor = lowHP ? '#ff2222' : '#39FF14';
-  ctx.shadowBlur  = lowHP ? 6 + 3*Math.sin(t*8) : 3;
-  ctx.strokeStyle = lowHP ? '#ff4444' : '#39FF14'; ctx.lineWidth = 2;
+  ctx.shadowColor = lowHP ? '#FF1F1F' : '#39FF14';
+  ctx.shadowBlur  = lowHP ? 6 + 6*Math.sin(t*8) : 3;
+  ctx.strokeStyle = lowHP ? '#FF1F1F' : '#39FF14'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(0, CONFIG.hudHeight-1); ctx.lineTo(CONFIG.canvasW, CONFIG.hudHeight-1); ctx.stroke();
   ctx.shadowBlur = 0;
 }
