@@ -1575,7 +1575,7 @@ function updatePlayer(dt) {
           }
         }
       }
-      if (!pfBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+      if (!pfBossHit && bossInPlay() && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
         pfBossHit = true;
         damageBoss(CONFIG.pitchforkBossDamage, player.x, player.y, 'pitchfork', 0.25);
@@ -1618,7 +1618,7 @@ function updatePlayer(dt) {
       }
     }
     // Boss: hit once in first half (phase 1), reset and hit again in second half (phase 2)
-    const canHitBoss = boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+    const canHitBoss = bossInPlay() && !boss.shield &&
         (dist2(tipX, tipY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2 ||
          dist2(midX, midY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2);
 
@@ -1646,7 +1646,7 @@ function updatePlayer(dt) {
       for (let j = skeletons.length - 1; j >= 0; j--)
         if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < wr2) damageSkeleton(j);
       // Damage boss
-      if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+      if (bossInPlay() && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < wr2) {
         damageBoss(1, player.x, player.y, 'whirlwind', 0.1);
       }
@@ -1685,8 +1685,7 @@ function updatePlayer(dt) {
       // Once per dash, the way a spear swing lands once. The repeat ticks are
       // there to catch enemies he advances into, not to grind the same boss
       // seven times over.
-      if (!knightDash.bossHit && boss && appState === 'boss_fight' &&
-          boss.bstate !== 'dead' && !boss.shield && inKnightArc(boss.x, boss.y)) {
+      if (!knightDash.bossHit && bossInPlay() && !boss.shield && inKnightArc(boss.x, boss.y)) {
         knightDash.bossHit = true;
         damageBoss(knightDashBossDamage(), player.x, player.y, 'spear', 0.15);
       }
@@ -1844,7 +1843,7 @@ function fireLightningStorm() {
     if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   for (let j = skeletons.length - 1; j >= 0; j--)
     if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
-  if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+  if (bossInPlay() && !boss.shield &&
       dist2(player.x, player.y, boss.x, boss.y) < r2) {
     damageBoss(CONFIG.stormBossDamage, player.x, player.y, 'storm', CONFIG.stormFlashDuration);
   }
@@ -1882,7 +1881,7 @@ function updateArrows(dt) {
       // exists at all.
       if (a.homing) {
         let tgt = null;
-        if (boss && appState==='boss_fight' && boss.bstate!=='dead') {
+        if (bossInPlay()) {
           tgt = boss;
         } else {
           let tDist2 = Infinity;
@@ -2430,7 +2429,7 @@ function explodeExplosive(d, source) {
     if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   for (let j = skeletons.length - 1; j >= 0; j--)
     if (dist2(d.x, d.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
-  if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+  if (bossInPlay() && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage : CONFIG.dynamiteBossDamage;
     damageBoss(bossDamage, d.x, d.y, source, 0.25);
@@ -2945,6 +2944,22 @@ const BOSS_HUNTS_WHILE_EXPLORING = {
   crowking: false, dark_archer: false, dark_knight: false, minotaur: true,
 };
 
+/**
+ * Is the boss a live target for a weapon right now?
+ *
+ * Every attack used to ask `appState === 'boss_fight'`, which was the same
+ * question while a boss only existed inside its own fight. It stopped being
+ * the same question the moment the warden started hunting during exploration:
+ * he was on screen, hitting the player, and immune to everything, so the stun
+ * a hit is meant to buy could never happen and the level had no counterplay at
+ * all. Same fact as BOSS_HUNTS_WHILE_EXPLORING, read from the weapon's end.
+ */
+function bossInPlay() {
+  if (!boss || boss.bstate === 'dead') return false;
+  if (appState === 'boss_fight') return true;
+  return appState === 'playing' && BOSS_HUNTS_WHILE_EXPLORING[boss.kind];
+}
+
 const BOSS_ON_HIT = {
   crowking:    (amount) => { dazeBoss(); applyBossDamage(amount); },
   dark_archer: (amount) => applyBossDamage(amount),
@@ -3090,7 +3105,7 @@ const BossHit = {
  * happened and the caller removes the projectile on ABSORBED or DAMAGED.
  */
 function resolveBossHit(a, damage, source) {
-  if (!boss || appState !== 'boss_fight' || boss.bstate === 'dead') return BossHit.MISS;
+  if (!bossInPlay()) return BossHit.MISS;
   if (dist2(a.x, a.y, boss.x, boss.y) >= CONFIG.bossHitRadius * CONFIG.bossHitRadius)
     return BossHit.MISS;
 
@@ -3158,7 +3173,19 @@ function bossSpeedMod() {
 
 /** Total length of one daze: the stun plus both recovery steps. */
 function bossDazeTotal() {
-  return CONFIG.bossDazeStunDuration + CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration;
+  return dazeTimerForStun(CONFIG.bossDazeStunDuration);
+}
+
+/**
+ * Where the one daze countdown has to start for `secs` of full stun.
+ *
+ * bossDazePhase reads the timer as a position inside stun, then slow1, then
+ * slow2, counting down. So "stun him for 1.5 seconds" is not `dazeTimer = 1.5`:
+ * that lands inside slow2 and freezes nothing. Anyone setting the timer by
+ * hand needs this conversion, which is exactly why it has a name.
+ */
+function dazeTimerForStun(secs) {
+  return secs + CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration;
 }
 
 /** 'stun' | 'slow1' | 'slow2' | null, derived from the one countdown so
@@ -3251,7 +3278,7 @@ function minotaurSeesPlayer() {
  */
 function stunMinotaur() {
   noteMinotaurEncounter();
-  boss.dazeTimer = Math.max(boss.dazeTimer, CONFIG.minotaurStunSecs);
+  boss.dazeTimer = Math.max(boss.dazeTimer, dazeTimerForStun(CONFIG.minotaurStunSecs));
   if (boss.bstate === 'charge' || boss.bstate === 'wind') endMinotaurCharge(false);
   boss.cooldown = Math.max(boss.cooldown, CONFIG.minotaurChargeCooldown);
 }
