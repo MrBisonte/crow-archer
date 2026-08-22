@@ -1,6 +1,6 @@
 # CROW ARCHER — Design System
 
-A visual-language guide and developer spec for the browser game **CROW ARCHER**: an archery survival game played on an 800×544px canvas with a CRT-terminal aesthetic and phosphor-green brand palette.
+A visual-language guide and developer spec for the browser game **CROW ARCHER**: an archery survival game played on a 1056×720px canvas with a CRT-terminal aesthetic and phosphor-green brand palette.
 
 > No external assets exist. Everything in the game is drawn with the Canvas 2D API (`fillRect`, `arc`, `ellipse`, `bezierCurveTo`, `lineTo`, `createLinearGradient`, `createRadialGradient`, `shadowBlur`). This system documents every shape, color, easing curve, and particle so a developer can translate it directly into `ctx.*` calls.
 
@@ -10,7 +10,7 @@ A visual-language guide and developer spec for the browser game **CROW ARCHER**:
 
 This system was written from the design brief, before integration into the game. The brief is the source of truth, and all entities, palettes and animation curves below derive from its constraints:
 
-- Canvas: 800×544px, HUD 32px, world 800×512px, tile grid 25×16 @ 32px
+- Canvas: 1056×720px, HUD 48px, world 1056×672px, tile grid 33×21 @ 32px
 - Tiles already exist: `EMPTY`, `ROCK`, `WATER`, `TREE` (do not redesign)
 - HUD chrome, overlay screens, screen-shake, vignette and chromatic aberration already exist (do not redesign)
 - 13 entities, 7 particle events, and a unified animation system are the scope of this redesign

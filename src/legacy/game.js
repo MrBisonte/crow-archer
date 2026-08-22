@@ -100,8 +100,8 @@ function zzfx(
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 
 const CONFIG = {
-  tileSize: 32, cols: 33, rows: 21, hudHeight: 32,
-  canvasW: 1056, canvasH: 704,
+  tileSize: 32, cols: 33, rows: 21, hudHeight: 48,
+  canvasW: 1056, canvasH: 720,
 
   playerSpeed: 200, playerRadius: 8,
   playerMaxHP: 10, playerHitFlashSecs: 0.3,
@@ -451,16 +451,7 @@ const BOSS_ENTRY_TEXT = {
   4: '⚠  SOMETHING IS ALREADY IN THE MAZE  ⚠',
 };
 
-// Above this capacity the HUD shows a count instead of one icon per unit.
-// 12 icons still fit beside the boss HP bar at either pitch the HUD uses
-// (13 px for quiver resources, 14 px for hearts); more do not.
-const HUD_ICON_LIMIT = 12;
 
-// Hearts are a counted row like any quiver resource, so they carry the same
-// descriptor shape and go through the same drawer. Keeping them a resource in
-// all but name is what stops the row from growing past its slot: HP upgrades
-// raise the max, and only drawCountRow knows where the icons stop fitting.
-const HP_RESOURCE = { icon: '♥', color: '#39FF14', dim: '#333', spacing: 14 };
 
 // When the HUD starts shouting about health. A fraction, not a hit count:
 // HP upgrades mean a flat "3 left" is the last hit at max 10 and most of a
@@ -1398,6 +1389,7 @@ events.on(e => {
 
     case 'PICKUP_TAKEN':
       playSound(sndPickup);
+      addPickupMark(e.kind, e.x, e.y);
       if (e.kind === 'ricochet') {
         burst(e.x, e.y, { count: 12, colors: ['#39E0FF','#7AF0FF','#FFFFFF'],
           speedMin: 80, speedMax: 160, decay: 2.2, shape: 'spark',
@@ -1700,6 +1692,7 @@ function updatePlayer(dt) {
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
   if (blockedFlash > 0) blockedFlash = Math.max(0, blockedFlash - dt);
+  updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
@@ -6535,275 +6528,563 @@ function drawBossEntrance() {
 }
 
 /**
- * One counted row in the HUD: an icon per unit while the max still fits, a
- * compact `icon NN/MM` once it does not. Hearts and quiver resources share
- * this, so an upgraded max can never overrun whatever sits to the row's right.
+ * The HUD's four lanes. A lane's contents never move another lane's
+ * contents: every element inside one has a literal x, so picking something
+ * up changes a value and never a position. This replaces a running `rx`
+ * accumulator where each optional item advanced the next by a hardcoded
+ * amount, which meant a fire arrow pickup shifted everything to its right
+ * and nothing in the strip had a position worth learning.
  *
- * `r` is a descriptor carrying icon, color, dim and spacing. CONFIG.resources
- * entries already have that shape; HP_RESOURCE gives hearts the same one.
- * A non-null `alertCol` recolors the filled units only, which is what both
- * callers want: the low-HP pulse and the empty-pickup flash are one signal.
- *
- * Returns the width drawn, for callers that flow instead of sitting at a
- * fixed x.
+ * A · VITALS       health, and nothing else
+ * B · CONSUMABLES  every countable pool
+ * C · CONTEXT      run state, or the boss, or the maze objective
+ * D · STATUS       cooldowns and non-countable power-ups
  */
-function drawCountRow(x, r, cur, max, alertCol = null, alertGlow = null) {
-  const paint = (on) => {
-    const hot = Boolean(alertCol) && on;
-    ctx.fillStyle  = hot ? alertCol : (on ? r.color : r.dim);
-    ctx.shadowBlur = hot && alertGlow ? 8 : 0;
-    if (ctx.shadowBlur) ctx.shadowColor = alertGlow;
+const LANE = {
+  A: { x:   0, w: 232 },
+  B: { x: 232, w: 280 },
+  C: { x: 512, w: 288 },
+  D: { x: 800, w: 256 },
+};
+
+/**
+ * One counted track: always ten cells, always the same box, so the geometry
+ * is identical either side of the breakpoint and only the subdivision
+ * changes. Under the limit a cell is one unit and capacity is countable at a
+ * glance; over it each cell is `max/10` and the boundary cell fills
+ * proportionally, which is what lets an upgraded max grow without the row
+ * ever reflowing or colliding with its neighbour.
+ *
+ * The proportional cell keeps a 2px floor while the value is at least 1, so
+ * "almost gone" never renders as "gone".
+ */
+function drawCellTrack(x, y, cells, pitch, body, h, cur, max, colOn, colDim) {
+  const perCell = max / cells;
+  for (let i = 0; i < cells; i++) {
+    const cx = x + i * pitch;
+    ctx.fillStyle = colDim;
+    ctx.fillRect(cx, y, body, h);
+    const filled = Math.min(1, Math.max(0, cur / perCell - i));
+    if (filled <= 0) continue;
+    let w = Math.floor(body * filled);
+    if (w < 2 && cur >= 1) w = 2;
+    ctx.fillStyle = colOn;
+    ctx.fillRect(cx, y, w, h);
+  }
+}
+
+/**
+ * Shape vocabulary. Every HUD item is a shape in its own colour plus a
+ * count, replacing letter codes ([R:] [F:] [J:] [FS:] [L:] [FB:]) that
+ * needed a legend nobody ships. Each painter fills an `s` by `s` box from
+ * the current origin using whatever fill and stroke the caller set, so one
+ * glyph serves the lit and dimmed states without knowing which it is in.
+ *
+ * Hue carries damage type and shape carries delivery: the fire family all
+ * share #FF7A1F and differ only in outline.
+ */
+const GLYPH = {
+  arrow: (s) => { const m = s/2;
+    ctx.beginPath(); ctx.moveTo(s*0.95, m); ctx.lineTo(s*0.5, m-s*0.3); ctx.lineTo(s*0.5, m+s*0.3); ctx.closePath(); ctx.fill();
+    ctx.fillRect(s*0.08, m-s*0.07, s*0.45, s*0.14); },
+  fireArrow: (s) => { const m = s/2;
+    ctx.beginPath(); ctx.moveTo(s*0.95, m); ctx.lineTo(s*0.5, m-s*0.3); ctx.lineTo(s*0.5, m+s*0.3); ctx.closePath(); ctx.fill();
+    ctx.fillRect(s*0.08, m-s*0.07, s*0.45, s*0.14);
+    ctx.fillRect(0, m-s*0.28, s*0.12, s*0.56); },
+  ricochet: (s) => { const m = s/2; ctx.lineWidth = 2;
+    for (const dx of [0.15, 0.5]) { ctx.beginPath();
+      ctx.moveTo(s*dx, m-s*0.3); ctx.lineTo(s*(dx+0.28), m); ctx.lineTo(s*dx, m+s*0.3); ctx.stroke(); } },
+  dynamite: (s) => { ctx.fillRect(s*0.28, s*0.28, s*0.44, s*0.62);
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.5, s*0.28); ctx.lineTo(s*0.72, s*0.06); ctx.stroke(); },
+  satchel: (s) => { ctx.fillRect(s*0.15, s*0.4, s*0.7, s*0.5);
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.3, s*0.4); ctx.lineTo(s*0.7, s*0.4); ctx.stroke(); },
+  javelin: (s) => { ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(s*0.1, s*0.9); ctx.lineTo(s*0.72, s*0.28); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s*0.95, s*0.05); ctx.lineTo(s*0.62, s*0.2); ctx.lineTo(s*0.8, s*0.38); ctx.closePath(); ctx.fill(); },
+  fireSword: (s) => { ctx.fillRect(s*0.43, s*0.05, s*0.14, s*0.6);
+    ctx.fillRect(s*0.22, s*0.62, s*0.56, s*0.12);
+    ctx.fillRect(s*0.45, s*0.74, s*0.1, s*0.2); },
+  laser: (s) => { const m = s/2;
+    ctx.fillRect(s*0.15, m-s*0.07, s*0.7, s*0.14);
+    ctx.fillRect(s*0.1, m-s*0.24, s*0.08, s*0.48);
+    ctx.fillRect(s*0.82, m-s*0.24, s*0.08, s*0.48); },
+  fireBolt: (s) => { [[0.2, 0.7], [0.34, 0.52], [0.48, 0.34]].forEach(([y, w], i) =>
+    ctx.fillRect(s*0.12, s*(y + 0.12*i), s*w, s*0.1)); },
+  spin: (s) => { const m = s/2; ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) { ctx.beginPath();
+      ctx.arc(m, m, s*0.36, i*2.09, i*2.09 + 1.3); ctx.stroke(); } },
+  bolt: (s) => { ctx.beginPath();
+    ctx.moveTo(s*0.58, s*0.05); ctx.lineTo(s*0.28, s*0.52); ctx.lineTo(s*0.48, s*0.52);
+    ctx.lineTo(s*0.4, s*0.95); ctx.lineTo(s*0.72, s*0.44); ctx.lineTo(s*0.5, s*0.44); ctx.closePath(); ctx.fill(); },
+  storm: (s) => { ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(s*0.5, s*0.36, s*0.3, Math.PI*0.9, Math.PI*2.1); ctx.stroke();
+    GLYPH.bolt(s*0.7); },
+  block: (s) => { const m = s/2, r = s*0.42;
+    ctx.lineWidth = 2; ctx.beginPath();
+    ctx.moveTo(m, m-r); ctx.lineTo(m+r, m-r*0.4); ctx.lineTo(m, m+r); ctx.lineTo(m-r, m-r*0.4);
+    ctx.closePath(); ctx.stroke(); },
+  shield: (s) => { const m = s/2; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < 6; i++) { const a = Math.PI/6 + i*Math.PI/3;
+      const px = m + s*0.42*Math.cos(a), py = m + s*0.42*Math.sin(a);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }
+    ctx.closePath(); ctx.stroke(); },
+  feather: (s) => { const m = s/2; ctx.beginPath();
+    ctx.moveTo(m, 0); ctx.quadraticCurveTo(s, m, m, s); ctx.quadraticCurveTo(0, m, m, 0);
+    ctx.closePath(); ctx.fill(); },
+  snipe: (s) => { const m = s/2; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(m, m, s*0.3, 0, Math.PI*2); ctx.stroke();
+    [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => { ctx.beginPath();
+      ctx.moveTo(m + dx*s*0.36, m + dy*s*0.36); ctx.lineTo(m + dx*s*0.5, m + dy*s*0.5); ctx.stroke(); }); },
+  key: (s) => { const m = s/2; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(s*0.3, m, s*0.24, 0, Math.PI*2); ctx.stroke();
+    ctx.fillRect(s*0.52, m-s*0.07, s*0.46, s*0.14);
+    ctx.fillRect(s*0.82, m, s*0.08, s*0.24); },
+};
+
+/** Every countable pool: which glyph draws it, and the colour it owns. */
+const POOL = {
+  arrows:         { glyph: 'arrow',     color: '#D4A832' },
+  ricochetArrows: { glyph: 'ricochet',  color: '#39E0FF' },
+  fireArrows:     { glyph: 'fireArrow', color: '#FF7A1F' },
+  dynamites:      { glyph: 'dynamite',  color: '#FFB400' },
+  satchels:       { glyph: 'satchel',   color: '#B23A00' },
+  knightJavelins: { glyph: 'javelin',   color: '#D9B98A' },
+  laserStreams:   { glyph: 'laser',     color: '#39E0FF' },
+  fireBolts:      { glyph: 'fireBolt',  color: '#FF7A1F' },
+};
+
+/**
+ * Lane B per character: the pool being fired, then the reserves.
+ *
+ * The knight and wizard have no countable primary, since a spear and a bolt
+ * are gated by cooldown rather than ammo, so their active slot is empty and
+ * their pools sit in reserve. Every listed pool is always drawn, dimmed at
+ * zero rather than hidden, which is what keeps the positions fixed.
+ */
+const LANE_B = {
+  archer: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'dynamites'] },
+  ranger: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'satchels'] },
+  knight: { active: null,     reserve: ['knightJavelins'] },
+  wizard: { active: null,     reserve: ['laserStreams', 'fireBolts'] },
+};
+
+/**
+ * Lane D per character: cooldowns and non-countable power-ups, assigned once
+ * and never reordered during a run.
+ *
+ * The knight fills all four slots, which is what sizes the lane. Countable
+ * things are deliberately absent even where they look like status: javelins,
+ * laser streams and fire bolts are pools, and pools live in lane B.
+ */
+const LANE_D = {
+  archer: ['snipe', 'shield'],
+  ranger: ['snipe', 'shield'],
+  knight: ['whirlwind', 'block', 'fireSword', 'shield'],
+  wizard: ['bolt', 'storm', 'snipe', 'shield'],
+};
+
+/** Reads one chip's live state. A table rather than a switch, so a new
+ *  ability is a new row instead of another arm on a growing chain. */
+const CHIP = {
+  whirlwind: () => cooldownChip('spin', knightWhirlwindCD, CONFIG.knightWhirlwindCooldown, knightWhirlwindTimer),
+  block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, CONFIG.knightBlockCooldown, 0),
+  bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
+  storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
+  fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
+                      label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
+                      frac: null }),
+  shield:    () => ({ glyph: 'shield', color: '#FFB400', lit: playerShield,
+                      label: playerShield ? 'ON' : '', frac: null }),
+  snipe:     () => ({ glyph: 'snipe', color: '#F0C830', lit: sniperMode,
+                      label: sniperMode ? 'ON' : '', frac: null }),
+};
+
+/** Shared shape for anything that recharges: ready, counting down, or live. */
+function cooldownChip(glyph, cd, full, activeTimer) {
+  const active = activeTimer > 0, ready = cd <= 0;
+  return {
+    glyph, color: '#39FF14', lit: active || ready,
+    label: active ? activeTimer.toFixed(1) + 's' : ready ? 'READY' : cd.toFixed(1) + 's',
+    frac:  active || ready ? null : 1 - cd / full,
   };
-  if (max > HUD_ICON_LIMIT) {
-    const label = `${r.icon}${String(cur).padStart(2, '0')}/${max}`;
-    paint(cur > 0);
-    ctx.fillText(label, x, 16);
-    ctx.shadowBlur = 0;
-    return ctx.measureText(label).width + 10;
-  }
-  for (let i = 0; i < max; i++) {
-    paint(i < cur);
-    ctx.fillText(r.icon, x + i * r.spacing, 16);
-  }
-  ctx.shadowBlur = 0;
-  return max * r.spacing + 8;
+}
+
+const TRACK_CELLS = 10;
+
+/**
+ * Charge, drawn at the player's feet instead of in the strip.
+ *
+ * Charging is an aiming decision, so it belongs where the eye already is.
+ * The arc opens around the aim vector as the charge builds, which means the
+ * same mark answers "how long have I held this" and "where will it go".
+ */
+function drawChargeArc() {
+  const held = charge.on ? Math.min(1, (performance.now() - charge.t0) / 1000)
+             : knightCharge.on ? knightChargeFrac()
+             : 0;
+  if (held <= 0) return;
+
+  const col = held < 0.5 ? '#28B30E' : held < 0.99 ? '#39FF14' : '#F0C830';
+  const half = (1.8 * held) / 2;
+  ctx.save();
+  ctx.translate(player.x, player.y + CONFIG.hudHeight + 6);
+  ctx.strokeStyle = col; ctx.lineWidth = 3;
+  ctx.shadowColor = col;
+  ctx.shadowBlur = held >= 0.99 ? 10 + 4*Math.sin(loopT*12) : 0;
+  ctx.beginPath();
+  ctx.arc(0, 0, 20, player.aimAngle - half, player.aimAngle + half);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /**
- * Shield mark: a stroked hexagon. Was a filled diamond, which the feather
- * wallet also used, so one glyph stood for two unrelated things three
- * elements apart in the same row.
+ * Pickup confirmations, rising off the player.
+ *
+ * This is what teaches the shape vocabulary. The HUD dropped letter codes in
+ * favour of glyphs, and a glyph nobody has been introduced to is worse than
+ * the code it replaced, so the moment of acquisition is where the shape gets
+ * learned: the same mark that will sit in lane B, at twice the size, over
+ * the thing that just picked it up.
  */
-function hexGlyph(cx, cy, r) {
-  ctx.beginPath();
-  for (let i = 0; i < 6; i++) {
-    const a = Math.PI / 6 + i * Math.PI / 3;
-    const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+const PICKUP_MARK = {
+  ricochet: { glyph: 'ricochet', color: '#39E0FF' },
+  fire:     { glyph: 'fireArrow', color: '#FF7A1F' },
+  shield:   { glyph: 'shield',   color: '#FFB400' },
+};
+const PICKUP_MARK_SECS = 0.8;
+let pickupMarks = [];
+
+function addPickupMark(kind, x, y) {
+  const look = PICKUP_MARK[kind];
+  if (look) pickupMarks.push({ x, y, t: PICKUP_MARK_SECS, ...look });
+}
+
+function updatePickupMarks(dt) {
+  for (let i = pickupMarks.length - 1; i >= 0; i--) {
+    pickupMarks[i].t -= dt;
+    if (pickupMarks[i].t <= 0) pickupMarks.splice(i, 1);
   }
-  ctx.closePath(); ctx.stroke();
 }
 
-/** Feather wallet mark: a four-point leaf, filled. */
-function leafGlyph(cx, cy, r) {
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - r);
-  ctx.quadraticCurveTo(cx + r, cy, cx, cy + r);
-  ctx.quadraticCurveTo(cx - r, cy, cx, cy - r);
-  ctx.closePath(); ctx.fill();
+function drawPickupMarks() {
+  for (const m of pickupMarks) {
+    const done = 1 - m.t / PICKUP_MARK_SECS;
+    const rise = 16 * done;
+    // Alpha only starts falling for the last 250ms, so the shape is fully
+    // solid for most of its life and does not read as a flicker.
+    const fade = m.t < 0.25 ? m.t / 0.25 : 1;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.translate(m.x - 14, m.y + CONFIG.hudHeight - 24 - rise);
+    ctx.fillStyle = m.color; ctx.strokeStyle = m.color;
+    ctx.shadowColor = m.color; ctx.shadowBlur = 6;
+    GLYPH[m.glyph](28);
+    ctx.restore();
+  }
 }
-
-/** Cooldown bar geometry. One home, since the row advance depends on it. */
-const CD_BAR = { w: 78, h: 20, y: 6, gap: 8 };
 
 /**
- * One ability cooldown bar. Four of these used to be the same twenty lines
- * pasted with different track, fill, border and label colors; what actually
- * varies is the fill fraction, the label, and which state it is in.
- *
- * State picks the color, not the ability. READY is the same green on every
- * bar for every character, so "can I use this" is one thing to recognise
- * instead of four palettes. Which ability a bar belongs to is already
- * carried by its fixed position in the row.
- *
- * The label is the state and nothing else: no ability name, because the name
- * cost the four characters left over at 8px, and 8px is where the digits in
- * a countdown stop being separable under the scanline overlay.
- *
- * Returns the width to advance by.
+ * The two states that end a run get the screen edge to themselves, rather
+ * than another line of text competing for the same 48px as everything else.
+ * HP always wins: never both at once.
  */
-function drawCooldownBar(x, frac, label, state) {
-  const { w, h, y, gap } = CD_BAR;
-  const lit = state !== 'cooling';
-  ctx.fillStyle = '#0A0F0A'; ctx.fillRect(x, y, w, h);
-  ctx.shadowColor = '#39FF14';
-  ctx.shadowBlur = state === 'active' ? 8 + 4*Math.sin(loopT*8) : (lit ? 6 : 0);
-  ctx.fillStyle = lit ? '#39FF14' : '#196407';
-  ctx.fillRect(x, y, w * frac, h);
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = lit ? '#39FF14' : '#243424'; ctx.lineWidth = 1;
-  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-  // Dark on the filled bar, bright on the empty track: readable either way.
-  ctx.fillStyle = lit ? '#0A0F0A' : '#39FF14';
-  ctx.font = 'bold 12px "Courier New",monospace'; ctx.textAlign = 'center';
-  ctx.fillText(label, x + w/2, y + h/2);
-  ctx.textAlign = 'left'; ctx.font = 'bold 10px "Courier New",monospace';
-  return w + gap;
+function drawEdgeAlerts() {
+  const maxHP = FEATHERS.maxHP();
+  const hpFrac = playerHP > 0 ? playerHP / maxHP : 1;
+  const pool = CONFIG.resources.arrows;
+  const ammoFrac = (selectedChar === 'archer' || selectedChar === 'ranger') && pool.max > 0
+    ? inv.arrows / pool.max : 1;
+
+  let col = null, amp = 0;
+  if (playerHP > 0 && hpFrac <= LOW_HP_FRACTION) { col = '#FF1F1F'; amp = 0.10; }
+  else if (ammoFrac <= 0.10)                     { col = '#FFB400'; amp = 0.05; }
+  if (!col) return;
+
+  const y = CONFIG.hudHeight;
+  ctx.save();
+  ctx.globalAlpha = amp + amp * Math.sin(loopT * 8);
+  ctx.strokeStyle = col; ctx.lineWidth = 6;
+  ctx.shadowColor = col; ctx.shadowBlur = 12;
+  ctx.strokeRect(3, y + 3, CONFIG.canvasW - 6, CONFIG.canvasH - y - 6);
+  ctx.restore();
+}
+
+/**
+ * Edge ticks for threats the player cannot currently account for.
+ *
+ * The design asked for off-screen threat markers, reasoning that on a 33x21
+ * grid the thing that kills you is usually just off-frame. That is not true
+ * here: the world is exactly 33x21 at 32px and there is no camera, so it
+ * fills the viewport and nothing is ever off-screen. The real version of
+ * that problem is a threat you cannot see rather than one you cannot reach:
+ * an enemy standing in the maze's unlit dark, or a crow that has noticed you
+ * while your attention is elsewhere.
+ *
+ * So the mechanism is the design's, pointed at the case that actually
+ * exists. It also replaces the old blinking INCOMING text, and improves on
+ * it, since a tick says which direction the trouble is in.
+ */
+const EDGE_TICK_MAX = 8;
+
+/** A boss ticks in its own eye colour, like every other threat marker. */
+function bossTickColor() {
+  return boss.kind === 'minotaur' ? MINOTAUR_PALETTE.eye : '#B040E0';
+}
+
+function drawEdgeTicks() {
+  const cx = CONFIG.canvasW / 2, cy = CONFIG.hudHeight + (CONFIG.canvasH - CONFIG.hudHeight) / 2;
+  const threats = [];
+
+  // Aggro only, never merely unseen. Trash that cannot be seen stays
+  // unmarked on purpose: the maze deletes crows and keeps a pack of rats
+  // alive at all times, so ticking every unlit one would pin six to eight
+  // markers to the edge permanently. That is a live minimap of the threats
+  // the dark exists to hide, and it gets more useful the darker it gets,
+  // which is backwards. Rats are meant to be found, not mapped.
+  for (const c of crows) {
+    if (c.state !== 'aggro') continue;
+    threats.push({ x: c.x, y: c.y + CONFIG.hudHeight, col: c.white ? '#FFFFFF' : '#FF1F1F' });
+  }
+  // The boss is the opposite case and does tick when unseen. Something
+  // unkillable closing through a wall is the one threat where knowing the
+  // direction, and being able to do little about it, is the point.
+  if (boss && boss.bstate !== 'dead' && !litAt(boss.x, boss.y))
+    threats.push({ x: boss.x, y: boss.y + CONFIG.hudHeight, col: bossTickColor() });
+
+  if (!threats.length) return;
+  threats.sort((a, b) => dist2(cx, cy, a.x, a.y) - dist2(cx, cy, b.x, b.y));
+
+  const top = CONFIG.hudHeight + 16, bot = CONFIG.canvasH - 16;
+  const left = 16, right = CONFIG.canvasW - 16;
+  ctx.save();
+  ctx.globalAlpha = 0.35 + 0.25 * Math.sin(loopT * 4);
+  for (const th of threats.slice(0, EDGE_TICK_MAX)) {
+    const ang = Math.atan2(th.y - cy, th.x - cx);
+    const ex = Math.max(left, Math.min(right, cx + Math.cos(ang) * CONFIG.canvasW));
+    const ey = Math.max(top,  Math.min(bot,   cy + Math.sin(ang) * CONFIG.canvasH));
+    ctx.save();
+    ctx.translate(ex, ey); ctx.rotate(ang);
+    ctx.fillStyle = th.col; ctx.shadowColor = th.col; ctx.shadowBlur = 6;
+    ctx.fillRect(-1.5, -12, 3, 24);
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 function drawHUD(t) {
   const isBoss = appState === 'boss_fight';
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
-  ctx.font = 'bold 12px "Courier New", monospace'; ctx.textBaseline = 'middle';
+  const maxHP  = FEATHERS.maxHP();
+  const lowHP  = playerHP > 0 && playerHP / maxHP <= LOW_HP_FRACTION;
 
-  // Score. Dimmer than the rest on purpose: it is the one number here that
-  // never changes a decision mid-fight, and #39FF14 is reserved for health
-  // and friendly state now.
-  ctx.fillStyle = '#28B30E'; ctx.textAlign = 'left';
-  ctx.fillText(`SCORE:${String(score).padStart(3,'0')}`, 8, 16);
+  ctx.fillStyle = '#0A0F0A'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#243424';
+  for (const l of [LANE.B, LANE.C, LANE.D]) ctx.fillRect(l.x, 4, 1, 38);
 
-  // Kill counter or wave counter, depending on mode; or boss HP bar
-  if (!isBoss) {
-    ctx.fillStyle = '#39FF14';
-    if (gameMode === 'brawl') ctx.fillText(`  KILLS:${String(killCount).padStart(2,'0')}/10`, 96, 16);
-    else                      ctx.fillText(`  WAVE:${String(wave).padStart(2,'0')}`, 96, 16);
-  } else if (boss && !Number.isFinite(boss.hpMax)) {
-    // A boss with no finite HP has no bar to draw. The minotaur cannot be
-    // killed, so a bar would promise progress that never arrives, and the
-    // segment loop below counts one divider per HP point — against Infinity
-    // that is not a slow frame, it is a hang. This is the one place the rest
-    // of the file has to know an unkillable boss exists.
-    ctx.textAlign='right'; ctx.font='bold 11px "Courier New",monospace';
-    ctx.fillStyle='#C8A040';
-    ctx.fillText('THE MAZE HAS A KEEPER', 680, 16);
-    ctx.textAlign='left'; ctx.font='bold 12px "Courier New",monospace';
-  } else if (boss) {
-    // Prominent segmented HP bar
-    const bBarX=420, bBarW=260, bBarY=4, bBarH=22;
-    const bHpMax = boss.hpMax || CONFIG.bossHP;
-    const hpFrac = boss.hp / bHpMax;
-    const hitOn  = boss.hitFlash > 0 && Math.floor(boss.hitFlash*18)%2===0;
-    ctx.fillStyle='#1a0000'; ctx.fillRect(bBarX, bBarY, bBarW, bBarH);
-    ctx.shadowColor = hitOn ? '#FFFFFF' : '#ff2222';
-    ctx.shadowBlur  = hitOn ? 20 : 8 + 4*Math.sin(t*5);
-    ctx.fillStyle   = hitOn ? '#ffffff' : (hpFrac > 0.5 ? '#ff2222' : hpFrac > 0.25 ? '#ff5500' : '#cc0000');
-    ctx.fillRect(bBarX, bBarY, bBarW * hpFrac, bBarH);
-    ctx.shadowBlur=0;
-    // Segment dividers
-    ctx.fillStyle='rgba(0,0,0,0.6)';
-    for (let i=1;i<bHpMax;i++) ctx.fillRect(bBarX+(bBarW/bHpMax)*i-1, bBarY, 2, bBarH);
-    // Border glow
-    ctx.shadowColor='#cc0000'; ctx.shadowBlur=5;
-    ctx.strokeStyle='#ff4444'; ctx.lineWidth=1.5;
-    ctx.strokeRect(bBarX, bBarY, bBarW, bBarH);
-    ctx.shadowBlur=0;
-    // Labels
-    ctx.textAlign='right'; ctx.font='bold 11px "Courier New",monospace';
-    ctx.fillStyle='#cc0000'; ctx.fillText('BOSS HP', bBarX-5, 16);
-    ctx.fillStyle='#ff8888'; ctx.font='bold 10px "Courier New",monospace';
-    // Burn damage makes hp fractional, so the readout shows the point he is
-    // still on while the bar behind it drains smoothly. The epsilon keeps
-    // float dust from rounding a whole point back up.
-    ctx.fillText(`${Math.ceil(boss.hp - 1e-6)}/${bHpMax}`, bBarX+bBarW-4, 16);
-    ctx.font='bold 12px "Courier New",monospace';
-  }
+  drawLaneVitals(maxHP, lowHP);
+  drawLaneConsumables();
+  drawLaneContext(t, isBoss);
+  drawLaneStatus();
 
-  // HP hearts. Same drawer as the quiver below, so a maxed-out HP upgrade
-  // collapses to a count rather than running into the resource column (or,
-  // during a boss fight, into the boss HP bar).
-  const hpX = isBoss ? 248 : 383;
-  const lowHP = playerHP > 0 && playerHP / FEATHERS.maxHP() <= LOW_HP_FRACTION;
-  const hpAlert = lowHP && Math.floor(t*4)%2===0 ? '#FF1F1F' : null;
-  drawCountRow(hpX, HP_RESOURCE, playerHP, FEATHERS.maxHP(), hpAlert, '#FF1F1F');
-
-  // Resources — archer/ranger quiver OR knight/wizard cooldowns. Each branch
-  // is named explicitly rather than falling through to a trailing else, so a
-  // fifth character with none of these draws nothing here instead of
-  // silently inheriting whichever branch used to be last.
-  ctx.font = 'bold 10px "Courier New", monospace';
-  let rx = isBoss ? 692 : 568;
-  ctx.textAlign = 'left';
-  if (selectedChar === 'archer' || selectedChar === 'ranger') {
-    // Same ammo fields, same pickup effects — only which second resource
-    // shows (dynamites vs satchels) differs.
-    const keys = selectedChar === 'archer' ? ['arrows', 'dynamites'] : ['arrows', 'satchels'];
-    for (const k of keys) {
-      const r = CONFIG.resources[k];
-      const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
-      rx += drawCountRow(rx, r, inv[k], r.max, flash ? '#8A1010' : null);
-    }
-    if (inv.ricochetArrows > 0) { ctx.fillStyle='#44ddff'; ctx.fillText(`[R:${inv.ricochetArrows}]`,rx,16); rx+=52; }
-    if (inv.fireArrows     > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
-  } else if (selectedChar === 'knight') {
-    // Knight — whirlwind cooldown bar + active buffs
-    const wrdRdy  = knightWhirlwindCD <= 0;
-    const wrdFrac = wrdRdy ? 1 : (CONFIG.knightWhirlwindCooldown - knightWhirlwindCD) / CONFIG.knightWhirlwindCooldown;
-    const wrdActive = knightWhirlwindTimer > 0;
-    const wrdLabel = wrdActive ? `${knightWhirlwindTimer.toFixed(1)}s`
-                   : wrdRdy    ? 'READY'
-                               : `${knightWhirlwindCD.toFixed(1)}s`;
-    rx += drawCooldownBar(rx, wrdActive ? 1 : wrdFrac, wrdLabel,
-                          wrdActive ? 'active' : wrdRdy ? 'ready' : 'cooling');
-    // Block bar — countdown to the next free charge. The shared ◆SHLD
-    // readout further down already flags a banked charge as active, so this
-    // one just needs to read "ready" rather than duplicate that text.
-    const blkRdy  = knightBlockCD <= 0 || playerShield;
-    const blkFrac = blkRdy ? 1 : (CONFIG.knightBlockCooldown - knightBlockCD) / CONFIG.knightBlockCooldown;
-    rx += drawCooldownBar(rx, blkFrac, blkRdy ? 'READY' : `${knightBlockCD.toFixed(1)}s`,
-                          blkRdy ? 'ready' : 'cooling');
-    if (inv.knightJavelins    > 0) { ctx.fillStyle='#D0D0E8'; ctx.fillText(`[J:${inv.knightJavelins}]`, rx, 16); rx+=48; }
-    if (inv.knightFireSwordTimer > 0) {
-      ctx.fillStyle='#FF7A1F';
-      ctx.fillText(`[FS:${inv.knightFireSwordTimer.toFixed(1)}s]`, rx, 16); rx+=70;
-    }
-  } else if (selectedChar === 'wizard') {
-    // Wizard — bolt cooldown bar
-    const boltRdy  = wizBoltCD <= 0;
-    const boltFrac = boltRdy ? 1 : (CONFIG.wizBoltCooldown - wizBoltCD) / CONFIG.wizBoltCooldown;
-    const stormRdy  = stormCD <= 0;
-    const stormFrac = stormRdy ? 1 : (CONFIG.stormCooldown - stormCD) / CONFIG.stormCooldown;
-    // Bolt bar
-    rx += drawCooldownBar(rx, boltFrac, boltRdy ? 'READY' : `${wizBoltCD.toFixed(1)}s`,
-                          boltRdy ? 'ready' : 'cooling');
-    // Storm bar
-    rx += drawCooldownBar(rx, stormFrac, stormRdy ? 'READY' : `${stormCD.toFixed(1)}s`,
-                          stormRdy ? 'ready' : 'cooling');
-    // Special ammo
-    if (inv.laserStreams > 0) { ctx.fillStyle='#39E0FF'; ctx.fillText(`[L:${inv.laserStreams}]`,rx,16); rx+=50; }
-    if (inv.fireBolts    > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
-  }
-  // The maze's keys, one icon per key, lit when held. Same icon-per-unit loop
-  // as the quiver above, and only while a maze run is live, so forest and
-  // castle keep the HUD they had.
-  if (mazeRun) {
-    ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
-    for (const [kind, k] of Object.entries(MAZE_KEYS)) {
-      const held = mazeRun.held[kind];
-      ctx.shadowColor = k.color; ctx.shadowBlur = held ? 6 : 0;
-      ctx.fillStyle = held ? k.color : k.dim;
-      ctx.fillText(k.icon, rx, 16);
-      ctx.shadowBlur = 0;
-      rx += k.spacing;
-    }
-    rx += 8;
-  }
-  if (playerShield) {
-    ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
-    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 3*Math.sin(t*6);
-    ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 1.5; hexGlyph(rx + 5, 16, 5);
-    ctx.fillStyle = '#FFB400'; ctx.fillText('SHLD', rx + 13, 16);
-    ctx.shadowBlur = 0; rx += 52;
-  }
-  // Feather wallet — dim amber, always visible
-  ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
-  ctx.fillStyle = '#5a3a00';
-  leafGlyph(rx + 4, 16, 5);
-  ctx.fillText(`${FEATHERS.wallet()}`, rx + 11, 16);
-  ctx.font = 'bold 12px "Courier New", monospace';
-
-  // Mode badge (always visible, dim)
-  ctx.font = 'bold 10px "Courier New", monospace'; ctx.textAlign = 'right';
-  ctx.fillStyle = '#1a5a10';
-  ctx.fillText(gameMode === 'brawl' ? 'BRAWL' : 'WAVES', CONFIG.canvasW - 8, 7);
-
-  // INCOMING / SNIPE indicator
-  ctx.font = 'bold 12px "Courier New", monospace';
-  if (!isBoss) {
-    if (sniperMode) {
-      ctx.fillStyle = '#ffff33';
-      ctx.fillText('◎ SNIPE', CONFIG.canvasW - 8, 22);
-    } else if (crows.some(c => c.state === 'aggro') && Math.floor(t*2)%2===0) {
-      ctx.fillStyle = '#ff2222';
-      ctx.fillText('⚠ INCOMING', CONFIG.canvasW - 8, 22);
-    }
-  }
-
-  // HUD separator — glows on low HP
-  ctx.shadowColor = lowHP ? '#FF1F1F' : '#39FF14';
-  ctx.shadowBlur  = lowHP ? 6 + 6*Math.sin(t*8) : 3;
-  ctx.strokeStyle = lowHP ? '#FF1F1F' : '#39FF14'; ctx.lineWidth = 2;
+  ctx.shadowColor = lowHP ? '#FF1F1F' : '#196407';
+  ctx.shadowBlur  = lowHP ? 6 + 6*Math.sin(t*8) : 4;
+  ctx.strokeStyle = lowHP ? '#FF1F1F' : '#196407'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(0, CONFIG.hudHeight-1); ctx.lineTo(CONFIG.canvasW, CONFIG.hudHeight-1); ctx.stroke();
   ctx.shadowBlur = 0;
+}
+
+/** Lane A: health, with nothing else allowed to compete with it. */
+function drawLaneVitals(maxHP, lowHP) {
+  const col = lowHP ? '#FF1F1F' : '#39FF14';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.fillStyle = '#28B30E';
+  ctx.fillText('HP', 8, 13);
+
+  if (lowHP) { ctx.shadowColor = '#FF1F1F'; ctx.shadowBlur = 6 + 6*Math.sin(loopT*8); }
+  // Plain rects rather than heart glyphs: a 12px glyph inside a 14px cell
+  // leaves 1px of margin and stops resolving under the scanline pass, where
+  // a solid block still reads at any count.
+  drawCellTrack(8, 18, TRACK_CELLS, 16, 14, 14, playerHP, maxHP, col, '#243424');
+  ctx.shadowBlur = 0;
+
+  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.textAlign = 'right'; ctx.fillStyle = col;
+  ctx.fillText(playerHP + '/' + maxHP, 224, 30);
+}
+
+/** Lane B: the pool being fired on top, the reserves underneath. */
+function drawLaneConsumables() {
+  const spec = LANE_B[selectedChar];
+  if (!spec) return;
+  if (spec.active) drawActivePool(spec.active);
+  spec.reserve.forEach((key, i) => drawReservePool(key, 240 + i * 100));
+}
+
+function drawActivePool(key) {
+  const pool  = POOL[key];
+  const res   = CONFIG.resources[key];
+  const cur   = inv[key] || 0;
+  const max   = res ? res.max : 0;
+  const flash = iFlash[key] > 0 && Math.floor(iFlash[key]*12)%2 === 0;
+  const col   = flash ? '#8A1010' : pool.color;
+
+  ctx.save(); ctx.translate(240, 5);
+  ctx.fillStyle = col; ctx.strokeStyle = col; GLYPH[pool.glyph](14);
+  ctx.restore();
+
+  if (max > 0) drawCellTrack(260, 7, TRACK_CELLS, 12, 10, 12, cur, max, col, '#243424');
+
+  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.textAlign = 'right'; ctx.fillStyle = col;
+  ctx.fillText(max > 0 ? cur + '/' + max : String(cur), 504, 17);
+}
+
+function drawReservePool(key, x) {
+  const pool = POOL[key];
+  const cur  = inv[key] || 0;
+  ctx.save();
+  ctx.globalAlpha = cur > 0 ? 1 : 0.35;
+  ctx.translate(x, 27);
+  ctx.fillStyle = pool.color; ctx.strokeStyle = pool.color;
+  GLYPH[pool.glyph](12);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = cur > 0 ? 1 : 0.35;
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.textAlign = 'left'; ctx.fillStyle = pool.color;
+  ctx.fillText(String(cur), x + 18, 37);
+  ctx.restore();
+}
+
+/**
+ * Lane C: run context, or the boss, or the maze objective.
+ *
+ * This is what stops a boss fight from moving the rest of the HUD. Only the
+ * elements the boss is allowed to replace live here, so lanes A, B and D
+ * render identically in and out of a fight.
+ */
+function drawLaneContext(t, isBoss) {
+  const cx = LANE.C.x + LANE.C.w / 2;
+  ctx.textAlign = 'center';
+
+  if (isBoss && boss && !Number.isFinite(boss.hpMax)) {
+    // The minotaur cannot be killed, so a bar would promise progress that
+    // never arrives, and the divider loop in drawBossBar counts one per HP
+    // point, which against Infinity is a hang rather than a slow frame.
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.shadowColor = '#C8A040'; ctx.shadowBlur = 6 + 3*Math.sin(t*3);
+    ctx.fillStyle = '#C8A040';
+    ctx.fillText('THE MAZE HAS A KEEPER', cx, 18);
+    ctx.shadowBlur = 0;
+  } else if (isBoss && boss) {
+    drawBossBar(t, cx);
+  } else {
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4; ctx.fillStyle = '#39FF14';
+    ctx.fillText(gameMode === 'brawl'
+      ? 'KILLS ' + String(killCount).padStart(2, '0') + '/10'
+      : 'WAVE ' + String(wave).padStart(2, '0'), cx, 18);
+    ctx.shadowBlur = 0;
+    ctx.font = 'bold 10px "Courier New", monospace'; ctx.fillStyle = '#28B30E';
+    ctx.fillText('SCORE ' + score, cx, 34);
+  }
+
+  // Row three is identical in all three states above, so nothing here moves.
+  ctx.save(); ctx.translate(520, 32); ctx.fillStyle = '#A07828'; GLYPH.feather(10); ctx.restore();
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.textAlign = 'left'; ctx.fillStyle = '#A07828';
+  ctx.fillText(String(FEATHERS.wallet()), 534, 42);
+
+  if (mazeRun) drawMazeKeys(cx);
+
+  ctx.textAlign = 'right'; ctx.fillStyle = '#196407';
+  ctx.fillText(gameMode === 'brawl' ? 'BRAWL' : 'WAVES', 792, 42);
+}
+
+function drawBossBar(t, cx) {
+  const x = 520, y = 6, w = 272, h = 16;
+  const hpMax = boss.hpMax || CONFIG.bossHP;
+  const frac  = boss.hp / hpMax;
+  const hitOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash*18)%2 === 0;
+
+  ctx.fillStyle = '#1A2A1A'; ctx.fillRect(x, y, w, h);
+  ctx.shadowColor = hitOn ? '#FFFFFF' : '#FF1F1F';
+  ctx.shadowBlur  = hitOn ? 20 : 6 + 4*Math.sin(t*3);
+  ctx.fillStyle   = hitOn ? '#FFFFFF' : (frac > 0.5 ? '#FF1F1F' : frac > 0.25 ? '#B23A00' : '#8A1010');
+  ctx.fillRect(x, y, w * frac, h);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#0A0F0A';
+  for (let i = 1; i < hpMax; i++) ctx.fillRect(x + (w/hpMax)*i - 0.5, y, 1, h);
+  ctx.strokeStyle = '#FF1F1F'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.textAlign = 'center'; ctx.fillStyle = '#FF8888';
+  // Burn damage makes hp fractional, so the readout shows the point the boss
+  // is still on while the bar behind it drains smoothly. The epsilon keeps
+  // float dust from rounding a whole point back up.
+  ctx.fillText(Math.ceil(boss.hp - 1e-6) + ' / ' + hpMax, cx, 34);
+}
+
+/**
+ * The maze's two keys. Held or not held, never a count, so they get marks
+ * and no number. They sit in lane C because they are objective state like
+ * the wave counter, and because lane D is already full for the knight.
+ */
+function drawMazeKeys(cx) {
+  const kinds = Object.keys(MAZE_KEYS);
+  const pitch = 18;
+  let x = cx - ((kinds.length - 1) * pitch) / 2 - 5;
+  for (const kind of kinds) {
+    const k = MAZE_KEYS[kind], held = mazeRun.held[kind];
+    ctx.save();
+    ctx.globalAlpha = held ? 1 : 0.35;
+    ctx.translate(x, 32);
+    ctx.fillStyle = held ? k.color : k.dim;
+    ctx.strokeStyle = held ? k.color : k.dim;
+    if (held) { ctx.shadowColor = k.color; ctx.shadowBlur = 6; }
+    GLYPH.key(10);
+    ctx.restore();
+    x += pitch;
+  }
+}
+
+/** Lane D: one chip per ability, in a slot that never reorders. */
+function drawLaneStatus() {
+  const chips = LANE_D[selectedChar] || [];
+  chips.forEach((kind, i) => drawChip(CHIP[kind](), 804 + i * 60, 14));
+}
+
+function drawChip(c, x, y) {
+  const w = 56, h = 20;
+  ctx.save();
+  ctx.globalAlpha = c.lit ? 0.6 : 1;
+  ctx.strokeStyle = c.lit ? c.color : '#243424'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalAlpha = c.lit ? 1 : 0.22;
+  ctx.translate(x + 2, y + 3);
+  ctx.fillStyle = c.color; ctx.strokeStyle = c.color;
+  if (c.lit) { ctx.shadowColor = c.color; ctx.shadowBlur = 6; }
+  GLYPH[c.glyph](14);
+  ctx.restore();
+
+  if (c.label) {
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.textAlign = 'right'; ctx.fillStyle = c.lit ? c.color : '#243424';
+    ctx.fillText(c.label, x + 52, y + 10);
+  }
+  // The same primitive for a recharging ability and a timed pickup, so one
+  // visual language covers both.
+  if (c.frac != null) {
+    ctx.fillStyle = c.color;
+    ctx.fillRect(x + 2, y + h - 3, (w - 4) * c.frac, 2);
+  }
 }
 
 // Shared helpers for overlay screens
@@ -7259,15 +7540,17 @@ function render(t) {
     // draws it has always been on forest and castle.
     for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
     for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
-    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
+    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts();
+    drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
     if (!boss || litAt(boss.x, boss.y)) drawBoss();
-    drawFloaters();
+    drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
     drawFog();
     ctx.restore();
+    drawEdgeTicks(); drawEdgeAlerts();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
     if (bossDeathSeq) {
