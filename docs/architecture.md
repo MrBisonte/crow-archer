@@ -203,4 +203,5 @@ Sound comes from a small synth in `src/legacy/game.js` that reads [ZzFX](https:/
 ## See also
 
 - [Design patterns](design-patterns.md): composition over inheritance for character definitions
+- [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it
 - [Design system](../.design-system/README.md): draw specs in pixels and hex, live preview cards, a playable UI kit demo

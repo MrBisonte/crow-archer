@@ -198,10 +198,58 @@ export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
   },
 };
 
+/**
+ * The labyrinth: mortared block walls and worn flagstone.
+ *
+ * Only EMPTY and ROCK are the maze's own art, because `MazeTerrain` emits
+ * nothing else and no in-game mutation can introduce a third: blasts turn ROCK
+ * straight to EMPTY, and ASH only ever comes from burning a TREE the maze does
+ * not have. The castle's stone covers the rest so the table is total if the
+ * maze ever grows water or a shrine.
+ *
+ * A wall fills its tile edge to edge, unlike the castle's pillar. In a maze the
+ * wall is the level, and art that reads as an object standing in a room makes
+ * a corridor look like a colonnade.
+ */
+export const MAZE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
+  ...CASTLE_TILE_PAINTERS,
+  [TILE.EMPTY](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#2a2622');
+      // Flagstone seams on a 8x8 lattice, offset per row so joints stagger.
+      const off = (seed % 2) * 8;
+      pixelRect(grid, 0, 0, 16, 1, '#211e1a');
+      pixelRect(grid, 0, 8, 16, 1, '#211e1a');
+      pixelRect(grid, off, 0, 1, 8, '#211e1a');
+      pixelRect(grid, (off + 8) % 16, 8, 1, 8, '#211e1a');
+      if (seed % 6 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 1, '#332e28');
+      if (seed % 9 === 0) setPixel(grid, (seed % 13) + 1, (seed % 12) + 3, '#3c352c');
+    });
+  },
+  [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => {
+      pixelRect(grid, 0, 0, 16, 16, '#4a443c');
+      // Three courses of block, running bond, so a long wall does not tile
+      // into obvious vertical stripes.
+      for (let course = 0; course < 3; course++) {
+        const top = course * 6;
+        pixelRect(grid, 0, top, 16, 5, '#5c554a');
+        pixelRect(grid, 0, top + 5, 16, 1, '#332f29');
+        const jog = course % 2 === 0 ? 5 : 11;
+        pixelRect(grid, jog, top, 1, 5, '#332f29');
+      }
+      // Damp catching the light along the top edge, moss in the joints.
+      pixelRect(grid, 0, 0, 16, 1, '#6d6558');
+      if (seed % 4 === 0) pixelRect(grid, (seed % 12) + 1, (seed % 2) * 6 + 5, 3, 1, '#3f4a30');
+    });
+  },
+};
+
 /** Which painter table draws each map's tiles. One row per MapKind. */
 export const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>> = {
   forest: TILE_PAINTERS,
   castle: CASTLE_TILE_PAINTERS,
+  maze: MAZE_TILE_PAINTERS,
 };
 
 /**
@@ -309,9 +357,21 @@ const CASTLE_PALETTE: AnimatedPalette = {
   treeFlicker: (a) => `rgba(200,150,60,${a.toFixed(2)})`,
 };
 
+/**
+ * Mostly inert today: `MazeTerrain` emits no water and no trees, so nothing
+ * here has anything to animate. It exists because the table is total, and
+ * because torchlight amber is the right answer if the maze ever gets either.
+ */
+const MAZE_PALETTE: AnimatedPalette = {
+  waterBase: ['#101c22', '#14222a'],
+  waterRipple: ['#1c3038', '#0c1418'],
+  treeFlicker: (a) => `rgba(220,140,50,${a.toFixed(2)})`,
+};
+
 export const ANIMATED_THEMES: Record<MapKind, AnimatedPalette> = {
   forest: FOREST_PALETTE,
   castle: CASTLE_PALETTE,
+  maze: MAZE_PALETTE,
 };
 
 /**

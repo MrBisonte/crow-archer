@@ -12,7 +12,8 @@
  * rules apart here means neither is re-decided at a call site.
  */
 
-import { generateGrid, type Noise2D } from './mapgen';
+import { MazeTerrain, NoiseTerrain, type MapGenerator } from './map-generators';
+import { type Noise2D } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
 
@@ -22,22 +23,59 @@ import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
  * render/tiles.ts) — the same reason CharacterKind became a table instead of
  * a branch, not the reason GameMode stayed one.
  */
-export type MapKind = 'forest' | 'castle';
+export type MapKind = 'forest' | 'castle' | 'maze';
 
 /**
- * Generation tuning per map, one row per MapKind so a third map fails to
- * compile until it has a density.
+ * How each map builds its grid, one row per MapKind so a fourth map fails to
+ * compile until it has a generator.
+ *
+ * This held a plain `{ density: number }` while every map was the same noise
+ * algorithm at a different setting. The maze is not that algorithm at any
+ * density, so the row became the generator itself rather than a number the
+ * one generator reads. See docs/level-3-maze.md.
  *
  * forest's 0.45 is single player's own clutter thinned for a duel: that map
  * was drawn for crows flying a corridor, and measured, a third of its tiles
- * stop an arrow — two players 400 px apart almost never have a clear line
+ * stop an arrow, so two players 400 px apart almost never have a clear line
  * otherwise. castle's density is a starting point, tuned for readable
- * pillars over a thicket; adjust freely, nothing downstream depends on the
- * exact number.
+ * pillars over a thicket. maze's braid is the fraction of dead ends reopened
+ * into loops. All three are free to adjust; nothing downstream reads them.
  */
-export const MAP_GEN: Record<MapKind, { density: number }> = {
-  forest: { density: 0.45 },
-  castle: { density: 0.5 },
+export const MAP_GEN: Record<MapKind, MapGenerator> = {
+  forest: new NoiseTerrain({ density: 0.45 }),
+  castle: new NoiseTerrain({ density: 0.5 }),
+  maze: new MazeTerrain({ braid: 0.15 }),
+};
+
+/**
+ * Per-map rules that are not about generation, one row per MapKind.
+ *
+ * Separate from MAP_GEN because these outlive generation: MAP_GEN is consulted
+ * once to build the grid, these are consulted every time something tries to
+ * change it.
+ *
+ * forest and castle are built from scattered noise, so blowing a hole in one
+ * opens a shortcut and nothing else. A maze *is* its walls: clearing them with
+ * a Lightning Storm or a Whirlwind turns the level into an open room and
+ * deletes the only thing making an unkillable warden dangerous.
+ *
+ * `fogOfWar` is the same argument about sight. Forest and castle are arenas you
+ * read at a glance, and hiding two thirds of one would only make it fiddly. A
+ * maze is a level about not knowing what is round the corner, so the corner has
+ * to actually hide something.
+ *
+ * `crows` is where they live. A passive crow crosses the map in a straight line
+ * with no terrain check, which reads as a bird over an arena and as a bug in a
+ * corridor. In single player it carries a second cost: ten crow kills is the
+ * forest's own win condition, and a maze that quietly swaps itself for a boss
+ * fight halfway through has two win conditions and means neither.
+ */
+export const MAP_RULES: Record<MapKind, {
+  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean;
+}> = {
+  forest: { destructibleTerrain: true, fogOfWar: false, crows: true },
+  castle: { destructibleTerrain: true, fogOfWar: false, crows: true },
+  maze: { destructibleTerrain: false, fogOfWar: true, crows: false },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
@@ -64,8 +102,24 @@ export type NoiseFactory = (seed: number) => Noise2D | null;
 export class Terrain {
   readonly map: TileMap;
 
-  constructor(map: TileMap) {
+  /**
+   * Which map this grid was built from, kept so the methods that change it can
+   * read MAP_RULES.
+   *
+   * A grid alone cannot answer whether its walls may be broken: rock is rock in
+   * every map. The alternative was passing the kind to `destroyArea` and
+   * `burnTile` at each call site, and the one caller that forgot would flatten
+   * a maze in a way nothing would catch.
+   */
+  readonly kind: MapKind;
+
+  /**
+   * Defaults to 'forest' rather than requiring a kind, so callers that build a
+   * grid by hand keep the destructible terrain they already had.
+   */
+  constructor(map: TileMap, kind: MapKind = 'forest') {
     this.map = map;
+    this.kind = kind;
   }
 
   /**
@@ -75,8 +129,8 @@ export class Terrain {
    */
   static fromSeed(seed: number, noise: NoiseFactory, kind: MapKind = 'forest'): Terrain {
     const map = new TileMap(MAP_ROWS, MAP_COLS);
-    map.reset(generateGrid(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed), MAP_GEN[kind].density));
-    return new Terrain(map);
+    map.reset(MAP_GEN[kind].generate(MAP_ROWS, MAP_COLS, mulberry32(seed), noise(seed)));
+    return new Terrain(map, kind);
   }
 
   /** The tile covering a point, or undefined outside the grid. */
@@ -122,8 +176,13 @@ export class Terrain {
    *
    * A radius rather than a point, since a blast is a radius. Tile centres are
    * what is measured, also as in the legacy game.
+   *
+   * Nothing happens at all on a map MAP_RULES marks indestructible. A maze is
+   * its walls, and one Lightning Storm through them is the difference between a
+   * corridor chase and an open room.
    */
   destroyArea(x: number, y: number, radius: number): void {
+    if (!MAP_RULES[this.kind].destructibleTerrain) return;
     const reach = Math.ceil(radius / TILE_SIZE);
     const r0 = Math.floor(y / TILE_SIZE);
     const c0 = Math.floor(x / TILE_SIZE);
@@ -151,8 +210,14 @@ export class Terrain {
    * this is a shot landing on what it hit, not a blast. Returns whether
    * anything actually burned, so a caller only bothers telling clients about
    * hits that changed something.
+   *
+   * On a map MAP_RULES marks indestructible it always reports false and leaves
+   * the tile standing, which is the answer callers already handle for rock. A
+   * fire arrow burning a maze open costs the level the same walls a blast
+   * would.
    */
   burnTile(x: number, y: number): boolean {
+    if (!MAP_RULES[this.kind].destructibleTerrain) return false;
     const r = Math.floor(y / TILE_SIZE);
     const c = Math.floor(x / TILE_SIZE);
     const tile = this.map.get(r, c);

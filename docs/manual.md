@@ -55,7 +55,8 @@ flowchart LR
     D -- yes --> C[Castle stage: 9 skeleton waves]
     C --> DA[Dark Archer entrance and fight]
     DA --> DK[Dark Knight entrance and fight]
-    DK --> W[Win]
+    DK --> M[Maze: the Minotaur's lair]
+    M --> W[Walk out the door]
 ```
 
 Crow King shield phases:
@@ -80,7 +81,46 @@ keeps its distance, firing three-bolt volleys and lobbing an occasional
 bomb that explodes in a radius; the dark knight closes the gap fast,
 charging often and sometimes halting into a whirlwind between charges.
 Both summon one skeleton every so often too, ice from the archer and fire
-from the knight. Beating both ends the run at the win screen.
+from the knight. Beating both does not end the run: the castle floor opens
+into the labyrinth under it, behind a black screen reading YOU HAVE ENTERED THE
+MINOTAUR'S LAIR.
+
+### The maze
+
+The third and last level. You do not clear it, you leave it.
+
+It is dark. You see four tiles, about one junction ahead. Corridors you have
+walked stay dimly on screen; everything else is black, and enemies only draw
+where you can see them right now, so memory shows you walls and never what is
+moving between them. Four torches are hidden in the level. Press **E** on one
+and it lights permanently, tripling sight to twelve tiles. The first torch is
+the whole upgrade, so the others are for reading the map, not for stacking.
+
+The **Minotaur** cannot be killed. Hitting him stuns him, which buys you
+distance and never progress. He hunts you the whole level, charges when he sees
+you down a corridor, and smashes the wall he ends against. Maze walls are
+otherwise indestructible: dynamite, Lightning Storm and Whirlwind still damage
+what is in radius, they just do not open the level up.
+
+The way out is a chain:
+
+| Step | How |
+|---|---|
+| Silver key | Dropped by a rat, one roll in five, and only after you have met the Minotaur |
+| Chest | Walk onto it holding the silver key |
+| Golden key | Inside the chest |
+| Door | Walk onto it holding the golden key. This wins the run |
+
+"Met the Minotaur" means his first charge or his first stun, whichever lands
+first. Before that, rats drop nothing. One silver key exists per run.
+
+**Rats** die to anything and come in packs. The bite is 1 damage, and then 3
+more over three seconds while you move at 65% speed. One bite is survivable.
+Being swarmed while slowed is how the level kills you.
+
+Difficulty is set per character, easiest first: ranger, archer, wizard, knight.
+The knight is strongest here, because melee answers a pack fastest, so the maze
+sends him the most rats and the least patient Minotaur.
 
 ### Multiplayer
 
@@ -128,6 +168,7 @@ flowchart LR
 | **Crow King** | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
 | **Dark Archer** | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
 | **Dark Knight** | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
+| **Minotaur** | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None, and no HP: hits stun him instead of hurting him |
 
 The two dark bosses are corrupted echoes of the Archer and the Knight: the
 archer's silhouette keeps a bow drawn on you, the knight's keeps a spear that
@@ -193,11 +234,11 @@ fly deploy
 
 `fly deploy` builds the Dockerfile and prints the URL. That URL is the game. `fly.toml` sets `PORT` in `[env]` to match `internal_port`, since Fly does not inject it on its own.
 
-Leave the machine count at **1** — `fly scale count 1`. Rooms live in the process's memory, so a second machine would hold rooms the first cannot see, and a player would join a code their friend is not in. Auto-stop is off so the machine does not nap between matches.
+Leave the machine count at **1** with `fly scale count 1`. Rooms live in the process's memory, so a second machine would hold rooms the first cannot see, and a player would join a code their friend is not in. Auto-stop is off so the machine does not nap between matches.
 
 Everyone opens the same URL, one player hosts, and the others join with the four-letter code.
 
-Fly over Railway on cost, decided against a €20/month ceiling: this game is bandwidth-bound rather than CPU-bound — roughly 15 KB/s per client, so about 54 MB per player-hour — and egress is $0.02/GB on Fly against $0.05/GB on Railway. Railway Hobby's $5 monthly credit is a floor rather than a discount, so it bills $5 even while idle and its advantage disappears exactly when players arrive. Any host that takes a Dockerfile and assigns `PORT` still works; nothing in the repo is Fly-specific but this file.
+Fly over Railway on cost, decided against a €20/month ceiling: this game is bandwidth-bound rather than CPU-bound, at roughly 15 KB/s per client or about 54 MB per player-hour, and egress is $0.02/GB on Fly against $0.05/GB on Railway. Railway Hobby's $5 monthly credit is a floor rather than a discount, so it bills $5 even while idle and its advantage disappears exactly when players arrive. Any host that takes a Dockerfile and assigns `PORT` still works; nothing in the repo is Fly-specific but this file.
 
 #### Playing without deploying
 

@@ -6,8 +6,7 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { generateGrid } from '../sim/mapgen';
-import { MAP_GEN } from '../sim/arena-map';
+import { MAP_GEN, MAP_RULES } from '../sim/arena-map';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
@@ -120,6 +119,67 @@ const CONFIG = {
   // crow's 200 (matching player speed) on purpose, a threat that is always
   // closing is not meant to also be unescapable.
   skeletonSpeed: 130, skeletonContactDamage: 1,
+  // The maze's trash mob. Faster than a skeleton and dies to anything, so the
+  // threat is never one rat: it is a pack of them filling a two-tile corridor
+  // while something you cannot kill comes down it. Spawns in packs on open
+  // floor rather than walking in from the right, since a maze has no corridor
+  // to walk in from.
+  // Faster than playerSpeed (200) on purpose. Slower and a rat can never land
+  // the first bite on anyone walking away, which makes the whole pack décor.
+  // The margin is small, so you outrun them briefly; once poisoned you are at
+  // 100 and they are on you. The slow is the trap, the speed just sets it.
+  ratSpeed: 215, ratContactDamage: 1, ratPackSize: 5, ratSpawnMinDistance: 200,
+  // Seconds of quiet after a pack is wiped out, before the next one appears.
+  // A pack at a time, not a trickle: a trickle you can never get ahead of, and
+  // getting ahead is the only reason to fight rats at all.
+  ratRespawnSecs: 6,
+  // A bite is barely a hit; the poison is the point. 3 damage spread over 3
+  // seconds at one point a second, plus a crawl for the same window. Getting
+  // bitten once is survivable, getting swarmed is not, and the slow is what
+  // turns a second bite into a third.
+  //
+  // The slow was 0.5, which put you at 100 against a 215 rat: one bite and the
+  // pack had you, with nothing you could do about it. 0.65 still means you
+  // lose a straight race and no longer means the first bite decided it.
+  ratPoisonSecs: 3, ratPoisonDamagePerTick: 1, ratPoisonTickSecs: 1, ratPoisonSlowMult: 0.65,
+  // The maze's warden. Unkillable by design, so none of these are HP: they are
+  // the shape of a chase. Prowl is a little slower than the player so walking
+  // away works until a corridor ends; the charge is much faster than anyone.
+  minotaurProwlSpeed: 165,
+  minotaurChargeSpeed: 430,
+  minotaurWindupSecs: 0.55,      // telegraph: he plants, snorts, then goes
+  minotaurChargeMaxSecs: 1.6,
+  minotaurRecoverSecs: 1.1,      // after a charge ends, however it ended
+  minotaurChargeCooldown: 1.4,   // earliest he may line up another one
+  minotaurContactDamage: 2,
+  minotaurChargeContactDamage: 3,
+  minotaurContactRadius: 26,
+  minotaurSightRange: 520,       // he still needs line of sight, this caps it
+  minotaurStunSecs: 1.5,         // what a hit buys you, instead of progress
+  minotaurSmashRadius: 1,        // tiles cleared where a charge ends in wall
+
+  // The maze's objective chain. Distances are pixels on a 1056x672 arena, so
+  // "far" here means most of the way across it. The door is the far end, the
+  // chest is a detour, and the separation stops one being the other's landmark.
+  mazeChestMinDistance: 380,
+  mazeDoorMinDistance: 620,
+  mazeObjectiveSeparation: 300,
+  // Per rat kill, and only once the warden has shown himself. One in five
+  // makes the hunt a handful of kills rather than a grind or a formality.
+  mazeSilverKeyDropChance: 0.2,
+
+  // Sight, in tiles. The open maps keep the radius they have always had, which
+  // is larger than the screen and so reads as "no fog at all". The maze runs
+  // dark: four tiles is a little over two body lengths, enough to see the
+  // corridor you are in and nothing of the one you are about to enter.
+  sightRadiusTiles: 14,
+  mazeSightRadiusTiles: 4,
+  torchSightMult: 3,             // what a lit torch buys, permanently
+  fogMemorySlope: 0.75,          // how fast a lit tile dims toward the edge of sight
+  fogMemoryAlpha: 0.74,          // black over terrain you remember but cannot see
+  torchGlowTiles: 2,             // tiles a lit torch keeps clear of fog, forever
+  mazeTorchCount: 3,
+  mazeTorchMinDistance: 200,     // from the spawn, so the first is not underfoot
 
   // Fire skeleton: same movement and contact damage as normal, but its
   // death is a small blast that punishes standing next to it when it pops.
@@ -277,7 +337,11 @@ const CONFIG = {
   keys: {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
-    menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift'
+    menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift',
+    // Striking a torch is a decision, so it gets a button. Keys, the chest and
+    // the door do not: your inventory has already decided those, and a prompt
+    // in front of a foregone conclusion is a button press, not a choice.
+    use: 'e'
   }
 };
 
@@ -335,10 +399,56 @@ applyPace(CONFIG.pace);
 
 // Keyed by bossStage (1 = crow king, 2 = dark archer, 3 = dark knight), not
 // boss.kind — the entrance banner starts typing before spawnBoss() has run.
+/**
+ * The black screen between one stage and the next.
+ *
+ * Cutting straight from a death burst into a fresh map reads as a glitch, so
+ * each hand-off holds on a title until the player clicks. This was one screen
+ * hardcoded as its own appState; the maze made it two, which is the point a
+ * copy stops being cheaper than a table.
+ *
+ * The stage is already fully built behind the screen when it appears. The
+ * intro only decides what to say and where to go, never what to set up.
+ */
+const STAGE_INTROS = {
+  castle: {
+    text: "You've entered the cursed Castle!",
+    accent: '#B040E0', dim: '#8A40A8', frame: '#4a1a5c',
+    sweep: 'rgba(176,64,224,0.045)',
+  },
+  maze: {
+    text: "YOU HAVE ENTERED THE MINOTAUR'S LAIR",
+    // Torchlight amber rather than the castle's purple: the maze is lit by
+    // fire and the title should be the last warm thing before the dark.
+    accent: '#FFA030', dim: '#B4702A', frame: '#5c3a12',
+    sweep: 'rgba(255,160,48,0.05)',
+  },
+};
+
+/** Which intro is on screen right now, or null. Only 'stage_intro' reads it. */
+let pendingIntro = null;
+
+/**
+ * Holds the black screen in front of a stage that is already built.
+ *
+ * Assigns appState directly for the same reason the castle hand-off always
+ * did: transitionTo('playing') runs initGame() and would wipe the run that
+ * just cleared the previous stage.
+ */
+function showStageIntro(kind) {
+  pendingIntro = kind;
+  appState = 'stage_intro';
+}
+
 const BOSS_ENTRY_TEXT = {
   1: '⚠  THE CROWS SUMMONED THEIR KING  ⚠',
   2: '⚠  A DARK ARCHER STIRS IN THE DEPTHS  ⚠',
   3: '⚠  THE LAST DARK KNIGHT RISES  ⚠',
+  // Stage 4 is not reachable from the brawl run yet: beating the dark knight
+  // still goes to the win screen. It exists so the minotaur can be spawned
+  // for testing without inventing a second boss-spawn path. Wiring level 3
+  // into the progression is its own piece of work, see docs/level-3-maze.md.
+  4: '⚠  SOMETHING IS ALREADY IN THE MAZE  ⚠',
 };
 
 // Above this capacity the HUD shows a count instead of one icon per unit.
@@ -438,6 +548,10 @@ let killCount = 0, dropStreak = 0, playerShield = false;
 // returns before reading input while it is positive, so movement, aiming
 // and every weapon lock out together for the duration.
 let playerFrozenTimer = 0;
+// Rat venom. Mirrors playerFrozenTimer's shape: one countdown owns the whole
+// effect, so the damage tick, the slow and the tint all read one source. A
+// fresh bite refreshes rather than stacks, the same call dazeBoss makes.
+let playerPoison = { timer: 0, tickIn: 0 };
 // Its own counter, deliberately not sharing killCount: see the comment above
 // the SKELETONS section for why that separation is load-bearing.
 let skeletonKillCount = 0;
@@ -537,8 +651,63 @@ function generateMap(kind = 'forest') {
   // swaps them, and it runs before the reset below so the map is painted once
   // instead of once per theme.
   events.emit({ type: 'MAP_GENERATED', kind });
-  tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
-    (x, y) => sn.noise2D(x, y), MAP_GEN[kind].density));
+  // MAP_GEN holds a generator per kind, not a density: the maze is carved
+  // rather than thresholded, so the noise source is offered and ignored by
+  // the generators that do not want it. See docs/level-3-maze.md.
+  tileMap.reset(MAP_GEN[kind].generate(CONFIG.rows, CONFIG.cols, rng,
+    (x, y) => sn.noise2D(x, y)));
+  // The objective belongs to the maze and to no other map, so it is built and
+  // cleared here, with the grid it is placed on. Every consumer then has one
+  // guard, `mazeRun`, instead of its own check on mapKind.
+  mazeRun = kind === 'maze' ? newMazeRun() : null;
+  // Crows belong to the map. Moving to one that has none has to take the last
+  // map's birds with it, or they keep flying through the new map's walls and
+  // keep counting toward a win condition this map does not use.
+  if (!mapHasCrows()) crows = [];
+  // Sight is grid-shaped too, so memory of the last map is a lie about this
+  // one. It stays here rather than behind MAP_GENERATED: placing torches needs
+  // the grid and puts real objects in the world, which is simulation, even
+  // though what the fog then draws is not.
+  resetSight();
+}
+
+/**
+ * Where a run starts, snapped to open floor. Three callers wanted the same
+ * point — the fresh run, the harness reposition, and the maze objective, which
+ * has to be placed far from it — so the constant lives here rather than in the
+ * first two and then a third copy.
+ */
+function spawnPoint() {
+  return nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+}
+
+/**
+ * The centre of the closest tile to (wx, wy) that a body can stand on.
+ *
+ * The spawn point used to be a bare constant, which worked only because
+ * generateGrid carves a guaranteed clear zone around it. A carved map makes no
+ * such promise: the maze puts walls on every even index, so the old spawn
+ * landed inside rock. Rings outwards the same way multiplayer's
+ * nearestStandable does (src/sim/spawns.ts) rather than inventing a second
+ * answer to the same question. Falls back to the point itself, since every map
+ * this can be asked about has open tiles somewhere near the middle.
+ */
+function nearestOpenTile(wx, wy) {
+  const ts = CONFIG.tileSize;
+  const col0 = Math.floor(wx / ts), row0 = Math.floor(wy / ts);
+  const centre = (r, c) => ({ x: c * ts + ts / 2, y: r * ts + ts / 2 });
+  for (let radius = 0; radius <= 12; radius++) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        // Only the ring's edge is new; the inside was covered by smaller radii.
+        if (radius > 0 && Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+        const r = row0 + dr, c = col0 + dc;
+        if (r < 0 || r >= CONFIG.rows || c < 0 || c >= CONFIG.cols) continue;
+        if (tilePassable(tileMap.get(r, c))) return centre(r, c);
+      }
+    }
+  }
+  return { x: wx, y: wy };
 }
 
 function tileAt(wx, wy) {
@@ -549,7 +718,23 @@ function tileAt(wx, wy) {
 
 // Storm and whirlwind level terrain the same way: trees char to ash,
 // rocks and huts are cleared outright.
+/** Can anything on this map break terrain at all? One home for the rule. */
+function terrainDestructible() {
+  return MAP_RULES[mapKind].destructibleTerrain;
+}
+
+/** Does this map hide what the player cannot see? One home for that rule too. */
+function fogOfWar() {
+  return MAP_RULES[mapKind].fogOfWar;
+}
+
+/** Do crows live on this map? Same table, same reason: it is a per-map fact. */
+function mapHasCrows() {
+  return MAP_RULES[mapKind].crows;
+}
+
 function smashTile(row, col) {
+  if (!terrainDestructible()) return;
   const t = tileMap.get(row, col);
   if (t === TILE.TREE) tileMap.set(row, col, TILE.ASH);
   else if (t === TILE.ROCK || t === TILE.HUT) tileMap.set(row, col, TILE.EMPTY);
@@ -564,15 +749,97 @@ const _rotPassable = (x, y) => {
 };
 
 const _fov   = new FOV.PreciseShadowcasting(_rotPassable);
+
+/**
+ * How far the player can see right now, in tiles.
+ *
+ * Open maps keep the radius they have always had, which covers the arena, so
+ * nothing about forest or castle changes. The maze runs on a torch's reach, and
+ * lighting one triples it for the rest of the run.
+ */
+function playerSightTiles() {
+  if (!fogOfWar()) return CONFIG.sightRadiusTiles;
+  const base = CONFIG.mazeSightRadiusTiles;
+  return torchIsLit() ? base * CONFIG.torchSightMult : base;
+}
+
 const fovMap  = new FovMap(CONFIG.rows, CONFIG.cols,
-  (col, row, mark) => _fov.compute(col, row, 14, mark));
+  (col, row, mark) => _fov.compute(col, row, playerSightTiles(), mark));
+
+// Terrain the player has already stood in the light of, and terrain a lit torch
+// holds open forever. Both are memory rather than sight: they say what the maze
+// looks like, never what is moving in it.
+const seenTiles  = new Uint8Array(CONFIG.rows * CONFIG.cols);
+const torchTiles = new Uint8Array(CONFIG.rows * CONFIG.cols);
+// Which tile the memory pass last ran from. FovMap only recomputes on a tile
+// change, so marking memory on every step would be 693 writes for nothing.
+let seenFrom = -1;
+
+/** Clears sight, memory and torchlight. Called whenever a new grid is built. */
+function resetSight() {
+  fovMap.invalidate();
+  seenTiles.fill(0);
+  torchTiles.fill(0);
+  seenFrom = -1;
+}
 
 function updateFOV() {
-  fovMap.update(Math.floor(player.x / CONFIG.tileSize), Math.floor(player.y / CONFIG.tileSize));
+  const col = Math.floor(player.x / CONFIG.tileSize), row = Math.floor(player.y / CONFIG.tileSize);
+  fovMap.update(col, row);
+  if (!fogOfWar()) return;
+  const at = row * CONFIG.cols + col;
+  if (at === seenFrom) return;
+  seenFrom = at;
+  for (let r = 0; r < CONFIG.rows; r++)
+    for (let c = 0; c < CONFIG.cols; c++)
+      if (fovMap.isVisible(c, r)) seenTiles[r * CONFIG.cols + c] = 1;
 }
 
 // Returns true if grid cell (col, row) is currently in the player's line-of-sight.
 function tileVisible(col, row) { return fovMap.isVisible(col, row); }
+
+/** Can the player see this world point right now? Always true where there is no fog. */
+function litAt(wx, wy) {
+  if (!fogOfWar()) return true;
+  return fovMap.isVisible(Math.floor(wx / CONFIG.tileSize), Math.floor(wy / CONFIG.tileSize));
+}
+
+/**
+ * Is there an unobstructed straight line between two tiles?
+ *
+ * This is the question a hunter asks, and it is not the question fovMap
+ * answers. That cache is computed from the player's tile at the player's
+ * radius, so it says what the player can see. Shadowcasting is symmetric, which
+ * let both questions share one answer while everyone had the same sight range.
+ * The maze breaks that: shrink the player to four tiles and "the minotaur can
+ * see you" would collapse into "you can already see the minotaur", which is the
+ * opposite of a warden appearing at the end of a dark corridor.
+ *
+ * Bresenham over the same passability callback FOV and A* use, so a wall stops
+ * a line here exactly where it stops an arrow.
+ */
+function lineOfSight(c0, r0, c1, r1) {
+  let x = c0, y = r0;
+  const dx = Math.abs(c1 - c0), dy = -Math.abs(r1 - r0);
+  const sx = c0 < c1 ? 1 : -1, sy = r0 < r1 ? 1 : -1;
+  let err = dx + dy;
+  while (x !== c1 || y !== r1) {
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x += sx; }
+    if (e2 <= dx) { err += dx; y += sy; }
+    // The far end is the target itself, which may be standing anywhere.
+    if ((x !== c1 || y !== r1) && !_rotPassable(x, y)) return false;
+  }
+  return true;
+}
+
+/** Can something standing at (wx, wy) see the player, within `rangePx`? */
+function seesPlayerFrom(wx, wy, rangePx) {
+  if (Math.hypot(player.x - wx, player.y - wy) > rangePx) return false;
+  const ts = CONFIG.tileSize;
+  return lineOfSight(Math.floor(wx / ts), Math.floor(wy / ts),
+                     Math.floor(player.x / ts), Math.floor(player.y / ts));
+}
 
 // A* path from pixel position (fromPx,fromPy) to (toPx,toPy).
 // Returns an array of {x,y} pixel waypoints (tile centers), NOT including start.
@@ -715,20 +982,27 @@ let mouseLeftHeld = false;
  * so importing this module never reaches for document.
  */
 function installInput() {
-  canvas.addEventListener('mousemove', e => {
+  // On the window, not the canvas, and clamped into it. On the canvas alone,
+  // aim silently froze the moment the pointer crossed the edge: the last event
+  // inside was the last aim update, so a shot fired while reaching for
+  // something off to the side went where the pointer had last been seen rather
+  // than where it was pointing. Clamping pins aim to the nearest edge instead,
+  // which is what a player means by pushing past the border.
+  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+  window.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
-    mouse.x = (e.clientX - r.left) * (CONFIG.canvasW / r.width);
-    mouse.y = (e.clientY - r.top)  * (CONFIG.canvasH / r.height);
+    if (r.width === 0 || r.height === 0) return;   // canvas not laid out yet
+    mouse.x = clamp((e.clientX - r.left) * (CONFIG.canvasW / r.width), 0, CONFIG.canvasW);
+    mouse.y = clamp((e.clientY - r.top) * (CONFIG.canvasH / r.height), 0, CONFIG.canvasH);
   });
   canvas.addEventListener('mousedown', e => {
     initAudio();
     if (e.button === 0) {
       mouseLeftHeld = true;
       if (inGame()) shootPressed = true;
-      // The castle-intro black screen waits for exactly this: one click, no
-      // key, since it is shown mid-run with the keyboard already busy with
-      // movement held down.
-      else if (appState === 'castle_intro') appState = 'playing';
+      // A stage intro waits for exactly this: one click, no key, since it is
+      // shown mid-run with the keyboard already busy with movement held down.
+      else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
     }
     if (e.button === 2) { mouseRightHeld = true; startCharge(); }
   });
@@ -865,6 +1139,75 @@ const WEAPON_FX = {
 
 events.on(e => {
   switch (e.type) {
+    case 'MINOTAUR_ROAR':
+      playSound(sndBossScreech);
+      break;
+    case 'MINOTAUR_CHARGE':
+      playSound(sndChargeWhoosh);
+      triggerShake(4, 120);
+      break;
+    case 'MINOTAUR_SMASH':
+      playSound(sndExplosion);
+      burst(e.x, e.y, { count: 26, colors: ['#5C554A','#4A443C','#8A6242','#332F29'],
+        speedMin: 60, speedMax: 190, decay: 1.5, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 3.5, damping: 0.7, shadowBlur: 3, shadowColor: '#8A6242' });
+      break;
+    case 'PLAYER_POISONED':
+      playSound(sndPoisonBite);
+      triggerShake(2, 80);
+      burst(e.x, e.y, { count: 10, colors: ['#6ABF2A','#9BE04A','#4E8F1E'],
+        speedMin: 20, speedMax: 70, decay: 1.6, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 2.5, gravity: -30, shadowBlur: 5, shadowColor: '#6ABF2A' });
+      break;
+    case 'PLAYER_POISON_TICK':
+      playSound(sndPoisonTick);
+      burst(e.x, e.y, { count: 5, colors: ['#6ABF2A','#4E8F1E'],
+        speedMin: 8, speedMax: 30, decay: 1.9, shape: 'spark',
+        sizeMin: 1, sizeMax: 2, gravity: -55, shadowBlur: 4, shadowColor: '#6ABF2A' });
+      break;
+
+    // The objective chain. Each beat reads its colour from MAZE_KEYS or the
+    // lock it belongs to, so the maze decides what a key is and this decides
+    // only how loud it lands.
+    case 'KEY_DROPPED': {
+      playSound(sndKeyDrop);
+      const key = MAZE_KEYS[e.kind];
+      burst(e.x, e.y, { count: 14, colors: [key.color, '#FFFFFF'],
+        speedMin: 30, speedMax: 110, decay: 1.8, shape: 'spark',
+        sizeMin: 1, sizeMax: 2.5, gravity: -20, shadowBlur: 8, shadowColor: key.color });
+      floaters.push({ x: e.x, y: e.y - 8, alpha: 1.0, vy: -34,
+        text: `${e.kind.toUpperCase()} KEY`, color: key.color });
+      break; }
+
+    case 'KEY_TAKEN': {
+      playSound(sndPickup);
+      const key = MAZE_KEYS[e.kind];
+      burst(e.x, e.y, { count: 12, colors: [key.color, '#FFFFFF'],
+        speedMin: 40, speedMax: 140, decay: 2.2, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 3, shadowBlur: 10, shadowColor: key.color });
+      break; }
+
+    case 'CHEST_OPENED':
+      playSound(sndChestOpen); triggerShake(4, 180);
+      burst(e.x, e.y, { count: 22, colors: ['#FFB400','#FFD866','#FFFFFF','#7A4A18'],
+        speedMin: 40, speedMax: 150, decay: 1.5,
+        shapeMix: [['spark', 0.6], ['circle', 0.4]],
+        sizeMin: 1.5, sizeMax: 3, gravity: -30, shadowBlur: 10, shadowColor: '#FFB400' });
+      break;
+
+    case 'DOOR_OPENED':
+      playSound(sndDoorOpen); triggerShake(10, 500);
+      burst(e.x, e.y, { count: 30, colors: ['#FFE8B0','#FFB400','#FFFFFF'],
+        speedMin: 30, speedMax: 200, decay: 1.2, shape: 'circle',
+        sizeMin: 2, sizeMax: 5, shadowBlur: 14, shadowColor: '#FFE8B0' });
+      break;
+
+    case 'TORCH_LIT':
+      playSound(sndTorchLight);
+      burst(e.x, e.y, { count: 16, colors: ['#FF7A1F','#FFB400','#FFF3C0'],
+        speedMin: 20, speedMax: 90, decay: 2.0, shape: 'spark',
+        sizeMin: 1, sizeMax: 2.5, gravity: -60, shadowBlur: 10, shadowColor: '#FF7A1F' });
+      break;
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -1164,15 +1507,16 @@ function initGame() {
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
-  castleWave = 0; playerFrozenTimer = 0;
-  fovMap.invalidate(); // force FOV recompute on next player move
+  castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
+  resetSight(); // force an FOV recompute, and forget the last run's map
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
-  player = { x: 2.5 * CONFIG.tileSize, y: (CONFIG.rows / 2) * CONFIG.tileSize, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
+  const spawn = spawnPoint();
+  player = { x: spawn.x, y: spawn.y, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
   skeletons = []; // only populated once brawl mode reaches its castle stage
-  for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
+  if (mapHasCrows()) for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
 }
 
 /**
@@ -1303,6 +1647,10 @@ function updatePlayer(dt) {
   // An ice bolt's freeze locks out everything below, movement, aiming and
   // every weapon's cooldown tick, for its full duration. Nothing else can
   // read player input while this is positive.
+  // Ticked before the freeze gate: being frozen stops you acting, it does not
+  // stop you bleeding, and a poison that paused whenever an ice bolt landed
+  // would quietly reward getting hit by two things at once.
+  updatePlayerPoison(dt);
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
@@ -1326,7 +1674,7 @@ function updatePlayer(dt) {
       if (hasButton(cmd, Button.LEFT))  vx -= 1;
       if (hasButton(cmd, Button.RIGHT)) vx += 1;
       const len = Math.hypot(vx, vy);
-      if (len > 0) { vx = (vx/len)*FEATHERS.speed()*dt; vy = (vy/len)*FEATHERS.speed()*dt; player.walkPhase += 8 * dt; }
+      if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
     }
     const r = CONFIG.playerRadius;
     // Clamp bounds keep the player's collision corners (±r) inside the first passable
@@ -1397,7 +1745,7 @@ function updatePlayer(dt) {
           }
         }
       }
-      if (!pfBossHit && boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+      if (!pfBossHit && bossInPlay() && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
         pfBossHit = true;
         damageBoss(CONFIG.pitchforkBossDamage, player.x, player.y, 'pitchfork', 0.25);
@@ -1440,7 +1788,7 @@ function updatePlayer(dt) {
       }
     }
     // Boss: hit once in first half (phase 1), reset and hit again in second half (phase 2)
-    const canHitBoss = boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+    const canHitBoss = bossInPlay() && !boss.shield &&
         (dist2(tipX, tipY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2 ||
          dist2(midX, midY, boss.x, boss.y) < CONFIG.bossHitRadius ** 2);
 
@@ -1468,7 +1816,7 @@ function updatePlayer(dt) {
       for (let j = skeletons.length - 1; j >= 0; j--)
         if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < wr2) damageSkeleton(j);
       // Damage boss
-      if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+      if (bossInPlay() && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < wr2) {
         damageBoss(1, player.x, player.y, 'whirlwind', 0.1);
       }
@@ -1507,8 +1855,7 @@ function updatePlayer(dt) {
       // Once per dash, the way a spear swing lands once. The repeat ticks are
       // there to catch enemies he advances into, not to grind the same boss
       // seven times over.
-      if (!knightDash.bossHit && boss && appState === 'boss_fight' &&
-          boss.bstate !== 'dead' && !boss.shield && inKnightArc(boss.x, boss.y)) {
+      if (!knightDash.bossHit && bossInPlay() && !boss.shield && inKnightArc(boss.x, boss.y)) {
         knightDash.bossHit = true;
         damageBoss(knightDashBossDamage(), player.x, player.y, 'spear', 0.15);
       }
@@ -1666,7 +2013,7 @@ function fireLightningStorm() {
     if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   for (let j = skeletons.length - 1; j >= 0; j--)
     if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
-  if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+  if (bossInPlay() && !boss.shield &&
       dist2(player.x, player.y, boss.x, boss.y) < r2) {
     damageBoss(CONFIG.stormBossDamage, player.x, player.y, 'storm', CONFIG.stormFlashDuration);
   }
@@ -1704,7 +2051,7 @@ function updateArrows(dt) {
       // exists at all.
       if (a.homing) {
         let tgt = null;
-        if (boss && appState==='boss_fight' && boss.bstate!=='dead') {
+        if (bossInPlay()) {
           tgt = boss;
         } else {
           let tDist2 = Infinity;
@@ -2039,11 +2386,46 @@ function killCrow(j) {
 // first skeleton kill from instantly re-triggering the Crow King's own
 // boss_entrance the moment the stage changes.
 
+/** Speed per skeleton kind. A rat is the same entity, tuned to rush. */
+const SKELETON_SPEED = {
+  normal: () => CONFIG.skeletonSpeed,
+  fire:   () => CONFIG.skeletonSpeed,
+  ice:    () => CONFIG.skeletonSpeed,
+  rat:    () => CONFIG.ratSpeed,
+};
+
+/**
+ * A random open tile at least `minDist` from the player, for kinds that
+ * appear inside the map rather than walking in from off-screen.
+ *
+ * Rejection sampling over open tiles, capped, because a maze's open tiles are
+ * scattered rather than contiguous and there is no cheap closed form for
+ * "somewhere over there". Falls back to any open tile, then to the caller's
+ * off-screen default, so a spawn always resolves.
+ */
+function openTileAwayFrom(px, py, minDist) {
+  const ts = CONFIG.tileSize;
+  let fallback = null;
+  for (let tries = 0; tries < 120; tries++) {
+    const r = Math.floor(Math.random() * CONFIG.rows);
+    const c = Math.floor(Math.random() * CONFIG.cols);
+    if (!tilePassable(tileMap.get(r, c))) continue;
+    const x = c * ts + ts / 2, y = r * ts + ts / 2;
+    fallback ??= { x, y };
+    if (dist2(x, y, px, py) >= minDist * minDist) return { x, y };
+  }
+  return fallback;
+}
+
 function spawnSkeleton(kind = 'normal') {
   const baseY = (1 + Math.random() * (CONFIG.rows - 2)) * CONFIG.tileSize;
+  // Rats appear in the map; the castle kinds still march in from the right.
+  const at = kind === 'rat'
+    ? openTileAwayFrom(player.x, player.y, CONFIG.ratSpawnMinDistance)
+    : null;
   skeletons.push({
-    x: CONFIG.canvasW + 20, y: baseY,
-    kind, // 'normal' | 'fire' | 'ice' — see the wave table below
+    x: at ? at.x : CONFIG.canvasW + 20, y: at ? at.y : baseY,
+    kind, // 'normal' | 'fire' | 'ice' | 'rat' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
     hp: 1, maxHp: 1, hitFlash: 0,
@@ -2073,6 +2455,7 @@ function killSkeleton(j) {
       damagePlayer(CONFIG.fireSkeletonBlastDamage);
     }
   }
+  maybeDropSilverKey(s);
   const dropChance = 0.25 + HANDICAP.dropBoost();
   dropStreak++;
   if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(s.x, s.y); }
@@ -2080,7 +2463,11 @@ function killSkeleton(j) {
   // No kill count here: the gauntlet is nine waves, cleared one at a time.
   // The last skeleton of a wave dying is what starts the next one, or, past
   // wave 9, the dark archer's entrance.
-  if (gameMode === 'brawl' && appState === 'playing' && skeletons.length === 0) {
+  // Gated on the gauntlet actually running, not just on the array emptying.
+  // castleWave is 0 until startCastleWave sets it, so any other skeleton kind
+  // in play elsewhere — the maze's rats, a boss summon before wave 1 — cannot
+  // advance a gauntlet that has not begun.
+  if (gameMode === 'brawl' && appState === 'playing' && castleWave > 0 && skeletons.length === 0) {
     if (castleWave < CASTLE_TOTAL_WAVES) startCastleWave(castleWave + 1);
     else transitionTo('boss_entrance');
   }
@@ -2112,6 +2499,33 @@ function startCastleWave(n) {
  * passive crow's flight, this respects tilePassable the way the player's own
  * movement does, so nothing here drifts through a pillar.
  */
+/**
+ * Walks one pursuer a step along its cached A* path toward the player.
+ *
+ * Crows, skeletons and rats all chase the same way: follow the cached path,
+ * ask the scheduler for a fresh one when it expires or runs out, and beeline
+ * while waiting. That was two copies and rats would have made three, so it
+ * lives here once, parameterised by the only thing that actually differs
+ * between them, speed.
+ *
+ * Returns whether it moved, which is what drives a walk cycle.
+ */
+function chaseAlongPath(e, spd, dt) {
+  e.pathTimer -= dt;
+  if (!e.path || e.path.length === 0 || e.pathTimer <= 0) pathScheduler.request(e);
+  if (e.path && e.path.length > 0) {
+    const wp = e.path[0];
+    const wdx = wp.x - e.x, wdy = wp.y - e.y, wdist = Math.hypot(wdx, wdy);
+    if (wdist < 6) { e.path.shift(); return false; }   // waypoint reached
+    e.x += (wdx / wdist) * spd * dt; e.y += (wdy / wdist) * spd * dt;
+    return true;
+  }
+  // No path yet (open ground, or already adjacent) — head straight at them.
+  const dx = player.x - e.x, dy = player.y - e.y, dist = Math.hypot(dx, dy) || 1;
+  e.x += (dx / dist) * spd * dt; e.y += (dy / dist) * spd * dt;
+  return true;
+}
+
 function updateSkeletons(dt) {
   if (bossDeathSeq) return;
   // Requests go on the same queue crows use — updateCrows.serve() drains it
@@ -2122,20 +2536,13 @@ function updateSkeletons(dt) {
     const s = skeletons[i];
     if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
     const dx = player.x - s.x, dy = player.y - s.y, dist = Math.hypot(dx, dy);
-    if (dist < 14) { damagePlayer(CONFIG.skeletonContactDamage); continue; }
-    const spd = CONFIG.skeletonSpeed;
-    s.pathTimer -= dt;
-    if (!s.path || s.path.length === 0 || s.pathTimer <= 0) pathScheduler.request(s);
-    let moved = false;
-    if (s.path && s.path.length > 0) {
-      const wp = s.path[0];
-      const wdx = wp.x - s.x, wdy = wp.y - s.y, wdist = Math.hypot(wdx, wdy);
-      if (wdist < 6) { s.path.shift(); }
-      else { s.x += (wdx / wdist) * spd * dt; s.y += (wdy / wdist) * spd * dt; moved = true; }
-    } else {
-      s.x += (dx / dist) * spd * dt; s.y += (dy / dist) * spd * dt; moved = true;
+    const reach = s.kind === 'rat' ? 11 : 14;
+    if (dist < reach) {
+      damagePlayer(s.kind === 'rat' ? CONFIG.ratContactDamage : CONFIG.skeletonContactDamage);
+      if (s.kind === 'rat') poisonPlayer();
+      continue;
     }
-    if (moved) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, SKELETON_SPEED[s.kind](), dt)) s.walkPhase += dt * 8;
 
     if (s.kind === 'ice') {
       s.shotCD -= dt;
@@ -2203,7 +2610,7 @@ function explodeExplosive(d, source) {
       const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
       const t = tileMap.get(row, col);
       if (dist2(d.x, d.y, wx, wy) < r2 && (t === TILE.ROCK || t === TILE.TREE || t === TILE.HUT))
-        tileMap.set(row, col, TILE.EMPTY);
+        if (terrainDestructible()) tileMap.set(row, col, TILE.EMPTY);
     }
   }
 
@@ -2211,7 +2618,7 @@ function explodeExplosive(d, source) {
     if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
   for (let j = skeletons.length - 1; j >= 0; j--)
     if (dist2(d.x, d.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
-  if (boss && appState === 'boss_fight' && boss.bstate !== 'dead' && !boss.shield &&
+  if (bossInPlay() && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage : CONFIG.dynamiteBossDamage;
     damageBoss(bossDamage, d.x, d.y, source, 0.25);
@@ -2307,33 +2714,23 @@ function updateCrows(dt) {
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
       const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult();
-      // Request a recompute when the cached path expires or runs out; the
-      // scheduler serves it within a few frames. The crow keeps following its
-      // stale path (or beelines when empty) until then.
-      c.pathTimer -= dt;
-      if (!c.path || c.path.length === 0 || c.pathTimer <= 0) pathScheduler.request(c);
-      if (c.path && c.path.length > 0) {
-        const wp = c.path[0];
-        const wdx = wp.x - c.x, wdy = wp.y - c.y, wdist = Math.hypot(wdx, wdy);
-        if (wdist < 6) { c.path.shift(); }                          // waypoint reached
-        else { c.x += (wdx / wdist) * spd * dt; c.y += (wdy / wdist) * spd * dt; }
-      } else {
-        // No valid path (open space, already adjacent) — beeline directly
-        c.x += (dx / dist) * spd * dt; c.y += (dy / dist) * spd * dt;
-      }
+      chaseAlongPath(c, spd, dt);
       if (c.aggroTimer <= 0) { c.state = 'passive'; c.baseY = c.y; c.path = null; }
     }
   }
 }
 
 function aggroCrows(count) {
-  // Only aggro crows that have line-of-sight to the player (rot.js FOV).
-  // This prevents off-screen or wall-blocked crows from mysteriously turning hostile.
+  // A crow turns on you because it noticed you, so the check runs from the
+  // crow: does it have a clear line to the player, inside its own sight range.
+  // That was the intent all along, and reading the player's FOV cache happened
+  // to give the same answer while everyone shared one radius. It stops giving
+  // it the moment the player's radius shrinks, which is exactly what the maze
+  // does. The range matches the open maps' old FOV radius, so forest and castle
+  // keep the reach they had.
+  const range = CONFIG.sightRadiusTiles * CONFIG.tileSize;
   const passive = crows
-    .filter(c => {
-      if (c.state !== 'passive') return false;
-      return tileVisible(Math.floor(c.x / CONFIG.tileSize), Math.floor(c.y / CONFIG.tileSize));
-    })
+    .filter(c => c.state === 'passive' && seesPlayerFrom(c.x, c.y, range))
     .sort((a, b) => dist2(a.x,a.y,player.x,player.y) - dist2(b.x,b.y,player.x,player.y));
   let n = 0;
   for (const c of passive) {
@@ -2373,6 +2770,225 @@ function updateFloaters(dt) {
   }
 }
 
+// ── THE MAZE'S OBJECTIVE ──────────────────────────────────────────────────────
+//
+// A silver key opens a chest, the chest holds a golden key, the golden key
+// opens the door, and the door is the level. Traversal rather than
+// extermination, which is the whole reason the warden cannot be killed: if
+// damage bought progress, the maze would be an arena with corners.
+
+/**
+ * The objective's entire state, or null on a map that has none.
+ *
+ * One nullable object rather than six loose flags: every consumer gets a
+ * single guard, and generateMap has a single place to clear.
+ */
+let mazeRun = null;
+
+/**
+ * The maze's two keys.
+ *
+ * Same row shape as CONFIG.resources so drawHUD paints them with the
+ * icon-per-unit loop it already runs for the quiver. They are not resources,
+ * though: resetInv hands the player a full set of everything in that table,
+ * and a key you start the level holding is not a key.
+ */
+const MAZE_KEYS = {
+  silver: { color: '#D0D8E8', dim: '#2d2d2d', icon: '⚷', spacing: 13 },
+  golden: { color: '#FFB400', dim: '#2d2d2d', icon: '⚷', spacing: 13 },
+};
+
+/**
+ * What each lock wants, and what opening it buys.
+ *
+ * Two rows rather than an `if`: the chest and the door are one interaction,
+ * and the only things that differ are the key it eats and the payoff. A third
+ * lockable thing is a row, not an edit inside updateMazeObjective.
+ */
+const MAZE_LOCKS = {
+  chest: {
+    needs: 'silver',
+    open: (x, y) => {
+      mazeRun.held.golden = true;
+      events.emit({ type: 'CHEST_OPENED', x, y });
+    },
+  },
+  door: {
+    needs: 'golden',
+    open: (x, y) => {
+      events.emit({ type: 'DOOR_OPENED', x, y });
+      transitionTo('win');
+    },
+  },
+};
+
+/**
+ * Places the chest and the door, once, on the grid that was just carved.
+ *
+ * openTileAwayFrom answers for one anchor at a time and both anchors matter
+ * here, so the door is drawn first as the far end and the chest is re-rolled
+ * until it clears the door as well as the spawn. The retry is bounded because
+ * on a 33x21 grid the two constraints can fight, and an awkward layout beats
+ * a hang.
+ */
+function newMazeRun() {
+  const spawn = spawnPoint();
+  const door = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeDoorMinDistance) ?? spawn;
+  let chest = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeChestMinDistance) ?? spawn;
+  const apart = CONFIG.mazeObjectiveSeparation ** 2;
+  for (let tries = 0; tries < 12 && dist2(chest.x, chest.y, door.x, door.y) < apart; tries++) {
+    chest = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeChestMinDistance) ?? chest;
+  }
+  // Few, and scattered rather than placed: finding one has to feel like luck.
+  const torches = [];
+  for (let i = 0; i < CONFIG.mazeTorchCount; i++) {
+    const at = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeTorchMinDistance);
+    if (at) torches.push({ x: at.x, y: at.y, lit: false, flamePhase: Math.random() * Math.PI * 2 });
+  }
+  return {
+    locks: {
+      chest: { x: chest.x, y: chest.y, opened: false },
+      door:  { x: door.x,  y: door.y,  opened: false },
+    },
+    held: { silver: false, golden: false },
+    drops: [],            // keys lying on the floor, waiting to be walked over
+    torches,
+    ratTimer: 0,          // counts down to the next pack, once the last is dead
+    metMinotaur: false,   // his first charge or his first stun, whichever came first
+    silverDropped: false, // one silver key exists, ever
+  };
+}
+
+/**
+ * Keeps a pack of rats in the maze.
+ *
+ * CONFIG.ratPackSize shipped with the rat and had no consumer: nothing put rats
+ * on the map outside the dev harness, which left the silver key undroppable in
+ * a real run.
+ *
+ * A pack at a time, and the next one only after the last is dead. Topping up
+ * one rat at a time reads as fairer and plays far worse: the pack becomes a
+ * permanent tax with no way to get ahead of it, and clearing a corridor stops
+ * meaning anything. Killing all five buys real quiet, which is what makes them
+ * worth shooting.
+ */
+function updateRatPack(dt) {
+  if (skeletons.length > 0) { mazeRun.ratTimer = ratRespawnSecs(); return; }
+  mazeRun.ratTimer -= dt;
+  if (mazeRun.ratTimer > 0) return;
+  mazeRun.ratTimer = ratRespawnSecs();
+  const n = ratsPerPack();
+  for (let i = 0; i < n; i++) spawnSkeleton('rat');
+}
+
+/**
+ * Has the player lit anything yet?
+ *
+ * Derived from the torches rather than tracked beside them, so "the lights are
+ * on" and "this torch is burning" can never disagree. The first one is the only
+ * one that changes sight; the rest are landmarks.
+ */
+function torchIsLit() {
+  return !!mazeRun && mazeRun.torches.some(t => t.lit);
+}
+
+/**
+ * Strikes a torch, and holds a small patch of the maze open around it forever.
+ *
+ * Sight goes to three times the base and stays there for the run. A timer was
+ * the alternative and it makes the level a stopwatch: a maze is a place you are
+ * meant to search, and light that expires punishes searching. It would also
+ * contradict the map, since the torch itself keeps burning either way.
+ */
+function lightTorch(t) {
+  t.lit = true;
+  const ts = CONFIG.tileSize, reach = CONFIG.torchGlowTiles;
+  const c0 = Math.floor(t.x / ts), r0 = Math.floor(t.y / ts);
+  for (let r = r0 - reach; r <= r0 + reach; r++)
+    for (let c = c0 - reach; c <= c0 + reach; c++)
+      if (r >= 0 && r < CONFIG.rows && c >= 0 && c < CONFIG.cols)
+        torchTiles[r * CONFIG.cols + c] = 1;
+  // The sight radius just changed, and FovMap only recomputes when the tracked
+  // tile does. Without the invalidate the new reach waits for the next step the
+  // player takes, which reads as the torch failing to light. The recompute has
+  // to happen here too, not next frame: this runs after updateFOV, so leaving
+  // the cache empty would render one fully black frame at the exact moment the
+  // level is supposed to open up.
+  fovMap.invalidate();
+  seenFrom = -1;
+  updateFOV();
+  events.emit({ type: 'TORCH_LIT', x: t.x, y: t.y });
+}
+
+/**
+ * The first time the warden does something to you.
+ *
+ * Committing to a charge and taking a stun both count, whichever lands first:
+ * either way the player has met him, and meeting him is what turns the rats
+ * from vermin into the way forward. Rolling for the key before that would let
+ * a lucky opening kill hand over the chain before the level has said anything.
+ */
+function noteMinotaurEncounter() {
+  if (mazeRun) mazeRun.metMinotaur = true;
+}
+
+/**
+ * Rolls one dead rat for the silver key.
+ *
+ * Stops rolling the moment a key exists, so a player who walks past the one on
+ * the floor does not farm a second. Only rats carry it: the castle's skeletons
+ * share this death path and have nothing to do with the maze.
+ */
+function maybeDropSilverKey(s) {
+  if (!mazeRun || s.kind !== 'rat') return;
+  if (!mazeRun.metMinotaur || mazeRun.silverDropped) return;
+  if (Math.random() >= CONFIG.mazeSilverKeyDropChance / mazePressure()) return;
+  mazeRun.silverDropped = true;
+  mazeRun.drops.push({ kind: 'silver', x: s.x, y: s.y, bobPhase: Math.random() * Math.PI * 2 });
+  events.emit({ type: 'KEY_DROPPED', x: s.x, y: s.y, kind: 'silver' });
+}
+
+/**
+ * Walk over a key to take it, walk into a lock to open it.
+ *
+ * No new keybind. The level's verb is traversal and pickups already teach that
+ * touching a thing is how you use it, so reaching the door is the act of
+ * leaving rather than a prompt in front of it. Distances reuse
+ * CONFIG.pickupRadius, so a key collects at exactly the reach a quiver does.
+ */
+function updateMazeObjective(dt) {
+  if (!mazeRun) return;
+  updateRatPack(dt);
+  const reach = CONFIG.pickupRadius ** 2;
+  // Torches are the one thing here you choose rather than collect, so they are
+  // the one thing on a button. Consumed on read, the way every other one-shot
+  // key in stepGame is, so holding it down lights one torch and not a row.
+  const use = !!keys[CONFIG.keys.use];
+  if (use) keys[CONFIG.keys.use] = false;
+  for (const t of mazeRun.torches) t.flamePhase += dt * 9;
+  if (use) {
+    // One press lights one torch, so two within arm's reach of each other stay
+    // two decisions.
+    const t = mazeRun.torches.find(t => !t.lit && dist2(player.x, player.y, t.x, t.y) < reach);
+    if (t) lightTorch(t);
+  }
+  for (let i = mazeRun.drops.length - 1; i >= 0; i--) {
+    const k = mazeRun.drops[i];
+    k.bobPhase += dt * (2 * Math.PI / 0.6);
+    if (dist2(player.x, player.y, k.x, k.y) >= reach) continue;
+    mazeRun.held[k.kind] = true;
+    events.emit({ type: 'KEY_TAKEN', x: k.x, y: k.y, kind: k.kind });
+    mazeRun.drops.splice(i, 1);
+  }
+  for (const [name, lock] of Object.entries(MAZE_LOCKS)) {
+    const at = mazeRun.locks[name];
+    if (at.opened || !mazeRun.held[lock.needs]) continue;
+    if (dist2(player.x, player.y, at.x, at.y) >= reach) continue;
+    at.opened = true;
+    lock.open(at.x, at.y);
+  }
+}
+
 function checkPickupCollection() {
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
@@ -2407,6 +3023,8 @@ function updateEscalation(dt) {
   // not this timer — see killSkeleton. Only waveAnnounce still needs to
   // count down here so a castle-wave banner fades on schedule.
   if (mapKind === 'castle') return;
+  // The maze's population is the rat pack and the warden. See MAP_RULES.crows.
+  if (!mapHasCrows()) return;
   if (escalationTimer >= CONFIG.crowEscalationInterval) {
     escalationTimer -= CONFIG.crowEscalationInterval;
     wave++;
@@ -2416,6 +3034,43 @@ function updateEscalation(dt) {
 }
 
 // ── DAMAGE / BOSS ─────────────────────────────────────────────────────────────
+
+/** Half speed while venom is in you, full speed otherwise. */
+function poisonSpeedMult() {
+  return playerPoison.timer > 0 ? CONFIG.ratPoisonSlowMult : 1;
+}
+
+/**
+ * Applies a fresh bite's venom. Refreshes to full rather than stacking, so a
+ * swarm is dangerous through the slow it keeps renewing rather than through
+ * an unbounded damage total.
+ */
+function poisonPlayer() {
+  const first = playerPoison.timer <= 0;
+  playerPoison.timer = CONFIG.ratPoisonSecs;
+  if (first) playerPoison.tickIn = CONFIG.ratPoisonTickSecs;
+  events.emit({ type: 'PLAYER_POISONED', x: player.x, y: player.y });
+}
+
+/**
+ * Counts the venom down and bites once a second while it lasts.
+ *
+ * Damage goes straight to playerHP rather than through damagePlayer, because
+ * that gate refuses anything while playerHitFlash is up: routed through it,
+ * every tick would be swallowed by the invulnerability from the bite that
+ * applied the poison in the first place. A shield does not stop it either.
+ * Venom is already inside you.
+ */
+function updatePlayerPoison(dt) {
+  if (playerPoison.timer <= 0) return;
+  playerPoison.timer = Math.max(0, playerPoison.timer - dt);
+  playerPoison.tickIn -= dt;
+  if (playerPoison.tickIn > 0) return;
+  playerPoison.tickIn += CONFIG.ratPoisonTickSecs;
+  playerHP -= CONFIG.ratPoisonDamagePerTick;
+  events.emit({ type: 'PLAYER_POISON_TICK', x: player.x, y: player.y });
+  if (playerHP <= 0) { playerHP = 0; transitionTo('gameover'); }
+}
 
 function damagePlayer(amount, crowIndex = -1) {
   // Team gate: an attacker never hurts its own team. In single-player the
@@ -2479,7 +3134,94 @@ function updateBossEntrance(dt) {
 
 // Stage order for brawl mode's full run. Index 0 is always the forest fight;
 // 1 and 2 are the castle stage's two dark bosses, fought in sequence.
-const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight'];
+const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight', 'minotaur'];
+
+/**
+ * What a landed hit does, per boss.
+ *
+ * The three arena bosses share one contract: they have HP, damage lowers it,
+ * zero kills them. The minotaur shares none of it, so this is not a fourth
+ * branch inside that contract, it is a second contract. Same Record<kind, fn>
+ * shape as BOSS_HIT_FX above rather than an `if` inside damageBoss.
+ */
+/**
+ * Which bosses exist outside a boss fight.
+ *
+ * The three arena bosses are only ever alive inside `boss_fight`, after an
+ * entrance that burns the arena clear for them, so nothing has to update them
+ * while the player explores. The minotaur is not fought, he is escaped: he
+ * hunts through the whole level, which means updateBoss now runs in `playing`
+ * too. One row per kind rather than an `if (boss.kind === 'minotaur')` at the
+ * call site, so a fifth boss has to answer the question instead of inheriting
+ * whichever answer the branch happened to give it.
+ */
+/**
+ * How hard the maze pushes each character, as one multiplier.
+ *
+ * The level is last, so it is allowed to be hard, but the difficulty it landed
+ * on was the wrong shape: the knight cleared it most easily because melee
+ * shreds a rat pack, and the two characters the level was supposed to test
+ * hardest were the ones dying in the hunt. This is the ordering it should
+ * have, easiest first: ranger, archer, wizard, knight.
+ *
+ * One scalar rather than four tables. Everything the maze uses to apply
+ * pressure moves together, so a row here is a single decision about a
+ * character and not four that have to be kept consistent with each other.
+ * Above 1 is harder than the level shipped, below 1 is easier.
+ *
+ * These are a starting point, not a measurement. Tune them by playing.
+ */
+const MAZE_PRESSURE = {
+  ranger: 0.70,   // three bolts a press already answers a pack; give it room
+  archer: 0.90,
+  wizard: 1.10,   // a 2 s bolt against five rats is the level's real test
+  knight: 1.35,   // melee is strongest here, so the maze leans hardest on him
+};
+
+/** The pressure for whoever is playing. 1 outside the maze, so nothing else moves. */
+function mazePressure() {
+  if (!mazeRun) return 1;
+  return MAZE_PRESSURE[selectedChar] ?? 1;
+}
+
+/** Rats per pack, never fewer than two: one rat is not a pack. */
+function ratsPerPack() {
+  return Math.max(2, Math.round(CONFIG.ratPackSize * mazePressure()));
+}
+
+/** Quiet between packs. More pressure buys less of it. */
+function ratRespawnSecs() {
+  return CONFIG.ratRespawnSecs / mazePressure();
+}
+
+const BOSS_HUNTS_WHILE_EXPLORING = {
+  crowking: false, dark_archer: false, dark_knight: false, minotaur: true,
+};
+
+/**
+ * Is the boss a live target for a weapon right now?
+ *
+ * Every attack used to ask `appState === 'boss_fight'`, which was the same
+ * question while a boss only existed inside its own fight. It stopped being
+ * the same question the moment the warden started hunting during exploration:
+ * he was on screen, hitting the player, and immune to everything, so the stun
+ * a hit is meant to buy could never happen and the level had no counterplay at
+ * all. Same fact as BOSS_HUNTS_WHILE_EXPLORING, read from the weapon's end.
+ */
+function bossInPlay() {
+  if (!boss || boss.bstate === 'dead') return false;
+  if (appState === 'boss_fight') return true;
+  return appState === 'playing' && BOSS_HUNTS_WHILE_EXPLORING[boss.kind];
+}
+
+const BOSS_ON_HIT = {
+  crowking:    (amount) => { dazeBoss(); applyBossDamage(amount); },
+  dark_archer: (amount) => applyBossDamage(amount),
+  dark_knight: (amount) => applyBossDamage(amount),
+  // No HP to lower and no death path to reach. A hit buys time instead:
+  // it stuns him, which interrupts a charge and lets you get down the corridor.
+  minotaur:    ()       => stunMinotaur(),
+};
 
 // Which CONFIG keys hold a kind's HP for each character, so bossHpFor has one
 // home instead of a third near-identical ternary chain pasted next to the
@@ -2491,6 +3233,10 @@ const BOSS_HP_KEYS = {
 };
 
 function bossHpFor(kind) {
+  // The minotaur cannot be killed, so he has no HP row. Infinity rather than a
+  // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without
+  // any of them learning that an unkillable boss exists.
+  if (kind === 'minotaur') return Infinity;
   const [normal, wizard, knight] = BOSS_HP_KEYS[kind];
   const key = selectedChar === 'wizard' ? wizard : selectedChar === 'knight' ? knight : normal;
   return CONFIG[key];
@@ -2511,6 +3257,22 @@ function spawnBoss() {
     burnDps: 0,                     // damage per second for the burn now running
     dazeTimer: 0,                   // crow king only: stun then two-step slow, see dazeBoss
   };
+  if (kind === 'minotaur') {
+    // Starts far from the player rather than off the right edge: a maze has no
+    // open lane to walk in along, and openTileAwayFrom is already the answer
+    // to "somewhere over there" on a carved map.
+    const at = openTileAwayFrom(player.x, player.y, 320) ?? { x: common.x, y: common.y };
+    boss = {
+      ...common,
+      x: at.x, y: at.y,
+      bstate: 'prowl',
+      chargeDX: 0, chargeDY: 0,     // locked at windup, not re-aimed mid-charge
+      chargeTimer: 0, cooldown: 0,
+      path: null, pathTimer: 0,     // prowls on the shared A* scheduler
+      state: 'aggro',               // what pathScheduler.serve() looks for
+    };
+    return;
+  }
   if (kind === 'crowking') {
     boss = {
       ...common,
@@ -2576,9 +3338,8 @@ function knockBoss(fromX, fromY) {
 function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
   boss.hitFlash = flash;
   knockBoss(fromX, fromY);
-  if (boss.kind === 'crowking') dazeBoss();
   events.emit({ type: 'BOSS_HIT', source });
-  applyBossDamage(amount);
+  BOSS_ON_HIT[boss.kind](amount);
 }
 
 /** Outcome of one projectile reaching the boss. */
@@ -2598,7 +3359,7 @@ const BossHit = {
  * happened and the caller removes the projectile on ABSORBED or DAMAGED.
  */
 function resolveBossHit(a, damage, source) {
-  if (!boss || appState !== 'boss_fight' || boss.bstate === 'dead') return BossHit.MISS;
+  if (!bossInPlay()) return BossHit.MISS;
   if (dist2(a.x, a.y, boss.x, boss.y) >= CONFIG.bossHitRadius * CONFIG.bossHitRadius)
     return BossHit.MISS;
 
@@ -2666,7 +3427,19 @@ function bossSpeedMod() {
 
 /** Total length of one daze: the stun plus both recovery steps. */
 function bossDazeTotal() {
-  return CONFIG.bossDazeStunDuration + CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration;
+  return dazeTimerForStun(CONFIG.bossDazeStunDuration);
+}
+
+/**
+ * Where the one daze countdown has to start for `secs` of full stun.
+ *
+ * bossDazePhase reads the timer as a position inside stun, then slow1, then
+ * slow2, counting down. So "stun him for 1.5 seconds" is not `dazeTimer = 1.5`:
+ * that lands inside slow2 and freezes nothing. Anyone setting the timer by
+ * hand needs this conversion, which is exactly why it has a name.
+ */
+function dazeTimerForStun(secs) {
+  return secs + CONFIG.bossDazeSlow1Duration + CONFIG.bossDazeSlow2Duration;
 }
 
 /** 'stun' | 'slow1' | 'slow2' | null, derived from the one countdown so
@@ -2736,6 +3509,117 @@ function enterOrbit() {
   boss.orbitRadius = Math.hypot(boss.x - player.x, boss.y - player.y);
 }
 
+/**
+ * Line of sight from the warden's own eyes, capped by his own range.
+ *
+ * This used to read the player's FOV cache and lean on shadowcasting being
+ * symmetric. Fog of war ended that: the player now sees four tiles and he sees
+ * sixteen, so borrowing the player's answer would mean he could only ever
+ * charge from inside the lit circle, and the whole point of him is arriving out
+ * of the dark. See lineOfSight.
+ */
+function minotaurSeesPlayer() {
+  return seesPlayerFrom(boss.x, boss.y, CONFIG.minotaurSightRange);
+}
+
+/**
+ * What a hit on the minotaur buys: a stun that interrupts whatever he was
+ * doing and puts his charge back on cooldown.
+ *
+ * Reuses the crow king's daze countdown wholesale rather than adding a second
+ * stun concept — bossDazePhase() already derives stun/slow/slow from it, and
+ * updateBossDaze already ticks it.
+ */
+function stunMinotaur() {
+  noteMinotaurEncounter();
+  boss.dazeTimer = Math.max(boss.dazeTimer, dazeTimerForStun(CONFIG.minotaurStunSecs));
+  if (boss.bstate === 'charge' || boss.bstate === 'wind') endMinotaurCharge(false);
+  boss.cooldown = Math.max(boss.cooldown, CONFIG.minotaurChargeCooldown / mazePressure());
+}
+
+/** Drops him out of a charge into recovery, smashing the wall if he hit one. */
+function endMinotaurCharge(hitWall) {
+  if (hitWall) {
+    // smashTile is a no-op on a map whose terrain is not destructible, so on
+    // the maze this is pure spectacle: he slams into stone, staggers, and
+    // showers chips, but the wall holds. That is deliberate — a warden who
+    // opens the maze as he chases you dismantles the level he is guarding.
+    const r0 = Math.floor(boss.y / CONFIG.tileSize), c0 = Math.floor(boss.x / CONFIG.tileSize);
+    const reach = CONFIG.minotaurSmashRadius;
+    for (let dr = -reach; dr <= reach; dr++)
+      for (let dc = -reach; dc <= reach; dc++) smashTile(r0 + dr, c0 + dc);
+    triggerShake(9, 260);
+    events.emit({ type: 'MINOTAUR_SMASH', x: boss.x, y: boss.y });
+  }
+  boss.bstate = 'recover';
+  boss.stateTimer = 0;
+  boss.cooldown = CONFIG.minotaurChargeCooldown / mazePressure();
+}
+
+/**
+ * Prowl, charge on sight, recover. No shield, no HP, no death.
+ *
+ * Prowling reuses chaseAlongPath, the same A* follow crows, skeletons and rats
+ * use, so he navigates a maze without knowing one exists. Only the charge
+ * ignores the path: it commits to a direction locked at windup and runs in a
+ * straight line until something stops it, which is what makes a corridor feel
+ * like a corridor.
+ */
+function updateMinotaur(dt) {
+  boss.stateTimer += dt;
+  if (boss.cooldown > 0) boss.cooldown = Math.max(0, boss.cooldown - dt);
+
+  // A stun freezes him wherever he is, mid-charge included.
+  if (bossDazePhase() === 'stun') return;
+
+  const contactR = CONFIG.minotaurContactRadius;
+  const touching = Math.hypot(player.x - boss.x, player.y - boss.y) < contactR;
+
+  if (boss.bstate === 'prowl') {
+    if (touching) damagePlayer(CONFIG.minotaurContactDamage);
+    if (chaseAlongPath(boss, CONFIG.minotaurProwlSpeed * bossSpeedMod(), dt)) boss.wingPhase += dt * 6;
+    if (boss.cooldown <= 0 && minotaurSeesPlayer()) {
+      boss.bstate = 'wind'; boss.stateTimer = 0;
+      events.emit({ type: 'MINOTAUR_ROAR', x: boss.x, y: boss.y });
+    }
+    return;
+  }
+
+  if (boss.bstate === 'wind') {
+    // Plants and telegraphs. Aim keeps tracking until the moment he launches,
+    // so the tell is honest: what he is facing at the end is where he goes.
+    const a = Math.atan2(player.y - boss.y, player.x - boss.x);
+    boss.chargeDX = Math.cos(a); boss.chargeDY = Math.sin(a);
+    if (touching) damagePlayer(CONFIG.minotaurContactDamage);
+    if (boss.stateTimer >= CONFIG.minotaurWindupSecs) {
+      boss.bstate = 'charge'; boss.stateTimer = 0; boss.chargeTimer = 0;
+      boss.path = null;
+      noteMinotaurEncounter();
+      events.emit({ type: 'MINOTAUR_CHARGE', x: boss.x, y: boss.y });
+    }
+    return;
+  }
+
+  if (boss.bstate === 'charge') {
+    if (touching) damagePlayer(CONFIG.minotaurChargeContactDamage);
+    const spd = CONFIG.minotaurChargeSpeed * bossSpeedMod();
+    const nx = boss.x + boss.chargeDX * spd * dt;
+    const ny = boss.y + boss.chargeDY * spd * dt;
+    // Axis-separated so a glancing wall stops him on the axis that hit it.
+    const blockedX = !tilePassable(tileAt(nx, boss.y));
+    const blockedY = !tilePassable(tileAt(boss.x, ny));
+    if (blockedX || blockedY) { endMinotaurCharge(true); return; }
+    boss.x = nx; boss.y = ny;
+    boss.wingPhase += dt * 14;
+    if (boss.stateTimer >= CONFIG.minotaurChargeMaxSecs) endMinotaurCharge(false);
+    return;
+  }
+
+  // recover
+  if (touching) damagePlayer(CONFIG.minotaurContactDamage);
+  if (boss.stateTimer >= CONFIG.minotaurRecoverSecs) { boss.bstate = 'prowl'; boss.stateTimer = 0; }
+}
+
 function updateBoss(dt) {
   if (!boss || boss.bstate === 'dead') return;
   boss.wingPhase += dt * 8;
@@ -2760,6 +3644,10 @@ function updateBoss(dt) {
   updateBossDaze(dt);
   const justResumed = wasStunned && bossDazePhase() !== 'stun';
   if (justResumed && boss.bstate === 'orbit') enterOrbit();
+
+  // The minotaur shares the frame preamble above (burn, flash, facing, daze)
+  // and none of what follows: no shield window, no orbit, no volleys.
+  if (boss.kind === 'minotaur') { updateMinotaur(dt); return; }
 
   // ── Shield phase machine — crow king only ────────────────────────────────
   // Rolling 30s window: reset shield-use counter each window
@@ -3055,16 +3943,32 @@ function updateBossDeath(dt) {
       // stage 1. The nine-wave gauntlet plays out in 'playing' like a normal
       // brawl; killSkeleton's own wave-clear check is what starts the next
       // wave, or the dark archer's entrance once wave 9 clears. The castle
-      // is already fully set up at this point; castle_intro just holds a
-      // black screen in front of it until the player clicks, since cutting
-      // straight from the death burst into the new map read as too fast.
-      appState = 'castle_intro';
+      // is already fully set up at this point; the intro just holds a black
+      // screen in front of it until the player clicks, since cutting straight
+      // from the death burst into the new map read as too fast.
+      showStageIntro('castle');
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
       skeletons = [];
       bossStage = 3;
       transitionTo('boss_entrance');
+    } else if (deadKind === 'dark_knight') {
+      // Stage 3 done, and the run is not over: the castle's floor gives out
+      // into the labyrinth under it. Built exactly the way the castle
+      // hand-off builds its stage, then held behind a title.
+      //
+      // spawnBoss() reads bossStage, so that has to be 4 before it runs, and
+      // the maze has to exist before the minotaur picks a tile to stand on.
+      skeletons = []; crows = [];
+      bossStage = 4;
+      generateMap('maze');
+      const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+      player.x = spawn.x; player.y = spawn.y;
+      spawnBoss();
+      showStageIntro('maze');
     } else {
+      // The minotaur cannot die, so nothing reaches here through him. The
+      // maze is won by walking out of the door, not by clearing the room.
       skeletons = [];
       transitionTo('win');
     }
@@ -3100,7 +4004,13 @@ const sndExplosion     = [.8,  .05,  90, 0, .18, .3,  5, 1, -40];       // lowpa
 const sndWizBolt       = [.25, 0,   440, 0, .04, .13, 0, 1, 0, 0, 440, .05]; // sine + pitch jump — magic zap
 const sndLightning     = [.75, .15, 120, 0, .25, .3,  4, 1];            // bit noise — lightning crack
 const sndCrossbow      = [.28, .04, 550, 0, .03, .06, 4, 1, -120];      // bit noise snap, downward pitch — mechanical thock
+const sndPoisonBite    = [.22, .04, 260, 0, .04, .07, 4, 1, -140];     // bit noise, pitch dropping — a wet nip
+const sndPoisonTick    = [.14, .02, 180, 0, .05, .09, 2, 1, -60];      // low sawtooth throb — the venom working
 const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // triangle blip, upward pitch — arm confirm
+const sndKeyDrop       = [.3,  .02, 1400, 0, .02, .12, 1, 1, 0, 0, 300, .05]; // triangle chime + pitch jump — small metal landing
+const sndChestOpen     = [.4,  .05, 160, 0, .1,  .22, 2, 1, 120];       // sawtooth rising — a lid coming up
+const sndDoorOpen      = [.6,  .1,   70, 0, .3,  .5,  4, 1, 40];        // low bit noise grinding up — stone giving way
+const sndTorchLight    = [.3,  .3,  420, 0, .06, .18, 4, 1, 90];        // bit noise, rising — a strike catching
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
 function sndGameover() {
@@ -3630,6 +4540,39 @@ function drawWizard() {
  * drawKnight/drawRanger, so the freeze reads the same on every character
  * without touching four separate draw functions for one shared status.
  */
+/**
+ * Venom tell: a sickly green haze and a few rising motes, plus a bar of the
+ * remaining duration under the feet.
+ *
+ * Deliberately not the freeze ring's shape. Both can be up at once, and two
+ * rings pulsing at different rates around one body is unreadable.
+ */
+function drawPlayerPoisonOverlay() {
+  const px = player.x, py = player.y + CONFIG.hudHeight;
+  const frac = Math.min(1, playerPoison.timer / CONFIG.ratPoisonSecs);
+  const pulse = 0.5 + 0.5 * Math.sin(loopT * 7);
+  ctx.save(); ctx.translate(px, py);
+  ctx.globalAlpha = 0.20 + 0.12 * pulse;
+  ctx.shadowColor = '#6ABF2A'; ctx.shadowBlur = 10;
+  ctx.fillStyle = '#6ABF2A';
+  ctx.beginPath(); ctx.arc(0, -3, 14, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  // Motes drifting up off the body
+  for (let k = 0; k < 4; k++) {
+    const t = (loopT * 0.6 + k / 4) % 1;
+    const mx = Math.sin((k * 2.3) + loopT * 2) * 7;
+    ctx.globalAlpha = (1 - t) * 0.75;
+    ctx.fillStyle = k % 2 ? '#9BE04A' : '#4E8F1E';
+    ctx.fillRect(mx, -4 - t * 16, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  // Duration bar, under the feet so it never sits where the charge bar goes.
+  const bw = 20, bh = 2;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(-bw/2, 13, bw, bh);
+  ctx.fillStyle = '#6ABF2A'; ctx.fillRect(-bw/2, 13, bw * frac, bh);
+  ctx.restore();
+}
+
 function drawPlayerFrozenOverlay() {
   const px = player.x, py = player.y + CONFIG.hudHeight;
   const pulse = 0.5 + 0.5 * Math.sin(loopT * 5);
@@ -4577,9 +5520,54 @@ const SKELETON_PALETTES = {
   normal: { bone: '#D8D0C0', boneHi: '#F4F0E6', edge: '#8A8070', eye: '#B040E0', aura: null },
   fire:   { bone: '#D86A40', boneHi: '#F4A868', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
   ice:    { bone: '#A8D8F0', boneHi: '#E4F6FF', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
+  // Not bone at all, but it reads the same three slots so nothing downstream
+  // needs to know a rat is not a skeleton.
+  rat:    { bone: '#4A3E36', boneHi: '#6B5A4C', edge: '#2A221C', eye: '#FF4020', aura: null },
 };
 
 const SKELETON_SPRITE = { w: 14, h: 24 };
+const RAT_SPRITE = { w: 14, h: 10 };
+
+/**
+ * A low, quick body: tail, hunched back, snout, and four legs that scurry on
+ * the same three-frame stride the skeletons use.
+ *
+ * Drawn facing right and never mirrored, like every other ground critter here.
+ */
+function buildRatGrid(kind, frame) {
+  const C = SKELETON_PALETTES[kind];
+  const g = makePixelGrid(RAT_SPRITE.w, RAT_SPRITE.h);
+  const swing = frame === 'a' ? 1 : frame === 'b' ? -1 : 0;
+
+  // Tail, whipping opposite the legs so the body reads as driven by them.
+  pixelCurve(g, [0, 4 - swing], [3, 6], [5, 5], C.edge, 8);
+  // Haunch and back
+  pixelEllipse(g, 6, 6, 4, 2, C.bone);
+  pixelEllipse(g, 6, 5, 3, 1, C.boneHi);
+  // Head and snout
+  pixelEllipse(g, 10, 6, 2, 2, C.bone);
+  pixelRect(g, 12, 6, 2, 1, C.bone);
+  // Ear
+  pixelRect(g, 9, 3, 2, 2, C.edge);
+  setPixel(g, 10, 4, C.bone);
+  // Legs, alternating with the stride
+  pixelRect(g, 4 + swing, 8, 1, 2, C.edge);
+  pixelRect(g, 7 - swing, 8, 1, 2, C.edge);
+  pixelRect(g, 10 + swing, 8, 1, 2, C.edge);
+  return g;
+}
+
+/**
+ * Per-kind rendering, so a kind with a different body is a row rather than a
+ * branch inside drawSkeleton. The three bone kinds share one builder and
+ * differ only by palette; the rat brings its own.
+ */
+const SKELETON_LOOK = {
+  normal: { sprite: SKELETON_SPRITE, build: buildSkeletonGrid, dy: -15, eyes: [[4, 5], [8, 5]], shadow: [7, 2] },
+  fire:   { sprite: SKELETON_SPRITE, build: buildSkeletonGrid, dy: -15, eyes: [[4, 5], [8, 5]], shadow: [7, 2] },
+  ice:    { sprite: SKELETON_SPRITE, build: buildSkeletonGrid, dy: -15, eyes: [[4, 5], [8, 5]], shadow: [7, 2] },
+  rat:    { sprite: RAT_SPRITE,      build: buildRatGrid,      dy: -7,  eyes: [[11, 5]],        shadow: [6, 1.5] },
+};
 
 /** frame 'a'/'b' are the two extremes of the stride, 'mid' legs-together
  * between them — see animFrame3. Skull and ribcage stay put; only limbs
@@ -4614,7 +5602,7 @@ function buildSkeletonGrid(kind, frame) {
 const _skeletonGrids = {};
 function skeletonGrid(kind, frame) {
   const key = `${kind}|${frame}`;
-  return _skeletonGrids[key] || (_skeletonGrids[key] = buildSkeletonGrid(kind, frame));
+  return _skeletonGrids[key] || (_skeletonGrids[key] = SKELETON_LOOK[kind].build(kind, frame));
 }
 
 // Ground-based, so a walk cycle (legs swinging on s.walkPhase) replaces a
@@ -4625,6 +5613,7 @@ function drawSkeleton(s) {
   const flashOn = s.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
   const kind = s.kind || 'normal';
   const palette = SKELETON_PALETTES[kind] || SKELETON_PALETTES.normal;
+  const look = SKELETON_LOOK[kind] || SKELETON_LOOK.normal;
   const eyeCol = palette.eye;
   const frame = animFrame3(s.walkPhase);
   const grid = skeletonGrid(kind, frame);
@@ -4635,7 +5624,7 @@ function drawSkeleton(s) {
   // 1. Ground shadow
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, 9, look.shadow[0], look.shadow[1], 0, 0, Math.PI*2); ctx.fill();
 
   // Elemental aura — fire and ice only, a small pulsing glow behind the ribs
   if (palette.aura && !flashOn) {
@@ -4649,18 +5638,22 @@ function drawSkeleton(s) {
 
   // 2. Pixel-art body (see buildSkeletonGrid). The stride is 3 baked frames
   // (animFrame3), same reasoning as the crow's flap cycle above.
-  const kSpriteDx = -(SKELETON_SPRITE.w) / 2, kSpriteDy = -15;
+  const kSpriteDx = -(look.sprite.w) / 2, kSpriteDy = look.dy;
   const kCanvas = flashOn
-    ? spriteFlashCanvas(`skeleton|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h, '#ffffff')
-    : spriteCanvas(`skeleton|${kind}|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+    ? spriteFlashCanvas(`skeleton|${kind}|${frame}`, grid, look.sprite.w, look.sprite.h, '#ffffff')
+    : spriteCanvas(`skeleton|${kind}|${frame}`, grid, look.sprite.w, look.sprite.h);
+  // #30's glow behind a flashing body, so a hit reads through a crowd. Kept
+  // with the maze's per-kind sprite size: a rat is 14x10 and a skeleton
+  // 14x24, so the dimensions have to come from the look row, not a constant.
   if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
   ctx.shadowBlur = 0;
 
   // 3. Eye sockets — stamped glow, same technique as the crow's eye
   const eyeStamp = glowDotStamp(eyeCol, 1, 3);
-  ctx.drawImage(eyeStamp, kSpriteDx + 4 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
-  ctx.drawImage(eyeStamp, kSpriteDx + 8 - eyeStamp.width/2, kSpriteDy + 5 - eyeStamp.height/2);
+  for (const [ex, ey] of look.eyes) {
+    ctx.drawImage(eyeStamp, kSpriteDx + ex - eyeStamp.width/2, kSpriteDy + ey - eyeStamp.height/2);
+  }
 
   ctx.restore();
 }
@@ -4694,8 +5687,170 @@ function drawHostileBolts() {
   }
 }
 
+/**
+ * The chest, closed with its lock plate lit or spent with its lid tipped back.
+ */
+function drawChest(at) {
+  const open = at.opened;
+  ctx.save(); ctx.translate(at.x, at.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(0, 9, 11, 2.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.shadowColor = '#FFB400'; ctx.shadowBlur = open ? 0 : 6 + 4*Math.sin(loopT*3);
+  ctx.fillStyle = '#6B4423'; ctx.fillRect(-11, -2, 22, 11);
+  ctx.fillStyle = '#4A2E17'; ctx.fillRect(-11, 6, 22, 3);
+  if (open) {
+    ctx.fillStyle = '#0A0A08'; ctx.fillRect(-10, -3, 20, 4);
+    ctx.fillStyle = '#5A381D'; ctx.fillRect(-11, -11, 22, 5);
+  } else {
+    ctx.fillStyle = '#7C5129'; ctx.fillRect(-11, -8, 22, 7);
+    ctx.fillStyle = '#8A5B2E'; ctx.fillRect(-11, -8, 22, 2);
+  }
+  ctx.fillStyle = '#C8A040';
+  ctx.fillRect(-7, open ? -11 : -8, 2, open ? 5 : 11);
+  ctx.fillRect( 5, open ? -11 : -8, 2, open ? 5 : 11);
+  if (!open) {
+    ctx.fillStyle = '#E0C060'; ctx.fillRect(-3, -3, 6, 6);
+    ctx.fillStyle = '#2A1A08'; ctx.fillRect(-1, -1, 2, 3);
+  }
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/**
+ * The exit, timber in a stone arch until the golden key turns it into daylight.
+ */
+function drawDoor(at) {
+  ctx.save(); ctx.translate(at.x, at.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(0, 14, 13, 3, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4A4740'; ctx.fillRect(-13, -18, 26, 32);
+  ctx.fillStyle = '#5C584F'; ctx.fillRect(-13, -18, 26, 3);
+  if (at.opened) {
+    const pulse = 0.6 + 0.4*Math.sin(loopT*2.5);
+    ctx.shadowColor = '#FFE8B0'; ctx.shadowBlur = 10 + 6*pulse;
+    ctx.fillStyle = `rgba(255,232,176,${(0.55 + 0.35*pulse).toFixed(2)})`;
+    ctx.fillRect(-8, -14, 16, 28);
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = '#3A2412'; ctx.fillRect(-8, -14, 16, 28);
+    ctx.fillStyle = '#4E3018'; ctx.fillRect(-8, -14, 16, 2);
+    ctx.fillStyle = '#2C1B0D';
+    for (let y = -8; y < 14; y += 7) ctx.fillRect(-8, y, 16, 1);
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 5 + 3*Math.sin(loopT*3);
+    ctx.fillStyle = '#C8A040'; ctx.fillRect(-3, -2, 6, 7);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#1A1006'; ctx.fillRect(-1, 0, 2, 4);
+  }
+  ctx.restore();
+}
+
+// One painter per lock, the same Record<kind, painter> shape RETICLE_PAINTERS
+// uses further down, so drawMazeObjective never branches on which one it has.
+const MAZE_LOCK_PAINTERS = { chest: drawChest, door: drawDoor };
+
+/** A key on the floor: bow, shaft, two teeth, over a pickup's pedestal halo. */
+function drawMazeKey(k) {
+  const look = MAZE_KEYS[k.kind];
+  ctx.save(); ctx.translate(k.x, k.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 8, 7, 1.8, 0, 0, Math.PI*2); ctx.fill();
+  ctx.shadowColor = look.color; ctx.shadowBlur = 12;
+  ctx.globalAlpha = 0.22 + 0.12*Math.sin(k.bobPhase);
+  ctx.fillStyle = look.color;
+  ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.translate(0, -2 + Math.sin(k.bobPhase)*2);
+  ctx.shadowBlur = 8;
+  ctx.strokeStyle = look.color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(-4, 0, 3.2, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = look.color;
+  ctx.fillRect(-1, -1, 9, 2);
+  ctx.fillRect(5, -4, 2, 4);
+  ctx.fillRect(8, -3, 2, 3);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/**
+ * A wall torch: dead stick in a bracket, or a flame.
+ *
+ * A lit one ignores the fog gate on purpose. It is the only landmark the maze
+ * offers, and a landmark you can only see when you are standing on it is not
+ * one. lightTorch holds the fog open around it to match.
+ */
+function drawTorch(t) {
+  ctx.save(); ctx.translate(t.x, t.y + CONFIG.hudHeight);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 8, 6, 1.6, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4A3A22'; ctx.fillRect(-1.5, -4, 3, 12);   // the stick
+  ctx.fillStyle = '#6B5A38'; ctx.fillRect(-4, 6, 8, 3);       // the bracket
+  if (!t.lit) {
+    ctx.fillStyle = '#2A2218'; ctx.fillRect(-3, -8, 6, 5);    // cold pitch
+    ctx.restore();
+    return;
+  }
+  const f = Math.sin(t.flamePhase), g = Math.sin(t.flamePhase * 1.7);
+  ctx.shadowColor = '#FF9020'; ctx.shadowBlur = 16 + 6*f;
+  ctx.fillStyle = `rgba(255,144,32,${(0.16 + 0.06*f).toFixed(2)})`;
+  ctx.beginPath(); ctx.arc(0, -6, 18 + 3*f, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FF7A1F';
+  ctx.beginPath(); ctx.ellipse(0, -8, 3.4 + 0.6*g, 6 + 1.2*f, 0, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#FFB400';
+  ctx.beginPath(); ctx.ellipse(0, -8, 2 + 0.4*g, 4, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#FFF3C0';
+  ctx.beginPath(); ctx.arc(0, -8, 1 + 0.4*Math.abs(f), 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+/** The maze's furniture and any key lying on its floor. Nothing off the maze. */
+function drawMazeObjective() {
+  if (!mazeRun) return;
+  for (const [name, at] of Object.entries(mazeRun.locks))
+    if (litAt(at.x, at.y)) MAZE_LOCK_PAINTERS[name](at);
+  for (const k of mazeRun.drops) if (litAt(k.x, k.y)) drawMazeKey(k);
+  for (const t of mazeRun.torches) if (t.lit || litAt(t.x, t.y)) drawTorch(t);
+}
+
+/**
+ * Three states per tile: lit right now, remembered, or never seen.
+ *
+ * Painted over the world rather than baked into it, so terrain and memory stay
+ * one drawing pass and the fog is the only thing that knows about sight. Lit
+ * tiles fade toward the edge of the circle instead of ending on a hard rim,
+ * which costs one hypot per tile and buys the difference between a torch and a
+ * spotlight.
+ *
+ * Anything that moves is gated at its own draw call, not here, because memory
+ * has to show the corridor and never the rat standing in it.
+ */
+function drawFog() {
+  if (!fogOfWar()) return;
+  const ts = CONFIG.tileSize, hud = CONFIG.hudHeight, cols = CONFIG.cols;
+  const pc = player.x / ts - 0.5, pr = player.y / ts - 0.5;
+  const radius = playerSightTiles();
+  const dim = CONFIG.fogMemoryAlpha;
+  for (let r = 0; r < CONFIG.rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c;
+      let a;
+      if (fovMap.isVisible(c, r)) {
+        a = Math.min(dim, (Math.hypot(c - pc, r - pr) / radius) ** 2 * CONFIG.fogMemorySlope);
+      } else if (torchTiles[i]) {
+        a = 0;
+      } else {
+        a = seenTiles[i] ? dim : 1;
+      }
+      if (a <= 0.01) continue;
+      ctx.fillStyle = a >= 1 ? '#000' : `rgba(0,0,0,${a.toFixed(3)})`;
+      ctx.fillRect(c * ts, r * ts + hud, ts, ts);
+    }
+  }
+}
+
 function drawPickups() {
   for (const p of pickups) {
+    if (!litAt(p.x, p.y)) continue;
     const ep         = p.bobPhase || 0;
     const blinkPhase = loopT * 4 + ep;
     const bobY       = -2 + Math.sin(loopT * 3 + ep) * 2;
@@ -4896,6 +6051,7 @@ function drawBoss() {
   if (!boss || boss.bstate === 'dead') return;
   if (boss.kind === 'dark_archer') { drawDarkArcher(); return; }
   if (boss.kind === 'dark_knight') { drawDarkKnight(); return; }
+  if (boss.kind === 'minotaur')    { drawMinotaur(); return; }
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const fl = boss.hitFlash > 0;
   const bossPulse = 0.5 + 0.5 * Math.sin(loopT * 2);
@@ -5092,6 +6248,77 @@ function drawDarkArcher() {
  * remap it thrusts its spear with (see drawKnight), scaled up, plus the
  * corona-pulse and hit-flash techniques from the crow king.
  */
+const MINOTAUR_SPRITE = { w: 26, h: 34 };
+const MINOTAUR_PALETTE = {
+  hide:    '#6B4A32',
+  hideHi:  '#8A6242',
+  hideDk:  '#43301F',
+  muscle:  '#7A563A',
+  horn:    '#E8DCC2',
+  hornDk:  '#A89777',
+  hoof:    '#2A1E14',
+  eye:     '#FF3010',
+  ring:    '#C8A040',
+};
+
+/**
+ * A hero's build wearing a bull's head, drawn at the same 1x pixel scale as
+ * every other sprite and simply taller: 26x34 against a hero's 20x24, which is
+ * the 50% ceiling asked for and still leaves room to slip past in a 64px
+ * corridor.
+ *
+ * Deliberately humanoid. The threat is that it is the same kind of thing you
+ * are, and bigger, not that it is a monster filling the passage.
+ */
+function buildMinotaurGrid(frame) {
+  const C = MINOTAUR_PALETTE;
+  const g = makePixelGrid(MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h);
+  const swing = frame === 'a' ? 3 : frame === 'b' ? -3 : 0;
+
+  // Legs, digitigrade-ish, ending in hooves
+  pixelCurve(g, [10, 22], [10 + swing * 0.4, 27], [10 + swing, 31], C.muscle, 4);
+  pixelCurve(g, [16, 22], [16 - swing * 0.4, 27], [16 - swing, 31], C.muscle, 4);
+  pixelRect(g, 8 + swing, 31, 5, 3, C.hoof);
+  pixelRect(g, 14 - swing, 31, 5, 3, C.hoof);
+
+  // Torso: broad chest tapering to the waist
+  pixelRect(g, 7, 12, 12, 8, C.hide);
+  pixelRect(g, 8, 20, 10, 3, C.hideDk);
+  pixelRect(g, 9, 13, 8, 4, C.hideHi);
+  // Pectoral shading
+  pixelRect(g, 12, 13, 1, 6, C.hideDk);
+
+  // Arms, swinging opposite the legs
+  pixelCurve(g, [6, 13], [3, 17 + swing], [3, 21 + swing], C.muscle, 4);
+  pixelCurve(g, [20, 13], [23, 17 - swing], [23, 21 - swing], C.muscle, 4);
+  pixelRect(g, 1, 21 + swing, 4, 3, C.hideDk);
+  pixelRect(g, 21, 21 - swing, 4, 3, C.hideDk);
+
+  // Neck
+  pixelRect(g, 11, 10, 4, 3, C.hideDk);
+
+  // Bull skull: broad muzzle, heavy brow
+  pixelEllipse(g, 13, 6, 6, 5, C.hide);
+  pixelRect(g, 10, 7, 7, 4, C.hideHi);       // muzzle plate
+  pixelRect(g, 11, 10, 5, 1, C.hideDk);      // mouth line
+  setPixel(g, 11, 8, C.hideDk); setPixel(g, 15, 8, C.hideDk);   // nostrils
+  pixelRect(g, 8, 3, 11, 2, C.hideDk);       // brow ridge
+
+  // Horns, sweeping out and up
+  pixelCurve(g, [7, 4], [3, 2], [1, 0], C.horn, 6);
+  pixelCurve(g, [19, 4], [23, 2], [25, 0], C.horn, 6);
+  setPixel(g, 1, 0, C.hornDk); setPixel(g, 25, 0, C.hornDk);
+  // Nose ring, the one bit of gear
+  pixelEllipse(g, 13, 12, 2, 1, C.ring);
+
+  return g;
+}
+
+let _minotaurGrids = {};
+function minotaurGrid(frame) {
+  return _minotaurGrids[frame] || (_minotaurGrids[frame] = buildMinotaurGrid(frame));
+}
+
 const DARK_KNIGHT_SPRITE = { w: 40, h: 70 };
 const DARK_KNIGHT_PALETTE = {
   leg: '#141018', legHi: '#2A2430',
@@ -5206,6 +6433,85 @@ function drawDarkKnight() {
   ctx.fillStyle = '#B0B0C0';
   ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(22, -5); ctx.lineTo(22, 5); ctx.closePath(); ctx.fill();
   ctx.restore();
+
+  ctx.restore();
+}
+
+/**
+ * The minotaur, with the state he is in readable at a glance.
+ *
+ * No HP bar: he does not have HP, and drawing an empty one would promise
+ * progress that never comes. The stun ring is the only feedback a hit gives,
+ * so it has to be unmistakable.
+ */
+function drawMinotaur() {
+  const bx = boss.x, by = boss.y + CONFIG.hudHeight;
+  const flashOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash * 20) % 2 === 0;
+  const stunned = bossDazePhase() === 'stun';
+  const frame = animFrame3(boss.wingPhase);
+  const grid = minotaurGrid(frame);
+
+  ctx.save(); ctx.translate(bx, by);
+
+  // Ground shadow, wider than a hero's because he is
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.ellipse(0, 16, 13, 3.5, 0, 0, Math.PI*2); ctx.fill();
+
+  // Windup tell: dust kicking back and a red glow building at the horns
+  if (boss.bstate === 'wind') {
+    const t = Math.min(1, boss.stateTimer / CONFIG.minotaurWindupSecs);
+    ctx.globalAlpha = 0.30 + 0.35 * t;
+    ctx.shadowColor = '#FF3010'; ctx.shadowBlur = 8 + 14 * t;
+    ctx.strokeStyle = '#FF3010'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -12, 15 + 6 * t, 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    // The line he is about to run down, so the tell is directional, not just loud
+    ctx.globalAlpha = 0.25 + 0.3 * t;
+    ctx.setLineDash([6, 5]); ctx.strokeStyle = '#FF6040'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.lineTo(boss.chargeDX * 150, boss.chargeDY * 150);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // Charge: speed streaks trailing behind him
+  if (boss.bstate === 'charge') {
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = '#C8A040'; ctx.lineWidth = 2;
+    for (let k = 1; k <= 3; k++) {
+      ctx.beginPath();
+      ctx.moveTo(-boss.chargeDX * 10 * k, -boss.chargeDY * 10 * k - 6 + k * 4);
+      ctx.lineTo(-boss.chargeDX * 26 * k, -boss.chargeDY * 26 * k - 6 + k * 4);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  const dx = -MINOTAUR_SPRITE.w / 2, dy = -MINOTAUR_SPRITE.h + 16;
+  const cvs = flashOn
+    ? spriteFlashCanvas(`minotaur|${frame}`, grid, MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h, '#ffffff')
+    : spriteCanvas(`minotaur|${frame}`, grid, MINOTAUR_SPRITE.w, MINOTAUR_SPRITE.h);
+  ctx.save(); ctx.scale(boss.facing, 1);
+  ctx.drawImage(cvs, boss.facing === 1 ? dx : dx, dy);
+  ctx.restore();
+
+  // Eyes, stamped over the skull
+  const eye = glowDotStamp(MINOTAUR_PALETTE.eye, 1, 4);
+  ctx.drawImage(eye, dx + 10 - eye.width/2, dy + 6 - eye.height/2);
+  ctx.drawImage(eye, dx + 16 - eye.width/2, dy + 6 - eye.height/2);
+
+  // Stunned: the one thing a hit actually does, so it reads loudly
+  if (stunned) {
+    const p = 0.5 + 0.5 * Math.sin(loopT * 12);
+    ctx.shadowColor = '#FFD040'; ctx.shadowBlur = 10 + 6 * p;
+    ctx.strokeStyle = `rgba(255,208,64,${(0.65 + 0.3*p).toFixed(2)})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -22, 12, 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    for (let k = 0; k < 3; k++) {
+      const a = loopT * 5 + (k / 3) * Math.PI * 2;
+      ctx.fillStyle = '#FFD040';
+      ctx.fillRect(Math.cos(a) * 12 - 1, -22 + Math.sin(a) * 5 - 1, 2, 2);
+    }
+  }
 
   ctx.restore();
 }
@@ -5341,6 +6647,16 @@ function drawHUD(t) {
     ctx.fillStyle = '#39FF14';
     if (gameMode === 'brawl') ctx.fillText(`  KILLS:${String(killCount).padStart(2,'0')}/10`, 96, 16);
     else                      ctx.fillText(`  WAVE:${String(wave).padStart(2,'0')}`, 96, 16);
+  } else if (boss && !Number.isFinite(boss.hpMax)) {
+    // A boss with no finite HP has no bar to draw. The minotaur cannot be
+    // killed, so a bar would promise progress that never arrives, and the
+    // segment loop below counts one divider per HP point — against Infinity
+    // that is not a slow frame, it is a hang. This is the one place the rest
+    // of the file has to know an unkillable boss exists.
+    ctx.textAlign='right'; ctx.font='bold 11px "Courier New",monospace';
+    ctx.fillStyle='#C8A040';
+    ctx.fillText('THE MAZE HAS A KEEPER', 680, 16);
+    ctx.textAlign='left'; ctx.font='bold 12px "Courier New",monospace';
   } else if (boss) {
     // Prominent segmented HP bar
     const bBarX=420, bBarW=260, bBarY=4, bBarH=22;
@@ -5435,6 +6751,21 @@ function drawHUD(t) {
     // Special ammo
     if (inv.laserStreams > 0) { ctx.fillStyle='#39E0FF'; ctx.fillText(`[L:${inv.laserStreams}]`,rx,16); rx+=50; }
     if (inv.fireBolts    > 0) { ctx.fillStyle='#FF7A1F'; ctx.fillText(`[FB:${inv.fireBolts}]`,rx,16);  rx+=54; }
+  }
+  // The maze's keys, one icon per key, lit when held. Same icon-per-unit loop
+  // as the quiver above, and only while a maze run is live, so forest and
+  // castle keep the HUD they had.
+  if (mazeRun) {
+    ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
+    for (const [kind, k] of Object.entries(MAZE_KEYS)) {
+      const held = mazeRun.held[kind];
+      ctx.shadowColor = k.color; ctx.shadowBlur = held ? 6 : 0;
+      ctx.fillStyle = held ? k.color : k.dim;
+      ctx.fillText(k.icon, rx, 16);
+      ctx.shadowBlur = 0;
+      rx += k.spacing;
+    }
+    rx += 8;
   }
   if (playerShield) {
     ctx.textAlign='left'; ctx.font='bold 10px "Courier New",monospace';
@@ -5649,6 +6980,7 @@ const CTRL_ACTIONS = [
   { label: 'MOVE RIGHT', key: 'right' },
   { label: 'SHOOT',      key: 'shoot' },
   { label: 'SNIPE/CHARGE', key: 'snipe' },
+  { label: 'LIGHT TORCH', key: 'use'   },
   { label: 'PAUSE',      key: 'pause' }
 ];
 
@@ -5783,19 +7115,20 @@ function drawWin(t) {
  * spawn) already ran before this state was entered, hidden behind the black
  * screen, so the click just reveals it rather than triggering it.
  */
-function drawCastleIntro(t) {
+function drawStageIntro(t) {
+  const intro = STAGE_INTROS[pendingIntro] || STAGE_INTROS.castle;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
-  _scanSweep('rgba(176,64,224,0.045)', 90);
-  _cornerFrame('#4a1a5c');
+  _scanSweep(intro.sweep, 90);
+  _cornerFrame(intro.frame);
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.shadowColor = '#B040E0'; ctx.shadowBlur = 16 + 7 * Math.sin(t * 1.7);
-  ctx.fillStyle = '#B040E0'; ctx.font = '24px "Courier New", monospace';
-  ctx.fillText("You've entered the cursed Castle!", CONFIG.canvasW / 2, CONFIG.canvasH / 2 - 16);
+  ctx.shadowColor = intro.accent; ctx.shadowBlur = 16 + 7 * Math.sin(t * 1.7);
+  ctx.fillStyle = intro.accent; ctx.font = '24px "Courier New", monospace';
+  ctx.fillText(intro.text, CONFIG.canvasW / 2, CONFIG.canvasH / 2 - 16);
   ctx.shadowBlur = 0;
 
   ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 3);
-  ctx.fillStyle = '#8A40A8'; ctx.font = '16px "Courier New", monospace';
+  ctx.fillStyle = intro.dim; ctx.font = '16px "Courier New", monospace';
   ctx.fillText('[ CLICK TO CONTINUE ]', CONFIG.canvasW / 2, CONFIG.canvasH / 2 + 32);
   ctx.globalAlpha = 1;
 }
@@ -5920,12 +7253,20 @@ function render(t) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
-    drawTiles(); FORESHADOW.drawSkyTint(); drawPickups(); drawFires(); drawParticles();
-    crows.forEach(drawCrow);
-    skeletons.forEach(drawSkeleton);
+    drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawPickups(); drawFires(); drawParticles();
+    // Anything alive is drawn only where the player can see it right now.
+    // litAt is unconditionally true off the maze, so this is the same list of
+    // draws it has always been on forest and castle.
+    for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
+    for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
     drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
+    if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
-    drawBoss(); drawFloaters();
+    if (!boss || litAt(boss.x, boss.y)) drawBoss();
+    drawFloaters();
+    // Last thing inside the shake, so the dark moves with the world instead of
+    // sliding across it.
+    drawFog();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -5969,7 +7310,7 @@ function render(t) {
   } else if (appState === 'controls')   { drawControls(t);
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
-  } else if (appState === 'castle_intro') { drawCastleIntro(t);
+  } else if (appState === 'stage_intro') { drawStageIntro(t);
   } else if (appState === 'inventory')  { FEATHERS.draw(); }
 }
 
@@ -6094,8 +7435,13 @@ function stepGame(dt) {
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
+      // The maze's warden hunts you the whole level, so he ticks here as well
+      // as in a boss fight. See BOSS_HUNTS_WHILE_EXPLORING for why this is a
+      // table lookup and not a kind check.
+      if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
+      updateMazeObjective(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -6161,8 +7507,16 @@ function loop(ts) {
   const _pt1 = PERF ? performance.now() : 0;
   render(loopT);
   if (PERF) { PERF.push(_updMs, performance.now() - _pt1); PERF.draw(); }
-  requestAnimationFrame(loop);
+  if (liveLoop) requestAnimationFrame(loop);
 }
+
+// Whether the browser's own frame clock still drives the loop. A harness turns
+// this off (see devHooks.takeClock) because the two clocks share one
+// accumulator and race: real time runs faster than a scripted step(), so one
+// live frame arriving between two calls subtracts however many seconds of wall
+// clock have passed and the sim silently stops advancing until that debt is
+// repaid.
+let liveLoop = true;
 
 // Dev hook: steps the loop with fixed timestamps and exposes read access to
 // module state, so headless verification works while the tab is backgrounded.
@@ -6172,8 +7526,22 @@ let __devTs = 0;
  * Read and drive access to module state. boot() also hangs this on
  * `window.__game` for the browser console. Tests import it directly, which is
  * what keeping this module free of import-time side effects buys.
+ *
+ * FEATHERS.init() and the first requestAnimationFrame used to sit here at
+ * module scope. They belong to boot() now, which is the whole point of the
+ * seam: importing this file must not start a game.
  */
 export const devHooks = {
+  // Hands the clock to the harness: stops the browser driving the loop and
+  // zeroes the shared accumulator, so step(n) advances exactly n fixed steps.
+  // Without it a scripted run is at the mercy of whichever clock ran last.
+  takeClock() {
+    liveLoop = false;
+    accumulator = 0;
+    lastTs = __devTs = performance.now();
+    return { accumulator, devTs: __devTs };
+  },
+  clock: () => ({ accumulator, lastTs, devTs: __devTs, live: liveLoop }),
   step(n = 1) {
     if (__devTs === 0) __devTs = performance.now();
     // Advance by exactly one fixed step per call, so step(n) runs n sim steps.
@@ -6218,6 +7586,55 @@ export const devHooks = {
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
+  poison: () => ({ timer: playerPoison.timer, tickIn: playerPoison.tickIn, speedMult: poisonSpeedMult() }),
+  minotaur: () => (boss && boss.kind === 'minotaur'
+    ? { bstate: boss.bstate, x: boss.x, y: boss.y, hp: boss.hp,
+        stateTimer: boss.stateTimer, cooldown: boss.cooldown,
+        daze: boss.dazeTimer, phase: bossDazePhase(), sees: minotaurSeesPlayer() }
+    : null),
+  spawnMinotaur() { bossStage = 4; spawnBoss(); boss.bstate = 'prowl'; return boss.kind; },
+  // The whole objective chain in one read: which keys are held, which locks
+  // are open, whether the warden has been met yet, and where the furniture is.
+  intro: () => pendingIntro,
+  pressure: () => ({
+    char: selectedChar, pressure: mazePressure(),
+    ratsPerPack: ratsPerPack(), ratRespawnSecs: +ratRespawnSecs().toFixed(2),
+    silverDropChance: +(CONFIG.mazeSilverKeyDropChance / mazePressure()).toFixed(3),
+    chargeCooldown: +(CONFIG.minotaurChargeCooldown / mazePressure()).toFixed(2),
+    poisonSlow: CONFIG.ratPoisonSlowMult,
+  }),
+  // The same two lines the click handler runs, so a harness advances the
+  // stage hand-off through the real path rather than assigning appState.
+  dismissIntro() { if (appState !== 'stage_intro') return false; pendingIntro = null; appState = 'playing'; return true; },
+  maze: () => (mazeRun ? {
+    silver: mazeRun.held.silver, golden: mazeRun.held.golden,
+    chestOpened: mazeRun.locks.chest.opened, doorOpened: mazeRun.locks.door.opened,
+    metMinotaur: mazeRun.metMinotaur, silverDropped: mazeRun.silverDropped,
+    chest: { x: mazeRun.locks.chest.x, y: mazeRun.locks.chest.y },
+    door: { x: mazeRun.locks.door.x, y: mazeRun.locks.door.y },
+    drops: mazeRun.drops.map(k => ({ kind: k.kind, x: k.x, y: k.y })),
+    torches: mazeRun.torches.map(t => ({ x: t.x, y: t.y, lit: t.lit })),
+  } : null),
+  // What the player can see, and how much of the map they have banked.
+  sight: () => {
+    let visible = 0;
+    for (let r = 0; r < CONFIG.rows; r++)
+      for (let c = 0; c < CONFIG.cols; c++) if (fovMap.isVisible(c, r)) visible++;
+    return {
+      fog: fogOfWar(), radiusTiles: playerSightTiles(), torchLit: torchIsLit(), visible,
+      remembered: seenTiles.reduce((n, v) => n + v, 0),
+      torchOpened: torchTiles.reduce((n, v) => n + v, 0),
+      tiles: CONFIG.rows * CONFIG.cols,
+    };
+  },
+  // The two halves of the sight question, which fog of war pulled apart.
+  // lit is "the player can see this point"; seesPlayerFrom is "something here
+  // can see the player". They stopped having the same answer on the maze.
+  lit: (x, y) => litAt(x, y),
+  seesPlayerFrom: (x, y, range) => seesPlayerFrom(x, y, range),
+  // The same A* the pursuers walk, so a scripted run crosses the maze the way
+  // a player would instead of teleporting and calling it a playtest.
+  path: (x, y) => computeAStarPath(player.x, player.y, x, y),
   knightCharge: () => ({
     charging: knightCharge.on, frac: knightChargeFrac(),
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,
@@ -6240,6 +7657,15 @@ export const devHooks = {
   tiles: () => tileMap,
   mapKind: () => mapKind,
   generateMap(kind) { generateMap(kind); },
+  // Regenerating the map under a player already placed leaves them wherever
+  // they were, which on a carved map is often inside a wall. This is the
+  // reposition initGame does for itself, exposed so a harness can switch maps
+  // mid-run without that artefact looking like a spawn bug.
+  respawnPlayer() {
+    const p = spawnPoint();
+    player.x = p.x; player.y = p.y;
+    return { x: p.x, y: p.y };
+  },
   player: () => player,
   crows: () => crows,
   skeletons: () => skeletons,
