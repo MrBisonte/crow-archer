@@ -106,6 +106,10 @@ const CONFIG = {
 
   playerSpeed: 200, playerRadius: 8,
   playerMaxHP: 10, playerHitFlashSecs: 0.3,
+  // Enemy hit feedback. The sprite goes flat white for hitFlashWhiteSecs and
+  // the knock offset decays across the whole hitFlashSecs, so the recoil
+  // outlasts the flash instead of ending with it.
+  hitFlashSecs: 0.15, hitFlashWhiteSecs: 0.07, hitKnockPx: 3,
   // How long the reticle flags a press the game refused. Short on purpose:
   // long enough to see, too short to be mistaken for a state you are in.
   blockedFlashSecs: 0.1,
@@ -846,7 +850,7 @@ events.on(e => {
         speedMin: 40, speedMax: 120, decay: 1.8,
         shapeMix: [['circle', 0.8], ['spark', 0.2]],
         sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#FFB400',
-        forceColor: '#FFB400'
+        forceColor: '#FFB400', pri: PRI.KILL
       });
       floaters.push({ x: e.x, y: e.y, alpha: 1.0, vy: -42 });
       floaters.push({ x: e.x + 12, y: e.y - 6, alpha: 1.0, vy: -36, text: `+${e.earned}◆`, color: '#FFB400' });
@@ -862,7 +866,8 @@ events.on(e => {
         count: 14, colors: skelColors,
         speedMin: 40, speedMax: 120, decay: 1.8,
         shapeMix: [['circle', 0.7], ['spark', 0.3]],
-        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: skelGlow
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: skelGlow,
+        pri: PRI.KILL
       });
       break;
     }
@@ -894,12 +899,12 @@ events.on(e => {
         triggerShake(...SHAKE.heavyMelee);
         burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
           speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
-          gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14' });
+          gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14', pri: PRI.IMPACT });
       } else {
         triggerShake(...SHAKE.meleeHit);
         burst(e.x, e.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
           speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
-          shadowBlur: e.fire ? 8 : 3,
+          shadowBlur: e.fire ? 8 : 3, pri: PRI.IMPACT,
           shadowColor: e.fire ? '#FF7A1F' : '#C0C0C0' });
       }
       break;
@@ -1023,7 +1028,7 @@ events.on(e => {
       triggerShake(...SHAKE.shieldBlocked);
       burst(e.x, e.y, { count: 10, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
         speedMin: 60, speedMax: 200, decay: 2.5, shape: 'spark',
-        shadowBlur: 10, shadowColor: '#FFB400' });
+        shadowBlur: 10, shadowColor: '#FFB400', pri: PRI.CRITICAL });
       break;
 
     case 'PICKUP_TAKEN':
@@ -1205,6 +1210,37 @@ function spawnPickup(wx, wy) {
       if (tryPlace(col + dc, row + dr)) return;
 }
 
+const PARTICLE_CAP = 120;
+/**
+ * Particle importance. The cap used to evict oldest-first, which drops the
+ * newest information in exactly the busiest frames: a boss fight in a crowd
+ * is when the player most needs to see that they were hit, and when a plain
+ * FIFO is most likely to have thrown it away for smoke.
+ *
+ * PRI.CRITICAL is never evicted. Anything below it yields to something more
+ * important, and a spawn that finds nothing weaker than itself is dropped
+ * rather than pushing the array past the cap.
+ */
+const PRI = { AMBIENT: 0, IMPACT: 1, KILL: 2, CRITICAL: 3 };
+
+/**
+ * Frees one slot for a particle of importance `pri`, evicting the lowest
+ * tier first and the oldest within that tier (index order is age order).
+ * Returns false when nothing weaker exists, meaning: drop the newcomer.
+ */
+function makeParticleRoom(pri) {
+  if (particles.length < PARTICLE_CAP) return true;
+  let worst = -1, worstPri = Infinity;
+  for (let i = 0; i < particles.length; i++) {
+    const q = particles[i].pri;
+    if (q >= PRI.CRITICAL) continue;
+    if (q < worstPri) { worstPri = q; worst = i; }
+  }
+  if (worst < 0 || worstPri > pri) return false;
+  particles.splice(worst, 1);
+  return true;
+}
+
 function burst(wx, wy, opts) {
   const {
     count = 8, colors = ['#ffffff'],
@@ -1213,10 +1249,13 @@ function burst(wx, wy, opts) {
     sizeMin = 1.5, sizeMax = 2.5,
     shadowBlur = 0, shadowColor = '#ffffff',
     shrink = false, shapeMix = null, shape = 'circle',
-    forceColor = null
+    forceColor = null, pri = PRI.AMBIENT
   } = opts;
-  while (particles.length >= 120) particles.shift();
   for (let i = 0; i < count; i++) {
+    // Per particle, not once before the loop: the old trim freed a single
+    // slot and then pushed the whole burst, so a 36-particle blast left 155
+    // in a 120-capped array and the cap did not hold at all.
+    if (!makeParticleRoom(pri)) break;
     const a   = Math.random() * Math.PI * 2;
     const spd = speedMin + Math.random() * (speedMax - speedMin);
     const pShape = shapeMix
@@ -1228,7 +1267,7 @@ function burst(wx, wy, opts) {
       x: wx, y: wy,
       vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
       color: col, alpha: 1, decay, shape: pShape,
-      r, gravity, damping, shadowBlur, shadowColor, shrink
+      r, gravity, damping, shadowBlur, shadowColor, shrink, pri
     });
   }
 }
@@ -1707,10 +1746,11 @@ function updateArrows(dt) {
         a.trailTimer += 0.03;
         const rng = Math.random();
         const fc = rng < 0.6 ? '#FF7A1F' : rng < 0.9 ? '#FFB400' : '#FFFFFF';
-        particles.push({
+        if (makeParticleRoom(PRI.AMBIENT)) particles.push({
           x: a.x, y: a.y, vx: (Math.random()-.5)*20, vy: (Math.random()-.5)*20,
           color: fc, alpha: 1, decay: 3.0, shape: 'circle',
-          r: 1.5 + Math.random(), gravity: -40, damping: 0, shadowBlur: 8, shadowColor: fc, shrink: false
+          r: 1.5 + Math.random(), gravity: -40, damping: 0, shadowBlur: 8, shadowColor: fc,
+          shrink: false, pri: PRI.AMBIENT
         });
       }
     }
@@ -1860,14 +1900,14 @@ function updateArrows(dt) {
     const hitR = a.hitRadius || CONFIG.arrowHitRadius;
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
-        damageCrow(j); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageCrow(j, 1, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
     if (hit) continue;
     for (let j = skeletons.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, skeletons[j].x, skeletons[j].y) < hitR*hitR) {
-        damageSkeleton(j); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageSkeleton(j, 1, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
@@ -1892,11 +1932,12 @@ function updateFires(dt) {
       const ox = (Math.random()-.5)*20, oy = (Math.random()-.5)*20;
       const spd = 20 + Math.random()*40;
       const ea = Math.random()*Math.PI*2;
-      particles.push({
+      if (makeParticleRoom(PRI.AMBIENT)) particles.push({
         x: f.x + ox, y: f.y + oy,
         vx: Math.cos(ea)*spd, vy: Math.sin(ea)*spd,
         color: ec, alpha: 1, decay: 1.5, shape: 'spark',
-        r: 1.5, gravity: -80, damping: 0, shadowBlur: 6, shadowColor: ec, shrink: false
+        r: 1.5, gravity: -80, damping: 0, shadowBlur: 6, shadowColor: ec,
+        shrink: false, pri: PRI.AMBIENT
       });
     }
     f.damageTimer -= dt;
@@ -1923,11 +1964,28 @@ function onArrowMiss() {
  * Below wave 1's baseline of 1 HP, this behaves exactly as killCrow(j)
  * always did: one hit, dead.
  */
-function damageCrow(j, amount = 1) {
+/**
+ * Unit vector for a projectile's travel, for the hit recoil. Null for damage
+ * with no direction to it (a blast, a fire patch), which then reads as a
+ * flash with no shove, which is what those should look like.
+ */
+function hitKnockOffset(e) {
+  if (!e.knock || e.hitFlash <= 0) return ZERO_KNOCK;
+  const d = CONFIG.hitKnockPx * (e.hitFlash / CONFIG.hitFlashSecs);
+  return { x: e.knock.x * d, y: e.knock.y * d };
+}
+const ZERO_KNOCK = { x: 0, y: 0 };
+
+function knockFrom(vx, vy) {
+  const m = Math.hypot(vx, vy);
+  return m ? { x: vx / m, y: vy / m } : null;
+}
+
+function damageCrow(j, amount = 1, knock = null) {
   const c = crows[j];
   if (!c) return;
   c.hp -= amount;
-  if (c.hp > 0) { c.hitFlash = 0.15; return; }
+  if (c.hp > 0) { c.hitFlash = CONFIG.hitFlashSecs; c.knock = knock; return; }
   killCrow(j);
 }
 
@@ -1974,11 +2032,11 @@ function spawnSkeleton(kind = 'normal') {
   });
 }
 
-function damageSkeleton(j, amount = 1) {
+function damageSkeleton(j, amount = 1, knock = null) {
   const s = skeletons[j];
   if (!s) return;
   s.hp -= amount;
-  if (s.hp > 0) { s.hitFlash = 0.15; return; }
+  if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return; }
   killSkeleton(j);
 }
 
@@ -4422,7 +4480,7 @@ function drawCrow(c) {
   const bobYAmp   = isWhite ? 1.2 : 0.8;
   const bobY      = bobYAmp * Math.sin(loopT * 3 + ep);
   const pulsePhase = loopT * 6;
-  const flashOn = c.hitFlash > 0 && Math.floor(c.hitFlash * 20) % 2 === 0;
+  const flashOn = c.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
 
   const kind  = isWhite ? 'white' : 'normal';
   const frame = animFrame3(c.wingPhase);
@@ -4432,7 +4490,8 @@ function drawCrow(c) {
   const shadowFill = isWhite ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
   const eyeBlur  = isWhite ? 4 + 2*Math.sin(loopT*4 + ep) : 3;
 
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(cx, cy);
+  const cKnock = hitKnockOffset(c);
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(cx + cKnock.x, cy + cKnock.y);
 
   // 1. Ground shadow
   ctx.shadowBlur = 0;
@@ -4447,7 +4506,9 @@ function drawCrow(c) {
   const cCanvas = flashOn
     ? spriteFlashCanvas(`crow|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h, '#ffffff')
     : spriteCanvas(`crow|${kind}|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
   ctx.drawImage(cCanvas, cSpriteDx, cSpriteDy);
+  ctx.shadowBlur = 0;
 
   // 3. Eye — stamped glow, one per (color, blur step) across the whole flock
   const eyeStamp = glowDotStamp(eyeCol, 1.2, eyeBlur);
@@ -4538,14 +4599,15 @@ function skeletonGrid(kind, frame) {
 // techniques, not its geometry — always aggro, so no state-transition ring.
 function drawSkeleton(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
-  const flashOn = s.hitFlash > 0 && Math.floor(s.hitFlash * 20) % 2 === 0;
+  const flashOn = s.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
   const kind = s.kind || 'normal';
   const palette = SKELETON_PALETTES[kind] || SKELETON_PALETTES.normal;
   const eyeCol = palette.eye;
   const frame = animFrame3(s.walkPhase);
   const grid = skeletonGrid(kind, frame);
 
-  ctx.save(); ctx.translate(cx, cy);
+  const sKnock = hitKnockOffset(s);
+  ctx.save(); ctx.translate(cx + sKnock.x, cy + sKnock.y);
 
   // 1. Ground shadow
   ctx.shadowBlur = 0;
@@ -4568,7 +4630,9 @@ function drawSkeleton(s) {
   const kCanvas = flashOn
     ? spriteFlashCanvas(`skeleton|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h, '#ffffff')
     : spriteCanvas(`skeleton|${kind}|${frame}`, grid, SKELETON_SPRITE.w, SKELETON_SPRITE.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
+  ctx.shadowBlur = 0;
 
   // 3. Eye sockets — stamped glow, same technique as the crow's eye
   const eyeStamp = glowDotStamp(eyeCol, 1, 3);
