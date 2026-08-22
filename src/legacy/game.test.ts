@@ -106,3 +106,125 @@ describe('wizard homing bolts', () => {
     expect(angleGap(heading, toDecoy)).toBeGreaterThan(0.5);
   });
 });
+
+/** Presses a hotkey the way a real key-up/key-down pair would, then runs one
+ * step so the handler that reads `keys` sees and consumes it. `devHooks.key`
+ * dispatches a DOM KeyboardEvent, which needs a browser; this drives the same
+ * `keys` map directly, which is what the vitest `node` environment allows. */
+function press(key: string): void {
+  (g.keys() as Record<string, boolean>)[key] = true;
+  g.stepSim(1);
+}
+
+/** Reaches mapselect the real way: the menu hotkey is what sets `gameMode`,
+ * so a shortcut through `g.go('mapselect')` would leave a stale gameMode
+ * from an earlier test in place. */
+function openWavesMapSelect(): void {
+  g.go('menu');
+  press('w');
+  press('Enter');
+}
+
+// Pins down charselect's pre-existing cycling behavior. Written before
+// factoring its cycling logic into the same shared helper mapselect uses,
+// so a refactor that changes behavior fails here rather than shipping.
+describe('character select cycling', () => {
+  it('arrow keys cycle through CHAR_PANELS in order and wrap both directions', () => {
+    g.pick('archer');
+    g.go('charselect');
+
+    press('ArrowRight');
+    expect(g.selectedChar()).toBe('wizard');
+    press('ArrowRight');
+    expect(g.selectedChar()).toBe('knight');
+    press('ArrowRight');
+    expect(g.selectedChar()).toBe('ranger');
+    press('ArrowRight'); // wraps past the last panel back to the first
+    expect(g.selectedChar()).toBe('archer');
+
+    press('ArrowLeft'); // wraps the other way
+    expect(g.selectedChar()).toBe('ranger');
+  });
+
+  it('a panel hotkey selects that character directly, regardless of current position', () => {
+    g.pick('archer');
+    g.go('charselect');
+
+    press('k'); // KNIGHT
+    expect(g.selectedChar()).toBe('knight');
+    press('x'); // RANGER
+    expect(g.selectedChar()).toBe('ranger');
+  });
+});
+
+describe('waves map select', () => {
+  it('brawl always starts on forest, even with a map picked from a previous waves run', () => {
+    g.pickMap('castle'); // leftover from a hypothetical earlier waves run
+    g.go('menu');
+    press('b'); // BRAWL
+    expect(g.state()).toBe('charselect');
+
+    press('Enter'); // brawl's map is fixed, so this goes straight to the run
+    expect(g.state()).toBe('playing');
+    expect(g.mapKind()).toBe('forest');
+  });
+
+  it('waves opens mapselect after charselect, and confirming starts on the chosen map', () => {
+    g.go('menu');
+    press('w'); // WAVES
+    expect(g.state()).toBe('charselect');
+
+    press('Enter');
+    expect(g.state()).toBe('mapselect');
+
+    press('c'); // CASTLE
+    press('Enter');
+    expect(g.state()).toBe('playing');
+    expect(g.mapKind()).toBe('castle');
+    // Castle is a full waves map, not just a visual swap: it still spawns
+    // the pace preset's opening crows (MAP_RULES.castle.crows).
+    expect(g.crows().length).toBe(g.config().crowStartCount);
+  });
+
+  it('regression: waves on castle keeps escalating past the opening wave', () => {
+    // Waves+Castle used to hard-stop crow escalation forever (a stale
+    // mapKind==='castle' guard written back when only brawl's scripted
+    // stage could set it) — clearing the opening crows and simulating well
+    // past one escalation interval is what catches that; asserting only the
+    // opening count, as the test above does, would not have caught it.
+    g.go('menu');
+    press('w');
+    press('Enter');
+    press('c');
+    press('Enter');
+    expect(g.mapKind()).toBe('castle');
+
+    g.crows().length = 0;
+    g.stepSim(g.config().crowEscalationInterval * ONE_SECOND * 3);
+    expect(g.crows().length).toBeGreaterThan(0);
+  });
+
+  it('escape from mapselect returns to charselect without starting a run', () => {
+    openWavesMapSelect();
+    expect(g.state()).toBe('mapselect');
+
+    press('Escape');
+    expect(g.state()).toBe('charselect');
+  });
+
+  it('arrow keys cycle and wrap between the two panels', () => {
+    g.pickMap('forest');
+    openWavesMapSelect();
+    expect(g.state()).toBe('mapselect');
+
+    press('ArrowRight');
+    press('Enter');
+    expect(g.mapKind()).toBe('castle');
+
+    g.pickMap('castle');
+    openWavesMapSelect();
+    press('ArrowRight'); // wraps past the last panel back to the first
+    press('Enter');
+    expect(g.mapKind()).toBe('forest');
+  });
+});

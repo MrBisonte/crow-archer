@@ -92,7 +92,7 @@ two places. Everywhere else it is fixed. Logged as ROADMAP.md decision 9.
 | Context | Map choice | Mechanism |
 |---|---|---|
 | Multiplayer lobby | **Free**, host-selected | `SET_MAP` → `Room.setMap()` → `MATCH_START` |
-| Single-player, Waves mode | **Free** (not yet built; today defaults to forest) | none yet; natural extension point |
+| Single-player, Waves mode | **Free**, player-selected | mapselect screen (`MAP_PANELS`, filtered from `MAP_RULES.crows`) → `selectedMapKind` → `initGame()` |
 | Single-player, Brawl mode | **Fixed** | `generateMap('castle')` fires once, hardcoded inside `updateBossDeath()` when the Crow King dies: a story beat, not a menu |
 
 ```mermaid
