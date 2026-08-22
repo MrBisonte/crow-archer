@@ -7282,6 +7282,9 @@ window.__game = {
   // can see the player". They stopped having the same answer on the maze.
   lit: (x, y) => litAt(x, y),
   seesPlayerFrom: (x, y, range) => seesPlayerFrom(x, y, range),
+  // The same A* the pursuers walk, so a scripted run crosses the maze the way
+  // a player would instead of teleporting and calling it a playtest.
+  path: (x, y) => computeAStarPath(player.x, player.y, x, y),
   knightCharge: () => ({
     charging: knightCharge.on, frac: knightChargeFrac(),
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,
