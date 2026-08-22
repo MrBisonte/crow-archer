@@ -28,13 +28,14 @@ import {
   WIZARD_SPRITE, buildWizardGrid,
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
+  SAPPER_SPRITE, buildSapperGrid,
 } from '../render/character-grids';
 
 // Single-player has no team concept, so each hero gets one fixed trim
 // colour instead of the multiplayer per-team one. Archer's was already its
 // tunic accent; the others are new, small, low-stakes additions in the same
 // spirit (see buildWizardGrid/buildRangerGrid's hem/hood-brim trim).
-const SP_TRIM = { archer: '#39FF14', wizard: '#FFB400', ranger: '#FFCC00', knightNormal: '#3A5CC8', knightFireSword: '#CC3300' };
+const SP_TRIM = { archer: '#39FF14', wizard: '#FFB400', ranger: '#FFCC00', sapper: '#FF7A1A', knightNormal: '#3A5CC8', knightFireSword: '#CC3300' };
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
@@ -270,6 +271,13 @@ const CONFIG = {
   satchelBossDamage: 1,
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
+
+  // Sapper. The powder charge is thrown on the primary and costs nothing but
+  // time, so this cooldown is the whole of its ammo economy: there is no
+  // quiver to run dry and so no pitchfork fallback either. Slower than every
+  // primary but the wizard's bolt, matching SAPPER_CHARGE_COOLDOWN_TICKS in
+  // sim/weapons.ts.
+  sapperChargeCooldown: 1.1,
 
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
@@ -537,10 +545,14 @@ const CHAR_PANELS = [
     difficulty: DIFFICULTY.hard,
     lines:['Long spear  ·  melee range','Hold Shift: charge sweep (2× dmg)',
            'Pickups: Javelin  ·  Fire Sword','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
-  { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+  { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
+  { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+    difficulty: DIFFICULTY.hard,
+    lines:['Powder charges  ·  1.1s cooldown','Bounces off cover, then clears it',
+           'No quiver: the cooldown is the limit','Blast hits everything in radius','Demolition playstyle'] },
 ];
 
 /**
@@ -640,6 +652,7 @@ let selectedMapKind = 'forest';   // 'forest' | 'castle'
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
+let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
 let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 
@@ -1203,6 +1216,9 @@ const WEAPON_FX = {
   pitchfork: { sound: () => sndPitchfork, shake: [3, 90] },
   spear:     { sound: () => sndPitchfork, shake: [2, 70] },
   javelin:   { sound: () => sndPitchfork, shake: [3, 80] },
+  // The sapper's lob. Reuses the knight charge's whoosh rather than the bow's
+  // snap: what the ear needs to hear is that something heavy is in the air.
+  charge:    { sound: () => sndChargeWhoosh, shake: [2, 60] },
 };
 
 events.on(e => {
@@ -1578,7 +1594,7 @@ function initGame() {
   // WARD FEATHER, if it has been bought, is the only thing that opens a run
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
-  wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
+  wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -1776,6 +1792,7 @@ function updatePlayer(dt) {
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
+  if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
   if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
@@ -1949,6 +1966,7 @@ function tryShoot() {
   if (selectedChar === 'wizard') { tryWizardBolt(); return; }
   if (selectedChar === 'knight') { tryKnightAttack(); return; }
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
+  if (selectedChar === 'sapper') { trySapperCharge(); return; }
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
@@ -2063,17 +2081,45 @@ function startWhirlwind() {
 }
 
 
-function throwDynamite(chargeFrac) {
-  if (inv.dynamites <= 0) return;
-  inv.dynamites--;
-  const spd = CONFIG.dynamiteSpeed * (1 + chargeFrac * 2);
+/**
+ * Puts one stick of powder in the air along the current aim.
+ *
+ * Shared by the archer's charged throw and the sapper's primary: same flight,
+ * bounce, fuse and blast, and the only difference is what each spends to get
+ * it there and how fast it leaves the hand. Extracted rather than copied, so
+ * the two can never drift into being two slightly different explosives.
+ */
+function launchCharge(speed) {
   dynamites.push({
     x: player.x, y: player.y,
-    vx: Math.cos(player.aimAngle) * spd,
-    vy: Math.sin(player.aimAngle) * spd,
+    vx: Math.cos(player.aimAngle) * speed,
+    vy: Math.sin(player.aimAngle) * speed,
     life: CONFIG.dynamiteLifetime, fuseTotal: CONFIG.dynamiteLifetime,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
+}
+
+function throwDynamite(chargeFrac) {
+  if (inv.dynamites <= 0) return;
+  inv.dynamites--;
+  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2));
+}
+
+/**
+ * The sapper's powder charge: the same throw, on the primary, gated by a
+ * cooldown instead of a pouch.
+ *
+ * Nothing is spent, so there is no empty-quiver branch and no pitchfork
+ * fallback - a sapper who cannot throw yet is a sapper waiting, which is what
+ * the cooldown chip in lane D is there to show. The throw is uncharged: one
+ * press is one arc, always the same, because a primary that had to be held
+ * would be a secondary.
+ */
+function trySapperCharge() {
+  if (sapperChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  sapperChargeCD = CONFIG.sapperChargeCooldown;
+  launchCharge(CONFIG.dynamiteSpeed);
+  events.emit({ type: 'WEAPON_FIRED', kind: 'charge' });
 }
 
 function fireLightningStorm() {
@@ -4682,6 +4728,7 @@ function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
   if (selectedChar === 'knight') { drawKnight(); return; }
   if (selectedChar === 'ranger') { drawRanger(); return; }
+  if (selectedChar === 'sapper') { drawSapper(); return; }
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
   drawAimLine(px, py);
@@ -4968,6 +5015,66 @@ function drawRanger() {
   ctx.restore();
 
   if (!hasArrows) drawPitchforkIndicators(px, py);
+}
+
+function drawSapper() {
+  const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
+
+  drawAimLine(px, py);
+  drawHitFlashGhost(px, py);
+
+  ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+  const localAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
+  const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash * 20) % 2 === 0;
+
+  // 1. Ground shadow, wider than the archer's: this one is built heavy
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.ellipse(0, 10, 11, 3, 0, 0, Math.PI*2); ctx.fill();
+
+  // 2. Pixel-art keg/apron/helm (see buildSapperGrid). One fixed pose, no walk
+  // frames: the sapper's silhouette carries no cloak to sway.
+  const sGrid = buildSapperGrid(SP_TRIM.sapper);
+  const sDx = -(SAPPER_SPRITE.w) / 2, sDy = -22;
+  const sCanvas = flashOn
+    ? spriteFlashCanvas('sapper', sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`sapper|${SP_TRIM.sapper}`, sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h);
+  ctx.drawImage(sCanvas, sDx, sDy);
+
+  // 3. Shield halo
+  if (playerShield) {
+    const shP = loopT * 4;
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
+    ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -1, 17 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // 4. The charge held out along the aim, with a fuse that only burns while
+  // one is ready to throw. A dead fuse is the cooldown, readable from the
+  // sprite instead of only from the HUD chip.
+  const ready = sapperChargeCD <= 0;
+  const gx = Math.cos(localAngle) * 9, gy = Math.sin(localAngle) * 9;
+  ctx.strokeStyle = '#D9B98A'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(gx, gy); ctx.stroke();
+
+  ctx.fillStyle = '#3B3630';
+  ctx.beginPath(); ctx.arc(gx, gy, 3.4, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#8A6A22'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(gx, gy, 3.4, 0, Math.PI*2); ctx.stroke();
+
+  ctx.strokeStyle = '#1E1A16'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(gx, gy - 3); ctx.lineTo(gx + 1.5, gy - 6.5); ctx.stroke();
+  if (ready) {
+    const flare = 0.7 + 0.3 * Math.sin(loopT * 11);
+    ctx.shadowColor = '#C6501B'; ctx.shadowBlur = 6 * flare;
+    ctx.fillStyle = '#FF7A1A';
+    ctx.beginPath(); ctx.arc(gx + 1.5, gy - 6.5, 1.4 * flare, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.restore();
 }
 
 // Same body shape, two palettes — the fire sword's "powered up" recolor of
@@ -6753,6 +6860,9 @@ const LANE_B = {
   ranger: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'satchels'] },
   knight: { active: null,     reserve: ['knightJavelins'] },
   wizard: { active: null,     reserve: ['laserStreams', 'fireBolts'] },
+  // Nothing countable at all: the sapper's charges are made on the spot, so
+  // both slots are empty and lane D's cooldown chip carries the whole story.
+  sapper: { active: null,     reserve: [] },
 };
 
 /**
@@ -6768,6 +6878,7 @@ const LANE_D = {
   ranger: ['snipe', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'snipe', 'shield'],
+  sapper: ['charge', 'snipe', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -6776,6 +6887,7 @@ const CHIP = {
   whirlwind: () => cooldownChip('spin', knightWhirlwindCD, CONFIG.knightWhirlwindCooldown, knightWhirlwindTimer),
   block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, CONFIG.knightBlockCooldown, 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
+  charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
   storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
                       label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
@@ -7561,6 +7673,7 @@ const RETICLE_PAINTERS = {
   wizard: drawWizardReticle,
   knight: drawKnightReticle,
   ranger: drawRangerReticle,
+  sapper: drawSapperReticle,
 };
 
 function drawReticle() {
@@ -7600,6 +7713,31 @@ function drawRangerReticle() {
   ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
   ctx.fillStyle = '#FFCC00';
   ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Sapper: a wide dashed ring at the blast radius, with a dot at the aim point.
+ *
+ * The only reticle that shows an area rather than a point, because the only
+ * thing a sapper needs to judge is what the charge will reach - and how close
+ * that is to their own feet.
+ */
+function drawSapperReticle() {
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  ctx.globalAlpha = 0.18 + 0.3 * pulse;
+  ctx.strokeStyle = '#FF7A1A'; ctx.lineWidth = 1.2;
+  ctx.setLineDash([4, 5]);
+  ctx.beginPath(); ctx.arc(0, 0, CONFIG.dynamiteBlastRadius, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.25 + 0.55 * pulse;
+  ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 5 + 3 * pulse;
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.moveTo(dx * 5, dy * 5); ctx.lineTo(dx * 10, dy * 10); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#FF7A1A';
+  ctx.beginPath(); ctx.arc(0, 0, 1.6, 0, Math.PI * 2); ctx.fill();
   ctx.globalAlpha = 1;
 }
 
@@ -8069,6 +8207,10 @@ export const devHooks = {
   go(s) { transitionTo(s); },
   pick(c) { selectedChar = c; },
   selectedChar: () => selectedChar,
+  // The char-select table itself, so a test can check that every character
+  // the protocol knows about actually has a panel to be picked from.
+  charPanels: () => CHAR_PANELS,
+  sapperChargeCD: () => sapperChargeCD,
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },
   spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },

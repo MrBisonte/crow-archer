@@ -8,6 +8,7 @@
  * DOM at all. `devHooks.stepSim` advances the sim without a frame or a render.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { CHARACTERS } from '../net/protocol';
 import { boot, devHooks as g } from './game.js';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
@@ -139,11 +140,13 @@ describe('character select cycling', () => {
     expect(g.selectedChar()).toBe('knight');
     press('ArrowRight');
     expect(g.selectedChar()).toBe('ranger');
+    press('ArrowRight');
+    expect(g.selectedChar()).toBe('sapper');
     press('ArrowRight'); // wraps past the last panel back to the first
     expect(g.selectedChar()).toBe('archer');
 
     press('ArrowLeft'); // wraps the other way
-    expect(g.selectedChar()).toBe('ranger');
+    expect(g.selectedChar()).toBe('sapper');
   });
 
   it('a panel hotkey selects that character directly, regardless of current position', () => {
@@ -154,6 +157,8 @@ describe('character select cycling', () => {
     expect(g.selectedChar()).toBe('knight');
     press('x'); // RANGER
     expect(g.selectedChar()).toBe('ranger');
+    press('s'); // SAPPER
+    expect(g.selectedChar()).toBe('sapper');
   });
 });
 
@@ -226,5 +231,72 @@ describe('waves map select', () => {
     press('ArrowRight'); // wraps past the last panel back to the first
     press('Enter');
     expect(g.mapKind()).toBe('forest');
+  });
+});
+
+describe('the character roster reaches the single-player screen', () => {
+  it('gives every character the protocol knows a char-select panel', () => {
+    const panelled = g.charPanels().map((p: { char: string }) => p.char);
+    for (const kind of CHARACTERS) expect(panelled).toContain(kind);
+  });
+
+  it('gives every panel its own hotkey', () => {
+    const keys = g.charPanels().map((p: { key: string }) => p.key.toLowerCase());
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe('the sapper', () => {
+  beforeEach(() => { g.pick('sapper'); g.go('playing'); });
+
+  it('throws a powder charge on the primary, where the archer throws an arrow', () => {
+    expect(g.dynamites().length).toBe(0);
+    expect(g.arrows().length).toBe(0);
+    g.shoot();
+    g.stepSim(1);
+    expect(g.dynamites().length).toBe(1);
+    // The charge is the whole attack: nothing is loosed from a quiver.
+    expect(g.arrows().length).toBe(0);
+  });
+
+  it('refuses a second charge until the cooldown has run', () => {
+    g.shoot();
+    g.stepSim(1);
+    expect(g.dynamites().length).toBe(1);
+
+    // Straight away: still winding, so the press is refused rather than queued.
+    g.shoot();
+    g.stepSim(1);
+    expect(g.dynamites().length).toBe(1);
+    expect(g.sapperChargeCD()).toBeGreaterThan(0);
+
+    // Once the cooldown is spent, the next press throws. Stopping short of the
+    // 1.5s fuse keeps the first charge on the field to be counted.
+    g.stepSim(Math.ceil(g.config().sapperChargeCooldown * ONE_SECOND));
+    expect(g.sapperChargeCD()).toBe(0);
+    g.shoot();
+    g.stepSim(1);
+    expect(g.dynamites().length).toBe(2);
+  });
+
+  it('spends no ammo, so it keeps throwing past what a pouch would hold', () => {
+    const pouch = g.config().resources.dynamites.max;
+    const step = Math.ceil(g.config().sapperChargeCooldown * ONE_SECOND) + 1;
+    let thrown = 0;
+    for (let i = 0; i < pouch + 3; i++) {
+      g.shoot();
+      g.stepSim(1);
+      thrown++;
+      g.stepSim(step);
+    }
+    expect(thrown).toBeGreaterThan(pouch);
+    // And every one of them went off rather than piling up: the last throw is
+    // still mid-fuse when the loop ends, so wait out a full fuse first.
+    g.stepSim(Math.ceil(g.config().dynamiteLifetime * ONE_SECOND) + 2);
+    expect(g.dynamites().length).toBe(0);
+  });
+
+  it('starts every run with the charge ready rather than winding', () => {
+    expect(g.sapperChargeCD()).toBe(0);
   });
 });

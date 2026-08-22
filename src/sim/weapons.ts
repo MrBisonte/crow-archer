@@ -290,8 +290,34 @@ export const SATCHEL_IDLE_TICKS = ticks(60);
  * nothing in the request asked for a different number. */
 export const SATCHEL_CARRIED = DYNAMITE_CARRIED;
 
+/**
+ * Direct damage of the sapper's powder charge, and why it is not dynamite's.
+ *
+ * The charge is thrown on the primary, over and over, where dynamite is a
+ * tool spent four times a match. A stick's 4 damage on a repeatable attack
+ * would kill in three hits without ever needing to be aimed at anyone, so
+ * this comes down to the archer's arrow figure: 2, the same five-hits-to-kill
+ * rhythm every other primary is set against. What the sapper keeps over the
+ * archer is that a charge does not have to hit anybody — the blast radius is
+ * `DYNAMITE_BLAST_RADIUS`, shared with every other explosive, because
+ * `#explode` never asks what set it off.
+ */
+export const SAPPER_CHARGE_DAMAGE = ARROW_DAMAGE;
+
+/**
+ * How often a sapper can throw.
+ *
+ * Slower than every other primary except the wizard's staff, which stays the
+ * slowest thing in the game at 1.2. An attack that damages an area and cannot
+ * really miss has to be answered somewhere, and rate of fire is where: a
+ * sapper throwing on the archer's 0.35 rhythm would simply be a better archer
+ * with splash. It sits just under the staff rather than past it because the
+ * staff also hits harder per shot and steers itself onto a target.
+ */
+export const SAPPER_CHARGE_COOLDOWN_TICKS = ticks(1.1);
+
 // ---------------------------------------------------------------------------
-// The three weapons
+// The weapons
 // ---------------------------------------------------------------------------
 
 /**
@@ -488,6 +514,45 @@ export class Satchel implements Weapon {
 }
 
 /**
+ * The sapper's powder charge. Everyone else's opening move travels to
+ * someone; this one travels to a place and waits.
+ *
+ * Every figure but the damage is dynamite's own, and deliberately: the flight,
+ * the bounce off walls, the fuse and the blast are all behaviour the world
+ * already runs for `flavour: 'dynamite'`, so a sapper is a different rhythm
+ * over proven mechanics rather than a second explosive to keep in step with
+ * the first. What is not dynamite's is the hold: `DynamitePouch` is thrown by
+ * a charged press that wounds up to three times the speed, and this is not —
+ * one press is one throw, always the same arc, because a primary attack that
+ * had to be held would be a secondary.
+ */
+export class PowderCharge implements Weapon {
+  readonly kind = 'dynamite' as const;
+  readonly cooldownTicks = SAPPER_CHARGE_COOLDOWN_TICKS;
+
+  use(): WeaponEffect[] {
+    return [
+      {
+        kind: 'shot',
+        shot: {
+          flavour: 'dynamite',
+          speed: DYNAMITE_SPEED,
+          damage: SAPPER_CHARGE_DAMAGE,
+          lifeTicks: DYNAMITE_FUSE_TICKS,
+          radius: BOLT_RADIUS,
+          homingRate: 0,
+          // Off walls and trees, out in water, and off wherever it stops:
+          // this is what makes it a charge and not a slow arrow.
+          onTerrain: 'bounce',
+          explodesAtRest: true,
+          drownsInWater: true,
+        },
+      },
+    ];
+  }
+}
+
+/**
  * The wizard's real secondary, replacing the dynamite stand-in.
  *
  * Legacy's storm is a 450px radius, five times dynamite's blast, and hits
@@ -580,6 +645,7 @@ const PRIMARY: Record<CharacterKind, () => Weapon> = {
   wizard: () => new Staff(),
   knight: () => new Spear(),
   ranger: () => new Crossbow(),
+  sapper: () => new PowderCharge(),
 };
 
 export function primaryWeapon(character: CharacterKind): Weapon {
@@ -611,6 +677,11 @@ const OWN_SECONDARY: Partial<Record<CharacterKind, () => Secondary>> = {
   ranger: () => ({ kind: 'satchel', weapon: new Satchel() }),
   wizard: () => ({ kind: 'storm', weapon: new LightningStorm() }),
   knight: () => ({ kind: 'whirlwind', weapon: new Whirlwind() }),
+  // The one character that answers 'none' on purpose rather than for want of
+  // a weapon built yet. Handing a sapper dynamite as a second weapon would be
+  // the primary again on another button, and the fallback below would do
+  // exactly that if this row were left out.
+  sapper: () => ({ kind: 'none' }),
 };
 
 /**

@@ -199,3 +199,44 @@ export function buildKnightGrid(kind: KnightKind, trim: string): PixelGrid {
   pixelRect(g, 8, 29, 6, 3, C.legHi); pixelRect(g, 16, 29, 6, 3, C.legHi);
   return pixelOutline(g, outline);
 }
+
+export const SAPPER_SPRITE = { w: 24, h: 32 };
+
+/** Same fixed front pose as the archer, built stockier: a powder keg where the
+ * archer carries a quiver, an apron instead of a tunic, and a bandolier of
+ * charges across the chest in the trim colour. The charge itself is not baked
+ * in; both renderers draw it live, held out along the real-time aim. */
+export function buildSapperGrid(trim: string): PixelGrid {
+  const C = {
+    apron: '#4A3520', apronHi: '#5E4429',
+    soot: '#2A2622', sootHi: '#3B3630',
+    keg: '#6B4A24', kegHi: '#8A6430', band: '#8A6A22',
+    skin: '#D9B98A',
+    ember: '#C6501B',
+    outline: '#0A0F0A',
+  };
+  const g = makePixelGrid(SAPPER_SPRITE.w, SAPPER_SPRITE.h);
+  // Powder keg slung on the back, hooped in brass, where the archer's quiver sits
+  pixelEllipse(g, 5, 8, 2.6, 4.4, C.keg);
+  pixelEllipse(g, 4.2, 6, 1.1, 2, C.kegHi);
+  pixelRect(g, 3, 6, 5, 1, C.band); pixelRect(g, 3, 10, 5, 1, C.band);
+  // Flat-brimmed helm, wider than the archer's hood
+  pixelRect(g, 6, 7, 12, 1, C.soot);
+  pixelEllipse(g, 12, 5, 4.6, 3.4, C.soot);
+  pixelEllipse(g, 10.4, 4, 2.2, 1.6, C.sootHi);
+  // Face, two eye pixels so the pose reads front-facing like the others
+  pixelEllipse(g, 12, 8.6, 2.6, 1.8, C.skin);
+  setPixel(g, 10.5, 8.4, C.outline); setPixel(g, 13.5, 8.4, C.outline);
+  // Heavy shoulders and a leather apron down the front
+  pixelRect(g, 4, 10, 16, 4, C.soot);
+  pixelRect(g, 6, 14, 12, 7, C.apron);
+  pixelRect(g, 6, 14, 3, 7, C.apronHi);
+  pixelRect(g, 7, 21, 10, 2, C.soot);
+  // Bandolier of charges, corner to corner in the trim colour
+  pixelCurve(g, [7, 11], [12, 15], [17, 19], trim, 26);
+  setPixel(g, 9, 12.5, C.ember); setPixel(g, 13, 16.5, C.ember);
+  // Legs and boots, planted wider than the archer's
+  pixelRect(g, 7, 23, 4, 4, C.soot); pixelRect(g, 13, 23, 4, 4, C.soot);
+  pixelRect(g, 6, 27, 5, 3, C.sootHi); pixelRect(g, 13, 27, 5, 3, C.sootHi);
+  return pixelOutline(g, C.outline);
+}

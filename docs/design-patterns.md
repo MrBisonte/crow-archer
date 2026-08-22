@@ -7,8 +7,8 @@ pattern reference: every claim points at a real file.
 
 ## Composition over inheritance: character definition
 
-Crow Archer has four playable characters today, archer, wizard, knight, and
-ranger. A character's identity is a plain string tag. Behavior attaches to
+Crow Archer has five playable characters today, archer, wizard, knight,
+ranger, and sapper. A character's identity is a plain string tag. Behavior attaches to
 that tag from the outside, through lookup tables, rather than living on a
 class that the tag is an instance of.
 
@@ -16,7 +16,7 @@ class that the tag is an instance of.
 
 | Name | Type | Holds |
 |---|---|---|
-| `CharacterKind` | `'archer' \| 'wizard' \| 'knight' \| 'ranger'` | The tag itself. No fields, no methods. |
+| `CharacterKind` | `'archer' \| 'wizard' \| 'knight' \| 'ranger' \| 'sapper'` | The tag itself. No fields, no methods. |
 | `CHARACTERS` | `readonly CharacterKind[]` | The one array both the union and the runtime validator check against. |
 | `PRIMARY` | `Record<CharacterKind, () => Weapon>` | Which weapon a character fights with. |
 | `SILHOUETTES` | `Record<CharacterKind, Silhouette>` | Shadow and halo geometry for the body. |
@@ -180,6 +180,21 @@ The fourth hero landed for real, and turned out to be exactly this shape: a
 `Weapon`, plus one row each in `PRIMARY`, `SILHOUETTES`
 (`src/render/characters.ts`), and `PAINTERS`. Nothing existing was edited to
 add it, only extended.
+
+The fifth, the `sapper`, was the same shape again, and this time the claim was
+measured rather than assumed: widening `CharacterKind` alone and running
+`npm run typecheck` produced exactly five errors, one per table
+(`SILHOUETTES`, `PAINTERS`, `CHARACTER_STATS`, `PRIMARY`, `CHARACTER_KEYS`),
+and nothing else in the codebase failed to compile. Its weapon, `PowderCharge`,
+is one new class whose shot is `flavour: 'dynamite'`, so it inherits the
+bounce, fuse and blast the world already runs — a new hero, not a new
+mechanic. Its `OWN_SECONDARY` row is the first to answer `{ kind: 'none' }`
+deliberately: an explosive primary does not want the dynamite fallback.
+
+The legacy single-player side is not table-driven the same way, and adding a
+hero there is a dispatch line in `tryShoot`/`drawPlayer` plus rows in
+`CHAR_PANELS`, `LANE_B`, `LANE_D` and `RETICLE_PAINTERS`. That asymmetry is
+the honest measure of what the composition pattern buys on the TS side.
 
 ### Notes
 

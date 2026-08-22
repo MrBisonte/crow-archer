@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CHARACTERS } from '../net/protocol';
 import type { CharacterKind } from '../net/protocol';
 import { drawCharacter, type CharacterVisual } from './characters';
 
@@ -390,5 +391,44 @@ describe('drawCharacter', () => {
             expect(() =>
               draw({ character, facing, dead, shielded, aimAngle: 2.4, hitFlash: 0.3 }, 7.1, 32),
             ).not.toThrow();
+  });
+});
+
+describe('every character in the roster', () => {
+  // SILHOUETTES and PAINTERS are private to the module, so this is how a
+  // missing row shows up: drawCharacter reaches for one and finds nothing.
+  it('has a painter and a silhouette, so it can be drawn at all', () => {
+    for (const character of CHARACTERS) {
+      const rec = draw({ character });
+      expect(bodyCanvas(rec), character).toBeDefined();
+      expect(rec.calls.some((c) => c.name === 'ellipse'), character).toBe(true);
+    }
+  });
+
+  it('draws a shield halo when shielded, whoever is wearing it', () => {
+    for (const character of CHARACTERS) {
+      const bare = draw({ character });
+      const held = draw({ character, shielded: true });
+      expect(held.calls.length, character).toBeGreaterThan(bare.calls.length);
+    }
+  });
+});
+
+describe('the sapper', () => {
+  it('holds a lit charge out along the aim', () => {
+    const rec = draw({ character: 'sapper' });
+    // The ember is the one thing drawn in its own colour rather than shaded,
+    // so a fuse still reads as fire through a hit flash.
+    expect(rec.props.some((p) => p.name === 'fillStyle' && p.value === '#FF7A1A')).toBe(true);
+    // Aim is 0, so the charge and its fuse are the only things drawn well
+    // ahead of the body on the aim axis.
+    expect(rec.points.some((p) => p.x > 6)).toBe(true);
+  });
+
+  it('keeps the ember lit through a hit flash and through being down', () => {
+    for (const over of [{ hitFlash: 1 }, { dead: true }]) {
+      const rec = draw({ character: 'sapper', ...over });
+      expect(rec.props.some((p) => p.name === 'fillStyle' && p.value === '#FF7A1A')).toBe(true);
+    }
   });
 });

@@ -46,6 +46,11 @@ export const CHARACTER_STATS: Record<CharacterKind, CharacterStats> = {
   wizard: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
   knight: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
   ranger: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
+  // Shared defaults like every row above it. A sapper hauling powder is a
+  // tempting first row to slow down, but the single-player game reads its
+  // speed from CONFIG.playerSpeed through FEATHERS, so a slower sapper here
+  // would mean one hero moving at two different speeds in the two engines.
+  sapper: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
 };
 
 /**

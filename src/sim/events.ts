@@ -23,7 +23,14 @@ export type HitSource =
   | 'satchel';
 
 /** Which attack a player started. */
-export type WeaponKind = 'arrow' | 'bolt' | 'crossbow' | 'pitchfork' | 'spear' | 'javelin';
+export type WeaponKind =
+  | 'arrow'
+  | 'bolt'
+  | 'crossbow'
+  | 'pitchfork'
+  | 'spear'
+  | 'javelin'
+  | 'charge';
 
 export type PickupKind = 'ricochet' | 'fire' | 'shield';
 

@@ -37,6 +37,13 @@ Skirmisher with a rapid-fire crossbow.
 - **Special:** Satchel, first click throws it inert, second click arms a 3 s fuse shown as a countdown on the bag; the ranger's own bolt sets it off instantly, armed or not
 - **Pickups:** Ricochet bolts (bounce off walls with a speed boost), fire bolts (leave burning patches). Both are the archer's own pickup effects, unchanged
 
+### Sapper
+Demolition. The only hero whose opening move is thrown at a place rather than at a person.
+- **Primary:** Powder charge, 1.1 s cooldown. The archer's own throw, uncharged: it bounces off cover, runs a 1.5 s fuse, and blows up where it stops. The blast damages everything in radius and clears ROCK, TREE and HUT tiles
+- **Ammo:** none. Charges are made on the spot, so the cooldown is the whole limit and there is no quiver to run dry, no pickup to chase, and no pitchfork fallback
+- **Special:** none, deliberately. The primary is already the explosive
+- **Reticle:** the only one that shows an area — a dashed ring at the blast radius, so you can see what the charge will reach and how near that is to your own feet
+
 ## Game loop
 
 ### Single-player
@@ -118,7 +125,7 @@ first. Before that, rats drop nothing. One silver key exists per run.
 more over three seconds while you move at 65% speed. One bite is survivable.
 Being swarmed while slowed is how the level kills you.
 
-Difficulty is set per character, easiest first: ranger, archer, wizard, knight.
+Difficulty is set per character, easiest first: ranger, archer, knight, sapper, wizard.
 The knight is strongest here, because melee answers a pack fastest, so the maze
 sends him the most rats and the least patient Minotaur.
 
@@ -183,7 +190,7 @@ Every match uses a fresh generated map built on both machines from the four-byte
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
-Every character carries their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. The wizard's **Lightning Storm** and the knight's **Whirlwind** land instantly and over a 3-second channel respectively, hit everyone in range at once, and clear rock, trees and huts the way an explosion does. Both are cut down from their single-player radius, since a duel is not a boss fight and neither should be able to catch the whole arena in one press.
+Every character carries their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. The **sapper** is the exception and carries nothing at all on the second button: a powder charge is already what the primary throws, so a second explosive would be the same press twice. The wizard's **Lightning Storm** and the knight's **Whirlwind** land instantly and over a 3-second channel respectively, hit everyone in range at once, and clear rock, trees and huts the way an explosion does. Both are cut down from their single-player radius, since a duel is not a boss fight and neither should be able to catch the whole arena in one press.
 
 Every fifteen seconds or so a **crow** drifts across. It dies to one hit and drops a powerup where it falls: a replacement shield, or fire that doubles your damage for eight seconds.
 
@@ -193,7 +200,7 @@ Every fifteen seconds or so a **crow** drifts across. It dies to one hit and dro
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
 3. The host sets the mode with **D** for deathmatch or **C** for co-op, the map with **G** for forest or **V** for castle, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes). Pick one win condition, not both. Everyone presses **R**, and it starts once the last player is ready.
 
-Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or Q** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight) or **X** (ranger). They play differently.
+Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or Q** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight), **X** (ranger) or **S** (sapper). They play differently.
 
 Any team split works: 1v1, 2v1 and 2v2 all start, and seats spawn on opposite sides of whatever map came up.
 

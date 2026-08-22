@@ -26,6 +26,7 @@ import {
   WIZARD_SPRITE, buildWizardGrid,
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
+  SAPPER_SPRITE, buildSapperGrid,
 } from './character-grids';
 
 /** Everything needed to draw one character. All positions are world pixels. */
@@ -143,6 +144,9 @@ const SILHOUETTES: Record<CharacterKind, Silhouette> = {
   // Same build as the archer: both are light, ranged fighters, and nothing
   // asked the ranger to stand taller or cast a wider shadow.
   ranger: { shadowY: 9, shadowRX: 9, shadowRY: 2.5, haloY: -1, haloR: 16 },
+  // Broader than the archer and shorter than the knight: the sapper is built
+  // heavy but is not wearing plate, so the shadow widens and the halo does not.
+  sapper: { shadowY: 10, shadowRX: 11, shadowRY: 3, haloY: -1, haloR: 17 },
 };
 
 /**
@@ -221,6 +225,7 @@ const PAINTERS: Record<CharacterKind, (ctx: CanvasRenderingContext2D, p: Pose) =
   wizard: paintWizard,
   knight: paintKnight,
   ranger: paintRanger,
+  sapper: paintSapper,
 };
 
 // ---------------------------------------------------------------------------
@@ -384,6 +389,62 @@ function paintCrossbow(ctx: CanvasRenderingContext2D, p: Pose): void {
   ctx.lineTo(gx + Math.cos(p.aim) * 3, gy + Math.sin(p.aim) * 3);
   ctx.lineTo(gx + bx, gy + by);
   ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Sapper
+// ---------------------------------------------------------------------------
+
+function paintSapper(ctx: CanvasRenderingContext2D, p: Pose): void {
+  paintBakedBody(ctx, p, 'sapper', SAPPER_SPRITE, buildSapperGrid(p.trim));
+  paintHeldCharge(ctx, p);
+}
+
+/**
+ * The charge held ready at arm's length: a dark ball on the aim line with a
+ * lit fuse above it. Drawn live rather than baked, for the same reason the bow
+ * and the crossbow are — it has to follow the aim.
+ *
+ * The ember is the one part that ignores `shade`. A fuse washed grey on a
+ * downed body would still read as lit, and a white one during a hit flash
+ * would read as the flash rather than as fire, so it is drawn in its own
+ * colour and only its glow answers to the pose.
+ */
+function paintHeldCharge(ctx: CanvasRenderingContext2D, p: Pose): void {
+  const gx = Math.cos(p.aim) * 9;
+  const gy = Math.sin(p.aim) * 9;
+  // Arm out to the charge
+  ctx.strokeStyle = shade(p, '#2A2622');
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(gx, gy);
+  ctx.stroke();
+  // The charge itself
+  ctx.fillStyle = shade(p, '#3B3630');
+  ctx.beginPath();
+  ctx.arc(gx, gy, 3.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = shade(p, '#8A6A22');
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(gx, gy, 3.2, 0, Math.PI * 2);
+  ctx.stroke();
+  // Fuse and its ember, guttering rather than steady
+  const flare = 0.7 + 0.3 * Math.sin(p.t * 11);
+  ctx.strokeStyle = shade(p, '#1E1A16');
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(gx, gy - 3);
+  ctx.lineTo(gx + 1.5, gy - 6);
+  ctx.stroke();
+  ctx.shadowColor = '#C6501B';
+  ctx.shadowBlur = 6 * flare;
+  ctx.fillStyle = '#FF7A1A';
+  ctx.beginPath();
+  ctx.arc(gx + 1.5, gy - 6, 1.3 * flare, 0, Math.PI * 2);
+  ctx.fill();
   ctx.shadowBlur = 0;
 }
 

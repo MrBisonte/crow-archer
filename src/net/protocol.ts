@@ -66,7 +66,7 @@ export type RoomCode = string;
 // Lobby
 // ---------------------------------------------------------------------------
 
-export type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger';
+export type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper';
 
 /** 'coop' is 4-player PVE. 'deathmatch' is 2v2. The host picks. */
 export type GameMode = 'coop' | 'deathmatch';
@@ -389,7 +389,12 @@ const isOneOf = <T extends string>(allowed: readonly T[], v: unknown): v is T =>
 const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
   Array.isArray(v) && v.every(item);
 
-const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger'];
+/**
+ * Every playable character. Exported because it is the one written-down copy
+ * of the roster: `CharacterKind` and `isCharacter` both check against it, and
+ * so do the tests that make sure a new hero reached every lookup table.
+ */
+export const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger', 'sapper'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
 const MAPS: readonly MapKind[] = ['forest', 'castle', 'maze'];
 const ERROR_CODES: readonly ErrorCode[] = [
