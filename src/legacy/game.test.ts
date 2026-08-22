@@ -9,10 +9,10 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { boot, devHooks as g } from './game.js';
-import type { PixelGrid } from '../render/pixel-grid';
+import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
-  gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
+  filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
 } from '../render/grid-testkit';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
@@ -313,6 +313,9 @@ const gridOf = (name: string, kind: string, frame: string): PixelGrid =>
  * an exception per sprite. A palette that only ever grows needs none.
  */
 const PALETTE_BEFORE: Record<string, number> = {
+  crow: 4,
+  skeleton: 3,
+  rat: 3,
   crowking: 5,
   minotaur: 8,
   darkarcher: 6,
@@ -356,4 +359,39 @@ describe('sprite grids', () => {
       }
     });
   }
+});
+
+describe('walk cycles keep their limbs apart', () => {
+  // These three regressed the same way and were invisible the same way. A
+  // stride that swings limbs sideways can land two of them in the same
+  // columns at the extreme of the swing; while the limbs were sparse curves
+  // that read as noise either way, and the moment they are solid it reads as
+  // one thick limb. Each sprite's gap is checked the way its own silhouette
+  // convention makes it visible.
+
+  it('stands the skeleton on two legs in every frame', () => {
+    for (const kind of ['normal', 'fire', 'ice'])
+      for (const frame of ANIM_FRAMES) {
+        // Row 19 is below the pelvis, where only legs can be. This sprite is
+        // outlined, so the gap between the legs is a seam pixel rather than
+        // emptiness: the two legs are two columns that match each other and
+        // do not match what lies between them.
+        const row = gridOf('skeleton', kind, frame)[19] ?? [];
+        expect(row[5]).toBe(row[6]);
+        expect(row[8]).toBe(row[9]);
+        expect(row[7]).not.toBe(row[6]);
+      }
+  });
+
+  it('stands the minotaur on two hooves in every frame', () => {
+    // No outline pass on this one, so two touching hooves fuse into a single
+    // bar with nothing to seam them and the gap has to be real emptiness.
+    for (const frame of ANIM_FRAMES)
+      expect(filledRuns(gridOf('minotaur', 'minotaur', frame), 32)).toBe(2);
+  });
+
+  it('gives the rat all four legs in every frame', () => {
+    for (const frame of ANIM_FRAMES)
+      expect(filledRuns(gridOf('rat', 'rat', frame), 8)).toBe(4);
+  });
 });

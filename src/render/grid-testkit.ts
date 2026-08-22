@@ -46,6 +46,27 @@ export function invalidColours(grid: PixelGrid): string[] {
   return [...gridColours(grid)].filter((c) => !isHexColour(c));
 }
 
+/**
+ * How many separate runs of filled cells one row has.
+ *
+ * This is how "does it still have two legs" is asked of a walk cycle. A
+ * stride that swings limbs sideways can land two of them in the same columns
+ * at the extreme of the swing, which is invisible while the limbs are sparse
+ * curves and reads as one thick limb the moment they are solid. Only useful
+ * on a sprite with no pixelOutline pass, where the gap between limbs is real
+ * emptiness; on an outlined sprite the seam is a coloured pixel, so ask about
+ * the colour of the gap column instead.
+ */
+export function filledRuns(grid: PixelGrid, y: number): number {
+  let runs = 0;
+  let inRun = false;
+  for (const c of grid[y] ?? []) {
+    if (c !== null && !inRun) runs++;
+    inRun = c !== null;
+  }
+  return runs;
+}
+
 interface StubCanvas {
   width: number;
   height: number;

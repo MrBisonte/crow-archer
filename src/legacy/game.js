@@ -5470,8 +5470,8 @@ const CROW_SPRITE = { w: 20, h: 16 };
 // White is a persistent enemy kind (c.white), not just the entrance's
 // blink-white telegraph — drawCrow below picks this palette for both.
 const CROW_PALETTES = {
-  normal: { body: '#141414', bodyHi: '#3A3A3A', edge: '#000000', beak: '#FFB400' },
-  white:  { body: '#E4E4E4', bodyHi: '#FFFFFF', edge: '#A8A8A8', beak: '#FF1F1F' },
+  normal: { body: '#141414', bodyHi: '#3A3A3A', feather: '#2A2A2A', edge: '#000000', beak: '#FFB400', beakHi: '#FFD966' },
+  white:  { body: '#E4E4E4', bodyHi: '#FFFFFF', feather: '#C8C8C8', edge: '#A8A8A8', beak: '#FF1F1F', beakHi: '#FF6A5A' },
 };
 
 /** frame 'a'/'b' are the two extremes of the flap, 'mid' the level pass
@@ -5484,19 +5484,33 @@ function buildCrowGrid(kind, frame) {
   // Wings are the highlight tone, not the body tone — pixelOutline only
   // seams the outer silhouette, so two overlapping same-color shapes fuse
   // into one blob without a distinct fill to tell them apart.
-  if (frame === 'a')      pixelEllipse(g, 9, 11, 6, 2.2, C.bodyHi); // lowered, spread below
-  else if (frame === 'b') pixelEllipse(g, 9, 3, 5, 2, C.bodyHi);    // raised, folded over the back
-  else                    pixelEllipse(g, 8, 7.5, 6.5, 1.6, C.bodyHi); // level, spread to the sides
+  const wing = frame === 'a' ? { x: 9, y: 11, rx: 6, ry: 2.2 }    // lowered, spread below
+             : frame === 'b' ? { x: 9, y: 3, rx: 5, ry: 2 }       // raised, folded over the back
+             :                 { x: 8, y: 7.5, rx: 6.5, ry: 1.6 }; // level, spread to the sides
+  pixelEllipse(g, wing.x, wing.y, wing.rx, wing.ry, C.bodyHi);
+  // Two flight-feather splits, each cut to the wing's own height where it
+  // lands — the crow king's wing gets the same read at three times the size.
+  for (const i of [-1, 1]) {
+    const dx = (i * wing.rx) / 2;
+    const half = wing.ry * Math.sqrt(Math.max(0, 1 - (dx / wing.rx) ** 2));
+    pixelRect(g, Math.round(wing.x + dx), Math.round(wing.y - half), 1, Math.max(1, Math.round(half * 2)), C.feather);
+  }
 
   // Tail, trailing right (crow flies left, tail streams behind)
   pixelEllipse(g, 15, 7, 3, 1.6, C.body);
 
   // Body, drawn over the wing root so the silhouette reads front-to-back
   pixelEllipse(g, 11, 7.5, 5, 3.3, C.body);
+  pixelEllipse(g, 9, 6, 2.5, 1.4, C.bodyHi); // lit crown and nape
+  // The tail is the body's own colour and the body is painted over its root,
+  // so without a seam where they meet the silhouette has no tail at all.
+  pixelRect(g, 15, 6, 1, 3, C.feather);
+  pixelRect(g, 8, 9, 5, 1, C.feather); // breast/wing seam
 
-  // Beak, pointing left (crow flies left)
+  // Beak, pointing left (crow flies left), with a lit upper mandible
   pixelRect(g, 3, 7, 3, 1, C.beak);
   setPixel(g, 2, 7, C.beak);
+  pixelRect(g, 4, 6, 2, 1, C.beakHi);
 
   return pixelOutline(g, C.edge);
 }
@@ -5590,13 +5604,17 @@ function drawCrow(c) {
 
 // One palette per wave kind. `aura` is null for a normal skeleton so the
 // elemental glow below only ever draws for fire and ice.
+// `boneSh` sits between `bone` and `edge`: shading needs a tone that is darker
+// than the body without being the outline, and with only the three original
+// slots every shadow on these sprites had to be drawn in the seam colour,
+// which reads as a hole rather than as a curve.
 const SKELETON_PALETTES = {
-  normal: { bone: '#D8D0C0', boneHi: '#F4F0E6', edge: '#8A8070', eye: '#B040E0', aura: null },
-  fire:   { bone: '#D86A40', boneHi: '#F4A868', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
-  ice:    { bone: '#A8D8F0', boneHi: '#E4F6FF', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
-  // Not bone at all, but it reads the same three slots so nothing downstream
+  normal: { bone: '#D8D0C0', boneHi: '#F4F0E6', boneSh: '#B0A896', edge: '#8A8070', eye: '#B040E0', aura: null },
+  fire:   { bone: '#D86A40', boneHi: '#F4A868', boneSh: '#A84828', edge: '#7A2A10', eye: '#FF6020', aura: '#FF6020' },
+  ice:    { bone: '#A8D8F0', boneHi: '#E4F6FF', boneSh: '#78A8C8', edge: '#4878A0', eye: '#40D0F0', aura: '#40D0F0' },
+  // Not bone at all, but it reads the same slots so nothing downstream
   // needs to know a rat is not a skeleton.
-  rat:    { bone: '#4A3E36', boneHi: '#6B5A4C', edge: '#2A221C', eye: '#FF4020', aura: null },
+  rat:    { bone: '#4A3E36', boneHi: '#6B5A4C', boneSh: '#382E28', edge: '#2A221C', eye: '#FF4020', aura: null },
 };
 
 const SKELETON_SPRITE = { w: 14, h: 24 };
@@ -5614,20 +5632,28 @@ function buildRatGrid(kind, frame) {
   const swing = frame === 'a' ? 1 : frame === 'b' ? -1 : 0;
 
   // Tail, whipping opposite the legs so the body reads as driven by them.
-  pixelCurve(g, [0, 4 - swing], [3, 6], [5, 5], C.edge, 8);
+  // Sampled per pixel of its length: at 8 samples over a curve twice that
+  // long it came out dotted, which at this size reads as debris, not a tail.
+  pixelCurve(g, [0, 4 - swing], [3, 6], [5, 5], C.edge, 20);
   // Haunch and back
   pixelEllipse(g, 6, 6, 4, 2, C.bone);
   pixelEllipse(g, 6, 5, 3, 1, C.boneHi);
+  pixelRect(g, 3, 7, 6, 1, C.boneSh);   // belly, in shadow under the haunch
   // Head and snout
   pixelEllipse(g, 10, 6, 2, 2, C.bone);
   pixelRect(g, 12, 6, 2, 1, C.bone);
+  setPixel(g, 13, 6, C.boneHi);         // nose tip
+  setPixel(g, 11, 7, C.boneSh);         // jaw
   // Ear
   pixelRect(g, 9, 3, 2, 2, C.edge);
   setPixel(g, 10, 4, C.bone);
-  // Legs, alternating with the stride
-  pixelRect(g, 4 + swing, 8, 1, 2, C.edge);
-  pixelRect(g, 7 - swing, 8, 1, 2, C.edge);
-  pixelRect(g, 10 + swing, 8, 1, 2, C.edge);
+  // Four legs on fixed columns, the stride lifting alternate pairs rather
+  // than swinging them sideways: one-pixel legs on a 14px body cannot pass
+  // each other, and a sideways stride puts two of them in one column.
+  for (const [i, x] of [3, 5, 8, 10].entries()) {
+    const planted = frame === 'mid' || (i % 2 === 0) === (frame === 'a');
+    pixelRect(g, x, 8, 1, planted ? 2 : 1, C.edge);
+  }
   return g;
 }
 
@@ -5651,24 +5677,38 @@ function buildSkeletonGrid(kind, frame) {
   const g = makePixelGrid(SKELETON_SPRITE.w, SKELETON_SPRITE.h);
   const swing = frame === 'a' ? 2.5 : frame === 'b' ? -2.5 : 0;
 
-  // Legs
-  pixelCurve(g, [5, 15], [5 + swing * 0.4, 18], [5 + swing, 22], C.bone, 10);
-  pixelCurve(g, [6, 15], [6 + swing * 0.4, 18], [6 + swing, 22], C.bone, 10);
-  pixelCurve(g, [8, 15], [8 - swing * 0.4, 18], [8 - swing, 22], C.bone, 10);
-  pixelCurve(g, [9, 15], [9 - swing * 0.4, 18], [9 - swing, 22], C.bone, 10);
+  // Legs: the stride lifts one foot and plants the other rather than swinging
+  // them sideways. Two leg bones two columns apart cannot pass each other in
+  // a 14px sprite — at the full sideways swing all four landed in the same
+  // three columns, and the skeleton walked on one thick leg.
+  const lift = frame === 'a' ? 1 : frame === 'b' ? -1 : 0;
+  pixelRect(g, 5, 15, 2, 8 - lift, C.bone);
+  pixelRect(g, 8, 15, 2, 8 + lift, C.bone);
+  pixelRect(g, 4, 22 - lift, 3, 1, C.boneSh);
+  pixelRect(g, 8, 22 + lift, 3, 1, C.boneSh);
 
   // Arms
-  pixelCurve(g, [3, 10], [3 - swing * 0.3, 13], [3 - swing * 0.6, 16], C.bone, 8);
-  pixelCurve(g, [10, 10], [10 + swing * 0.3, 13], [10 + swing * 0.6, 16], C.bone, 8);
+  pixelCurve(g, [3, 10], [3 - swing * 0.3, 13], [3 - swing * 0.6, 16], C.bone, 12);
+  pixelCurve(g, [10, 10], [10 + swing * 0.3, 13], [10 + swing * 0.6, 16], C.bone, 12);
 
-  // Ribcage
+  // Ribcage: lit across the collarbones, falling into shadow low, with a
+  // sternum the ribs cross rather than one unbroken band per rib
   pixelRect(g, 4, 9, 6, 8, C.bone);
   pixelRect(g, 4, 9, 6, 2, C.boneHi);
+  pixelRect(g, 4, 14, 6, 3, C.boneSh);
   for (let ry = 11; ry <= 15; ry += 2) pixelRect(g, 4, ry, 6, 1, C.edge);
+  pixelRect(g, 6, 10, 2, 7, C.boneHi);
 
-  // Skull
+  // Pelvis, so the legs hang off something instead of out of the ribcage
+  pixelRect(g, 4, 16, 6, 2, C.boneSh);
+  setPixel(g, 6, 17, C.edge); setPixel(g, 7, 17, C.edge);
+
+  // Skull, shaded away from the light, with a toothed jaw under the sockets
   pixelEllipse(g, 7, 5, 4, 3.6, C.bone);
   pixelEllipse(g, 5.5, 3.5, 1.6, 1.2, C.boneHi);
+  pixelEllipse(g, 9.5, 5, 1.2, 1.8, C.boneSh);
+  pixelRect(g, 4, 7, 6, 1, C.boneSh);
+  for (const x of [5, 7, 9]) setPixel(g, x, 7, C.edge);
 
   return pixelOutline(g, C.edge);
 }
