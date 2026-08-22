@@ -100,8 +100,8 @@ function zzfx(
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 
 const CONFIG = {
-  tileSize: 32, cols: 33, rows: 21, hudHeight: 32,
-  canvasW: 1056, canvasH: 704,
+  tileSize: 32, cols: 33, rows: 21, hudHeight: 48,
+  canvasW: 1056, canvasH: 720,
 
   playerSpeed: 200, playerRadius: 8,
   playerMaxHP: 10, playerHitFlashSecs: 0.3,
