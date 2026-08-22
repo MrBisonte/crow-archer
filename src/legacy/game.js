@@ -335,8 +335,15 @@ const BOSS_ENTRY_TEXT = {
 };
 
 // Above this capacity the HUD shows a count instead of one icon per unit.
-// 12 icons at 13 px still fit beside the boss HP bar; more do not.
+// 12 icons still fit beside the boss HP bar at either pitch the HUD uses
+// (13 px for quiver resources, 14 px for hearts); more do not.
 const HUD_ICON_LIMIT = 12;
+
+// Hearts are a counted row like any quiver resource, so they carry the same
+// descriptor shape and go through the same drawer. Keeping them a resource in
+// all but name is what stops the row from growing past its slot: HP upgrades
+// raise the max, and only drawCountRow knows where the icons stop fitting.
+const HP_RESOURCE = { icon: '♥', color: '#39FF14', dim: '#333', spacing: 14 };
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
@@ -5090,6 +5097,41 @@ function drawBossEntrance() {
   }
 }
 
+/**
+ * One counted row in the HUD: an icon per unit while the max still fits, a
+ * compact `icon NN/MM` once it does not. Hearts and quiver resources share
+ * this, so an upgraded max can never overrun whatever sits to the row's right.
+ *
+ * `r` is a descriptor carrying icon, color, dim and spacing. CONFIG.resources
+ * entries already have that shape; HP_RESOURCE gives hearts the same one.
+ * A non-null `alertCol` recolors the filled units only, which is what both
+ * callers want: the low-HP pulse and the empty-pickup flash are one signal.
+ *
+ * Returns the width drawn, for callers that flow instead of sitting at a
+ * fixed x.
+ */
+function drawCountRow(x, r, cur, max, alertCol = null, alertGlow = null) {
+  const paint = (on) => {
+    const hot = Boolean(alertCol) && on;
+    ctx.fillStyle  = hot ? alertCol : (on ? r.color : r.dim);
+    ctx.shadowBlur = hot && alertGlow ? 8 : 0;
+    if (ctx.shadowBlur) ctx.shadowColor = alertGlow;
+  };
+  if (max > HUD_ICON_LIMIT) {
+    const label = `${r.icon}${String(cur).padStart(2, '0')}/${max}`;
+    paint(cur > 0);
+    ctx.fillText(label, x, 16);
+    ctx.shadowBlur = 0;
+    return ctx.measureText(label).width + 10;
+  }
+  for (let i = 0; i < max; i++) {
+    paint(i < cur);
+    ctx.fillText(r.icon, x + i * r.spacing, 16);
+  }
+  ctx.shadowBlur = 0;
+  return max * r.spacing + 8;
+}
+
 function drawHUD(t) {
   const isBoss = appState === 'boss_fight';
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
@@ -5134,17 +5176,13 @@ function drawHUD(t) {
     ctx.font='bold 12px "Courier New",monospace';
   }
 
-  // HP hearts
+  // HP hearts. Same drawer as the quiver below, so a maxed-out HP upgrade
+  // collapses to a count rather than running into the resource column (or,
+  // during a boss fight, into the boss HP bar).
   const hpX = isBoss ? 248 : 383;
   const lowHP = playerHP <= 3 && playerHP > 0;
-  for (let i = 0; i < FEATHERS.maxHP(); i++) {
-    const active = i < playerHP;
-    const pulse = lowHP && active && Math.floor(t*4)%2===0;
-    ctx.fillStyle = pulse ? '#ff4444' : (active ? '#39FF14' : '#333');
-    if (pulse) { ctx.shadowColor = '#ff2222'; ctx.shadowBlur = 8; }
-    ctx.fillText('♥', hpX + i*14, 16);
-    if (pulse) ctx.shadowBlur = 0;
-  }
+  const hpAlert = lowHP && Math.floor(t*4)%2===0 ? '#ff4444' : null;
+  drawCountRow(hpX, HP_RESOURCE, playerHP, FEATHERS.maxHP(), hpAlert, '#ff2222');
 
   // Resources — archer/ranger quiver OR knight/wizard cooldowns. Each branch
   // is named explicitly rather than falling through to a trailing else, so a
@@ -5160,20 +5198,7 @@ function drawHUD(t) {
     for (const k of keys) {
       const r = CONFIG.resources[k];
       const flash = iFlash[k] > 0 && Math.floor(iFlash[k]*12)%2===0;
-      // One icon per unit reads well up to a point. Past it the row would run
-      // off the HUD, so show a single icon and a count instead.
-      if (r.max > HUD_ICON_LIMIT) {
-        ctx.fillStyle = flash ? '#ff4444' : (inv[k] > 0 ? r.color : r.dim);
-        const label = `${r.icon}${String(inv[k]).padStart(2,'0')}/${r.max}`;
-        ctx.fillText(label, rx, 16);
-        rx += label.length * 6 + 10;
-      } else {
-        for (let i = 0; i < r.max; i++) {
-          ctx.fillStyle = i < inv[k] ? (flash ? '#ff4444' : r.color) : r.dim;
-          ctx.fillText(r.icon, rx + i * r.spacing, 16);
-        }
-        rx += r.max * r.spacing + 8;
-      }
+      rx += drawCountRow(rx, r, inv[k], r.max, flash ? '#ff4444' : null);
     }
     if (inv.ricochetArrows > 0) { ctx.fillStyle='#44ddff'; ctx.fillText(`[R:${inv.ricochetArrows}]`,rx,16); rx+=52; }
     if (inv.fireArrows     > 0) { ctx.fillStyle='#ff7700'; ctx.fillText(`[F:${inv.fireArrows}]`,rx,16);     rx+=44; }
