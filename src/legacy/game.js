@@ -590,6 +590,10 @@ function generateMap(kind = 'forest') {
   // cleared here, with the grid it is placed on. Every consumer then has one
   // guard, `mazeRun`, instead of its own check on mapKind.
   mazeRun = kind === 'maze' ? newMazeRun() : null;
+  // Crows belong to the map. Moving to one that has none has to take the last
+  // map's birds with it, or they keep flying through the new map's walls and
+  // keep counting toward a win condition this map does not use.
+  if (!mapHasCrows()) crows = [];
   // Sight is about the grid too: memory of the last map is a lie about this one.
   resetSight();
 }
@@ -649,6 +653,11 @@ function terrainDestructible() {
 /** Does this map hide what the player cannot see? One home for that rule too. */
 function fogOfWar() {
   return MAP_RULES[mapKind].fogOfWar;
+}
+
+/** Do crows live on this map? Same table, same reason: it is a per-map fact. */
+function mapHasCrows() {
+  return MAP_RULES[mapKind].crows;
 }
 
 function smashTile(row, col) {
@@ -1381,7 +1390,7 @@ function initGame() {
   player = { x: spawn.x, y: spawn.y, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
   skeletons = []; // only populated once brawl mode reaches its castle stage
-  for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
+  if (mapHasCrows()) for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
 }
 
 /**
@@ -2810,6 +2819,8 @@ function updateEscalation(dt) {
   // not this timer — see killSkeleton. Only waveAnnounce still needs to
   // count down here so a castle-wave banner fades on schedule.
   if (mapKind === 'castle') return;
+  // The maze's population is the rat pack and the warden. See MAP_RULES.crows.
+  if (!mapHasCrows()) return;
   if (escalationTimer >= CONFIG.crowEscalationInterval) {
     escalationTimer -= CONFIG.crowEscalationInterval;
     wave++;

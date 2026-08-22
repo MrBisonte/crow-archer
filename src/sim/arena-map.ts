@@ -63,11 +63,19 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
  * read at a glance, and hiding two thirds of one would only make it fiddly. A
  * maze is a level about not knowing what is round the corner, so the corner has
  * to actually hide something.
+ *
+ * `crows` is where they live. A passive crow crosses the map in a straight line
+ * with no terrain check, which reads as a bird over an arena and as a bug in a
+ * corridor. In single player it carries a second cost: ten crow kills is the
+ * forest's own win condition, and a maze that quietly swaps itself for a boss
+ * fight halfway through has two win conditions and means neither.
  */
-export const MAP_RULES: Record<MapKind, { destructibleTerrain: boolean; fogOfWar: boolean }> = {
-  forest: { destructibleTerrain: true, fogOfWar: false },
-  castle: { destructibleTerrain: true, fogOfWar: false },
-  maze: { destructibleTerrain: false, fogOfWar: true },
+export const MAP_RULES: Record<MapKind, {
+  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean;
+}> = {
+  forest: { destructibleTerrain: true, fogOfWar: false, crows: true },
+  castle: { destructibleTerrain: true, fogOfWar: false, crows: true },
+  maze: { destructibleTerrain: false, fogOfWar: true, crows: false },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
