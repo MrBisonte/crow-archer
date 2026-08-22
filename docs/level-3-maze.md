@@ -292,6 +292,43 @@ Not in Part 1: enemies, objective, stage progression, single-player entry. The
 maze is reachable through the multiplayer lobby's existing map picker first,
 because that path already exists and needs no new state machine.
 
+### The lights are off
+
+Added after the fact, and it belongs here rather than in Part 2 because it is a
+property of the map, not of anything in it. `MAP_RULES` grew a `fogOfWar` row
+for the same reason it grew `destructibleTerrain`: forest and castle are arenas
+you read at a glance, and a corridor level is about not knowing what is round
+the corner.
+
+Sight on the maze is four tiles, against fourteen everywhere else. Three states
+per tile, painted over the world as one pass after everything else:
+
+| State | Looks like | Why |
+|---|---|---|
+| Lit now | Clear, fading toward the edge of the circle | A hard rim reads as a spotlight, not a torch |
+| Remembered | 74% black | You know the shape of a corridor you have walked |
+| Never seen | Black | |
+
+Terrain remembers. Nothing alive does. Enemies, pickups, keys, the chest and the
+door are drawn only where the player can see them right now, gated at each
+draw call rather than by the overlay, because the overlay would let a rat show
+through the dim of a remembered corridor. A rat you cannot see is a rat you do
+not get to plan around, and that is the whole point of the level.
+
+The cost is measurable and small: the fog pass is 693 fill calls and one hypot
+per tile, and a full frame with it costs 0.3 ms.
+
+**It broke the one shortcut in the file.** `minotaurSeesPlayer` answered "does
+the warden see you" by reading the player's FOV cache, which was correct only
+because both had the same sight range and shadowcasting is symmetric. At four
+tiles against his sixteen, that shortcut becomes "he may only charge from inside
+your torchlight", which deletes the reason he exists. He now walks his own line
+of sight, from his own tile, over the same passability callback FOV and A* use.
+
+`aggroCrows` had borrowed the same answer with the same intent, and now asks
+from the crow at the open maps' old radius, so forest and castle keep the reach
+they had. It is also the last caller: `tileVisible` is now read only by the fog.
+
 ## Part 2: what lives in the maze
 
 Proposal.
@@ -412,6 +449,70 @@ A lurker, an ambusher that wakes on line of sight, was considered and dropped.
 The minotaur already owns dread at a blind corner, and two ambushers is one
 too many.
 
+### The pack, and who is not in it
+
+`CONFIG.ratPackSize` shipped with the rat and had no consumer. Nothing put a rat
+on the map outside the dev harness, so the objective's key could never drop and
+the level could not be finished by playing it. A pack of five now spawns on open
+floor away from the player, and the next pack only arrives once the last is
+dead.
+
+Topping up to five one rat at a time was tried first and is worse. It reads as
+fairer and plays as a tax you can never get ahead of, which makes clearing a
+corridor meaningless. Killing all five buys six seconds of quiet, and that quiet
+is the only reason to shoot something that drops one key in five.
+
+Crows are gone from this map, by a third `MAP_RULES` row. Part 2 already noted
+that a passive crow crosses the map in a straight line with no terrain check and
+reads as a bug in a corridor. In single player it carried a second cost nobody
+had noticed: ten crow kills is the forest's win condition, so a maze run could
+turn into the Crow King's entrance halfway through and replace the level the
+player was in. Two win conditions in one level means neither.
+
+### Torches
+
+The counterweight to the dark. Three per maze, on open floor away from the
+spawn, and finding one is meant to feel like luck rather than a stop on a route.
+
+Lighting one is a keypress, and it is the only new bind the level adds. That is
+the line the level draws: a torch is a decision, while keys, the chest and the
+door are foregone conclusions your inventory has already made, and a prompt in
+front of a foregone conclusion is a button press rather than a choice. The bind
+goes through `CONFIG.keys` and the controls screen like every other action.
+
+The first torch triples sight for the rest of the run, not for a timer. A maze
+is a place you are meant to search, and light on a clock punishes searching; it
+would also contradict the map, since the torch keeps burning either way. Later
+torches change nothing about sight and everything about navigation: a lit one
+holds the fog open around itself and stays visible from anywhere, which makes it
+the only landmark the level has. Marking a junction you have already been
+through is a real use for the second and third.
+
+### Two things about the warden that did not work
+
+Both only surface once he hunts outside a boss fight, and together they left the
+level with no counterplay at all.
+
+**He was invulnerable.** Every weapon gated its boss check on
+`appState === 'boss_fight'`, which was the same question as "is there a boss to
+hit" for as long as a boss only existed inside its own fight. Here he was on
+screen, hitting the player, and immune to arrows, spears, dynamite, storm and
+whirlwind alike. `bossInPlay()` states the real condition once, next to the
+table that says which bosses live outside a fight. Measured: before the fix, no
+scripted playthrough of any character landed a single hit on him.
+
+**The stun did not stun.** `stunMinotaur` set `dazeTimer = 1.5` and called it a
+1.5 second stun. `bossDazePhase` reads that timer as a position inside stun,
+then slow1, then slow2, counting down, so 1.5 lands inside slow2 and freezes
+nothing. The config comment said "what a hit buys you"; the code bought a mild
+slow. `dazeTimerForStun` does the conversion and has a name, so nobody sets that
+countdown by hand again.
+
+The balance risk Part 2 named, that stun at a distance collapses three
+characters into one, is not what happened. Stun is not the only verb, because
+the rats are: what actually separates the roster is how fast each character
+clears five of them in the dark.
+
 ## Part 3: the objective and stage wiring
 
 **The objective is built. The stage wiring is not.** Those were one heading
@@ -500,6 +601,49 @@ kind check because the fact worth recording is not "the minotaur is special", it
 is "being alive outside a boss fight is a property a boss either has or does
 not", and a fifth boss should have to answer it.
 
+Two things that assumption had quietly been holding up broke with it, and both
+are written up under Part 2: he could not be hit, and hitting him did not stun.
+
+### Playing it
+
+Eight scripted playthroughs per character, driven through the real keyboard
+handlers and the same A* the pursuers walk, targeting only what fog lets the
+player see, and spending each character's charge ability. Not a substitute for a
+human, but the same crude player for all four, which makes the columns
+comparable to each other and not to a person.
+
+| Character | Finished | Where the losses happen |
+|---|---|---|
+| Knight | 6 of 8 | Rarely. Melee clears a pack faster than anything else here |
+| Ranger | 5 of 8 | Hunting the pack, before the key drops |
+| Archer | 3 of 8 | Split between the hunt and the last walk to the door |
+| Wizard | 3 of 8 | The hunt. A two second bolt cooldown against five rats |
+
+Every character can finish. Wins take 6 to 49 seconds of play.
+
+Three things this measured that were worth knowing.
+
+**Corridors invert the roster.** Part 2's worry was that the maze punishes three
+quarters of the roster twice, through geometry and through the boss. The
+opposite happened: four tiles of sight means nobody is shooting at range
+anyway, so the archer's reach buys nothing and the knight's pack clear buys
+everything. The knight is the strongest character in this level by a distance.
+
+**The wizard is the one to watch.** His primary is on a two second cooldown,
+which is one rat every two seconds against five that move faster than he does.
+He is only viable because Lightning Storm clears a pack outright, so his run
+lives or dies on a ten second cooldown. Flagged rather than tuned: it is a
+balance decision, not a bug.
+
+**Poison is close to a death sentence.** A bite halves the player to 100 px/s
+against a rat's 215, so once bitten you cannot break contact and the only way
+out is to kill what is biting you. That is the trap Part 2 designed, working
+exactly as written, and it is worth deciding on purpose whether it should be
+quite this absolute.
+
+Neither Whirlwind nor Lightning Storm needed the walls: both damage what is in
+their radius, and `smashTile` returning early on the maze costs them nothing.
+
 ### What is still a proposal
 
 The stage wiring, unchanged and still true. `bossStage` is a 1-based index into
@@ -535,8 +679,11 @@ state without restarting, which is a smell the tests now depend on.
    because it is the better home. Part 3 answers half of it: the objective is
    single-player only, and it lives in the legacy file rather than `src/sim/`,
    so multiplayer still gets terrain and no reason to be there.
-2. Is a maze that ranged characters find frustrating a design failure or the
-   level's identity?
+2. ~~Is a maze that ranged characters find frustrating a design failure or the
+   level's identity?~~ **Overtaken by fog of war.** Nobody has range at four
+   tiles, so the question is no longer ranged against melee. It is whether the
+   wizard's two second bolt is playable against a pack of five. See
+   [Playing it](#playing-it).
 3. ~~Should maze walls be destructible?~~ **Settled: no.** See the
    destructible-terrain paragraph above. Kept here rather than deleted so the
    question and its answer stay findable together.
