@@ -806,6 +806,12 @@ const events = new EventBus();
  *
  * Read it top to bottom: a miss is the quietest thing in the game, taking a
  * hit outranks landing one, and only the boss and the run ending outrank that.
+ *
+ * Deliberately absent, and not an oversight to be corrected later: killing a
+ * crow or a skeleton does not shake at all. Critters die constantly and in
+ * groups, up to 22 alive at once on nightmare, so a per-kill shake is a
+ * permanent rumble rather than information. The boss is the opposite case
+ * and does shake, on contact, on death, and now per landed hit.
  */
 const SHAKE = {
   arrowMiss:      [2,  100],
@@ -828,8 +834,16 @@ const SHAKE = {
 // Sound and shake per boss-hit source. The sim states what landed; the table
 // decides how it sounds.
 const BOSS_HIT_FX = {
-  pitchfork: [6, 200], spear: [5, 200],
-  arrow: null, javelin: null, whirlwind: null, storm: null, dynamite: null, satchel: null,
+  // Landing one of these is a large fraction of the fight: the crow king dies
+  // in 5 archer hits, 14 wizard bolts. Ranged sources used to be silent here,
+  // so a knight felt every hit on the boss and an archer felt none.
+  pitchfork: [6, 200], spear: [5, 200], javelin: [5, 180], arrow: [4, 140],
+  // Still null, because each already shakes through its own event and would
+  // otherwise fire twice for one action, or many times for one cast:
+  // dynamite and satchel via EXPLOSION, storm via STORM_CAST, and whirlwind
+  // ticks its damage every 0.2s for 3s, which is the critter-kill problem
+  // wearing a different hat.
+  whirlwind: null, storm: null, dynamite: null, satchel: null,
 };
 // Sound and shake per attack the player starts.
 const WEAPON_FX = {
