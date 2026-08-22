@@ -122,6 +122,10 @@ const CONFIG = {
   // The margin is small, so you outrun them briefly; once poisoned you are at
   // 100 and they are on you. The slow is the trap, the speed just sets it.
   ratSpeed: 215, ratContactDamage: 1, ratPackSize: 5, ratSpawnMinDistance: 200,
+  // Seconds of quiet after a pack is wiped out, before the next one appears.
+  // A pack at a time, not a trickle: a trickle you can never get ahead of, and
+  // getting ahead is the only reason to fight rats at all.
+  ratRespawnSecs: 6,
   // A bite is barely a hit; the poison is the point. 3 damage spread over 3
   // seconds at one point a second, plus a half-speed crawl for the same
   // window. Getting bitten once is survivable, getting swarmed is not, and
@@ -2673,9 +2677,31 @@ function newMazeRun() {
     held: { silver: false, golden: false },
     drops: [],            // keys lying on the floor, waiting to be walked over
     torches,
+    ratTimer: 0,          // counts down to the next pack, once the last is dead
     metMinotaur: false,   // his first charge or his first stun, whichever came first
     silverDropped: false, // one silver key exists, ever
   };
+}
+
+/**
+ * Keeps a pack of rats in the maze.
+ *
+ * CONFIG.ratPackSize shipped with the rat and had no consumer: nothing put rats
+ * on the map outside the dev harness, which left the silver key undroppable in
+ * a real run.
+ *
+ * A pack at a time, and the next one only after the last is dead. Topping up
+ * one rat at a time reads as fairer and plays far worse: the pack becomes a
+ * permanent tax with no way to get ahead of it, and clearing a corridor stops
+ * meaning anything. Killing all five buys real quiet, which is what makes them
+ * worth shooting.
+ */
+function updateRatPack(dt) {
+  if (skeletons.length > 0) { mazeRun.ratTimer = CONFIG.ratRespawnSecs; return; }
+  mazeRun.ratTimer -= dt;
+  if (mazeRun.ratTimer > 0) return;
+  mazeRun.ratTimer = CONFIG.ratRespawnSecs;
+  for (let i = 0; i < CONFIG.ratPackSize; i++) spawnSkeleton('rat');
 }
 
 /**
@@ -2755,6 +2781,7 @@ function maybeDropSilverKey(s) {
  */
 function updateMazeObjective(dt) {
   if (!mazeRun) return;
+  updateRatPack(dt);
   const reach = CONFIG.pickupRadius ** 2;
   // Torches are the one thing here you choose rather than collect, so they are
   // the one thing on a button. Consumed on read, the way every other one-shot
