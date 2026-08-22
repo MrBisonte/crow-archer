@@ -1389,6 +1389,7 @@ events.on(e => {
 
     case 'PICKUP_TAKEN':
       playSound(sndPickup);
+      addPickupMark(e.kind, e.x, e.y);
       if (e.kind === 'ricochet') {
         burst(e.x, e.y, { count: 12, colors: ['#39E0FF','#7AF0FF','#FFFFFF'],
           speedMin: 80, speedMax: 160, decay: 2.2, shape: 'spark',
@@ -1691,6 +1692,7 @@ function updatePlayer(dt) {
   for (const k in iFlash) if (iFlash[k] > 0) iFlash[k] = Math.max(0, iFlash[k] - dt);
   if (playerHitFlash > 0) playerHitFlash = Math.max(0, playerHitFlash - dt);
   if (blockedFlash > 0) blockedFlash = Math.max(0, blockedFlash - dt);
+  updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
@@ -6629,6 +6631,10 @@ const GLYPH = {
   feather: (s) => { const m = s/2; ctx.beginPath();
     ctx.moveTo(m, 0); ctx.quadraticCurveTo(s, m, m, s); ctx.quadraticCurveTo(0, m, m, 0);
     ctx.closePath(); ctx.fill(); },
+  snipe: (s) => { const m = s/2; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(m, m, s*0.3, 0, Math.PI*2); ctx.stroke();
+    [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => { ctx.beginPath();
+      ctx.moveTo(m + dx*s*0.36, m + dy*s*0.36); ctx.lineTo(m + dx*s*0.5, m + dy*s*0.5); ctx.stroke(); }); },
   key: (s) => { const m = s/2; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(s*0.3, m, s*0.24, 0, Math.PI*2); ctx.stroke();
     ctx.fillRect(s*0.52, m-s*0.07, s*0.46, s*0.14);
@@ -6671,10 +6677,10 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['shield'],
-  ranger: ['shield'],
+  archer: ['snipe', 'shield'],
+  ranger: ['snipe', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
-  wizard: ['bolt', 'storm', 'shield'],
+  wizard: ['bolt', 'storm', 'snipe', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -6689,6 +6695,8 @@ const CHIP = {
                       frac: null }),
   shield:    () => ({ glyph: 'shield', color: '#FFB400', lit: playerShield,
                       label: playerShield ? 'ON' : '', frac: null }),
+  snipe:     () => ({ glyph: 'snipe', color: '#F0C830', lit: sniperMode,
+                      label: sniperMode ? 'ON' : '', frac: null }),
 };
 
 /** Shared shape for anything that recharges: ready, counting down, or live. */
@@ -6702,6 +6710,158 @@ function cooldownChip(glyph, cd, full, activeTimer) {
 }
 
 const TRACK_CELLS = 10;
+
+/**
+ * Charge, drawn at the player's feet instead of in the strip.
+ *
+ * Charging is an aiming decision, so it belongs where the eye already is.
+ * The arc opens around the aim vector as the charge builds, which means the
+ * same mark answers "how long have I held this" and "where will it go".
+ */
+function drawChargeArc() {
+  const held = charge.on ? Math.min(1, (performance.now() - charge.t0) / 1000)
+             : knightCharge.on ? knightChargeFrac()
+             : 0;
+  if (held <= 0) return;
+
+  const col = held < 0.5 ? '#28B30E' : held < 0.99 ? '#39FF14' : '#F0C830';
+  const half = (1.8 * held) / 2;
+  ctx.save();
+  ctx.translate(player.x, player.y + CONFIG.hudHeight + 6);
+  ctx.strokeStyle = col; ctx.lineWidth = 3;
+  ctx.shadowColor = col;
+  ctx.shadowBlur = held >= 0.99 ? 10 + 4*Math.sin(loopT*12) : 0;
+  ctx.beginPath();
+  ctx.arc(0, 0, 20, player.aimAngle - half, player.aimAngle + half);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Pickup confirmations, rising off the player.
+ *
+ * This is what teaches the shape vocabulary. The HUD dropped letter codes in
+ * favour of glyphs, and a glyph nobody has been introduced to is worse than
+ * the code it replaced, so the moment of acquisition is where the shape gets
+ * learned: the same mark that will sit in lane B, at twice the size, over
+ * the thing that just picked it up.
+ */
+const PICKUP_MARK = {
+  ricochet: { glyph: 'ricochet', color: '#39E0FF' },
+  fire:     { glyph: 'fireArrow', color: '#FF7A1F' },
+  shield:   { glyph: 'shield',   color: '#FFB400' },
+};
+const PICKUP_MARK_SECS = 0.8;
+let pickupMarks = [];
+
+function addPickupMark(kind, x, y) {
+  const look = PICKUP_MARK[kind];
+  if (look) pickupMarks.push({ x, y, t: PICKUP_MARK_SECS, ...look });
+}
+
+function updatePickupMarks(dt) {
+  for (let i = pickupMarks.length - 1; i >= 0; i--) {
+    pickupMarks[i].t -= dt;
+    if (pickupMarks[i].t <= 0) pickupMarks.splice(i, 1);
+  }
+}
+
+function drawPickupMarks() {
+  for (const m of pickupMarks) {
+    const done = 1 - m.t / PICKUP_MARK_SECS;
+    const rise = 16 * done;
+    // Alpha only starts falling for the last 250ms, so the shape is fully
+    // solid for most of its life and does not read as a flicker.
+    const fade = m.t < 0.25 ? m.t / 0.25 : 1;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.translate(m.x - 14, m.y + CONFIG.hudHeight - 24 - rise);
+    ctx.fillStyle = m.color; ctx.strokeStyle = m.color;
+    ctx.shadowColor = m.color; ctx.shadowBlur = 6;
+    GLYPH[m.glyph](28);
+    ctx.restore();
+  }
+}
+
+/**
+ * The two states that end a run get the screen edge to themselves, rather
+ * than another line of text competing for the same 48px as everything else.
+ * HP always wins: never both at once.
+ */
+function drawEdgeAlerts() {
+  const maxHP = FEATHERS.maxHP();
+  const hpFrac = playerHP > 0 ? playerHP / maxHP : 1;
+  const pool = CONFIG.resources.arrows;
+  const ammoFrac = (selectedChar === 'archer' || selectedChar === 'ranger') && pool.max > 0
+    ? inv.arrows / pool.max : 1;
+
+  let col = null, amp = 0;
+  if (playerHP > 0 && hpFrac <= LOW_HP_FRACTION) { col = '#FF1F1F'; amp = 0.10; }
+  else if (ammoFrac <= 0.10)                     { col = '#FFB400'; amp = 0.05; }
+  if (!col) return;
+
+  const y = CONFIG.hudHeight;
+  ctx.save();
+  ctx.globalAlpha = amp + amp * Math.sin(loopT * 8);
+  ctx.strokeStyle = col; ctx.lineWidth = 6;
+  ctx.shadowColor = col; ctx.shadowBlur = 12;
+  ctx.strokeRect(3, y + 3, CONFIG.canvasW - 6, CONFIG.canvasH - y - 6);
+  ctx.restore();
+}
+
+/**
+ * Edge ticks for threats the player cannot currently account for.
+ *
+ * The design asked for off-screen threat markers, reasoning that on a 33x21
+ * grid the thing that kills you is usually just off-frame. That is not true
+ * here: the world is exactly 33x21 at 32px and there is no camera, so it
+ * fills the viewport and nothing is ever off-screen. The real version of
+ * that problem is a threat you cannot see rather than one you cannot reach:
+ * an enemy standing in the maze's unlit dark, or a crow that has noticed you
+ * while your attention is elsewhere.
+ *
+ * So the mechanism is the design's, pointed at the case that actually
+ * exists. It also replaces the old blinking INCOMING text, and improves on
+ * it, since a tick says which direction the trouble is in.
+ */
+const EDGE_TICK_MAX = 8;
+
+function drawEdgeTicks() {
+  const cx = CONFIG.canvasW / 2, cy = CONFIG.hudHeight + (CONFIG.canvasH - CONFIG.hudHeight) / 2;
+  const threats = [];
+
+  for (const c of crows) {
+    const unseen = !litAt(c.x, c.y);
+    if (!unseen && c.state !== 'aggro') continue;
+    threats.push({ x: c.x, y: c.y + CONFIG.hudHeight, col: c.white ? '#FFFFFF' : '#FF1F1F' });
+  }
+  for (const s of skeletons) {
+    if (litAt(s.x, s.y)) continue;
+    const pal = SKELETON_PALETTES[s.kind || 'normal'] || SKELETON_PALETTES.normal;
+    threats.push({ x: s.x, y: s.y + CONFIG.hudHeight, col: pal.eye });
+  }
+  if (boss && boss.bstate !== 'dead' && !litAt(boss.x, boss.y))
+    threats.push({ x: boss.x, y: boss.y + CONFIG.hudHeight, col: '#B040E0' });
+
+  if (!threats.length) return;
+  threats.sort((a, b) => dist2(cx, cy, a.x, a.y) - dist2(cx, cy, b.x, b.y));
+
+  const top = CONFIG.hudHeight + 16, bot = CONFIG.canvasH - 16;
+  const left = 16, right = CONFIG.canvasW - 16;
+  ctx.save();
+  ctx.globalAlpha = 0.35 + 0.25 * Math.sin(loopT * 4);
+  for (const th of threats.slice(0, EDGE_TICK_MAX)) {
+    const ang = Math.atan2(th.y - cy, th.x - cx);
+    const ex = Math.max(left, Math.min(right, cx + Math.cos(ang) * CONFIG.canvasW));
+    const ey = Math.max(top,  Math.min(bot,   cy + Math.sin(ang) * CONFIG.canvasH));
+    ctx.save();
+    ctx.translate(ex, ey); ctx.rotate(ang);
+    ctx.fillStyle = th.col; ctx.shadowColor = th.col; ctx.shadowBlur = 6;
+    ctx.fillRect(-1.5, -12, 3, 24);
+    ctx.restore();
+  }
+  ctx.restore();
+}
 
 function drawHUD(t) {
   const isBoss = appState === 'boss_fight';
@@ -7372,15 +7532,17 @@ function render(t) {
     // draws it has always been on forest and castle.
     for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
     for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
-    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
+    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts();
+    drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
     if (!boss || litAt(boss.x, boss.y)) drawBoss();
-    drawFloaters();
+    drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
     drawFog();
     ctx.restore();
+    drawEdgeTicks(); drawEdgeAlerts();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
     if (bossDeathSeq) {
