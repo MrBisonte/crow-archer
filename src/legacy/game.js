@@ -322,7 +322,7 @@ function applyPace(name) {
   CONFIG.resources.satchels.max  = preset.baseDynamites;
 }
 
-applyPace(new URLSearchParams(location.search).get('pace') ?? CONFIG.pace);
+applyPace(CONFIG.pace);
 
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
@@ -510,12 +510,11 @@ function generateMap(kind = 'forest') {
   const rng = mulberry32(mapSeed);
   // SimplexNoise 2.4 takes a random fn, so terrain derives fully from the seed.
   const sn = new SimplexNoise(rng);
-  // tileLayer/tileOverlay are built once at startup, so the theme has to be
-  // set here too, not just the tiles. The theme goes on first, without a
-  // repaint of its own, so the reset below is the single pass that paints
-  // every tile: doing it the other way round repaints the whole map twice.
-  tileLayer.usePainters(TILE_THEMES[kind]);
-  tileOverlay.setPalette(ANIMATED_THEMES[kind]);
+  // Announced rather than applied: which painters a theme uses is a render
+  // decision, and this function is simulation. The listener boot() registers
+  // swaps them, and it runs before the reset below so the map is painted once
+  // instead of once per theme.
+  events.emit({ type: 'MAP_GENERATED', kind });
   tileMap.reset(generateGrid(CONFIG.rows, CONFIG.cols, rng,
     (x, y) => sn.noise2D(x, y), MAP_GEN[kind].density));
 }
@@ -578,9 +577,11 @@ const keys  = {};
 const mouse = { x: 400, y: 256 };
 let shootPressed = false;
 
-const canvas = document.getElementById('game');
-canvas.width = CONFIG.canvasW; canvas.height = CONFIG.canvasH;
-const ctx = canvas.getContext('2d');
+// Bound by boot(), not at import: this module has to load under vitest, where
+// there is no document. Everything that reads them runs downstream of boot().
+let canvas = null;
+let ctx = null;
+let booted = false;
 
 function initAudio() {
   // Resume the shared AudioContext on the first user gesture (Chrome autoplay policy)
@@ -682,61 +683,68 @@ function releaseCharge() {
   if (inGame() && selectedChar === 'archer') throwDynamite(Math.min(1, (performance.now() - charge.t0) / 1000));
 }
 
-canvas.addEventListener('mousemove', e => {
-  const r = canvas.getBoundingClientRect();
-  mouse.x = (e.clientX - r.left) * (CONFIG.canvasW / r.width);
-  mouse.y = (e.clientY - r.top)  * (CONFIG.canvasH / r.height);
-});
 let mouseRightHeld = false;
 // Held, not just pressed: multiplayer samples the button once per frame rather
 // than reacting to the event, the same way it reads the keyboard.
 let mouseLeftHeld = false;
-canvas.addEventListener('mousedown', e => {
-  initAudio();
-  if (e.button === 0) {
-    mouseLeftHeld = true;
-    if (inGame()) shootPressed = true;
-    // The castle-intro black screen waits for exactly this: one click, no
-    // key, since it is shown mid-run with the keyboard already busy with
-    // movement held down.
-    else if (appState === 'castle_intro') appState = 'playing';
-  }
-  if (e.button === 2) { mouseRightHeld = true; startCharge(); }
-});
-canvas.addEventListener('mouseup',    e => {
-  if (e.button === 0) mouseLeftHeld = false;
-  if (e.button === 2) { mouseRightHeld = false; releaseCharge(); }
-});
-canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-document.addEventListener('keydown', e => {
-  initAudio();
-  if (remapTarget !== null && appState === 'controls') {
-    if (e.key !== 'Escape') CONFIG.keys[remapTarget] = e.key;
-    remapTarget = null; e.preventDefault(); return;
-  }
-  if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
-  if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
-  if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
-  keys[e.key] = true;
-  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
-});
-document.addEventListener('keyup', e => {
-  keys[e.key] = false;
-  if (e.key === 'f' || e.key === 'F') releaseCharge();
-  if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
-});
-
-canvas.addEventListener('click', e => {
-  initAudio();
-  if (appState !== 'controls') return;
-  const r  = canvas.getBoundingClientRect();
-  const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
-  CTRL_ACTIONS.forEach((action, i) => {
-    const rowY = 160 + i * 46;
-    if (cy >= rowY - 20 && cy < rowY + 26) { remapTarget = action.key; controlsSelection = i; }
+/**
+ * Binds every pointer and keyboard listener to the canvas. Called by boot(),
+ * so importing this module never reaches for document.
+ */
+function installInput() {
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - r.left) * (CONFIG.canvasW / r.width);
+    mouse.y = (e.clientY - r.top)  * (CONFIG.canvasH / r.height);
   });
-});
+  canvas.addEventListener('mousedown', e => {
+    initAudio();
+    if (e.button === 0) {
+      mouseLeftHeld = true;
+      if (inGame()) shootPressed = true;
+      // The castle-intro black screen waits for exactly this: one click, no
+      // key, since it is shown mid-run with the keyboard already busy with
+      // movement held down.
+      else if (appState === 'castle_intro') appState = 'playing';
+    }
+    if (e.button === 2) { mouseRightHeld = true; startCharge(); }
+  });
+  canvas.addEventListener('mouseup',    e => {
+    if (e.button === 0) mouseLeftHeld = false;
+    if (e.button === 2) { mouseRightHeld = false; releaseCharge(); }
+  });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  document.addEventListener('keydown', e => {
+    initAudio();
+    if (remapTarget !== null && appState === 'controls') {
+      if (e.key !== 'Escape') CONFIG.keys[remapTarget] = e.key;
+      remapTarget = null; e.preventDefault(); return;
+    }
+    if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
+    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
+    if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
+    keys[e.key] = true;
+    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+  });
+  document.addEventListener('keyup', e => {
+    keys[e.key] = false;
+    if (e.key === 'f' || e.key === 'F') releaseCharge();
+    if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
+  });
+
+  canvas.addEventListener('click', e => {
+    initAudio();
+    if (appState !== 'controls') return;
+    const r  = canvas.getBoundingClientRect();
+    const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
+    CTRL_ACTIONS.forEach((action, i) => {
+      const rowY = 160 + i * 46;
+      if (cy >= rowY - 20 && cy < rowY + 26) { remapTarget = action.key; controlsSelection = i; }
+    });
+  });
+}
 
 // ── ENTITIES ──────────────────────────────────────────────────────────────────
 
@@ -3405,9 +3413,10 @@ function updateShake(dt)       { shake.update(dt); }
 function shakeOffset(t)        { return shake.offset(t); }
 
 const tileLayout  = { tileSize: CONFIG.tileSize, hudHeight: CONFIG.hudHeight };
-const tileLayer   = new StaticTileLayer(tileMap, tileLayout);
-const tileOverlay = new AnimatedTileOverlay(tileMap, tileLayout);
-const vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
+// Each builds its own offscreen canvas, so boot() constructs them.
+let tileLayer = null;
+let tileOverlay = null;
+let vignetteCanvas = null;
 
 function drawTiles() {
   tileLayer.draw(ctx);
@@ -5763,7 +5772,8 @@ function render(t) {
 
 // Frame-time probe, dev only. Enable with ?perf=1.
 // Tracks update and render cost separately over the last 120 frames.
-const PERF = new URLSearchParams(location.search).has('perf') ? {
+let PERF = null;
+const makePerf = () => ({
   upd: new Float32Array(120), ren: new Float32Array(120), i: 0, n: 0,
   push(u, r) {
     this.upd[this.i] = u; this.ren[this.i] = r;
@@ -5782,7 +5792,7 @@ const PERF = new URLSearchParams(location.search).has('perf') ? {
     ctx.fillText(`UPD AVG ${ua.toFixed(2)} MAX ${um.toFixed(2)}`, 4, CONFIG.canvasH - 24);
     ctx.fillText(`REN AVG ${ra.toFixed(2)} MAX ${rm.toFixed(2)}`, 4, CONFIG.canvasH - 13);
   }
-} : null;
+});
 
 let lastTs = 0, loopT = 0;
 
@@ -5949,21 +5959,35 @@ function loop(ts) {
   requestAnimationFrame(loop);
 }
 
-FEATHERS.init();
-requestAnimationFrame(loop);
-
-// Pure classes exposed for the test harness in tests.html.
-window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
-
 // Dev hook: steps the loop with fixed timestamps and exposes read access to
 // module state, so headless verification works while the tab is backgrounded.
 let __devTs = 0;
-window.__game = {
+
+/**
+ * Read and drive access to module state. boot() also hangs this on
+ * `window.__game` for the browser console. Tests import it directly, which is
+ * what keeping this module free of import-time side effects buys.
+ */
+export const devHooks = {
   step(n = 1) {
     if (__devTs === 0) __devTs = performance.now();
     // Advance by exactly one fixed step per call, so step(n) runs n sim steps.
     for (let i = 0; i < n; i++) { __devTs += FIXED_DT * 1000; loop(__devTs); }
   },
+  /**
+   * Advances the simulation only, one fixed step per count, with no frame and
+   * no render. Needs no canvas, so this is what the headless tests drive;
+   * step() and frame() above go through the real loop and need a booted page.
+   */
+  stepSim(n = 1) { for (let i = 0; i < n; i++) { updateShake(FIXED_DT); stepGame(FIXED_DT); } },
+  gameTime: () => gameTime,
+  config: () => CONFIG,
+  // The live key map and the one-shot fire latch, so a test can drive the same
+  // input path a real keyboard does instead of a parallel one.
+  keys: () => keys,
+  shoot() { shootPressed = true; },
+  killCount: () => killCount,
+  hp: () => playerHP,
   // One frame with a raw millisecond gap, to test accumulator multi-stepping.
   frame(ms) {
     if (__devTs === 0) __devTs = performance.now();
@@ -6017,3 +6041,53 @@ window.__game = {
   mouse: () => mouse,
   counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, hp: playerHP }),
 };
+
+/**
+ * Binds this module to a browser and starts the frame loop.
+ *
+ * Every DOM, storage and timer touch in this file happens here or downstream of
+ * here. Nothing runs at import, so `import { devHooks } from './game.js'` works
+ * under vitest with no document, which is what makes the simulation testable.
+ */
+export function boot() {
+  // Listeners and the frame loop must not be registered twice; a second call
+  // would double every keypress and run two loops.
+  if (booted) return;
+  booted = true;
+
+  const query = new URLSearchParams(location.search);
+
+  // The pace preset is already applied at import; this only layers the ?pace=
+  // override on top, and applyPace is plain assignment so re-running is safe.
+  applyPace(query.get('pace') ?? CONFIG.pace);
+
+  canvas = document.getElementById('game');
+  canvas.width = CONFIG.canvasW; canvas.height = CONFIG.canvasH;
+  ctx = canvas.getContext('2d');
+
+  tileLayer      = new StaticTileLayer(tileMap, tileLayout);
+  tileOverlay    = new AnimatedTileOverlay(tileMap, tileLayout);
+  vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
+
+  if (query.has('perf')) PERF = makePerf();
+
+  installInput();
+
+  // Render-side reaction to a new map. Registered here, not at module scope,
+  // because it touches the offscreen layers boot() just built.
+  events.on(e => {
+    switch (e.type) {
+      case 'MAP_GENERATED':
+        tileLayer.usePainters(TILE_THEMES[e.kind]);
+        tileOverlay.setPalette(ANIMATED_THEMES[e.kind]);
+        break;
+    }
+  });
+
+  // Pure classes exposed for the test harness in tests.html.
+  window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
+  window.__game = devHooks;
+
+  FEATHERS.init();
+  requestAnimationFrame(loop);
+}

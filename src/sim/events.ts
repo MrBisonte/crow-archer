@@ -9,6 +9,8 @@
  * those belong to the handler, which is render-side.
  */
 
+import type { MapKind } from './arena-map';
+
 /** What landed a hit on the boss. The handler picks the sound and shake. */
 export type HitSource =
   | 'arrow'
@@ -64,7 +66,11 @@ export type GameEvent =
   | { type: 'BOSS_ENTRANCE_FLASH' }
   | { type: 'BOSS_ENTRANCE_FIRE'; x: number; y: number }
   | { type: 'BOSS_SHIELD_BLOCKED'; x: number; y: number }
-  | { type: 'BOSS_BURNING'; x: number; y: number };
+  | { type: 'BOSS_BURNING'; x: number; y: number }
+  // World
+  // Emitted before the tile grid is replaced, so a render layer can swap theme
+  // and let the reset repaint once rather than twice.
+  | { type: 'MAP_GENERATED'; kind: MapKind };
 
 export type GameEventType = GameEvent['type'];
 export type EventHandler = (e: GameEvent) => void;
