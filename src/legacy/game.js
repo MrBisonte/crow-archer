@@ -153,6 +153,15 @@ const CONFIG = {
   // makes the hunt a handful of kills rather than a grind or a formality.
   mazeSilverKeyDropChance: 0.2,
 
+  // Sight, in tiles. The open maps keep the radius they have always had, which
+  // is larger than the screen and so reads as "no fog at all". The maze runs
+  // dark: four tiles is a little over two body lengths, enough to see the
+  // corridor you are in and nothing of the one you are about to enter.
+  sightRadiusTiles: 14,
+  mazeSightRadiusTiles: 4,
+  fogMemorySlope: 0.75,          // how fast a lit tile dims toward the edge of sight
+  fogMemoryAlpha: 0.74,          // black over terrain you remember but cannot see
+
   // Fire skeleton: same movement and contact damage as normal, but its
   // death is a small blast that punishes standing next to it when it pops.
   fireSkeletonBlastRadius: 50, fireSkeletonBlastDamage: 1,
@@ -573,6 +582,8 @@ function generateMap(kind = 'forest') {
   // cleared here, with the grid it is placed on. Every consumer then has one
   // guard, `mazeRun`, instead of its own check on mapKind.
   mazeRun = kind === 'maze' ? newMazeRun() : null;
+  // Sight is about the grid too: memory of the last map is a lie about this one.
+  resetSight();
 }
 
 /**
@@ -627,6 +638,11 @@ function terrainDestructible() {
   return MAP_RULES[mapKind].destructibleTerrain;
 }
 
+/** Does this map hide what the player cannot see? One home for that rule too. */
+function fogOfWar() {
+  return MAP_RULES[mapKind].fogOfWar;
+}
+
 function smashTile(row, col) {
   if (!terrainDestructible()) return;
   const t = tileMap.get(row, col);
@@ -643,15 +659,91 @@ const _rotPassable = (x, y) => {
 };
 
 const _fov   = new FOV.PreciseShadowcasting(_rotPassable);
+
+/**
+ * How far the player can see right now, in tiles.
+ *
+ * Open maps keep the radius they have always had, which covers the arena, so
+ * nothing about forest or castle changes. The maze runs on a torch's reach.
+ */
+function playerSightTiles() {
+  return fogOfWar() ? CONFIG.mazeSightRadiusTiles : CONFIG.sightRadiusTiles;
+}
+
 const fovMap  = new FovMap(CONFIG.rows, CONFIG.cols,
-  (col, row, mark) => _fov.compute(col, row, 14, mark));
+  (col, row, mark) => _fov.compute(col, row, playerSightTiles(), mark));
+
+// Terrain the player has already stood in the light of. Memory rather than
+// sight: it says what the maze looks like, never what is moving in it.
+const seenTiles = new Uint8Array(CONFIG.rows * CONFIG.cols);
+// Which tile the memory pass last ran from. FovMap only recomputes on a tile
+// change, so marking memory on every step would be 693 writes for nothing.
+let seenFrom = -1;
+
+/** Clears sight and memory. Called whenever a new grid is built. */
+function resetSight() {
+  fovMap.invalidate();
+  seenTiles.fill(0);
+  seenFrom = -1;
+}
 
 function updateFOV() {
-  fovMap.update(Math.floor(player.x / CONFIG.tileSize), Math.floor(player.y / CONFIG.tileSize));
+  const col = Math.floor(player.x / CONFIG.tileSize), row = Math.floor(player.y / CONFIG.tileSize);
+  fovMap.update(col, row);
+  if (!fogOfWar()) return;
+  const at = row * CONFIG.cols + col;
+  if (at === seenFrom) return;
+  seenFrom = at;
+  for (let r = 0; r < CONFIG.rows; r++)
+    for (let c = 0; c < CONFIG.cols; c++)
+      if (fovMap.isVisible(c, r)) seenTiles[r * CONFIG.cols + c] = 1;
 }
 
 // Returns true if grid cell (col, row) is currently in the player's line-of-sight.
 function tileVisible(col, row) { return fovMap.isVisible(col, row); }
+
+/** Can the player see this world point right now? Always true where there is no fog. */
+function litAt(wx, wy) {
+  if (!fogOfWar()) return true;
+  return fovMap.isVisible(Math.floor(wx / CONFIG.tileSize), Math.floor(wy / CONFIG.tileSize));
+}
+
+/**
+ * Is there an unobstructed straight line between two tiles?
+ *
+ * This is the question a hunter asks, and it is not the question fovMap
+ * answers. That cache is computed from the player's tile at the player's
+ * radius, so it says what the player can see. Shadowcasting is symmetric, which
+ * let both questions share one answer while everyone had the same sight range.
+ * The maze breaks that: shrink the player to four tiles and "the minotaur can
+ * see you" would collapse into "you can already see the minotaur", which is the
+ * opposite of a warden appearing at the end of a dark corridor.
+ *
+ * Bresenham over the same passability callback FOV and A* use, so a wall stops
+ * a line here exactly where it stops an arrow.
+ */
+function lineOfSight(c0, r0, c1, r1) {
+  let x = c0, y = r0;
+  const dx = Math.abs(c1 - c0), dy = -Math.abs(r1 - r0);
+  const sx = c0 < c1 ? 1 : -1, sy = r0 < r1 ? 1 : -1;
+  let err = dx + dy;
+  while (x !== c1 || y !== r1) {
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x += sx; }
+    if (e2 <= dx) { err += dx; y += sy; }
+    // The far end is the target itself, which may be standing anywhere.
+    if ((x !== c1 || y !== r1) && !_rotPassable(x, y)) return false;
+  }
+  return true;
+}
+
+/** Can something standing at (wx, wy) see the player, within `rangePx`? */
+function seesPlayerFrom(wx, wy, rangePx) {
+  if (Math.hypot(player.x - wx, player.y - wy) > rangePx) return false;
+  const ts = CONFIG.tileSize;
+  return lineOfSight(Math.floor(wx / ts), Math.floor(wy / ts),
+                     Math.floor(player.x / ts), Math.floor(player.y / ts));
+}
 
 // A* path from pixel position (fromPx,fromPy) to (toPx,toPy).
 // Returns an array of {x,y} pixel waypoints (tile centers), NOT including start.
@@ -962,6 +1054,7 @@ events.on(e => {
         speedMin: 30, speedMax: 200, decay: 1.2, shape: 'circle',
         sizeMin: 2, sizeMax: 5, shadowBlur: 14, shadowColor: '#FFE8B0' });
       break;
+
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -1260,7 +1353,7 @@ function initGame() {
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; playerPoison = { timer: 0, tickIn: 0 };
-  fovMap.invalidate(); // force FOV recompute on next player move
+  resetSight(); // force an FOV recompute, and forget the last run's map
   FEATHERS.applyToGame();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
@@ -2420,13 +2513,16 @@ function updateCrows(dt) {
 }
 
 function aggroCrows(count) {
-  // Only aggro crows that have line-of-sight to the player (rot.js FOV).
-  // This prevents off-screen or wall-blocked crows from mysteriously turning hostile.
+  // A crow turns on you because it noticed you, so the check runs from the
+  // crow: does it have a clear line to the player, inside its own sight range.
+  // That was the intent all along, and reading the player's FOV cache happened
+  // to give the same answer while everyone shared one radius. It stops giving
+  // it the moment the player's radius shrinks, which is exactly what the maze
+  // does. The range matches the open maps' old FOV radius, so forest and castle
+  // keep the reach they had.
+  const range = CONFIG.sightRadiusTiles * CONFIG.tileSize;
   const passive = crows
-    .filter(c => {
-      if (c.state !== 'passive') return false;
-      return tileVisible(Math.floor(c.x / CONFIG.tileSize), Math.floor(c.y / CONFIG.tileSize));
-    })
+    .filter(c => c.state === 'passive' && seesPlayerFrom(c.x, c.y, range))
     .sort((a, b) => dist2(a.x,a.y,player.x,player.y) - dist2(b.x,b.y,player.x,player.y));
   let n = 0;
   for (const c of passive) {
@@ -3054,13 +3150,17 @@ function enterOrbit() {
   boss.orbitRadius = Math.hypot(boss.x - player.x, boss.y - player.y);
 }
 
-/** Tile-space line of sight to the player, capped by how far he can see. */
+/**
+ * Line of sight from the warden's own eyes, capped by his own range.
+ *
+ * This used to read the player's FOV cache and lean on shadowcasting being
+ * symmetric. Fog of war ended that: the player now sees four tiles and he sees
+ * sixteen, so borrowing the player's answer would mean he could only ever
+ * charge from inside the lit circle, and the whole point of him is arriving out
+ * of the dark. See lineOfSight.
+ */
 function minotaurSeesPlayer() {
-  if (Math.hypot(player.x - boss.x, player.y - boss.y) > CONFIG.minotaurSightRange) return false;
-  // fovMap is computed from the player's tile and shadowcasting is symmetric,
-  // so "is he visible to you" is also "are you visible to him". One FOV pass
-  // answers both, which is why this costs nothing.
-  return tileVisible(Math.floor(boss.x / CONFIG.tileSize), Math.floor(boss.y / CONFIG.tileSize));
+  return seesPlayerFrom(boss.x, boss.y, CONFIG.minotaurSightRange);
 }
 
 /**
@@ -5288,12 +5388,48 @@ function drawMazeKey(k) {
 /** The maze's furniture and any key lying on its floor. Nothing off the maze. */
 function drawMazeObjective() {
   if (!mazeRun) return;
-  for (const [name, at] of Object.entries(mazeRun.locks)) MAZE_LOCK_PAINTERS[name](at);
-  for (const k of mazeRun.drops) drawMazeKey(k);
+  for (const [name, at] of Object.entries(mazeRun.locks))
+    if (litAt(at.x, at.y)) MAZE_LOCK_PAINTERS[name](at);
+  for (const k of mazeRun.drops) if (litAt(k.x, k.y)) drawMazeKey(k);
+}
+
+/**
+ * Three states per tile: lit right now, remembered, or never seen.
+ *
+ * Painted over the world rather than baked into it, so terrain and memory stay
+ * one drawing pass and the fog is the only thing that knows about sight. Lit
+ * tiles fade toward the edge of the circle instead of ending on a hard rim,
+ * which costs one hypot per tile and buys the difference between a torch and a
+ * spotlight.
+ *
+ * Anything that moves is gated at its own draw call, not here, because memory
+ * has to show the corridor and never the rat standing in it.
+ */
+function drawFog() {
+  if (!fogOfWar()) return;
+  const ts = CONFIG.tileSize, hud = CONFIG.hudHeight, cols = CONFIG.cols;
+  const pc = player.x / ts - 0.5, pr = player.y / ts - 0.5;
+  const radius = playerSightTiles();
+  const dim = CONFIG.fogMemoryAlpha;
+  for (let r = 0; r < CONFIG.rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c;
+      let a;
+      if (fovMap.isVisible(c, r)) {
+        a = Math.min(dim, (Math.hypot(c - pc, r - pr) / radius) ** 2 * CONFIG.fogMemorySlope);
+      } else {
+        a = seenTiles[i] ? dim : 1;
+      }
+      if (a <= 0.01) continue;
+      ctx.fillStyle = a >= 1 ? '#000' : `rgba(0,0,0,${a.toFixed(3)})`;
+      ctx.fillRect(c * ts, r * ts + hud, ts, ts);
+    }
+  }
 }
 
 function drawPickups() {
   for (const p of pickups) {
+    if (!litAt(p.x, p.y)) continue;
     const ep         = p.bobPhase || 0;
     const blinkPhase = loopT * 4 + ep;
     const bobY       = -2 + Math.sin(loopT * 3 + ep) * 2;
@@ -6619,12 +6755,19 @@ function render(t) {
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawPickups(); drawFires(); drawParticles();
-    crows.forEach(drawCrow);
-    skeletons.forEach(drawSkeleton);
+    // Anything alive is drawn only where the player can see it right now.
+    // litAt is unconditionally true off the maze, so this is the same list of
+    // draws it has always been on forest and castle.
+    for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
+    for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
     drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
-    drawBoss(); drawFloaters();
+    if (!boss || litAt(boss.x, boss.y)) drawBoss();
+    drawFloaters();
+    // Last thing inside the shake, so the dark moves with the world instead of
+    // sliding across it.
+    drawFog();
     ctx.restore();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -6941,6 +7084,22 @@ window.__game = {
     door: { x: mazeRun.locks.door.x, y: mazeRun.locks.door.y },
     drops: mazeRun.drops.map(k => ({ kind: k.kind, x: k.x, y: k.y })),
   } : null),
+  // What the player can see, and how much of the map they have banked.
+  sight: () => {
+    let visible = 0;
+    for (let r = 0; r < CONFIG.rows; r++)
+      for (let c = 0; c < CONFIG.cols; c++) if (fovMap.isVisible(c, r)) visible++;
+    return {
+      fog: fogOfWar(), radiusTiles: playerSightTiles(), visible,
+      remembered: seenTiles.reduce((n, v) => n + v, 0),
+      tiles: CONFIG.rows * CONFIG.cols,
+    };
+  },
+  // The two halves of the sight question, which fog of war pulled apart.
+  // lit is "the player can see this point"; seesPlayerFrom is "something here
+  // can see the player". They stopped having the same answer on the maze.
+  lit: (x, y) => litAt(x, y),
+  seesPlayerFrom: (x, y, range) => seesPlayerFrom(x, y, range),
   knightCharge: () => ({
     charging: knightCharge.on, frac: knightChargeFrac(),
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,

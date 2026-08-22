@@ -58,11 +58,16 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
  * opens a shortcut and nothing else. A maze *is* its walls: clearing them with
  * a Lightning Storm or a Whirlwind turns the level into an open room and
  * deletes the only thing making an unkillable warden dangerous.
+ *
+ * `fogOfWar` is the same argument about sight. Forest and castle are arenas you
+ * read at a glance, and hiding two thirds of one would only make it fiddly. A
+ * maze is a level about not knowing what is round the corner, so the corner has
+ * to actually hide something.
  */
-export const MAP_RULES: Record<MapKind, { destructibleTerrain: boolean }> = {
-  forest: { destructibleTerrain: true },
-  castle: { destructibleTerrain: true },
-  maze: { destructibleTerrain: false },
+export const MAP_RULES: Record<MapKind, { destructibleTerrain: boolean; fogOfWar: boolean }> = {
+  forest: { destructibleTerrain: true, fogOfWar: false },
+  castle: { destructibleTerrain: true, fogOfWar: false },
+  maze: { destructibleTerrain: false, fogOfWar: true },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
