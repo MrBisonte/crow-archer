@@ -12,12 +12,43 @@ import {
 
 const FRAMES: StrideFrame[] = ['a', 'mid', 'b'];
 
+/** The row a soldier's boots land on, where two legs have to read as two. */
+const BOOT_ROW = 22;
+
+/** The row the commander's hooves land on, four legs in two pairs. */
+const HOOF_ROW = 25;
+
 /** How many cells a grid actually paints. A silent typo tends to paint none. */
 const painted = (g: PixelGrid): number =>
   g.reduce((n, row) => n + row.filter((c) => c !== null && c !== undefined).length, 0);
 
 /** A grid as one comparable string, for telling two of them apart. */
 const shapeOf = (g: PixelGrid): string => g.map((row) => row.join(',')).join('|');
+
+/**
+ * How many separate solid runs a row has.
+ *
+ * This is the check for limbs collapsing. A stride swings limbs in antiphase,
+ * and if each one swings around its own top rather than a shared hip they
+ * cross at one extreme and merge into a single block: one frame of the walk
+ * shows one thick leg, which is invisible in a still and obvious in motion.
+ * Counting runs in the row the feet are on is what catches it.
+ *
+ * Works on these sprites because the gap between two splayed legs is two or
+ * more columns, which survives the pixelOutline pass as real emptiness rather
+ * than closing up into a seam.
+ */
+function filledRuns(g: PixelGrid, y: number): number {
+  const row = g[y] ?? [];
+  let runs = 0;
+  let inRun = false;
+  for (const cell of row) {
+    const filled = cell !== null && cell !== undefined;
+    if (filled && !inRun) runs++;
+    inRun = filled;
+  }
+  return runs;
+}
 
 describe('soldier grids', () => {
   it.each(SOLDIER_KINDS)('builds %s at the declared sprite size', (kind) => {
@@ -48,6 +79,27 @@ describe('soldier grids', () => {
   it.each(SOLDIER_KINDS)('moves %s between the two extremes of its stride', (kind) => {
     expect(shapeOf(SOLDIER_GRID_BUILDERS[kind]('a')))
       .not.toBe(shapeOf(SOLDIER_GRID_BUILDERS[kind]('b')));
+  });
+
+  // Reported by the pixel-art session, which hit this twice on its own
+  // sprites: the skeleton's four leg bones landed in the same three columns at
+  // full swing and read as one thick leg, and the minotaur's two feet fused
+  // into one hoof. Same cause here — legs that swing around their own tops
+  // instead of a shared hip cross at one extreme and merge.
+  //
+  // Both extremes, because the bug is asymmetric: the frame that splays
+  // correctly proves nothing about the frame that collapses.
+  it.each(SOLDIER_KINDS)('keeps %s\'s two legs apart at both ends of the stride', (kind) => {
+    for (const frame of ['a', 'b'] as const) {
+      const g = SOLDIER_GRID_BUILDERS[kind](frame);
+      expect(filledRuns(g, BOOT_ROW), `${kind} ${frame} fused its legs into one`).toBe(2);
+    }
+  });
+
+  it('lets the legs meet in the middle of the stride, which is not the bug', () => {
+    // Mid-stride is legs together, so one run there is correct. Asserting two
+    // everywhere would forbid a walk cycle rather than fix one.
+    expect(filledRuns(SOLDIER_GRID_BUILDERS.spearman('mid'), BOOT_ROW)).toBe(1);
   });
 
   it('is deterministic, so the sprite cache can key on kind and frame alone', () => {
@@ -90,5 +142,12 @@ describe('the commander grid', () => {
 
   it('moves between the two extremes of the gait', () => {
     expect(shapeOf(buildCommanderGrid('a'))).not.toBe(shapeOf(buildCommanderGrid('b')));
+  });
+
+  // Four legs in two pairs, and the same collapse the soldiers had: a pair
+  // that swings around its own tops crosses at one extreme and reads as one
+  // wide hoof. Four runs at both ends of the gait.
+  it.each(['a', 'b'] as const)('keeps all four legs apart on frame %s', (frame) => {
+    expect(filledRuns(buildCommanderGrid(frame), HOOF_ROW)).toBe(4);
   });
 });

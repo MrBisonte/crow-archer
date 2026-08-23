@@ -68,12 +68,24 @@ const swingOf = (frame: StrideFrame, amount: number): number =>
  */
 function buildSoldierBody(C: Record<string, string>, frame: StrideFrame): PixelGrid {
   const g = makePixelGrid(SOLDIER_SPRITE.w, SOLDIER_SPRITE.h);
-  const swing = swingOf(frame, 2);
+  const swing = swingOf(frame, 3);
 
-  pixelCurve(g, [6, 16], [6 + swing * 0.4, 19], [6 + swing, 22], C['cloth']!, 10);
-  pixelCurve(g, [9, 16], [9 - swing * 0.4, 19], [9 - swing, 22], C['cloth']!, 10);
-  pixelRect(g, 5 + swing, 21, 3, 2, C['edge']!);
-  pixelRect(g, 8 - swing, 21, 3, 2, C['edge']!);
+  // Both legs swing about a shared hip, not about their own tops.
+  //
+  // Written the obvious way — one leg at `6 + swing` and the other at
+  // `9 - swing` — they converge instead of splaying, meet at full swing and
+  // merge into a single thick leg for one frame of the walk. It is invisible
+  // in a still frame and unmissable in motion. Anchoring both to the same
+  // centre and sending them opposite ways makes the two extremes mirror images
+  // of each other, which is what a stride actually is.
+  const hipL = 7 - swing;
+  const hipR = 8 + swing;
+  pixelCurve(g, [6, 16], [(6 + hipL) / 2, 19], [hipL, 22], C['cloth']!, 10);
+  pixelCurve(g, [9, 16], [(9 + hipR) / 2, 19], [hipR, 22], C['cloth']!, 10);
+  // Two wide rather than three: at full swing three-wide boots close the gap
+  // the legs just opened, and the collapse comes back at the feet only.
+  pixelRect(g, hipL - 1, 21, 2, 2, C['edge']!);
+  pixelRect(g, hipR - 1, 21, 2, 2, C['edge']!);
 
   pixelRect(g, 5, 9, 6, 8, C['cloth']!);
   pixelRect(g, 5, 9, 6, 2, C['clothHi']!);
@@ -151,11 +163,27 @@ export function buildCommanderGrid(frame: StrideFrame): PixelGrid {
   const g = makePixelGrid(COMMANDER_SPRITE.w, COMMANDER_SPRITE.h);
   const swing = swingOf(frame, 3);
 
-  // Legs, fore and hind, swinging opposite each other.
-  pixelRect(g, 7 + swing, 20, 3, 7, C.horseDark);
-  pixelRect(g, 12 - swing, 20, 3, 7, C.horseDark);
-  pixelRect(g, 21 + swing, 20, 3, 7, C.horseDark);
-  pixelRect(g, 26 - swing, 20, 3, 7, C.horseDark);
+  // Fore and hind pairs, each swinging about its own shared shoulder rather
+  // than about the individual legs' tops. Same collapse the soldiers had, and
+  // worse here: a fused pair reads as one wide hoof and the horse stops
+  // looking like it has four legs at all.
+  // Centres one column apart, each pair opening opposite ways.
+  //
+  // Two failed shapes are worth recording, because both look right written
+  // down. Centres two apart (9 and 11) give a separation of |2 + 2*swing|:
+  // six columns one way and two the other, and pixelOutline closes a
+  // two-column gap into a seam, so the pair reads as one wide hoof on exactly
+  // one frame of the gait. A shared centre fixes the gap but makes the two
+  // extremes identical — negating the swing maps a symmetric pair onto itself,
+  // so the horse has a two-frame walk with a duplicate. One column apart is
+  // the pair of those: gaps of five and three columns, both surviving the
+  // outline, and two frames that actually differ.
+  const foreL = 9 - swing, foreR = 10 + swing;
+  const hindL = 23 - swing, hindR = 24 + swing;
+  pixelRect(g, foreL, 20, 2, 7, C.horseDark);
+  pixelRect(g, foreR, 20, 2, 7, C.horseDark);
+  pixelRect(g, hindL, 20, 2, 7, C.horseDark);
+  pixelRect(g, hindR, 20, 2, 7, C.horseDark);
 
   // Barrel, then neck and head.
   pixelEllipse(g, 18, 17, 12, 5, C.horse);
