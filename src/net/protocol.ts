@@ -66,7 +66,7 @@ export type RoomCode = string;
 // Lobby
 // ---------------------------------------------------------------------------
 
-export type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger';
+export type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper';
 
 /** 'coop' is 4-player PVE. 'deathmatch' is 2v2. The host picks. */
 export type GameMode = 'coop' | 'deathmatch';
@@ -389,9 +389,32 @@ const isOneOf = <T extends string>(allowed: readonly T[], v: unknown): v is T =>
 const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
   Array.isArray(v) && v.every(item);
 
-const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger'];
+/**
+ * Every playable character. Exported because it is the one written-down copy
+ * of the roster: `CharacterKind` and `isCharacter` both check against it, and
+ * so do the tests that make sure a new hero reached every lookup table.
+ */
+export const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger', 'sapper'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
-const MAPS: readonly MapKind[] = ['forest', 'castle', 'maze'];
+
+/**
+ * Every map the wire will accept, and the reason it is `as const` rather than
+ * `readonly MapKind[]` like its neighbours above.
+ *
+ * A validator that omits a kind does not fail: it rejects that map at the room
+ * boundary, so the host picks it, the server refuses SET_MAP, and the lobby
+ * silently keeps the old one. Annotating the array as `readonly MapKind[]`
+ * cannot catch that, because a short list is still a valid list of MapKinds.
+ * Widening it to the literals lets `Exhaustive` below turn a forgotten map
+ * into a build failure instead.
+ */
+const MAPS = ['forest', 'castle', 'maze', 'cavern'] as const satisfies readonly MapKind[];
+
+/** Resolves only when `T` is `never`, so naming a non-never type fails to compile. */
+type Exhaustive<T extends never> = T;
+
+/** Fails the build listing the maps MAPS forgot. Erased at runtime. */
+export type EveryMapIsValidated = Exhaustive<Exclude<MapKind, (typeof MAPS)[number]>>;
 const ERROR_CODES: readonly ErrorCode[] = [
   'VERSION_MISMATCH',
   'BAD_MESSAGE',

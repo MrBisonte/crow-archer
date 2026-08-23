@@ -12,7 +12,9 @@
  * rules apart here means neither is re-decided at a call site.
  */
 
-import { MazeTerrain, NoiseTerrain, type MapGenerator } from './map-generators';
+import {
+  CavernTerrain, MazeTerrain, NoiseTerrain, type MapGenerator,
+} from './map-generators';
 import { type Noise2D } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
@@ -23,10 +25,10 @@ import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
  * render/tiles.ts) — the same reason CharacterKind became a table instead of
  * a branch, not the reason GameMode stayed one.
  */
-export type MapKind = 'forest' | 'castle' | 'maze';
+export type MapKind = 'forest' | 'castle' | 'maze' | 'cavern';
 
 /**
- * How each map builds its grid, one row per MapKind so a fourth map fails to
+ * How each map builds its grid, one row per MapKind so a fifth map fails to
  * compile until it has a generator.
  *
  * This held a plain `{ density: number }` while every map was the same noise
@@ -39,13 +41,56 @@ export type MapKind = 'forest' | 'castle' | 'maze';
  * stop an arrow, so two players 400 px apart almost never have a clear line
  * otherwise. castle's density is a starting point, tuned for readable
  * pillars over a thicket. maze's braid is the fraction of dead ends reopened
- * into loops. All three are free to adjust; nothing downstream reads them.
+ * into loops. cavern's fill and smoothing are what decide whether it reads as
+ * chambers or as gravel: below about four rounds the scatter never collapses
+ * into rooms. All of them are free to adjust; nothing downstream reads them.
  */
 export const MAP_GEN: Record<MapKind, MapGenerator> = {
   forest: new NoiseTerrain({ density: 0.45 }),
   castle: new NoiseTerrain({ density: 0.5 }),
   maze: new MazeTerrain({ braid: 0.15 }),
+  cavern: new CavernTerrain({ fill: 0.44, smoothing: 4, pools: 0.1, fungus: 0.1 }),
 };
+
+/**
+ * Who fights on a map.
+ *
+ * `crows` is the original arena population: birds that fly in off the right
+ * edge, cross in a straight line with no terrain check, and read as wildlife
+ * over open ground. That last part is why it is not universal — the same
+ * straight line through a corridor reads as a bug, which is what kept them out
+ * of the maze.
+ *
+ * `soldiers` is a garrison: spearmen, shieldmen and archers that walk, path
+ * around terrain, and arrive in composed waves rather than one at a time. A
+ * cavern is somebody's dug-out stronghold, so its enemies are the people who
+ * dug it.
+ *
+ * `scripted` is a map whose population is placed by a stage script rather than
+ * escalating on a timer. The maze's rat pack and its warden are the only ones,
+ * and the distinction is load-bearing: a scripted map must not appear on the
+ * Waves map-select screen, because a run there would have two win conditions
+ * and mean neither.
+ */
+export type MapPopulation = 'crows' | 'soldiers' | 'scripted';
+
+/**
+ * Which populations escalate on the wave timer, and therefore which maps earn
+ * a panel on the Waves map-select screen.
+ *
+ * A table rather than `population !== 'scripted'` so that a fourth population
+ * has to state which it is, instead of defaulting itself onto a screen nobody
+ * decided to put it on.
+ */
+const WAVE_POPULATION: Record<MapPopulation, boolean> = {
+  crows: true,
+  soldiers: true,
+  scripted: false,
+};
+
+/** Does this map field an escalating population of its own in Waves mode? */
+export const runsWaves = (kind: MapKind): boolean =>
+  WAVE_POPULATION[MAP_RULES[kind].population];
 
 /**
  * Per-map rules that are not about generation, one row per MapKind.
@@ -57,25 +102,28 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
  * forest and castle are built from scattered noise, so blowing a hole in one
  * opens a shortcut and nothing else. A maze *is* its walls: clearing them with
  * a Lightning Storm or a Whirlwind turns the level into an open room and
- * deletes the only thing making an unkillable warden dangerous.
+ * deletes the only thing making an unkillable warden dangerous. A cavern is
+ * scattered rock again, only grown rather than thresholded, so it goes back to
+ * the forest's answer: its walls are cover, not the level.
  *
- * `fogOfWar` is the same argument about sight. Forest and castle are arenas you
- * read at a glance, and hiding two thirds of one would only make it fiddly. A
- * maze is a level about not knowing what is round the corner, so the corner has
- * to actually hide something.
+ * `fogOfWar` is the same argument about sight. Forest, castle and cavern are
+ * arenas you read at a glance, and hiding two thirds of one would only make it
+ * fiddly. A maze is a level about not knowing what is round the corner, so the
+ * corner has to actually hide something.
  *
- * `crows` is where they live. A passive crow crosses the map in a straight line
- * with no terrain check, which reads as a bird over an arena and as a bug in a
- * corridor. In single player it carries a second cost: ten crow kills is the
- * forest's own win condition, and a maze that quietly swaps itself for a boss
- * fight halfway through has two win conditions and means neither.
+ * `population` is who lives there, and it used to be a `crows` boolean. That
+ * one flag was quietly answering two different questions — "do birds live
+ * here" and "does this map field a wave at all" — and they came apart the
+ * moment a map wanted a population that was not birds. A map with no crows is
+ * not necessarily a map with no waves.
  */
 export const MAP_RULES: Record<MapKind, {
-  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean;
+  destructibleTerrain: boolean; fogOfWar: boolean; population: MapPopulation;
 }> = {
-  forest: { destructibleTerrain: true, fogOfWar: false, crows: true },
-  castle: { destructibleTerrain: true, fogOfWar: false, crows: true },
-  maze: { destructibleTerrain: false, fogOfWar: true, crows: false },
+  forest: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
+  castle: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
+  maze: { destructibleTerrain: false, fogOfWar: true, population: 'scripted' },
+  cavern: { destructibleTerrain: true, fogOfWar: false, population: 'soldiers' },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
@@ -195,7 +243,11 @@ export class Terrain {
         const cy = r * TILE_SIZE + TILE_SIZE / 2;
         if ((cx - x) ** 2 + (cy - y) ** 2 > radius * radius) continue;
         const tile = this.map.get(r, c);
-        if (tile === TILE.ROCK || tile === TILE.TREE || tile === TILE.HUT) {
+        // Saplings go too. Cover that grows back has to be stoppable while it
+        // is doing it, or regrowth is something that happens to the player
+        // rather than something they play against.
+        if (tile === TILE.ROCK || tile === TILE.TREE || tile === TILE.HUT
+          || tile === TILE.SAPLING) {
           this.map.set(r, c, TILE.EMPTY);
         }
       }
@@ -206,7 +258,8 @@ export class Terrain {
    * Burns exactly the tile at this point, if it can burn.
    *
    * Rock does not catch — the same exception the legacy game's fire arrows
-   * make — so this only ever clears a tree or a hut. One tile, not a radius:
+   * make — so this only ever clears a tree, a hut, or a sapling on its way to
+   * being one again. One tile, not a radius:
    * this is a shot landing on what it hit, not a blast. Returns whether
    * anything actually burned, so a caller only bothers telling clients about
    * hits that changed something.
@@ -221,7 +274,7 @@ export class Terrain {
     const r = Math.floor(y / TILE_SIZE);
     const c = Math.floor(x / TILE_SIZE);
     const tile = this.map.get(r, c);
-    if (tile !== TILE.TREE && tile !== TILE.HUT) return false;
+    if (tile !== TILE.TREE && tile !== TILE.HUT && tile !== TILE.SAPLING) return false;
     this.map.set(r, c, TILE.EMPTY);
     return true;
   }

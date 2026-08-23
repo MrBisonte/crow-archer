@@ -10,6 +10,7 @@
  */
 
 import type { MapKind } from './arena-map';
+import type { SoldierKind } from './soldiers';
 
 /** What landed a hit on the boss. The handler picks the sound and shake. */
 export type HitSource =
@@ -23,7 +24,15 @@ export type HitSource =
   | 'satchel';
 
 /** Which attack a player started. */
-export type WeaponKind = 'arrow' | 'bolt' | 'crossbow' | 'pitchfork' | 'spear' | 'javelin';
+export type WeaponKind =
+  | 'arrow'
+  | 'net'
+  | 'bolt'
+  | 'crossbow'
+  | 'pitchfork'
+  | 'spear'
+  | 'javelin'
+  | 'charge';
 
 export type PickupKind = 'ricochet' | 'fire' | 'shield';
 
@@ -34,6 +43,14 @@ export type GameEvent =
   // Combat results
   | { type: 'CROW_KILLED'; x: number; y: number; white: boolean; earned: number }
   | { type: 'SKELETON_KILLED'; x: number; y: number; kind: 'normal' | 'fire' | 'ice' }
+  // Its own event rather than a widened SKELETON_KILLED: the two share a
+  // shape but not a meaning, and that event's `kind` is read to pick undead
+  // colours a soldier has no version of.
+  | { type: 'SOLDIER_KILLED'; x: number; y: number; kind: SoldierKind }
+  // Not ICE_BOLT_FIRED reused. That one happens to play a generic sound
+  // today, but it states that an ice bolt was fired, and a soldier's arrow is
+  // not one; an event that lies is worse than an event that duplicates.
+  | { type: 'SOLDIER_SHOT'; x: number; y: number }
   | { type: 'FIRE_SKELETON_BLAST'; x: number; y: number }
   | { type: 'ICE_BOLT_FIRED'; x: number; y: number }
   | { type: 'PLAYER_FROZEN'; x: number; y: number }
@@ -50,6 +67,14 @@ export type GameEvent =
   | { type: 'WHIRLWIND_TICK'; x: number; y: number }
   | { type: 'WHIRLWIND_END'; x: number; y: number }
   | { type: 'KNIGHT_CHARGE'; x: number; y: number; power: number }
+  // The dash met something it could not push through and ended early.
+  | { type: 'KNIGHT_CHARGE_STOPPED'; x: number; y: number }
+  // The escape hatch fired: the player had nowhere to move and was lifted out.
+  | { type: 'PLAYER_UNSTUCK'; x: number; y: number; toX: number; toY: number }
+  | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
+  | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
+  | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
+  | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }
   // Player state

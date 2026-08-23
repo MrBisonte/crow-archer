@@ -6,6 +6,40 @@ import { TILE, type TileGrid, type TileId } from './tilemap';
 /** Coherent 2-D noise in [-1, 1]. Null when no noise source is available. */
 export type Noise2D = (x: number, y: number) => number;
 
+/*
+ * The arena's fixed furniture, as three predicates rather than three copies of
+ * the same arithmetic. Every map crows live on owes them the same three
+ * guarantees, and the second map to want them is the point at which "the
+ * generator that happens to be first" stops being the right home.
+ *
+ * Pure and rng-free on purpose: `generateGrid` below still consumes its random
+ * numbers in exactly the order it always did, so extracting these left every
+ * existing seed generating the map it generated before.
+ */
+
+/**
+ * The two columns down the right edge, left passable on every map. Crows spawn
+ * off the right of the canvas and fly in, and an aggro one paths the rest of
+ * the way with A*, so a map that walls this off gives them nothing to enter
+ * through.
+ */
+export const isCrowCorridor = (c: number, cols: number): boolean => c >= cols - 2;
+
+/**
+ * The solid rim: top row, bottom row and left column, stopping short of the
+ * crow corridor. The right edge is deliberately unwalled — that is the
+ * corridor's whole job.
+ */
+export const isArenaBorder = (r: number, c: number, rows: number, cols: number): boolean =>
+  (r === 0 || r === rows - 1 || c === 0) && !isCrowCorridor(c, cols);
+
+/**
+ * The block a run starts in, kept clear of anything solid so a fresh spawn
+ * never lands inside terrain.
+ */
+export const isSpawnZone = (r: number, c: number, rows: number): boolean =>
+  c >= 1 && c <= 4 && Math.abs(r - Math.floor(rows / 2)) <= 3;
+
 /**
  * Builds the terrain grid. Border walls with an open crow corridor on the
  * right, a clear player spawn zone, three independent noise layers for water,
@@ -43,15 +77,12 @@ export function generateGrid(
     grid[r] = row;
     for (let c = 0; c < cols; c++) {
       // Hard border walls: top row, bottom row, left col; crow corridor stays open
-      const isBorder = (r === 0 || r === rows - 1 || c === 0) && c < cols - 2;
-      if (isBorder) {
+      if (isArenaBorder(r, c, rows, cols)) {
         row[c] = rng() < 0.6 ? TILE.ROCK : TILE.TREE;
         continue;
       }
-      // Player spawn clear zone (cols 1-4, rows centered on mid-row)
-      if (c >= 1 && c <= 4 && r >= midRow - 3 && r <= midRow + 3) continue;
-      // Crow corridor, always passable
-      if (c >= cols - 2) continue;
+      if (isSpawnZone(r, c, rows)) continue;
+      if (isCrowCorridor(c, cols)) continue;
       // Each biome has its own noise layer at its own scale; offsets decorrelate.
       const nW = n2d(c, r, 0.1, 0, 0);
       const nR = n2d(c, r, 0.18, 47, 19);

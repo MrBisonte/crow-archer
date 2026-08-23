@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAP_COLS, MAP_ROWS } from './arena-map';
-import { MazeTerrain, NoiseTerrain, openTilesConnected } from './map-generators';
+import { CavernTerrain, MazeTerrain, NoiseTerrain, openTilesConnected } from './map-generators';
+import { isArenaBorder, isCrowCorridor, isSpawnZone } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, tilePassable, type TileGrid } from './tilemap';
 
@@ -123,6 +124,120 @@ describe('NoiseTerrain', () => {
     const a = new NoiseTerrain({ density: 0.45 }).generate(MAP_ROWS, MAP_COLS, mulberry32(9), null);
     const b = new NoiseTerrain({ density: 1 }).generate(MAP_ROWS, MAP_COLS, mulberry32(9), null);
     expect(a).not.toEqual(b);
+  });
+});
+
+describe('CavernTerrain', () => {
+  /** The tuning MAP_GEN ships, so these test the cavern the game builds. */
+  const SHAPE = { fill: 0.44, smoothing: 4, pools: 0.1, fungus: 0.1 };
+
+  const cavern = (seed: number, opts: Partial<typeof SHAPE> = {}): TileGrid =>
+    new CavernTerrain({ ...SHAPE, ...opts }).generate(
+      MAP_ROWS,
+      MAP_COLS,
+      mulberry32(seed),
+      null,
+    );
+
+  it('is deterministic: one seed always gives one cavern', () => {
+    expect(cavern(12345)).toEqual(cavern(12345));
+    expect(cavern(12345)).not.toEqual(cavern(12346));
+  });
+
+  // The same guarantee the maze needs, for a harder reason: a maze is
+  // connected by construction, and cellular automata promise nothing at all.
+  // joinRegions is the pass that has to make this true.
+  it('leaves every walkable tile reachable from every other, across 200 seeds', () => {
+    for (const seed of SEEDS) {
+      expect(openTilesConnected(cavern(seed)), `seed ${seed} sealed a chamber off`).toBe(true);
+    }
+  });
+
+  it('stays connected with no smoothing at all, when the fill is still scatter', () => {
+    for (const seed of SEEDS.slice(0, 40)) {
+      expect(openTilesConnected(cavern(seed, { smoothing: 0 })), `seed ${seed}`).toBe(true);
+    }
+  });
+
+  // What smoothing is for. A lone rock is one with no orthogonal rock beside
+  // it: scatter is mostly those, and a cave is mostly not, so the count
+  // collapsing is the scatter becoming chambers.
+  it('turns scatter into chambers, which is the whole point of smoothing', () => {
+    const lone = (grid: TileGrid): number => {
+      let n = 0;
+      for (let r = 0; r < MAP_ROWS; r++)
+        for (let c = 0; c < MAP_COLS; c++) {
+          if (grid[r]?.[c] !== TILE.ROCK) continue;
+          const joined =
+            grid[r - 1]?.[c] === TILE.ROCK || grid[r + 1]?.[c] === TILE.ROCK ||
+            grid[r]?.[c - 1] === TILE.ROCK || grid[r]?.[c + 1] === TILE.ROCK;
+          if (!joined) n++;
+        }
+      return n;
+    };
+    for (const seed of SEEDS.slice(0, 20)) {
+      expect(lone(cavern(seed)), `seed ${seed}`).toBeLessThan(lone(cavern(seed, { smoothing: 0 })));
+    }
+  });
+
+  it('walls the rim but leaves the crow corridor open, the way every crow map does', () => {
+    for (const seed of SEEDS.slice(0, 40)) {
+      const grid = cavern(seed);
+      for (let r = 0; r < MAP_ROWS; r++)
+        for (let c = 0; c < MAP_COLS; c++) {
+          if (isArenaBorder(r, c, MAP_ROWS, MAP_COLS)) {
+            expect(tilePassable(grid[r]?.[c]), `seed ${seed} opened the rim at ${r},${c}`)
+              .toBe(false);
+          } else if (isCrowCorridor(c, MAP_COLS) || isSpawnZone(r, c, MAP_ROWS)) {
+            expect(tilePassable(grid[r]?.[c]), `seed ${seed} blocked ${r},${c}`).toBe(true);
+          }
+        }
+    }
+  });
+
+  // Both bounds matter. Too closed is a run spent squeezing down necks; too
+  // open is the forest with different paint, and the cover this map is for
+  // never appears.
+  it('leaves an arena worth playing on, never a warren and never an empty room', () => {
+    const total = MAP_ROWS * MAP_COLS;
+    for (const seed of SEEDS) {
+      const open = openCount(cavern(seed)) / total;
+      expect(open, `seed ${seed} left ${(open * 100).toFixed(0)}% open`).toBeGreaterThan(0.35);
+      expect(open, `seed ${seed} left ${(open * 100).toFixed(0)}% open`).toBeLessThan(0.9);
+    }
+  });
+
+  // Ash only ever comes from burning something, and huts are placed by the
+  // noise generator alone, so a cavern that emitted either would be drawn by
+  // painters CAVERN_TILE_PAINTERS only borrows to keep its table total.
+  it('builds only the four tiles its theme paints for itself', () => {
+    const kinds = new Set(SEEDS.slice(0, 40).flatMap((seed) => cavern(seed).flat()));
+    expect(kinds.has(TILE.ASH)).toBe(false);
+    expect(kinds.has(TILE.HUT)).toBe(false);
+    expect(kinds).toEqual(new Set([TILE.EMPTY, TILE.ROCK, TILE.WATER, TILE.TREE]));
+  });
+
+  it('grows both pools and fungus, and neither when asked for neither', () => {
+    const bare = SEEDS.slice(0, 20).map((seed) => cavern(seed, { pools: 0, fungus: 0 }));
+    for (const grid of bare) {
+      expect(grid.flat()).not.toContain(TILE.WATER);
+      expect(grid.flat()).not.toContain(TILE.TREE);
+    }
+    const dressed = SEEDS.slice(0, 20).map((seed) => cavern(seed));
+    expect(dressed.some((g) => g.flat().includes(TILE.WATER))).toBe(true);
+    expect(dressed.some((g) => g.flat().includes(TILE.TREE))).toBe(true);
+  });
+
+  // Not the maze's answer, which is solid rock, and deliberately so: on a grid
+  // this small every column is inside the crow corridor, so the scaffolding
+  // opens the lot. Open is the safer degenerate answer of the two anyway —
+  // nothing can spawn inside a wall that is not there.
+  it('degrades to open floor rather than throwing on a grid too small to hold a chamber', () => {
+    const tiny = new CavernTerrain(SHAPE).generate(2, 2, mulberry32(1), null);
+    expect(tiny).toHaveLength(2);
+    expect(tiny[0]).toHaveLength(2);
+    expect(tiny.flat().every((t) => t === TILE.EMPTY)).toBe(true);
+    expect(openTilesConnected(tiny)).toBe(true);
   });
 });
 

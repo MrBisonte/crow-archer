@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CHARACTERS } from '../net/protocol';
 import {
   CROSSBOW_BOLT_COUNT,
   CROSSBOW_BOLT_DAMAGE,
@@ -7,8 +8,12 @@ import {
   CROSSBOW_SPREAD_RADIANS,
   Crossbow,
   DYNAMITE_DAMAGE,
+  DYNAMITE_FUSE_TICKS,
+  DYNAMITE_SPEED,
   DynamitePouch,
   LightningStorm,
+  PowderCharge,
+  SAPPER_CHARGE_DAMAGE,
   SATCHEL_CARRIED,
   SATCHEL_DAMAGE,
   Satchel,
@@ -164,4 +169,78 @@ describe('primaryWeapon', () => {
 
 it('carries the same number of satchels as dynamite, absent a reason to differ', () => {
   expect(SATCHEL_CARRIED).toBe(4);
+});
+
+describe('PowderCharge', () => {
+  it('throws one charge per use, not a burst', () => {
+    const effects = new PowderCharge().use();
+    expect(effects).toHaveLength(1);
+    expect(effects[0]?.kind).toBe('shot');
+  });
+
+  it('is dynamite in everything but the damage', () => {
+    const [effect] = new PowderCharge().use();
+    if (!effect || effect.kind !== 'shot') throw new Error('expected a shot');
+    expect(effect.shot.flavour).toBe('dynamite');
+    expect(effect.shot.speed).toBe(DYNAMITE_SPEED);
+    expect(effect.shot.lifeTicks).toBe(DYNAMITE_FUSE_TICKS);
+    expect(effect.shot.onTerrain).toBe('bounce');
+    expect(effect.shot.explodesAtRest).toBe(true);
+    expect(effect.shot.drownsInWater).toBe(true);
+  });
+
+  it('hits for less than a stick, because it is thrown over and over', () => {
+    const [effect] = new PowderCharge().use();
+    if (!effect || effect.kind !== 'shot') throw new Error('expected a shot');
+    expect(effect.shot.damage).toBe(SAPPER_CHARGE_DAMAGE);
+    expect(SAPPER_CHARGE_DAMAGE).toBeLessThan(DYNAMITE_DAMAGE);
+  });
+
+  it('flies straight and alone: no homing, no fan', () => {
+    const [effect] = new PowderCharge().use();
+    if (!effect || effect.kind !== 'shot') throw new Error('expected a shot');
+    expect(effect.shot.homingRate).toBe(0);
+    expect(effect.shot.angleOffset).toBeUndefined();
+  });
+
+  it('has no charge-and-hold: every use is the same throw', () => {
+    const a = new PowderCharge().use();
+    const b = new PowderCharge().use();
+    if (a[0]?.kind !== 'shot' || b[0]?.kind !== 'shot') throw new Error('expected shots');
+    expect(a[0].shot.speed).toBe(b[0].shot.speed);
+  });
+
+  it('throws slower than every primary but the wizard staff', () => {
+    const sapper = primaryWeapon('sapper').cooldownTicks;
+    for (const kind of CHARACTERS) {
+      if (kind === 'sapper' || kind === 'wizard') continue;
+      expect(sapper, kind).toBeGreaterThan(primaryWeapon(kind).cooldownTicks);
+    }
+    expect(sapper).toBeLessThan(primaryWeapon('wizard').cooldownTicks);
+  });
+});
+
+describe('the roster', () => {
+  it('arms every character with a primary that produces something', () => {
+    for (const kind of CHARACTERS) {
+      const weapon = primaryWeapon(kind);
+      expect(weapon.cooldownTicks, kind).toBeGreaterThan(0);
+      expect(weapon.use().length, kind).toBeGreaterThan(0);
+    }
+  });
+
+  it('answers the secondary question for every character, in every mode', () => {
+    for (const kind of CHARACTERS) {
+      for (const mode of ['coop', 'deathmatch'] as const) {
+        expect(secondaryWeapon(kind, mode).kind, `${kind}/${mode}`).toBeTruthy();
+      }
+    }
+  });
+
+  it("gives the sapper no secondary at all, rather than its own primary twice", () => {
+    // Without its own row this would fall through to the dynamite stand-in,
+    // which is the powder charge again on another button.
+    expect(secondaryWeapon('sapper', 'deathmatch')).toEqual({ kind: 'none' });
+    expect(secondaryWeapon('sapper', 'coop')).toEqual({ kind: 'none' });
+  });
 });

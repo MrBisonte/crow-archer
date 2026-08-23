@@ -38,6 +38,8 @@ const CHARACTER_KEYS: Record<CharacterKind, string> = {
   wizard: 'w',
   knight: 'k',
   ranger: 'x',
+  // 's' rather than an initial for the same reason as the others: it was free.
+  sapper: 's',
 };
 
 /** The reverse lookup the picker actually reads a keypress against. */
@@ -59,14 +61,16 @@ const CHARACTER_LEGEND = (Object.entries(CHARACTER_KEYS) as [CharacterKind, stri
  * One key per map, host only.
  *
  * No map gets its own first letter: C is coop, F is frags, M is the
- * multiplayer screen itself. So these are mnemonic rather than initial, and
- * they live in a table for the same reason the character keys do. A third map
- * added as a third `if` is a third place to forget.
+ * multiplayer screen itself, and the cavern wants that same taken C. So these
+ * are mnemonic rather than initial — B is the cavern for being below — and
+ * they live in a table for the same reason the character keys do. A fourth map
+ * added as a fourth `if` is a fourth place to forget.
  */
 const MAP_KEYS: Record<MapKind, string> = {
   forest: 'g',
   castle: 'v',
   maze: 'z',
+  cavern: 'b',
 };
 
 /** The reverse lookup the picker actually reads a keypress against. */
