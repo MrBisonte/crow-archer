@@ -602,6 +602,14 @@ let controlsSelection = 0, remapTarget = null;
  * the same array for arrow-key cycling and the bracketed hotkey, so a new
  * character is one entry rather than two lists that have to independently
  * agree on the same three names.
+ *
+ * `preview` belongs here for that reason and not by preference. It used to be
+ * a private lookup inside _drawCharPreview, keyed by character and checked by
+ * nothing, so the sapper shipped with a panel and no portrait: the row was
+ * simply missing and a missing row draws nothing rather than failing. Holding
+ * it here means the row that adds a character is the row that gives it a face.
+ * It is a function because the ranger's cloak sway is a real 3-frame cycle, so
+ * its grid depends on the frame while the other four are fixed poses.
  */
 // Difficulty gradient for the char-select panels, one home for the
 // label/color pair so all four panels agree on what "hard" looks like.
@@ -616,22 +624,29 @@ const DIFFICULTY = {
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
+    preview: () => ({ grid: buildArcherGrid(SP_TRIM.archer), sprite: ARCHER_SPRITE, key: 'archer' }),
     lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
            'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
+    preview: () => ({ grid: buildWizardGrid(SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: 'wizard' }),
     lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
            'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Tap Shift: Arcane Blink (6s)'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
+    preview: () => ({ grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' }),
     lines:['Long spear  ·  melee range','Hold Shift: charge sweep (2× dmg)',
            'Pickups: Javelin  ·  Fire Sword','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
+    // The one animated preview: its cloak sway is a real 3-frame cycle, so the
+    // frame is a parameter rather than baked like every other row's.
+    preview: (frame) => ({ grid: buildRangerGrid(frame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${frame}` }),
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
+    preview: () => ({ grid: buildSapperGrid(SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: 'sapper' }),
     lines:['10 bombs  ·  1.1s CD  ·  pitchfork at 0','Pickup: Fire / Ice bombs',
            'Special: 5-bomb barrage, 45° fan','Shift: 3x shot, or combo your own bomb','Demolition playstyle'] },
 ];
@@ -8570,24 +8585,20 @@ function _cornerFrame(color) {
 /** Reuses the same cached grids gameplay draws from — one real sprite per
  * hero instead of a fifth hand-drawn mini-vector copy per character. The
  * gentle bob is the only animation now; the vector version's per-character
- * sway/pulse lived on live overlays this preview has no equivalent of. */
-function _drawCharPreview(cx, cy, char, t) {
-  const rFrame = animFrame3(t * 1.5);
-  const PREVIEW = {
-    archer: { grid: buildArcherGrid(SP_TRIM.archer),        sprite: ARCHER_SPRITE, key: 'archer' },
-    wizard: { grid: buildWizardGrid(SP_TRIM.wizard),        sprite: WIZARD_SPRITE, key: 'wizard' },
-    knight: { grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' },
-    ranger: { grid: buildRangerGrid(rFrame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${rFrame}` },
-    sapper: { grid: buildSapperGrid(SP_TRIM.sapper),         sprite: SAPPER_SPRITE, key: 'sapper' },
-  };
-  const p = PREVIEW[char];
-  if (!p) return;
+ * sway/pulse lived on live overlays this preview has no equivalent of.
+ *
+ * Takes the panel row rather than the character name so the grid comes from
+ * the row being drawn (see CHAR_PANELS.preview). That also means one grid is
+ * built per panel per frame instead of all five: the lookup this replaced was
+ * a table literal, so every call rebuilt every character's grid to use one. */
+function _drawCharPreview(cx, cy, panel, t) {
+  const { grid, sprite, key } = panel.preview(animFrame3(t * 1.5));
   const scale = 1.4;
   const bob = Math.round(1.5 * Math.sin(t * 2));
   ctx.save(); ctx.translate(cx, cy + bob);
   ctx.drawImage(
-    spriteCanvas(`preview|${p.key}`, p.grid, p.sprite.w, p.sprite.h, scale),
-    -(p.sprite.w * scale) / 2, -(p.sprite.h * scale) / 2,
+    spriteCanvas(`preview|${key}`, grid, sprite.w, sprite.h, scale),
+    -(sprite.w * scale) / 2, -(sprite.h * scale) / 2,
   );
   ctx.restore();
 }
@@ -8642,7 +8653,7 @@ function drawCharSelect(t) {
       ctx.fillStyle='#FFB400'; ctx.fillText('[ NEW ]', px+panelW/2, panelY+50);
       ctx.shadowBlur=0;
     }
-    _drawCharPreview(px+panelW/2, panelY+114, p.char, t);
+    _drawCharPreview(px+panelW/2, panelY+114, p, t);
     ctx.font='10.5px "Courier New",monospace';
     ctx.fillStyle = sel ? p.color.replace('FF','88') : p.dim;
     p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+208+i*30));
@@ -9418,6 +9429,20 @@ export const devHooks = {
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
+  // Everything that can refuse the player movement, in one place. A stuck
+  // player is always one of these, so a harness that catches one can say which
+  // rather than guessing.
+  movementBlockers: () => ({
+    frozen: playerFrozenTimer,
+    sniperMode,
+    charging: knightCharge.on,
+    dashing: knightDash.timer,
+    buried: !playerFits(player.x, player.y),
+    snipeKeyHeld: !!keys[CONFIG.keys.snipe],
+    snipeKeyName: CONFIG.keys.snipe,
+    heldKeys: Object.keys(keys).filter(k => keys[k]),
+    x: player.x, y: player.y, state: appState, char: selectedChar, map: mapKind,
+  }),
   poison: () => ({ timer: playerPoison.timer, tickIn: playerPoison.tickIn, speedMult: poisonSpeedMult() }),
   minotaur: () => (boss && boss.kind === 'minotaur'
     ? { bstate: boss.bstate, x: boss.x, y: boss.y, hp: boss.hp,
