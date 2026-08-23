@@ -2100,6 +2100,28 @@ function updatePlayer(dt) {
   sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && selectedChar !== 'sapper'
     && hasButton(cmd, Button.SNIPE);
 
+  // What the player is actually asking for this frame, before the dash decides
+  // whether it is listening. Read up here because the dash needs it too.
+  let wantX = 0, wantY = 0;
+  if (hasButton(cmd, Button.UP))    wantY -= 1;
+  if (hasButton(cmd, Button.DOWN))  wantY += 1;
+  if (hasButton(cmd, Button.LEFT))  wantX -= 1;
+  if (hasButton(cmd, Button.RIGHT)) wantX += 1;
+
+  // Pulling back aborts the dash. The knight commits to a direction for a
+  // second and a half, which is a long time to have no say at all: pushed into
+  // a wall it slides along it, and on open ground it drags you somewhere you
+  // may not want to be. Steering with it does not cancel — only asking to go
+  // back the way you came, which is unambiguous and cannot fire by accident
+  // from a key that was already held when the dash began.
+  if (knightDash.timer > 0 && (wantX || wantY)) {
+    const dot = wantX * Math.cos(knightDash.angle) + wantY * Math.sin(knightDash.angle);
+    if (dot < 0) {
+      knightDash.timer = 0;
+      events.emit({ type: 'KNIGHT_CHARGE_STOPPED', x: player.x, y: player.y });
+    }
+  }
+
   // Charging roots him in place the same way sniper mode roots everyone else.
   if (!sniperMode && !knightCharge.on) {
     let vx = 0, vy = 0;
@@ -2111,10 +2133,7 @@ function updatePlayer(dt) {
       vy = Math.sin(knightDash.angle) * spd;
       player.walkPhase += 8 * dt;
     } else {
-      if (hasButton(cmd, Button.UP))    vy -= 1;
-      if (hasButton(cmd, Button.DOWN))  vy += 1;
-      if (hasButton(cmd, Button.LEFT))  vx -= 1;
-      if (hasButton(cmd, Button.RIGHT)) vx += 1;
+      vx = wantX; vy = wantY;
       const len = Math.hypot(vx, vy);
       if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
     }
@@ -2123,14 +2142,15 @@ function updatePlayer(dt) {
     if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
     const ny = player.y + vy;
     if (playerFits(player.x, ny)) player.y = clampArenaY(ny);
-    // A dash terrain has stopped dead is over, rather than one that keeps the
-    // controls for the rest of its 1.5s. The dash ignores movement keys by
-    // design, so a charge that ends up grinding against a tree used to pin the
-    // player in place for well over a second with every escape key held and
-    // nothing happening — which reads as being stuck, not as a committed dash.
-    // Only a full stop counts: one axis blocked is a dash sliding along a wall,
-    // which is still going somewhere.
-    if (knightDash.timer > 0 && player.x === fromX && player.y === fromY) {
+    // A dash terrain has interfered with at all is over. Any blocked axis
+    // counts, not just a dead stop: a dash clipping a wall used to slide along
+    // it for the rest of its second and a half, moving the player on one axis
+    // only with no say in it, which reads as being stuck able to go just left
+    // and right. Both cases are the same complaint — the dash still holding
+    // the controls after it stopped being a charge at anything.
+    const blockedX = vx !== 0 && player.x === fromX;
+    const blockedY = vy !== 0 && player.y === fromY;
+    if (knightDash.timer > 0 && (blockedX || blockedY)) {
       knightDash.timer = 0;
       events.emit({ type: 'KNIGHT_CHARGE_STOPPED', x: player.x, y: player.y });
     }

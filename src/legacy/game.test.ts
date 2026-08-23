@@ -1186,6 +1186,91 @@ describe('the knight charge', () => {
     expect(Math.hypot(p.x - from.x, p.y - from.y)).toBeGreaterThan(0);
   });
 
+  /** Starts a dash on open ground and reports the direction it committed to. */
+  function dashing(): number {
+    const c = g.config();
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 16.5 * c.tileSize;
+    p.y = 10.5 * c.tileSize;
+    g.startKnightCharge();
+    g.stepSim(30);
+    g.releaseKnightCharge();
+    return g.knightCharge().angle;
+  }
+
+  /** The arrow key closest to a world direction. */
+  function keyFor(ang: number): string {
+    return Math.abs(Math.cos(ang)) > Math.abs(Math.sin(ang))
+      ? (Math.cos(ang) > 0 ? 'ArrowRight' : 'ArrowLeft')
+      : (Math.sin(ang) > 0 ? 'ArrowDown' : 'ArrowUp');
+  }
+
+  /** Frames the dash stays in charge of the player, up to a generous cap. */
+  function framesHoldingControl(): number {
+    let held = 0;
+    for (let f = 0; f < 200; f++) {
+      g.stepSim(1);
+      if (!g.knightCharge().dashing) break;
+      held++;
+    }
+    return held;
+  }
+
+  // Regression: a second and a half is a long time to have no say in where you
+  // are going. Asking to go back the way you came ends it.
+  it('aborts when the player pulls back against it', () => {
+    const ang = dashing();
+    const keys = g.keys() as Record<string, boolean>;
+    keys[keyFor(ang + Math.PI)] = true;
+    const held = framesHoldingControl();
+    keys[keyFor(ang + Math.PI)] = false;
+    expect(held).toBe(0);
+  });
+
+  // The other half of that rule: steering with the dash is not an abort, or
+  // the ability would cancel itself off whichever key was already held when it
+  // started.
+  it('runs its full length when the player goes along with it', () => {
+    const ang = dashing();
+    const keys = g.keys() as Record<string, boolean>;
+    keys[keyFor(ang)] = true;
+    const held = framesHoldingControl();
+    keys[keyFor(ang)] = false;
+    expect(held).toBe(Math.round(g.config().knightChargeDashDuration * ONE_SECOND));
+  });
+
+  // Regression: a dash that clipped a wall side-on used to slide along it for
+  // the rest of its length, moving the knight on one axis only with no say in
+  // it — "stuck, can only go left and right".
+  it('ends when a wall blocks either axis, rather than sliding along it', () => {
+    const c = g.config();
+    const ang = dashing();
+    const p = g.player() as { x: number; y: number };
+    // A wall running parallel to the dash, one tile off to the side.
+    const perp = ang + Math.PI / 2;
+    for (let d = -10; d <= 10; d++) {
+      const wx = p.x + Math.cos(perp) * c.tileSize + Math.cos(ang) * c.tileSize * d;
+      const wy = p.y + Math.sin(perp) * c.tileSize + Math.sin(ang) * c.tileSize * d;
+      g.tiles().set(Math.floor(wy / c.tileSize), Math.floor(wx / c.tileSize), TILE.TREE);
+    }
+
+    let oneAxisOnly = 0;
+    let held = 0;
+    for (let f = 0; f < 200; f++) {
+      const before = { x: p.x, y: p.y };
+      g.stepSim(1);
+      if (!g.knightCharge().dashing) break;
+      held++;
+      const dx = Math.abs(p.x - before.x), dy = Math.abs(p.y - before.y);
+      if ((dx > 0.01) !== (dy > 0.01)) oneAxisOnly++;
+    }
+    expect(oneAxisOnly).toBe(0);
+    expect(held).toBeLessThan(Math.round(c.knightChargeDashDuration * ONE_SECOND) / 2);
+  });
+
   // Regression: knightCharge.on used to be cleared only by a keyup matching
   // the live CONFIG.keys.snipe, and pausing never delivers one. A charge held
   // into the pause menu left the knight permanently rooted on resume, since
