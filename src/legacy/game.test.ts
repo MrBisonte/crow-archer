@@ -9,11 +9,20 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CHARACTERS } from '../net/protocol';
+import { MAP_RULES, type MapKind } from '../sim/arena-map';
+import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { TILE } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
 const ONE_SECOND = 60;
+
+/**
+ * The maps the mapselect screen offers, derived the same way MAP_PANELS
+ * derives them. Naming them here instead would be a third copy of a list the
+ * game deliberately keeps in one place.
+ */
+const CROW_MAPS = (Object.keys(MAP_RULES) as MapKind[]).filter((kind) => MAP_RULES[kind].crows);
 
 /** Walks the boss entrance until the boss exists, then opens the fight. */
 function enterBossFight(): void {
@@ -262,20 +271,203 @@ describe('waves map select', () => {
     expect(g.state()).toBe('charselect');
   });
 
-  it('arrow keys cycle and wrap between the two panels', () => {
-    g.pickMap('forest');
+  // Walks the whole cycle once instead of naming the panels, because the
+  // panel list is derived: MAP_PANELS is every MAP_RULES map with crows, in
+  // table order. Written out by hand this test had to be edited to add a third
+  // map, which is exactly the hand-kept second list that derivation removed.
+  it('arrow keys cycle through every crow map in table order, and wrap', () => {
+    g.pickMap(CROW_MAPS[0]!);
     openWavesMapSelect();
     expect(g.state()).toBe('mapselect');
 
-    press('ArrowRight');
-    press('Enter');
-    expect(g.mapKind()).toBe('castle');
+    const walked = [g.selectedMapKind()];
+    for (let i = 0; i < CROW_MAPS.length; i++) {
+      press('ArrowRight');
+      walked.push(g.selectedMapKind());
+    }
+    // Every panel once, then back to where it started.
+    expect(walked).toEqual([...CROW_MAPS, CROW_MAPS[0]]);
 
-    g.pickMap('castle');
-    openWavesMapSelect();
-    press('ArrowRight'); // wraps past the last panel back to the first
+    press('ArrowLeft'); // and the other way, off the first panel
+    expect(g.selectedMapKind()).toBe(CROW_MAPS[CROW_MAPS.length - 1]);
+  });
+
+  it('leaves the maze off the screen entirely, because MAP_RULES gives it no crows', () => {
+    expect(MAP_RULES.maze.crows).toBe(false);
+    expect(CROW_MAPS).not.toContain('maze');
+  });
+
+  it('waves on the cavern starts there and spawns the opening crows', () => {
+    g.go('menu');
+    press('w');
     press('Enter');
-    expect(g.mapKind()).toBe('forest');
+    press('v'); // CAVERN — V, because the castle has C
+    press('Enter');
+    expect(g.state()).toBe('playing');
+    expect(g.mapKind()).toBe('cavern');
+    expect(g.crows().length).toBe(g.config().crowStartCount);
+  });
+
+  // The Waves+Castle bug, which was a population rule keyed on mapKind where
+  // it should have been keyed on gameMode and MAP_RULES. A new map kind
+  // reintroduces it the moment anything special-cases the kind by name, so the
+  // check comes with the kind rather than after someone reports it.
+  it('regression: waves on the cavern keeps escalating past the opening wave', () => {
+    g.go('menu');
+    press('w');
+    press('Enter');
+    press('v');
+    press('Enter');
+    expect(g.mapKind()).toBe('cavern');
+
+    g.crows().length = 0;
+    g.stepSim(g.config().crowEscalationInterval * ONE_SECOND * 3);
+    expect(g.crows().length).toBeGreaterThan(0);
+  });
+});
+
+describe('cover grows back', () => {
+  /** Seconds of simulation, rounded up to whole frames and one over, so a
+   * delay that lands mid-frame has actually elapsed by the time we look. */
+  const seconds = (s: number): number => Math.ceil(s * ONE_SECOND) + 1;
+
+  /** A tree the player is not standing on, so occupancy is not what is tested. */
+  function findTree(): [number, number] {
+    const tiles = g.tiles();
+    const { rows, cols, tileSize } = g.config();
+    const player = g.player() as { x: number; y: number };
+    const onPlayer = (r: number, c: number): boolean =>
+      Math.floor(player.x / tileSize) === c && Math.floor(player.y / tileSize) === r;
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) {
+        if (tiles.get(r, c) === TILE.TREE && !onPlayer(r, c)) return [r, c];
+      }
+    throw new Error('the forest generated no trees to burn');
+  }
+
+  it('takes a burnt tree back through a walkable sapling to a tree', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    expect(g.regrowth().active).toBe(true);
+
+    const [r, c] = findTree();
+    g.smashTile(r, c);
+    expect(g.tiles().get(r, c)).toBe(TILE.ASH);
+    expect(g.regrowth().pending).toBe(1);
+
+    // Stepped to this tile's own delays rather than to a round number: the
+    // stagger means no two tiles come back together, which is the point of it.
+    g.stepSim(seconds(regrowthDelay(DEFAULT_REGROWTH, 'sprout', r, c)));
+    expect(g.tiles().get(r, c)).toBe(TILE.SAPLING);
+
+    g.stepSim(seconds(regrowthDelay(DEFAULT_REGROWTH, 'mature', r, c)));
+    expect(g.tiles().get(r, c)).toBe(TILE.TREE);
+    expect(g.regrowth().pending).toBe(0);
+  });
+
+  // Reported from play: "chars get stuck in rocks and trees sometimes".
+  //
+  // A body is a box of CONFIG.playerRadius, not the point at its centre, and
+  // updatePlayer only moves when all four corners of that box are passable. So
+  // a body standing near a tile edge is partly on the next tile over, and a
+  // tree maturing there locks it in place: every incremental step keeps the
+  // same corner inside the new tree, so all four directions refuse and the
+  // only way out is burning the tile back down.
+  //
+  // Occupancy has to mean "overlaps", not "is centred on".
+  it('does not mature into the half of a body hanging over the next tile', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    const { tileSize, playerRadius } = g.config();
+    const player = g.player() as { x: number; y: number };
+
+    // Park the player just inside one tile, close enough to the edge that its
+    // box spills into the next column.
+    const col = Math.floor(player.x / tileSize);
+    const row = Math.floor(player.y / tileSize);
+    player.x = (col + 1) * tileSize - 2;
+    player.y = row * tileSize + tileSize / 2;
+    expect(Math.floor((player.x + playerRadius) / tileSize),
+      'the test did not actually straddle two tiles').toBe(col + 1);
+
+    // Burn the tile the overhang is on, then wait out the whole regrowth.
+    g.tiles().set(row, col + 1, TILE.ASH);
+    g.stepSim(seconds(
+      regrowthDelay(DEFAULT_REGROWTH, 'sprout', row, col + 1)
+      + regrowthDelay(DEFAULT_REGROWTH, 'mature', row, col + 1),
+    ));
+
+    expect(g.tiles().get(row, col + 1)).toBe(TILE.SAPLING);
+  });
+
+  it('matures it as soon as that body steps clear', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    const { tileSize } = g.config();
+    const player = g.player() as { x: number; y: number };
+    const col = Math.floor(player.x / tileSize);
+    const row = Math.floor(player.y / tileSize);
+    player.x = (col + 1) * tileSize - 2;
+    player.y = row * tileSize + tileSize / 2;
+
+    g.tiles().set(row, col + 1, TILE.ASH);
+    g.stepSim(seconds(
+      regrowthDelay(DEFAULT_REGROWTH, 'sprout', row, col + 1)
+      + regrowthDelay(DEFAULT_REGROWTH, 'mature', row, col + 1),
+    ));
+    expect(g.tiles().get(row, col + 1)).toBe(TILE.SAPLING);
+
+    // Step the body fully back into its own tile, and it finishes.
+    player.x = col * tileSize + tileSize / 2;
+    g.stepSim(ONE_SECOND);
+    expect(g.tiles().get(row, col + 1)).toBe(TILE.TREE);
+  });
+
+  it('grows nothing on the maze, the map that refuses to be broken', () => {
+    g.go('playing');
+    g.generateMap('maze');
+    expect(MAP_RULES.maze.destructibleTerrain).toBe(false);
+    expect(g.regrowth().active).toBe(false);
+
+    // A maze is only rock and floor, so plant something burnable and try:
+    // nothing chars it, so nothing is ever queued to come back.
+    g.tiles().set(3, 3, TILE.TREE);
+    g.smashTile(3, 3);
+    expect(g.tiles().get(3, 3)).toBe(TILE.TREE);
+    expect(g.regrowth().pending).toBe(0);
+  });
+
+  it('drops what was still growing when the map changes under it', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    const [r, c] = findTree();
+    g.smashTile(r, c);
+    expect(g.regrowth().pending).toBe(1);
+
+    g.generateMap('cavern');
+    expect(g.regrowth().pending).toBe(0);
+    expect(g.regrowth().active).toBe(true);
+  });
+});
+
+describe('crows follow MAP_RULES, not the map name', () => {
+  it('takes the birds to a map that has them and leaves them behind on one that does not', () => {
+    g.go('playing'); // forest, with the pace preset's opening crows
+    expect(g.crows().length).toBeGreaterThan(0);
+
+    // crows: true, so the flock carries over rather than being cleared.
+    g.generateMap('cavern');
+    expect(MAP_RULES.cavern.crows).toBe(true);
+    expect(g.crows().length).toBeGreaterThan(0);
+
+    // crows: false. Left in place they would keep flying through the walls of
+    // a map with no crow win condition at all.
+    g.generateMap('maze');
+    expect(g.crows().length).toBe(0);
   });
 });
 

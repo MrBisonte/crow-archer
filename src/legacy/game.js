@@ -7,6 +7,7 @@ import { FOV, Path } from 'rot-js';
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
 import { MAP_GEN, MAP_RULES } from '../sim/arena-map';
+import { Regrowth } from '../sim/regrowth';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
@@ -590,6 +591,10 @@ const MAP_PANEL_INFO = {
     lines:['Open ground, scattered cover','Long sightlines, easy crow paths','The classic run'] },
   castle: { key:'C', color:'#AAB4C0', bg:'rgba(170,180,192,0.10)', dim:'#4A5560', dimBg: DIM_PANEL_BG,
     lines:['Denser walls, tighter corridors','Crows funnel, fights stay close','A sharper, closer fight'] },
+  // V, not C: the castle has that. Same reason the multiplayer lobby's map
+  // keys are mnemonics, and the same reason RANGER answers to X.
+  cavern: { key:'V', color:'#5AD8B0', bg:'rgba(90,216,176,0.10)', dim:'#2A6858', dimBg: DIM_PANEL_BG,
+    lines:['Rough chambers, still pools','Wide rooms, short blind necks','Rock cover, fungus that burns'] },
 };
 const MAP_PANELS = Object.keys(MAP_RULES)
   .filter(kind => MAP_RULES[kind].crows)
@@ -657,7 +662,8 @@ let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
 
 // Map selection for Waves mode — persists for the session. Brawl ignores this
 // and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
-let selectedMapKind = 'forest';   // 'forest' | 'castle'
+// One of MAP_PANELS' kinds, which is every MAP_RULES map with crows.
+let selectedMapKind = 'forest';
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
@@ -730,10 +736,55 @@ let mapSeed = 0;
 let mapKind = 'forest';
 
 /**
+ * Burnt cover growing back. Watches the grid, so every way this game chars a
+ * tile — fire arrows, a lightning storm, a whirlwind — feeds it without
+ * knowing it is there. See sim/regrowth.ts.
+ *
+ * Bodies are what it cannot see for itself, so occupancy is passed in: a tree
+ * maturing under something standing on it would seal that thing inside
+ * terrain. Pickups count for the same reason even though they do not move —
+ * one inside a tree cannot be walked onto, so it is gone until something burns
+ * the tile back down.
+ *
+ * Crows are not asked about: a passive one crosses the map in a straight line
+ * with no terrain check at all, so it would veto tiles it is only flying over.
+ * Neither are the maze's rats, and that one is not a judgement call — regrowth
+ * is off entirely on a map MAP_RULES marks indestructible, and the maze is the
+ * only place a rat has ever stood.
+ */
+const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
+  const ts = CONFIG.tileSize;
+  // Overlap, not "is centred on", and each body asked about with the radius its
+  // own movement code collides with.
+  //
+  // updatePlayer samples all four corners of a playerRadius box and only moves
+  // when every one is passable. A body near a tile edge is therefore partly on
+  // the next tile, and a tree maturing there locks it in place for good: each
+  // incremental step keeps that same corner inside the new tree, so all four
+  // directions refuse and nothing short of burning the tile frees it. Asking
+  // only about the centre tile is what let that happen.
+  //
+  // Radius 0 for the rest because that is genuinely their collision model:
+  // updateBoss and updateSkeletons test the single point at their centre, and
+  // a pickup is a point on the ground. Giving them a box here would be
+  // inventing a footprint the movement code does not honour.
+  const overlaps = (b, radius) => {
+    if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
+    return Math.floor((b.x - radius) / ts) <= col && col <= Math.floor((b.x + radius) / ts)
+        && Math.floor((b.y - radius) / ts) <= row && row <= Math.floor((b.y + radius) / ts);
+  };
+  return overlaps(player, CONFIG.playerRadius)
+    || overlaps(boss, 0)
+    || skeletons.some((s) => overlaps(s, 0))
+    || pickups.some((p) => overlaps(p, 0));
+});
+
+/**
  * Generates the map, defaulting to 'forest' so a bare call is still a valid
  * one. `kind` comes from three real sources today: brawl's own scripted
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
- * screen (`selectedMapKind`, forest or castle), and the dev harness.
+ * screen (`selectedMapKind`, any map MAP_RULES gives crows), and the dev
+ * harness.
  */
 function generateMap(kind = 'forest') {
   mapKind = kind;
@@ -751,6 +802,10 @@ function generateMap(kind = 'forest') {
   // the generators that do not want it. See docs/level-3-maze.md.
   tileMap.reset(MAP_GEN[kind].generate(CONFIG.rows, CONFIG.cols, rng,
     (x, y) => sn.noise2D(x, y)));
+  // Regrowth is per-map twice over: which rules apply, and which tiles are
+  // still coming back. Both change here, so retarget does both — half-burnt
+  // tiles from the last map are coordinates on a grid that no longer exists.
+  regrowth.retarget(kind);
   // The objective belongs to the maze and to no other map, so it is built and
   // cleared here, with the grid it is placed on. Every consumer then has one
   // guard, `mazeRun`, instead of its own check on mapKind.
@@ -833,6 +888,10 @@ function smashTile(row, col) {
   const t = tileMap.get(row, col);
   if (t === TILE.TREE) tileMap.set(row, col, TILE.ASH);
   else if (t === TILE.ROCK || t === TILE.HUT) tileMap.set(row, col, TILE.EMPTY);
+  // A sapling clears rather than chars: there is not enough of it to leave
+  // ash, and leaving ash would start it growing again on the spot, which makes
+  // clearing one pointless.
+  else if (t === TILE.SAPLING) tileMap.set(row, col, TILE.EMPTY);
 }
 
 // ── ROT.JS — FOV & A* ─────────────────────────────────────────────────────────
@@ -8113,7 +8172,7 @@ function stepGame(dt) {
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
-      updateMazeObjective(dt);
+      updateMazeObjective(dt); regrowth.tick(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -8126,6 +8185,7 @@ function stepGame(dt) {
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
+      regrowth.tick(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -8340,6 +8400,10 @@ export const devHooks = {
   state: () => appState,
   multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
+  // Whether this map grows cover back, and how many tiles are mid-regrowth.
+  // Enough for a test to watch ash come back without reaching into the module.
+  regrowth: () => ({ active: regrowth.active, pending: regrowth.pendingCount }),
+  smashTile: (row, col) => { smashTile(row, col); },
   mapKind: () => mapKind,
   selectedMapKind: () => selectedMapKind,
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to

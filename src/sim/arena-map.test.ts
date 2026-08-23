@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAP_COLS, MAP_GEN, MAP_ROWS, TILE_SIZE, Terrain, type MapKind } from './arena-map';
+import {
+  MAP_COLS, MAP_GEN, MAP_ROWS, MAP_RULES, TILE_SIZE, Terrain, type MapKind,
+} from './arena-map';
 import { pickSpawns } from './spawns';
 import { TILE, TileMap, type TileGrid, type TileId } from './tilemap';
+
+/**
+ * Every map there is, read off the rules table rather than typed out again, so
+ * a new one joins these tests by existing instead of by being remembered.
+ */
+const EVERY_MAP = Object.keys(MAP_RULES) as MapKind[];
 
 /** No noise source, which the generator supports and which keeps tests quick. */
 const flat: () => null = () => null;
@@ -50,13 +58,24 @@ describe('Terrain', () => {
       const castle = Terrain.fromSeed(7, flat, 'castle');
       expect(forest.map.grid).not.toEqual(castle.map.grid);
     });
+
+    // One seed, every map, all different: a kind that quietly fell back to
+    // another map's generator would still be deterministic and still be the
+    // right size, and only this notices.
+    it('gives every map its own grid from one seed', () => {
+      const grids = EVERY_MAP.map((kind) => JSON.stringify(Terrain.fromSeed(7, flat, kind).map.grid));
+      expect(new Set(grids).size).toBe(EVERY_MAP.length);
+    });
+
+    it.each(EVERY_MAP)('builds %s the same way twice, on any machine', (kind) => {
+      expect(Terrain.fromSeed(4242, flat, kind).map.grid)
+        .toEqual(Terrain.fromSeed(4242, flat, kind).map.grid);
+    });
   });
 
   describe('MAP_GEN', () => {
-    it('has a generator for every MapKind', () => {
-      for (const kind of ['forest', 'castle', 'maze'] as const) {
-        expect(typeof MAP_GEN[kind].generate).toBe('function');
-      }
+    it.each(EVERY_MAP)('has a generator for %s', (kind) => {
+      expect(typeof MAP_GEN[kind].generate).toBe('function');
     });
   });
 
@@ -183,6 +202,9 @@ describe('Terrain', () => {
       ['a hut', 'castle', TILE.HUT],
       ['a tree', 'castle', TILE.TREE],
       ['rock', 'castle', TILE.ROCK],
+      ['a hut', 'cavern', TILE.HUT],
+      ['a tree', 'cavern', TILE.TREE],
+      ['rock', 'cavern', TILE.ROCK],
     ])('still clears %s on %s, which MAP_RULES leaves destructible', (_name, kind, tile) => {
       const t = blank(kind);
       t.map.set(4, 4, tile);
@@ -190,6 +212,17 @@ describe('Terrain', () => {
       t.destroyArea(p.x, p.y, 40);
       expect(t.tileAt(p.x, p.y)).toBe(TILE.EMPTY);
       expect(t.walkable(p.x, p.y)).toBe(true);
+    });
+
+    // Cover that grows back has to be stoppable while it is doing it, or
+    // regrowth happens to the player rather than being something they play
+    // against. See sim/regrowth.ts.
+    it('clears a sapling too, so cover can be stopped on its way back', () => {
+      const t = blank();
+      t.map.set(4, 4, TILE.SAPLING);
+      const p = at(4, 4);
+      t.destroyArea(p.x, p.y, 40);
+      expect(t.tileAt(p.x, p.y)).toBe(TILE.EMPTY);
     });
 
     it('leaves a maze exactly as it was carved, walls and all', () => {
@@ -219,6 +252,7 @@ describe('Terrain', () => {
     it.each([
       ['a hut', TILE.HUT],
       ['a tree', TILE.TREE],
+      ['a sapling, which is a tree that has not finished', TILE.SAPLING],
     ])('chars %s to open ground, and says so', (_name, tile) => {
       const t = blank();
       t.map.set(4, 4, tile);
