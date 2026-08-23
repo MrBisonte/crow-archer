@@ -177,6 +177,16 @@ The minotaur is why the split is worth naming. He has no HP row at all,
 `bossHpFor` returns `Infinity` for him, and a hit buys a stun rather than
 damage: he sits in both behavior tables and outside the data one.
 
+None of these are `Record`s the compiler checks, so a stage added without a
+row in each is `undefined` at the call site rather than a build failure, and
+the three call sites fail three different ways: a missing `BOSS_ON_HIT` row
+throws `TypeError` on the first hit that lands, a missing
+`BOSS_HUNTS_WHILE_EXPLORING` row reads as `false`, and a missing
+`BOSS_HP_KEY` row spawns a boss on `undefined` health. The commander shipped
+missing two of the three. A loop over `BOSS_STAGES` now refuses to load
+without a row in every table, which is the same guard `MAP_PANELS` and
+`CHAR_PANELS` already run for the half of their data that cannot be derived.
+
 ### Data structures (verified against current code)
 
 ```ts

@@ -4810,6 +4810,10 @@ function ratRespawnSecs() {
 
 const BOSS_HUNTS_WHILE_EXPLORING = {
   crowking: false, dark_archer: false, dark_knight: false, minotaur: true,
+  // He arrives behind an entrance like the three above him, so exploration
+  // never has him walking around in it. The row exists because a missing one
+  // reads as false rather than as a mistake, which is how it shipped.
+  commander: false,
 };
 
 /**
@@ -4835,6 +4839,8 @@ const BOSS_ON_HIT = {
   // No HP to lower and no death path to reach. A hit buys time instead:
   // it stuns him, which interrupts a charge and lets you get down the corridor.
   minotaur:    ()       => stunMinotaur(),
+  // Nothing special, like the two dark bosses: no shield to time and no daze.
+  commander:   (amount) => applyBossDamage(amount),
 };
 
 // Which CONFIG key holds a kind's health. One key, not one per character:
@@ -4855,6 +4861,30 @@ function bossHpFor(kind) {
   // any of them learning that an unkillable boss exists.
   if (kind === 'minotaur') return Infinity;
   return CONFIG[BOSS_HP_KEY[kind]];
+}
+
+/**
+ * Refuses to load with a boss the tables above do not cover.
+ *
+ * They are Records in shape and plain objects in fact, so a stage added
+ * without a row in each is not a compile error, it is `undefined` at the call
+ * site — and the three call sites fail three different ways. A missing
+ * BOSS_ON_HIT row throws TypeError on the first hit that lands. A missing
+ * BOSS_HUNTS_WHILE_EXPLORING row reads as false, which is a decision nobody
+ * took. A missing BOSS_HP_KEY row spawns a boss on `undefined` health.
+ *
+ * The commander shipped missing two of the three, which made the cavern's
+ * ending crash on the first arrow rather than fail to build.
+ */
+for (const kind of BOSS_STAGES) {
+  if (typeof BOSS_ON_HIT[kind] !== 'function')
+    throw new Error(`BOSS_ON_HIT has no row for '${kind}', which BOSS_STAGES lists`);
+  if (typeof BOSS_HUNTS_WHILE_EXPLORING[kind] !== 'boolean')
+    throw new Error(`BOSS_HUNTS_WHILE_EXPLORING has no row for '${kind}', which BOSS_STAGES lists`);
+  // The minotaur is the one deliberate absence: bossHpFor answers Infinity for
+  // him rather than reading a key, so a row here would be a number nobody uses.
+  if (kind !== 'minotaur' && !BOSS_HP_KEY[kind])
+    throw new Error(`BOSS_HP_KEY has no row for '${kind}', which BOSS_STAGES lists`);
 }
 
 function spawnBoss() {

@@ -2449,3 +2449,46 @@ describe('the balance model', () => {
     expect(bolts * c.wizBoltCooldown).toBeLessThan(10);
   });
 });
+
+describe('every boss the stage list names', () => {
+  /** Puts a stage's boss on the map and opens its fight. */
+  function fightStage(stage: number): { kind: string; hp: number; x: number; y: number } {
+    g.pick('archer');
+    g.go('playing');
+    g.spawnBossNow(stage);
+    g.go('boss_fight');
+    return g.boss() as { kind: string; hp: number; x: number; y: number };
+  }
+
+  it('takes damage rather than throwing on the first hit that lands', () => {
+    // The commander shipped with no BOSS_ON_HIT row, so damageBoss reached
+    // `undefined(amount)` and the cavern's ending crashed on the first arrow.
+    // Every stage but the warden, who has no health to take.
+    for (const stage of [1, 2, 3, 5]) {
+      const boss = fightStage(stage);
+      const before = boss.hp;
+      (boss as { shield?: boolean }).shield = false;   // the crow king opens behind one
+      expect(() => g.blast(boss.x, boss.y), boss.kind).not.toThrow();
+      expect((g.boss() as { hp: number }).hp, boss.kind).toBeLessThan(before);
+    }
+  });
+
+  it('can be brought to nothing, so the fight has an end', () => {
+    for (const stage of [1, 2, 3, 5]) {
+      const boss = fightStage(stage);
+      for (let i = 0; i < 40 && (g.boss() as { hp: number }).hp > 0; i++) {
+        (g.boss() as { shield?: boolean }).shield = false;
+        g.blast(boss.x, boss.y);
+      }
+      expect((g.boss() as { hp: number }).hp, boss.kind).toBeLessThanOrEqual(0);
+    }
+  });
+
+  it('leaves the warden out of it, and unkillable', () => {
+    const boss = fightStage(4);
+    expect(boss.kind).toBe('minotaur');
+    expect(boss.hp).toBe(Infinity);
+    g.blast(boss.x, boss.y);
+    expect((g.boss() as { hp: number }).hp).toBe(Infinity);
+  });
+});
