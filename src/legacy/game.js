@@ -11,6 +11,10 @@ import { Regrowth } from '../sim/regrowth';
 import {
   COMMANDER_WAVE, SOLDIER_STATS, shieldFacing, shieldStops, waveComposition,
 } from '../sim/soldiers';
+import {
+  COMMANDER_PALETTE, COMMANDER_SPRITE, SOLDIER_GRID_BUILDERS, SOLDIER_PALETTES,
+  SOLDIER_SPRITE, buildCommanderGrid,
+} from '../render/soldier-grids';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
@@ -279,6 +283,22 @@ const CONFIG = {
   darkKnightWhirlwindDamage: 1,
   darkKnightSkeletonInterval: 7,  // summons one fire skeleton on this cadence
 
+  // The garrison's commander, mounted: the cavern's last wave and the end of
+  // that run. Tuned against the dark knight, the charging melee boss he most
+  // resembles — more health than either dark boss, and a charge that hurts
+  // less than the knight's. Tanky rather than punishing, so the fight is long
+  // enough to be about reading his charges rather than about surviving one.
+  commanderHP: 10, commanderHPWizard: 24, commanderHPKnight: 22,
+  commanderContactDamage: 2, commanderContactReach: 30,
+  // Rides the player down between charges, slower than he charges by a wide
+  // margin so the wind-up is legible.
+  commanderRideSpeed: 105,
+  commanderChargeSpeed: 430, commanderChargeSecs: 0.75,
+  // Random, but never less than this apart. The floor is the whole of what
+  // makes the charge fair: without it two rolls can land back to back and
+  // there is no window to punish him in.
+  commanderChargeMinGap: 5, commanderChargeGapSpread: 3,
+
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
@@ -471,6 +491,8 @@ const BOSS_ENTRY_TEXT = {
   // for testing without inventing a second boss-spawn path. Wiring level 3
   // into the progression is its own piece of work, see docs/level-3-maze.md.
   4: '⚠  SOMETHING IS ALREADY IN THE MAZE  ⚠',
+  // Reached from Waves mode on the cavern, not from the brawl chain above.
+  5: '⚠  THEIR COMMANDER RIDES OUT  ⚠',
 };
 
 
@@ -3409,6 +3431,9 @@ function updateEscalation(dt) {
     return;
   }
   if (wave >= COMMANDER_WAVE && !boss && appState === 'playing') {
+    // spawnBoss and the entrance banner both read bossStage to decide who is
+    // arriving, so it has to say the commander before either runs.
+    bossStage = 5;
     transitionTo('boss_entrance');
     return;
   }
@@ -3516,7 +3541,11 @@ function updateBossEntrance(dt) {
 
 // Stage order for brawl mode's full run. Index 0 is always the forest fight;
 // 1 and 2 are the castle stage's two dark bosses, fought in sequence.
-const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight', 'minotaur'];
+// Stage 5 is not part of the brawl chain at all. The commander is the cavern's
+// own ending, reached from Waves mode when its wave counter hits
+// COMMANDER_WAVE, and bossStage is set to 5 there purely because spawnBoss and
+// the entrance both read the stage to decide who is arriving.
+const BOSS_STAGES = ['crowking', 'dark_archer', 'dark_knight', 'minotaur', 'commander'];
 
 /**
  * What a landed hit does, per boss.
@@ -3612,6 +3641,7 @@ const BOSS_HP_KEYS = {
   crowking:    ['bossHP', 'bossHPWizard', 'bossHPKnight'],
   dark_archer: ['darkArcherHP', 'darkArcherHPWizard', 'darkArcherHPKnight'],
   dark_knight: ['darkKnightHP', 'darkKnightHPWizard', 'darkKnightHPKnight'],
+  commander:   ['commanderHP', 'commanderHPWizard', 'commanderHPKnight'],
 };
 
 function bossHpFor(kind) {
@@ -3652,6 +3682,25 @@ function spawnBoss() {
       chargeTimer: 0, cooldown: 0,
       path: null, pathTimer: 0,     // prowls on the shared A* scheduler
       state: 'aggro',               // what pathScheduler.serve() looks for
+    };
+    return;
+  }
+  if (kind === 'commander') {
+    // Placed out in the map like the minotaur, and for the same reason: a
+    // cavern has no open lane down the right to ride in along, so the
+    // entrance's walk-in-from-the-edge does not apply to him.
+    const at = openTileAwayFrom(player.x, player.y, 320) ?? { x: common.x, y: common.y };
+    boss = {
+      ...common,
+      x: at.x, y: at.y,
+      bstate: 'ride',
+      shield: false,
+      charge: 0, chargeAngle: 0,
+      // The opening charge waits out the same floor every later one does, so
+      // the fight starts with him closing rather than already on top of you.
+      chargeCD: CONFIG.commanderChargeMinGap,
+      path: null, pathTimer: 0,   // rides on the shared A* scheduler
+      state: 'aggro',             // what pathScheduler.serve() looks for
     };
     return;
   }
@@ -4030,6 +4079,7 @@ function updateBoss(dt) {
   // The minotaur shares the frame preamble above (burn, flash, facing, daze)
   // and none of what follows: no shield window, no orbit, no volleys.
   if (boss.kind === 'minotaur') { updateMinotaur(dt); return; }
+  if (boss.kind === 'commander') { updateCommander(dt); return; }
 
   // ── Shield phase machine — crow king only ────────────────────────────────
   // Rolling 30s window: reset shield-use counter each window
@@ -4256,6 +4306,59 @@ function updateHostileBolts(dt) {
   }
 }
 
+/**
+ * The garrison's commander, mounted.
+ *
+ * His own loop rather than a fifth branch inside the arena bosses' orbit and
+ * charge machine, for the reason the minotaur has one: what he shares with
+ * them is the damage contract, not the movement. He rides the player down at a
+ * walk and charges on a timer, and that is the whole of him — no orbit, no
+ * shield window, no summons.
+ *
+ * The charge is random with a floor. A pure random interval can roll two
+ * charges back to back, which leaves no window to punish him in and reads as
+ * unfair rather than as dangerous; a fixed interval reads as a metronome and
+ * is beaten by counting. The floor plus a spread is the pair of those.
+ */
+function updateCommander(dt) {
+  const b = boss;
+  if (b.hitFlash > 0) b.hitFlash = Math.max(0, b.hitFlash - dt);
+
+  const dx = player.x - b.x, dy = player.y - b.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  b.facing = dx >= 0 ? 1 : -1;
+
+  if (dist < CONFIG.commanderContactReach) damagePlayer(CONFIG.commanderContactDamage);
+
+  if (b.charge > 0) {
+    // Committed to the heading he picked at the wind-up, so stepping off that
+    // line is the answer. Rock stops him dead rather than sliding him along
+    // it, which is what makes fighting him among the pillars worth doing.
+    b.charge -= dt;
+    const nx = b.x + Math.cos(b.chargeAngle) * CONFIG.commanderChargeSpeed * dt;
+    const ny = b.y + Math.sin(b.chargeAngle) * CONFIG.commanderChargeSpeed * dt;
+    if (tilePassable(tileAt(nx, ny))) { b.x = nx; b.y = ny; }
+    else b.charge = 0;
+    b.wingPhase += dt * 14;
+    return;
+  }
+
+  b.chargeCD -= dt;
+  if (b.chargeCD <= 0) {
+    b.charge = CONFIG.commanderChargeSecs;
+    b.chargeAngle = Math.atan2(dy, dx);
+    b.chargeCD = CONFIG.commanderChargeMinGap
+      + Math.random() * CONFIG.commanderChargeGapSpread;
+    events.emit({ type: 'BOSS_CHARGE' });
+    return;
+  }
+
+  // Between charges he closes at a walk, on the same cached A* the rest of the
+  // garrison uses, so the cavern's rock is something he goes round too.
+  chaseAlongPath(b, CONFIG.commanderRideSpeed, dt);
+  b.wingPhase += dt * 6;
+}
+
 function spawnBossBats() {
   const n = CONFIG.bossBatsPerSummon;
   for (let i = 0; i < n; i++) {
@@ -4348,6 +4451,12 @@ function updateBossDeath(dt) {
       player.x = spawn.x; player.y = spawn.y;
       spawnBoss();
       showStageIntro('maze');
+    } else if (deadKind === 'commander') {
+      // The cavern's ending. Not a hand-off to another stage the way the brawl
+      // chain's deaths are: this run is over, and what is left of the garrison
+      // goes with him rather than being left walking around a won map.
+      soldiers = []; skeletons = [];
+      transitionTo('win');
     } else {
       // The minotaur cannot die, so nothing reaches here through him. The
       // maze is won by walking out of the door, not by clearing the room.
@@ -6041,109 +6150,15 @@ function drawSkeleton(s) {
 }
 
 // ── SOLDIER ART ───────────────────────────────────────────────────────────────
-
-const SOLDIER_SPRITE = { w: 16, h: 24 };
-
-/**
- * One palette per kind, chosen so the three read apart at a distance before
- * their silhouettes do: warm bronze for the spearman, cold steel and blue for
- * the shieldman, green and leather for the archer. A player has to know which
- * one is closing without waiting to see what it is carrying.
- */
-const SOLDIER_PALETTES = {
-  spearman:  { cloth:'#8A6A38', clothHi:'#A88448', metal:'#9AA0A8', metalHi:'#C4CAD2',
-               skin:'#C89868', edge:'#2A2018', accent:'#B03028' },
-  shieldman: { cloth:'#44557A', clothHi:'#5E7296', metal:'#AAB4C0', metalHi:'#D8E0E8',
-               skin:'#C89868', edge:'#1C2230', accent:'#C8A030' },
-  archer:    { cloth:'#3E5E3A', clothHi:'#52784C', metal:'#8A8A78', metalHi:'#B0B0A0',
-               skin:'#C89868', edge:'#1A2418', accent:'#8A5A28' },
-};
-
-/**
- * The body all three share: legs on the stride, a tunic, a belt and a head.
- * What each kind carries is added on top by its own builder, so the walk cycle
- * is written once.
- *
- * Everything is drawn facing +x. `drawSoldier` mirrors the whole sprite when
- * the soldier is looking the other way, which is what keeps a shield on the
- * side the shield actually guards.
- */
-function buildSoldierBody(C, frame) {
-  const g = makePixelGrid(SOLDIER_SPRITE.w, SOLDIER_SPRITE.h);
-  const swing = frame === 'a' ? 2 : frame === 'b' ? -2 : 0;
-
-  pixelCurve(g, [6, 16], [6 + swing * 0.4, 19], [6 + swing, 22], C.cloth, 10);
-  pixelCurve(g, [9, 16], [9 - swing * 0.4, 19], [9 - swing, 22], C.cloth, 10);
-  pixelRect(g, 5 + swing, 21, 3, 2, C.edge);
-  pixelRect(g, 8 - swing, 21, 3, 2, C.edge);
-
-  pixelRect(g, 5, 9, 6, 8, C.cloth);
-  pixelRect(g, 5, 9, 6, 2, C.clothHi);
-  pixelRect(g, 5, 15, 6, 1, C.edge);
-
-  pixelEllipse(g, 8, 5, 3, 3.2, C.skin);
-  return g;
-}
-
-/** Spearman: conical helm, and the spear levelled at whatever it is walking toward. */
-function buildSoldierSpearGrid(frame) {
-  const C = SOLDIER_PALETTES.spearman;
-  const g = buildSoldierBody(C, frame);
-  pixelTriangleUp(g, 8, 4, 4, 4, C.metal);
-  pixelRect(g, 5, 4, 6, 1, C.metalHi);
-  // Shaft across the chest and out past the leading hand, head at the tip.
-  pixelRect(g, 4, 11, 12, 1, C.accent);
-  pixelTriangleUp(g, 15, 12, 2, 3, C.metalHi);
-  pixelRect(g, 10, 10, 2, 3, C.skin);
-  return pixelOutline(g, C.edge);
-}
-
-/**
- * Shieldman: a flat-topped helm and a shield filling the leading side.
- *
- * The shield is deliberately large and on one side only, because that is the
- * mechanic drawn — sim/soldiers.ts stops shots inside 60 degrees of the nose,
- * and this is the picture a player reads that rule off.
- */
-function buildSoldierShieldGrid(frame) {
-  const C = SOLDIER_PALETTES.shieldman;
-  const g = buildSoldierBody(C, frame);
-  pixelRect(g, 5, 2, 6, 3, C.metal);
-  pixelRect(g, 5, 2, 6, 1, C.metalHi);
-  // Sword arm tucked behind the body.
-  pixelRect(g, 4, 12, 1, 5, C.metal);
-  // Shield: edge to edge down the leading side, boss in the middle.
-  pixelRect(g, 11, 7, 4, 11, C.metal);
-  pixelRect(g, 11, 7, 4, 1, C.metalHi);
-  pixelRect(g, 11, 17, 4, 1, C.edge);
-  pixelEllipse(g, 13, 12, 1.6, 1.8, C.accent);
-  return pixelOutline(g, C.edge);
-}
-
-/** Archer: hood instead of a helm, and a bow drawn on the leading side. */
-function buildSoldierBowGrid(frame) {
-  const C = SOLDIER_PALETTES.archer;
-  const g = buildSoldierBody(C, frame);
-  pixelEllipse(g, 8, 4, 3.6, 3.4, C.cloth);
-  pixelEllipse(g, 8.5, 5, 2.4, 2.2, C.skin);
-  // Bow limb curving down the leading side, string across it.
-  pixelCurve(g, [12, 7], [15, 12], [12, 17], C.accent, 12);
-  pixelRect(g, 12, 8, 1, 9, C.metalHi);
-  pixelRect(g, 9, 11, 3, 1, C.skin);
-  return pixelOutline(g, C.edge);
-}
-
-/** One row per kind, so a fourth soldier is a builder and a row, not a branch. */
-const SOLDIER_LOOK = {
-  spearman:  { build: buildSoldierSpearGrid },
-  shieldman: { build: buildSoldierShieldGrid },
-  archer:    { build: buildSoldierBowGrid },
-};
+//
+// The grids themselves live in render/soldier-grids.ts, beside the heroes'.
+// What stays here is the drawing: the parts that need `ctx`, the sprite cache
+// and the per-body state a grid knows nothing about.
 
 const _soldierGrids = {};
 function soldierGrid(kind, frame) {
   const key = `${kind}|${frame}`;
-  return _soldierGrids[key] || (_soldierGrids[key] = SOLDIER_LOOK[kind].build(frame));
+  return _soldierGrids[key] || (_soldierGrids[key] = SOLDIER_GRID_BUILDERS[kind](frame));
 }
 
 /**
@@ -6581,6 +6596,7 @@ function drawBoss() {
   if (boss.kind === 'dark_archer') { drawDarkArcher(); return; }
   if (boss.kind === 'dark_knight') { drawDarkKnight(); return; }
   if (boss.kind === 'minotaur')    { drawMinotaur(); return; }
+  if (boss.kind === 'commander')   { drawCommander(); return; }
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const fl = boss.hitFlash > 0;
   const bossPulse = 0.5 + 0.5 * Math.sin(loopT * 2);
@@ -6973,6 +6989,48 @@ function drawDarkKnight() {
  * progress that never comes. The stun ring is the only feedback a hit gives,
  * so it has to be unmistakable.
  */
+const _commanderGrids = {};
+function commanderGrid(frame) {
+  return _commanderGrids[frame] || (_commanderGrids[frame] = buildCommanderGrid(frame));
+}
+
+/**
+ * The commander. Same ground shadow and hit flash every other body uses, plus
+ * a dust streak behind a committed charge so the one dangerous state is
+ * visible from across the room.
+ */
+function drawCommander() {
+  const b = boss;
+  const cx = b.x, cy = b.y + CONFIG.hudHeight;
+  const flashOn = b.hitFlash > 0;
+  const frame = animFrame3(b.wingPhase);
+  const grid = commanderGrid(frame);
+
+  ctx.save();
+  ctx.translate(cx + (b.knockX || 0), cy + (b.knockY || 0));
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(0, 13, 15, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+
+  if (b.charge > 0) {
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = COMMANDER_PALETTE.cloth;
+    for (let i = 1; i <= 3; i++) {
+      ctx.fillRect(-Math.cos(b.chargeAngle) * (10 + i * 9) - 3, -6 + i, 6, 3);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if (b.facing < 0) ctx.scale(-1, 1);
+  const sprite = flashOn
+    ? spriteFlashCanvas(`commander|${frame}`, grid, COMMANDER_SPRITE.w, COMMANDER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`commander|${frame}`, grid, COMMANDER_SPRITE.w, COMMANDER_SPRITE.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 10; }
+  ctx.drawImage(sprite, -COMMANDER_SPRITE.w / 2, -16);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
 function drawMinotaur() {
   const bx = boss.x, by = boss.y + CONFIG.hudHeight;
   const flashOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash * 20) % 2 === 0;

@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
-import { SOLDIER_STATS, waveComposition } from '../sim/soldiers';
+import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 
@@ -436,6 +436,76 @@ describe('the cavern garrison', () => {
     expect(shots).toBeGreaterThan(0);
     // And it held its ground rather than walking into contact.
     expect(Math.abs(s.x - player.x)).toBeGreaterThan(g.config().soldierContactReach);
+  });
+});
+
+describe('the commander', () => {
+  /** Runs a cavern waves run forward until its wave counter reaches `wave`. */
+  function runToWave(wave: number): void {
+    g.go('menu');
+    press('w');
+    press('Enter');
+    press('v');
+    press('Enter');
+    expect(g.mapKind()).toBe('cavern');
+    // One interval per wave, plus a little, and the field kept clear so the
+    // run is not decided by a spearman while the clock advances.
+    for (let i = 0; i < wave; i++) {
+      g.soldiers().length = 0;
+      g.stepSim(g.config().crowEscalationInterval * ONE_SECOND + 2);
+    }
+  }
+
+  it('does not ride out while the garrison is still holding', () => {
+    runToWave(COMMANDER_WAVE - 2);
+    expect(g.state()).toBe('playing');
+    expect(g.boss()).toBeFalsy();
+  });
+
+  it('rides out on his own wave and opens the fight', () => {
+    runToWave(COMMANDER_WAVE);
+    // The entrance is a state of its own; walk it the way the brawl tests do.
+    expect(['boss_entrance', 'boss_fight']).toContain(g.state());
+    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    expect(g.boss().kind).toBe('commander');
+  });
+
+  it('carries more health than either dark boss, and hits for less than the knight', () => {
+    const c = g.config();
+    expect(c.commanderHP).toBeGreaterThan(c.darkArcherHP);
+    expect(c.commanderHP).toBeGreaterThan(c.darkKnightHP);
+    expect(c.commanderContactDamage).toBeLessThan(c.darkKnightContactDamage);
+  });
+
+  it('holds his charge for at least the minimum gap, however the roll lands', () => {
+    runToWave(COMMANDER_WAVE);
+    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    g.go('boss_fight');
+    const boss = g.boss();
+
+    // Wind the first charge out, then watch the next gap. However the random
+    // spread rolls, it can never come in under the floor — which is the whole
+    // reason the floor exists.
+    boss.chargeCD = 0;
+    g.stepSim(1);
+    expect(boss.charge).toBeGreaterThan(0);
+    expect(boss.chargeCD).toBeGreaterThanOrEqual(g.config().commanderChargeMinGap);
+  });
+
+  it('commits a charge to the heading it picked, not to where the player went', () => {
+    runToWave(COMMANDER_WAVE);
+    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    g.go('boss_fight');
+    const boss = g.boss();
+    const player = g.player() as { x: number; y: number };
+
+    boss.chargeCD = 0;
+    g.stepSim(1);
+    const committed = boss.chargeAngle;
+    // Move the player well off that line; the charge must not re-aim.
+    player.y += 260;
+    g.stepSim(4);
+    expect(boss.chargeAngle).toBe(committed);
   });
 });
 
