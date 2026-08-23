@@ -7,6 +7,7 @@ import { FOV, Path } from 'rot-js';
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
 import { MAP_GEN, MAP_RULES, runsWaves } from '../sim/arena-map';
+import { modeRule, picksItsMap } from '../sim/game-mode';
 import { Regrowth } from '../sim/regrowth';
 import {
   COMMANDER_WAVE, SOLDIER_STATS, shieldFacing, shieldStops, waveComposition,
@@ -618,7 +619,7 @@ const LOW_HP_FRACTION = 0.25;
 // | paused | boss_entrance | boss_fight | stage_intro | inventory | win | gameover
 let appState = 'menu', controlsFrom = 'menu', pausedFrom = 'playing';
 
-let gameMode = 'brawl'; // 'brawl' | 'waves'  — persists across restarts
+let gameMode = 'brawl'; // a SinglePlayerMode; see MODE_RULES — persists across restarts
 let score = 0, wave = 1, gameTime = 0, escalationTimer = 0;
 let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
@@ -2497,8 +2498,8 @@ events.on(e => {
 function initGame() {
   // Brawl is always forest — see the architecture doc's map-selection table.
   // Waves honours whatever was picked on the mapselect screen.
-  generateMap(gameMode === 'waves' ? selectedMapKind : 'forest');
-  score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0;
+  generateMap(modeRule(gameMode).fixedMap ?? selectedMapKind);
+  score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0; waveAnnounceText = '';
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   knightBlockCD = 0;
@@ -2545,7 +2546,7 @@ function initGame() {
  * demand more hits than any weapon's ammo economy could supply.
  */
 function waveCrowHpMult() {
-  if (gameMode !== 'waves') return 1;
+  if (!modeRule(gameMode).waveScaling) return 1;
   return Math.min(10, Math.pow(1.1, wave - 1));
 }
 
@@ -2556,7 +2557,7 @@ function waveCrowHpMult() {
  * would stop being dodgeable at all, which is a different kind of hard.
  */
 function waveCrowAggroMult() {
-  if (gameMode !== 'waves') return 1;
+  if (!modeRule(gameMode).waveScaling) return 1;
   return Math.min(2, Math.pow(1.1, Math.floor((wave - 1) / 3)));
 }
 
@@ -3569,7 +3570,7 @@ function killCrow(j) {
   if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(c.x, c.y); }
   crows.splice(j, 1);
   // boss only triggers in brawl mode
-  if (gameMode === 'brawl' && killCount >= CONFIG.killsToTriggerBoss && appState === 'playing') transitionTo('boss_entrance');
+  if (modeRule(gameMode).bossTrigger === 'killCount' && killCount >= CONFIG.killsToTriggerBoss && appState === 'playing') transitionTo('boss_entrance');
 }
 
 // ── SKELETONS (castle stage) ────────────────────────────────────────────────
@@ -3663,7 +3664,7 @@ function killSkeleton(j) {
   // castleWave is 0 until startCastleWave sets it, so any other skeleton kind
   // in play elsewhere — the maze's rats, a boss summon before wave 1 — cannot
   // advance a gauntlet that has not begun.
-  if (gameMode === 'brawl' && appState === 'playing' && castleWave > 0 && skeletons.length === 0) {
+  if (modeRule(gameMode).runsCastleGauntlet && appState === 'playing' && castleWave > 0 && skeletons.length === 0) {
     if (castleWave < CASTLE_TOTAL_WAVES) startCastleWave(castleWave + 1);
     else transitionTo('boss_entrance');
   }
@@ -4557,13 +4558,15 @@ function checkPickupCollection() {
 function updateEscalation(dt) {
   escalationTimer += dt;
   if (waveAnnounce > 0) waveAnnounce -= dt;
-  // Brawl's castle stage is entirely wave-driven (startCastleWave), not this
-  // timer — see killSkeleton. Only waveAnnounce still needs to count down
-  // here so a castle-wave banner fades on schedule. Waves mode never calls
-  // startCastleWave, so gate on gameMode too: without it, picking Castle on
-  // the mapselect screen returned here every tick and the run never spawned
-  // another crow past the opening batch.
-  if (gameMode === 'brawl' && mapKind === 'castle') return;
+  // A mode that runs the castle gauntlet drives that stage from
+  // startCastleWave — see killSkeleton — so this timer must keep its hands
+  // off it. Only waveAnnounce still counts down here, so a castle-wave banner
+  // fades on schedule. The gate is on the *mode*, not on the map alone: keyed
+  // on `mapKind === 'castle'` by itself, picking Castle on the mapselect
+  // screen returned here every tick and the run never spawned another crow
+  // past the opening batch. runsCastleGauntlet is that lesson kept as one
+  // field, read here and in killSkeleton so the pair cannot drift apart.
+  if (modeRule(gameMode).runsCastleGauntlet && mapKind === 'castle') return;
   // The maze's population is scripted: its rat pack and its warden are placed
   // by the stage, not by this timer. See MAP_RULES.population.
   if (!mapHasCrows() && !mapHasSoldiers()) return;
@@ -4571,7 +4574,7 @@ function updateEscalation(dt) {
 
   escalationTimer -= CONFIG.crowEscalationInterval;
   wave++;
-  if (gameMode === 'waves') { waveAnnounce = 2.2; waveAnnounceText = `── WAVE ${wave} ──`; }
+  if (modeRule(gameMode).announcesWaves) { waveAnnounce = 2.2; waveAnnounceText = `── WAVE ${wave} ──`; }
 
   // What a wave is made of is the map's business, not this timer's. Crows
   // trickle in one at a time under a cap; a garrison arrives as a composed
@@ -9128,7 +9131,7 @@ function drawLaneContext(t, isBoss) {
   } else {
     ctx.font = 'bold 12px "Courier New", monospace';
     ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 4; ctx.fillStyle = '#39FF14';
-    ctx.fillText(gameMode === 'brawl'
+    ctx.fillText(modeRule(gameMode).summaryStat === 'kills'
       ? 'KILLS ' + String(killCount).padStart(2, '0') + '/10'
       : 'WAVE ' + String(wave).padStart(2, '0'), cx, 18);
     ctx.shadowBlur = 0;
@@ -9145,7 +9148,7 @@ function drawLaneContext(t, isBoss) {
   if (mazeRun) drawMazeKeys(cx);
 
   ctx.textAlign = 'right'; ctx.fillStyle = '#196407';
-  ctx.fillText(gameMode === 'brawl' ? 'BRAWL' : 'WAVES', 792, 42);
+  ctx.fillText(modeRule(gameMode).label, 792, 42);
 }
 
 function drawBossBar(t, cx) {
@@ -9373,7 +9376,7 @@ function _selectionScreenBackdrop(title, subtitle) {
 }
 
 function drawCharSelect(t) {
-  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${gameMode.toUpperCase()}`);
+  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
 
   // The selected panel takes a fixed share of the row and the rest split what
   // is left. Five equal panels could not hold five description lines without
@@ -9635,12 +9638,12 @@ function drawGameOver(t) {
   ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 5;
   ctx.fillStyle = '#39FF14'; ctx.font = '22px "Courier New", monospace';
   ctx.fillText(`FINAL SCORE:   ${String(score).padStart(3,'0')}`, CONFIG.canvasW/2, 254);
-  if (gameMode === 'brawl') ctx.fillText(`KILLS:         ${killCount}`, CONFIG.canvasW/2, 296);
+  if (modeRule(gameMode).summaryStat === 'kills') ctx.fillText(`KILLS:         ${killCount}`, CONFIG.canvasW/2, 296);
   else                      ctx.fillText(`WAVE REACHED:  ${wave}`,     CONFIG.canvasW/2, 296);
   ctx.shadowBlur = 0;
 
   ctx.fillStyle = '#0a3a06'; ctx.font = '13px "Courier New", monospace';
-  ctx.fillText(`[ ${gameMode.toUpperCase()} MODE ]`, CONFIG.canvasW/2, 336);
+  ctx.fillText(`[ ${modeRule(gameMode).label} MODE ]`, CONFIG.canvasW/2, 336);
 
   ctx.fillStyle = '#1a7a08'; ctx.font = '18px "Courier New", monospace';
   ctx.fillText(`[R] RESTART${Math.floor(t*2)%2===0 ? '_' : ' '}     [M] MENU`, CONFIG.canvasW/2, 390);
@@ -9680,7 +9683,7 @@ function drawWin(t) {
   ctx.fillText(`HP REMAINING:  ${hp}`, CONFIG.canvasW/2, 350);
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#0a3a06'; ctx.font = '13px "Courier New", monospace';
-  ctx.fillText(`[ ${gameMode.toUpperCase()} MODE ]`, CONFIG.canvasW/2, 378);
+  ctx.fillText(`[ ${modeRule(gameMode).label} MODE ]`, CONFIG.canvasW/2, 378);
 
   ctx.fillStyle = '#1a7a08'; ctx.font = '18px "Courier New", monospace';
   ctx.fillText(`[R] PLAY AGAIN${Math.floor(t*2)%2===0 ? '_' : ' '}   [M] MENU`, CONFIG.canvasW/2, 410);
@@ -10026,7 +10029,7 @@ function stepGame(dt) {
       selectedChar = cyclePanelSelection(CHAR_PANELS, selectedChar, 'char');
       // Waves lets the player pick the ground; brawl's map is fixed, so it
       // skips straight to the run the way it always has.
-      if (keys['Enter']) { transitionTo(gameMode === 'waves' ? 'mapselect' : 'playing'); keys['Enter']=false; }
+      if (keys['Enter']) { transitionTo(picksItsMap(gameMode) ? 'mapselect' : 'playing'); keys['Enter']=false; }
       if (keys['Escape']) { transitionTo('menu'); keys['Escape']=false; }
       break; }
 
@@ -10345,6 +10348,19 @@ export const devHooks = {
   smashTile: (row, col) => { smashTile(row, col); },
   mapKind: () => mapKind,
   selectedMapKind: () => selectedMapKind,
+  // The mode axis. Until these existed, MENU_ENTRIES was the only writer of
+  // gameMode and it is reachable only by a keypress on the title screen, so
+  // every test in the suite ran in the default 'brawl' and nothing had ever
+  // exercised the other side of the mode branches. setMode is deliberately
+  // unvalidated: modeRule falls back to brawl for anything it does not
+  // recognise, and a test that wants to prove that needs to be able to set
+  // nonsense on purpose.
+  mode: () => gameMode,
+  setMode(m) { gameMode = m; },
+  // The wave counter and the banner it raises, so a test can watch escalation
+  // happen through the real timer rather than asserting on a draw call.
+  wave: () => wave,
+  waveBanner: () => ({ secs: waveAnnounce, text: waveAnnounceText }),
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
   // hold onto after the call; setLogLevel changes what future calls record,
   // it does not retroactively add or remove anything already in the ring.

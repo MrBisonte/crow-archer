@@ -7,7 +7,7 @@
  * nothing else runs on import, so the simulation can be driven here with no
  * DOM at all. `devHooks.stepSim` advances the sim without a frame or a render.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CHARACTERS, type CharacterKind } from '../net/protocol';
 import { CHARACTER_STATS } from '../sim/arena';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
@@ -2316,5 +2316,177 @@ describe('the ranger net', () => {
       expect(g.rangerNet().drawing, character).toBe(false);
       expect(g.nets().length, character).toBe(0);
     }
+  });
+});
+
+// ── SINGLE PLAYER MODE ────────────────────────────────────────────────────────
+//
+// Until devHooks grew mode()/setMode(), MENU_ENTRIES was the only writer of
+// gameMode and it is reachable only by a keypress on the title screen, so every
+// test in this file ran in the default 'brawl'. The waves side of all eleven
+// mode branches had never been executed. These cover both sides of each rule in
+// MODE_RULES that has an observable effect on the simulation; the two that only
+// change drawn text (label, summaryStat) are pinned in game-mode.test.ts
+// instead, since asserting on a canvas call would test the renderer, not the
+// rule.
+describe('single player mode rules', () => {
+  // gameMode persists across restarts by design, so a test that changes it has
+  // to put it back or it leaks into everything after it — which is exactly the
+  // isolation trap that made this axis untested in the first place.
+  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+
+  describe('mapChoice and fixedMap decide the ground', () => {
+    it('brawl ignores the map picked on the mapselect screen', () => {
+      g.setMode('brawl');
+      g.pickMap('cavern');
+      g.go('playing');
+      expect(g.mapKind()).toBe('forest');
+    });
+
+    it('waves honours it', () => {
+      g.setMode('waves');
+      g.pickMap('cavern');
+      g.go('playing');
+      expect(g.mapKind()).toBe('cavern');
+    });
+
+    it('every map a panel offers is one waves can actually start on', () => {
+      // MAP_PANELS is derived from runsWaves, and initGame reads the same
+      // selection. A map that earns a panel but cannot be started on would be
+      // a dead entry on the screen.
+      g.setMode('waves');
+      for (const kind of Object.keys(MAP_RULES) as MapKind[]) {
+        if (!runsWaves(kind)) continue;
+        g.pickMap(kind);
+        g.go('playing');
+        expect(g.mapKind(), kind).toBe(kind);
+      }
+    });
+  });
+
+  describe('mapChoice also decides whether mapselect is on the way in', () => {
+    // Pressed through the `keys` map stepGame actually reads, rather than
+    // through devHooks.key(): that one builds a KeyboardEvent, and this suite
+    // runs in vitest's node environment where there is no DOM to build one in.
+    const pressEnterOnCharSelect = (): void => {
+      g.go('charselect');
+      (g.keys() as Record<string, boolean>)['Enter'] = true;
+      g.stepSim(1);
+    };
+
+    it('waves stops at the map screen, brawl goes straight to the run', () => {
+      g.setMode('waves');
+      pressEnterOnCharSelect();
+      expect(g.state()).toBe('mapselect');
+
+      g.setMode('brawl');
+      pressEnterOnCharSelect();
+      expect(g.state()).toBe('playing');
+    });
+  });
+
+  describe('bossTrigger decides what puts the boss on the field', () => {
+    it('brawl sends the boss in at the kill count, waves never does', () => {
+      const target = g.config().killsToTriggerBoss;
+
+      g.setMode('brawl');
+      g.go('playing');
+      for (let i = 0; i < target; i++) { g.spawnCrow(); g.kill(0); }
+      expect(g.state()).toBe('boss_entrance');
+
+      g.setMode('waves');
+      g.go('playing');
+      for (let i = 0; i < target * 2; i++) { g.spawnCrow(); g.kill(0); }
+      expect(g.killCount()).toBeGreaterThanOrEqual(target * 2);
+      expect(g.state()).toBe('playing');
+    });
+  });
+
+  describe('waveScaling decides whether crows get tougher', () => {
+    it('waves ramps crow hp with the wave, brawl leaves it flat', () => {
+      // Brawl is a sprint to ten kills and a boss, so it has no long climb to
+      // ramp against; waves is endless and needs one. Both are stepped through
+      // the real escalation timer so the wave number is arrived at, not set.
+      const steps = Math.ceil(g.config().crowEscalationInterval * 60) + 5;
+
+      const hpAfterOneEscalation = (mode: string): number => {
+        g.setMode(mode);
+        g.pickMap('forest');
+        g.go('playing');
+        g.stepSim(steps);
+        expect(g.wave(), `${mode} should have escalated`).toBe(2);
+        g.crows().length = 0;
+        g.spawnCrow();
+        const crow = g.crows()[0];
+        expect(crow, `${mode} should have spawned a crow`).toBeDefined();
+        return crow.maxHp;
+      };
+
+      expect(hpAfterOneEscalation('brawl')).toBe(1);
+      expect(hpAfterOneEscalation('waves')).toBeGreaterThan(1);
+    });
+  });
+
+  describe('announcesWaves decides whether a new wave says so', () => {
+    it('waves raises a banner on escalation and brawl stays quiet', () => {
+      // Driven through the real timer rather than by setting the counter, so
+      // this exercises updateEscalation itself.
+      const interval = g.config().crowEscalationInterval;
+      const steps = Math.ceil(interval * 60) + 5;
+
+      g.setMode('waves');
+      g.pickMap('forest');
+      g.go('playing');
+      const startWave = g.wave();
+      g.stepSim(steps);
+      expect(g.wave()).toBe(startWave + 1);
+      expect(g.waveBanner().secs).toBeGreaterThan(0);
+      expect(g.waveBanner().text).toContain(String(startWave + 1));
+
+      g.setMode('brawl');
+      g.pickMap('forest');
+      g.go('playing');
+      g.stepSim(steps);
+      expect(g.waveBanner().secs).toBe(0);
+      expect(g.waveBanner().text).toBe('');
+    });
+  });
+
+  describe('runsCastleGauntlet keeps two population drivers apart', () => {
+    // The Waves+Castle bug, pinned from both sides. Escalation used to bail on
+    // `mapKind === 'castle'` alone, so a Waves run on the castle never spawned
+    // another crow past the opening batch. Keying on the mode is the fix, and
+    // one field feeds both this and killSkeleton's gauntlet advance.
+    it('waves on the castle keeps escalating', () => {
+      const steps = Math.ceil(g.config().crowEscalationInterval * 60) + 5;
+      g.setMode('waves');
+      g.pickMap('castle');
+      g.go('playing');
+      const startWave = g.wave();
+      g.stepSim(steps);
+      expect(g.wave()).toBe(startWave + 1);
+    });
+
+    it('brawl on the castle does not, because the gauntlet drives it', () => {
+      const steps = Math.ceil(g.config().crowEscalationInterval * 60) + 5;
+      g.setMode('brawl');
+      g.go('playing');
+      g.generateMap('castle');
+      const startWave = g.wave();
+      g.stepSim(steps);
+      expect(g.wave()).toBe(startWave);
+    });
+  });
+
+  describe('an unrecognised mode falls back rather than throwing', () => {
+    it('runs as brawl, because the draw loop reads this every frame', () => {
+      g.setMode('not-a-mode');
+      g.pickMap('cavern');
+      g.go('playing');
+      // brawl's fixed map, reached through the fallback row.
+      expect(g.mapKind()).toBe('forest');
+      g.stepSim(30);
+      expect(g.state()).toBe('playing');
+    });
   });
 });
