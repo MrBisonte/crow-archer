@@ -751,23 +751,31 @@ describe('the sapper', () => {
   });
 
   it('refuses a second charge until the cooldown has run', () => {
+    // Counts throws rather than bombs still in the air: the bomb outflies the
+    // cooldown, so whether the first one is still on the field by the time the
+    // third press lands depends on where the map put its water, not on
+    // whether the press was accepted.
+    let thrown = 0;
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'charge') thrown++;
+    });
+
     g.shoot();
     g.stepSim(1);
-    expect(g.dynamites().length).toBe(1);
+    expect(thrown).toBe(1);
 
     // Straight away: still winding, so the press is refused rather than queued.
     g.shoot();
     g.stepSim(1);
-    expect(g.dynamites().length).toBe(1);
+    expect(thrown).toBe(1);
     expect(g.sapperChargeCD()).toBeGreaterThan(0);
 
-    // Once the cooldown is spent, the next press throws. Stopping short of the
-    // 1.5s fuse keeps the first charge on the field to be counted.
+    // Once the cooldown is spent, the next press throws.
     g.stepSim(Math.ceil(g.config().sapperChargeCooldown * ONE_SECOND));
     expect(g.sapperChargeCD()).toBe(0);
     g.shoot();
     g.stepSim(1);
-    expect(g.dynamites().length).toBe(2);
+    expect(thrown).toBe(2);
   });
 
   it('spends no ammo, so it keeps throwing past what a pouch would hold', () => {
@@ -782,13 +790,140 @@ describe('the sapper', () => {
     }
     expect(thrown).toBeGreaterThan(pouch);
     // And every one of them went off rather than piling up: the last throw is
-    // still mid-fuse when the loop ends, so wait out a full fuse first.
-    g.stepSim(Math.ceil(g.config().dynamiteLifetime * ONE_SECOND) + 2);
+    // still mid-fuse when the loop ends, so wait out a full fuse first. The
+    // sapper's bomb burns longer than the archer's stick, so it is that fuse
+    // this has to outlast.
+    g.stepSim(Math.ceil(g.config().sapperBombLifetime * ONE_SECOND) + 2);
     expect(g.dynamites().length).toBe(0);
   });
 
   it('starts every run with the charge ready rather than winding', () => {
     expect(g.sapperChargeCD()).toBe(0);
+  });
+
+  it('throws a round bomb, not the archer\'s stick of dynamite', () => {
+    g.shoot();
+    g.stepSim(1);
+    expect(g.dynamites()[0].kind).toBe('bomb');
+  });
+
+  it('outranges the archer\'s dynamite, by speed and by fuse both', () => {
+    const c = g.config();
+    expect(c.sapperBombSpeed).toBeGreaterThan(c.dynamiteSpeed);
+    expect(c.sapperBombLifetime).toBeGreaterThan(c.dynamiteLifetime);
+  });
+
+  describe('the barrage', () => {
+    it('fans a fixed count of bombs across its own arc', () => {
+      const c = g.config();
+      const p = g.player() as { aimAngle: number };
+      p.aimAngle = 0;
+      g.barrage();
+      const bombs = g.barrageBombs();
+      expect(bombs.length).toBe(c.sapperBarrageCount);
+
+      // Symmetric about the aim, spanning exactly the configured arc.
+      const angles = bombs.map((b: { angle: number }) => b.angle).sort((a: number, b: number) => a - b);
+      const half = c.sapperBarrageArcRadians / 2;
+      expect(angles[0]).toBeCloseTo(-half, 5);
+      expect(angles[angles.length - 1]).toBeCloseTo(half, 5);
+      // An odd count puts one bomb dead on the aim line rather than straddling it.
+      expect(angles[(angles.length - 1) / 2]).toBeCloseTo(0, 5);
+    });
+
+    it('refuses a second barrage until its cooldown has run', () => {
+      g.barrage();
+      expect(g.sapperBarrageCD()).toBeGreaterThan(0);
+      g.barrageBombs().length = 0;
+      g.barrage();
+      expect(g.barrageBombs().length).toBe(0);
+    });
+
+    it('goes off on contact rather than counting down a fuse', () => {
+      clearArena();
+      const { tileSize } = g.config();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 6.5 * tileSize;
+      p.y = 6.5 * tileSize;
+      p.aimAngle = 0;
+      g.crows().length = 0;
+      // A wall two tiles east, so the centre bomb reaches it well inside its
+      // own fuse. Terrain rather than a crow on purpose: a passive crow's y is
+      // recomputed from baseY every frame, so one placed by hand does not stay
+      // where it was put.
+      for (let dr = -2; dr <= 2; dr++) g.tiles().set(6 + dr, 8, TILE.ROCK);
+
+      let explosions = 0;
+      g.onEvent((e: { type: string }) => { if (e.type === 'EXPLOSION') explosions++; });
+      g.barrage();
+      const fuse = Math.ceil(g.config().sapperBarrageLifetime * ONE_SECOND);
+      const steps = 12;
+      g.stepSim(steps);
+      // Well short of the fuse running out, so this can only be a contact hit.
+      expect(steps).toBeLessThan(fuse);
+      expect(explosions).toBeGreaterThan(0);
+    });
+  });
+
+  describe('the shift shot', () => {
+    it('is gated on a ten-second cooldown', () => {
+      expect(g.config().sapperShotCooldown).toBe(10);
+      g.sapperShot();
+      expect(g.sapperShots().length).toBe(1);
+      expect(g.sapperShotCD()).toBe(10);
+
+      g.sapperShots().length = 0;
+      g.sapperShot();
+      expect(g.sapperShots().length).toBe(0);
+    });
+
+    it('detonates the sapper\'s own bomb into a bigger blast', () => {
+      clearArena();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 6.5 * g.config().tileSize;
+      p.y = 6.5 * g.config().tileSize;
+      p.aimAngle = 0;
+      g.crows().length = 0;
+
+      // A bomb sat still in the shot's path, rather than one mid-throw.
+      g.dynamites().push({
+        x: p.x + 60, y: p.y, vx: 0, vy: 0,
+        life: 5, fuseTotal: 5, kind: 'bomb', angle: 0, bobPhase: 0,
+      });
+
+      let big = false;
+      g.onEvent((e: { type: string; big?: boolean }) => { if (e.type === 'EXPLOSION') big = !!e.big; });
+      g.sapperShot();
+      g.stepSim(6);
+
+      // The bomb is gone, and what it went off as was the combo blast rather
+      // than the plain one its own fuse would have produced.
+      expect(g.dynamites().length).toBe(0);
+      expect(big).toBe(true);
+    });
+
+    it('rewards a centre hit over a glancing one', () => {
+      const c = g.config();
+      // The falloff is what makes it a skill shot: dead centre is worth
+      // several times the edge of the same blast.
+      expect(c.sapperComboFalloffMax).toBeGreaterThan(c.sapperComboFalloffMin);
+      expect(c.sapperComboRadiusMult).toBeGreaterThan(1);
+    });
+  });
+
+  it('is not rooted by the shift key, since it spends it on the shot', () => {
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    const from = p.x;
+    const keys = g.keys() as Record<string, boolean>;
+    keys[g.config().keys.snipe] = true;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys[g.config().keys.snipe] = false;
+    keys['ArrowRight'] = false;
+    expect(p.x).toBeGreaterThan(from);
   });
 });
 

@@ -322,6 +322,22 @@ const CONFIG = {
   // primary but the wizard's bolt, matching SAPPER_CHARGE_COOLDOWN_TICKS in
   // sim/weapons.ts.
   sapperChargeCooldown: 1.1,
+  // The sapper's own bomb outranges the archer's dynamite on purpose, via
+  // speed and fuse both — a straight-line demolition tool, not a lob.
+  sapperBombSpeed: 400, sapperBombLifetime: 1.8,
+  // Special: a fan of mini-bombs across a fixed arc, each a small independent
+  // blast that goes off on the first thing it touches rather than counting
+  // down a fuse — area denial the primary alone can't give him.
+  sapperBarrageCount: 5, sapperBarrageArcRadians: Math.PI / 4, sapperBarrageCooldown: 6,
+  sapperBarrageSpeed: 380, sapperBarrageLifetime: 0.9, sapperBarrageBlastRadius: 40,
+  sapperBarrageDamage: 1,
+  // Shift: a fast piercing shot. A direct hit is a clean multiple of a normal
+  // one; catching the sapper's own live bomb in flight instead detonates it
+  // early into a bigger blast, its damage highest at the centre and falling
+  // off toward the edge — the reward for threading the harder shot.
+  sapperShotCooldown: 10, sapperShotSpeed: 600, sapperShotLifetime: 1.5,
+  sapperShotDamageMult: 3, sapperShotBossDamage: 3,
+  sapperComboRadiusMult: 1.33, sapperComboFalloffMax: 10, sapperComboFalloffMin: 2,
 
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
@@ -605,8 +621,8 @@ const CHAR_PANELS = [
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
-    lines:['Powder charges  ·  1.1s cooldown','Bounces off cover, then clears it',
-           'No quiver: the cooldown is the limit','Blast hits everything in radius','Demolition playstyle'] },
+    lines:['Bombs  ·  1.1s cooldown, long reach','Special: 5-bomb barrage, 45° fan',
+           'Shift: piercing shot, 3x dmg (10s)','Snipe your own bomb for a combo blast','Demolition playstyle'] },
 ];
 
 /**
@@ -715,6 +731,7 @@ let selectedMapKind = 'forest';
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
 let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
+let sapperBarrageCD = 0, sapperShotCD = 0;
 // Arcane Blink: what the wizard spends the sniper key on. The iframe is the
 // short mercy window on arrival, without which blinking out of a swarm still
 // takes the hit you blinked away from.
@@ -1243,6 +1260,10 @@ function startCharge() {
     // No charge-and-hold: each click either throws a satchel or arms the one
     // already out. releaseCharge() has nothing to do for the ranger.
     if (inGame()) useSatchel();
+  } else if (selectedChar === 'sapper') {
+    // No charge-and-hold either: one press fires the whole fan at once.
+    // releaseCharge() has nothing to do for the sapper, same as the ranger.
+    trySapperBarrage();
   } else {
     if (inv.dynamites > 0 && !charge.on && inGame()) { charge.on = true; charge.t0 = performance.now(); }
   }
@@ -1318,7 +1339,7 @@ function installInput() {
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
-    if (!keys[e.key] && e.key === CONFIG.keys.snipe) { startKnightCharge(); tryWizardBlink(); }
+    if (!keys[e.key] && e.key === CONFIG.keys.snipe) { startKnightCharge(); tryWizardBlink(); trySapperShot(); }
     keys[e.key] = true;
     if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
@@ -1347,6 +1368,10 @@ function installInput() {
 // ── ENTITIES ──────────────────────────────────────────────────────────────────
 
 let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamites = [], satchels = [];
+// The sapper's special and Shift: kept apart from dynamites/arrows since
+// neither shares their physics (mini-bombs explode on contact rather than a
+// fuse; the shift shot flies straight and never bounces).
+let barrageBombs = [], sapperShots = [];
 // The castle stage's critter. A parallel array to crows, not a variant of it —
 // see damageSkeleton/killSkeleton and updateSkeletons for why.
 let skeletons = [];
@@ -1446,6 +1471,10 @@ const WEAPON_FX = {
   // The sapper's lob. Reuses the knight charge's whoosh rather than the bow's
   // snap: what the ear needs to hear is that something heavy is in the air.
   charge:    { sound: () => sndChargeWhoosh, shake: [2, 60] },
+  // Five of them leaving at once, so it lands heavier than one bomb does.
+  barrage:   { sound: () => sndChargeWhoosh, shake: [4, 120] },
+  // The shot itself is light — what it sets off is not.
+  sapperShot: { sound: () => sndCrossbow, shake: [2, 70] },
 };
 
 events.on(e => {
@@ -1631,14 +1660,18 @@ events.on(e => {
           shapeMix: [['spark', 0.7], ['circle', 0.3]],
           sizeMin: 1.5, sizeMax: 3, gravity: 380, shadowColor: '#FFFFFF' });
       } else {
-        burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#FFB400'],
-          speedMin: 200, speedMax: 360, decay: 4.0,
+        // The sapper's shift-detonated combo reaches a bigger radius than a
+        // normal blast, so its burst travels 33% further to match rather than
+        // reading like a normal explosion sitting inside a bigger ring.
+        const m = e.big ? CONFIG.sapperComboRadiusMult : 1;
+        burst(e.x, e.y, { count: Math.round(12 * m), colors: ['#FFFFFF','#FFB400'],
+          speedMin: 200 * m, speedMax: 360 * m, decay: 4.0,
           shape: 'circle', sizeMin: 2, sizeMax: 5, shadowBlur: 16, shadowColor: '#FFB400' });
-        burst(e.x, e.y, { count: 36, colors: ['#FF7A1F','#FF1F1F','#FFB400','#8A1010'],
-          speedMin: 120, speedMax: 260, decay: 1.2,
+        burst(e.x, e.y, { count: Math.round(36 * m), colors: ['#FF7A1F','#FF1F1F','#FFB400','#8A1010'],
+          speedMin: 120 * m, speedMax: 260 * m, decay: 1.2,
           shape: 'circle', sizeMin: 2.5, sizeMax: 5, damping: 0.5, shadowBlur: 10, shadowColor: '#FF7A1F' });
-        burst(e.x, e.y, { count: 12, colors: ['#3A3A3A','#1A1A1A','#5C5C5C'],
-          speedMin: 30, speedMax: 80, decay: 0.5,
+        burst(e.x, e.y, { count: Math.round(12 * m), colors: ['#3A3A3A','#1A1A1A','#5C5C5C'],
+          speedMin: 30 * m, speedMax: 80 * m, decay: 0.5,
           shape: 'circle', sizeMin: 4, sizeMax: 7, gravity: -10, shrink: true });
       }
       break;
@@ -1861,6 +1894,7 @@ function initGame() {
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -2016,12 +2050,15 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  // The knight spends this button on his charge, and the wizard on a blink.
-  // Neither has an aim line worth sharpening: the knight has none at all, and
-  // the wizard's bolts steer themselves onto a target after they are cast, so
-  // a tighter angle at the moment of casting buys him almost nothing while
-  // the root that comes with it costs him everything.
-  sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && hasButton(cmd, Button.SNIPE);
+  // The knight spends this button on his charge, the wizard on a blink, and
+  // the sapper on his shot. None of the three has an aim line worth
+  // sharpening: the knight has none at all, the wizard's bolts steer
+  // themselves onto a target after they are cast, and the sapper's shot flies
+  // in one straight, undeflected line already — a tighter angle at the moment
+  // of firing buys any of them almost nothing while the root that comes with
+  // it costs everything.
+  sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && selectedChar !== 'sapper'
+    && hasButton(cmd, Button.SNIPE);
 
   // Charging roots him in place the same way sniper mode roots everyone else.
   if (!sniperMode && !knightCharge.on) {
@@ -2059,6 +2096,8 @@ function updatePlayer(dt) {
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
+  if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
+  if (sapperShotCD        > 0) sapperShotCD       = Math.max(0, sapperShotCD       - dt);
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
@@ -2353,16 +2392,20 @@ function startWhirlwind() {
  * Puts one stick of powder in the air along the current aim.
  *
  * Shared by the archer's charged throw and the sapper's primary: same flight,
- * bounce, fuse and blast, and the only difference is what each spends to get
- * it there and how fast it leaves the hand. Extracted rather than copied, so
- * the two can never drift into being two slightly different explosives.
+ * bounce and blast, and the only difference is what each spends to get it
+ * there, how fast it leaves the hand, and how long its fuse runs — kind picks
+ * which of those last two, and doubles as what tells drawDynamites() and the
+ * sapper's own Shift shot which bomb this is. Extracted rather than copied,
+ * so the two throws can never drift into being two slightly different
+ * explosives.
  */
-function launchCharge(speed) {
+function launchCharge(speed, kind = 'dynamite') {
+  const lifetime = kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime;
   dynamites.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * speed,
     vy: Math.sin(player.aimAngle) * speed,
-    life: CONFIG.dynamiteLifetime, fuseTotal: CONFIG.dynamiteLifetime,
+    life: lifetime, fuseTotal: lifetime, kind,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
 }
@@ -2386,8 +2429,53 @@ function throwDynamite(chargeFrac) {
 function trySapperCharge() {
   if (sapperChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   sapperChargeCD = CONFIG.sapperChargeCooldown;
-  launchCharge(CONFIG.dynamiteSpeed);
+  launchCharge(CONFIG.sapperBombSpeed, 'bomb');
   events.emit({ type: 'WEAPON_FIRED', kind: 'charge' });
+}
+
+/**
+ * The sapper's special: a fan of mini-bombs across a fixed arc in front of
+ * him, each a small independent blast that goes off on the first thing it
+ * touches rather than counting down a fuse — what "having only dynamite" was
+ * missing, area denial that doesn't wait a second and a half to matter.
+ */
+function trySapperBarrage() {
+  if (selectedChar !== 'sapper' || !inGame()) return;
+  if (sapperBarrageCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  sapperBarrageCD = CONFIG.sapperBarrageCooldown;
+  const n = CONFIG.sapperBarrageCount, half = CONFIG.sapperBarrageArcRadians / 2;
+  for (let i = 0; i < n; i++) {
+    // n-1 equal steps across the arc, symmetric about aim angle, so an odd
+    // count always puts one bomb on the aim line rather than straddling it.
+    const a = player.aimAngle - half + (n === 1 ? half : (half * 2 * i) / (n - 1));
+    barrageBombs.push({
+      x: player.x, y: player.y,
+      vx: Math.cos(a) * CONFIG.sapperBarrageSpeed, vy: Math.sin(a) * CONFIG.sapperBarrageSpeed,
+      life: CONFIG.sapperBarrageLifetime, angle: a,
+    });
+  }
+  events.emit({ type: 'WEAPON_FIRED', kind: 'barrage' });
+}
+
+/**
+ * The sapper's Shift: a fast, straight shot with two very different jobs.
+ * Landed on an enemy it is a plain multiple of a normal hit; landed on the
+ * sapper's own live bomb instead, it detonates that bomb early into a bigger
+ * blast whose damage peaks at the very centre and falls off toward the
+ * edge — the payoff for threading a shot through whatever stands between the
+ * sapper and his own charge. UT99's shock-combo, not a second weapon.
+ */
+function trySapperShot() {
+  if (selectedChar !== 'sapper' || !inGame()) return;
+  if (sapperShotCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  sapperShotCD = CONFIG.sapperShotCooldown;
+  sapperShots.push({
+    x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * CONFIG.sapperShotSpeed,
+    vy: Math.sin(player.aimAngle) * CONFIG.sapperShotSpeed,
+    life: CONFIG.sapperShotLifetime, angle: player.aimAngle,
+  });
+  events.emit({ type: 'WEAPON_FIRED', kind: 'sapperShot' });
 }
 
 function fireLightningStorm() {
@@ -3155,21 +3243,23 @@ function updateDynamites(dt) {
 }
 
 /**
- * One explosive going off — dynamite's timer running out, or a satchel's
- * timer or the ranger's own bolt. Blast radius is dynamite's own CONFIG
- * figure for both, one copy rather than two numbers that could quietly drift
- * apart. Boss damage is not: the satchel hits for less, `source` picks which
- * CONFIG figure applies and is also carried through to `damageBoss` to tag
- * which weapon the hit event names.
+ * One explosive going off — dynamite's timer running out, a satchel's timer,
+ * the ranger's own bolt, a mini-bomb from the sapper's barrage, or his own
+ * bomb detonated early by his Shift shot. Blast radius and boss damage
+ * default to dynamite's own CONFIG figures; a caller with a different size
+ * (the barrage) or a per-target falloff (the Shift combo) passes `opts`
+ * instead of a second copy of this function existing to drift out of sync
+ * with the first.
  */
-function explodeExplosive(d, source) {
+function explodeExplosive(d, source, opts = {}) {
+  const radius = opts.radius ?? CONFIG.dynamiteBlastRadius;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
-  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater });
-  const r2 = CONFIG.dynamiteBlastRadius ** 2;
+  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: !!opts.falloff });
+  const r2 = radius ** 2;
 
   // Destroy ROCK and TREE tiles within blast radius
-  const tileR = Math.ceil(CONFIG.dynamiteBlastRadius / CONFIG.tileSize);
+  const tileR = Math.ceil(radius / CONFIG.tileSize);
   const tc = Math.floor(d.x / CONFIG.tileSize), tr = Math.floor(d.y / CONFIG.tileSize);
   for (let dr = -tileR; dr <= tileR; dr++) {
     for (let dc = -tileR; dc <= tileR; dc++) {
@@ -3182,14 +3272,107 @@ function explodeExplosive(d, source) {
     }
   }
 
-  for (let j = crows.length - 1; j >= 0; j--)
-    if (dist2(d.x, d.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
-  for (let j = skeletons.length - 1; j >= 0; j--)
-    if (dist2(d.x, d.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
+  // Flat 1x with no falloff configured, otherwise a linear taper from max at
+  // the epicentre to min at the very edge of the radius.
+  const falloffAt = (tx, ty) => {
+    if (!opts.falloff) return 1;
+    const frac = Math.min(1, Math.sqrt(dist2(d.x, d.y, tx, ty)) / radius);
+    return opts.falloff.max - frac * (opts.falloff.max - opts.falloff.min);
+  };
+
+  for (let j = crows.length - 1; j >= 0; j--) {
+    const c = crows[j];
+    if (dist2(d.x, d.y, c.x, c.y) < r2) damageCrow(j, falloffAt(c.x, c.y));
+  }
+  for (let j = skeletons.length - 1; j >= 0; j--) {
+    const s = skeletons[j];
+    if (dist2(d.x, d.y, s.x, s.y) < r2) damageSkeleton(j, falloffAt(s.x, s.y));
+  }
   if (bossInPlay() && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
-    const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage : CONFIG.dynamiteBossDamage;
-    damageBoss(bossDamage, d.x, d.y, source, 0.25);
+    const base = source === 'satchel' ? CONFIG.satchelBossDamage
+                : source === 'barrage' ? CONFIG.sapperBarrageDamage
+                : CONFIG.dynamiteBossDamage;
+    damageBoss(base * falloffAt(boss.x, boss.y), d.x, d.y, source, 0.25);
+  }
+}
+
+/**
+ * The sapper's barrage mini-bombs: straight flight, no bounce, and — unlike
+ * the main charge — a check every frame for the first thing they touch,
+ * since "explodes on hit" is the whole point of a fan of them. A miss still
+ * goes off once its short fuse runs out, so a barrage into open ground reads
+ * as five small blasts rather than five bombs vanishing off-screen.
+ */
+function updateBarrageBombs(dt) {
+  const hitR = CONFIG.arrowHitRadius;
+  for (let i = barrageBombs.length - 1; i >= 0; i--) {
+    const b = barrageBombs[i];
+    b.life -= dt;
+    const nx = b.x + b.vx * dt, ny = b.y + b.vy * dt;
+    const blocked = !tilePassable(tileAt(nx, ny));
+    if (!blocked) { b.x = nx; b.y = ny; }
+
+    let hit = blocked;
+    if (!hit) for (const c of crows) if (dist2(b.x, b.y, c.x, c.y) < hitR * hitR) { hit = true; break; }
+    if (!hit) for (const s of skeletons) if (dist2(b.x, b.y, s.x, s.y) < hitR * hitR) { hit = true; break; }
+    if (!hit && bossInPlay() && !boss.shield && dist2(b.x, b.y, boss.x, boss.y) < hitR * hitR) hit = true;
+
+    if (hit || b.life <= 0) {
+      explodeExplosive(b, 'barrage', { radius: CONFIG.sapperBarrageBlastRadius });
+      barrageBombs.splice(i, 1);
+    }
+  }
+}
+
+/**
+ * The sapper's Shift shot: straight flight, no bounce, gone on the first
+ * thing it touches. The sapper's own live bombs are checked before enemies —
+ * see trySapperShot() — since threading the combo is the shot this ability
+ * exists for, not a fallback.
+ */
+function updateSapperShots(dt) {
+  const hitR = CONFIG.arrowHitRadius;
+  for (let i = sapperShots.length - 1; i >= 0; i--) {
+    const s = sapperShots[i];
+    s.life -= dt;
+    const nx = s.x + s.vx * dt, ny = s.y + s.vy * dt;
+    if (!tilePassable(tileAt(nx, ny)) || s.life <= 0) { sapperShots.splice(i, 1); continue; }
+    s.x = nx; s.y = ny;
+
+    let comboHit = false;
+    for (let j = dynamites.length - 1; j >= 0; j--) {
+      const d = dynamites[j];
+      if (d.kind === 'bomb' && dist2(s.x, s.y, d.x, d.y) < hitR * hitR) {
+        dynamites.splice(j, 1);
+        explodeExplosive(d, 'sapperShot', {
+          radius: CONFIG.dynamiteBlastRadius * CONFIG.sapperComboRadiusMult,
+          falloff: { max: CONFIG.sapperComboFalloffMax, min: CONFIG.sapperComboFalloffMin },
+        });
+        comboHit = true;
+        break;
+      }
+    }
+    if (comboHit) { sapperShots.splice(i, 1); continue; }
+
+    let hit = false;
+    if (bossInPlay() && !boss.shield && dist2(s.x, s.y, boss.x, boss.y) < hitR * hitR) {
+      damageBoss(CONFIG.sapperShotBossDamage, s.x, s.y, 'sapperShot', 0.2);
+      hit = true;
+    }
+    if (!hit) for (let j = crows.length - 1; j >= 0; j--)
+      if (dist2(s.x, s.y, crows[j].x, crows[j].y) < hitR * hitR) {
+        damageCrow(j, CONFIG.sapperShotDamageMult, knockFrom(s.vx, s.vy)); hit = true; break;
+      }
+    if (!hit) for (let j = skeletons.length - 1; j >= 0; j--)
+      if (dist2(s.x, s.y, skeletons[j].x, skeletons[j].y) < hitR * hitR) {
+        damageSkeleton(j, CONFIG.sapperShotDamageMult, knockFrom(s.vx, s.vy)); hit = true; break;
+      }
+    if (!hit) for (let j = soldiers.length - 1; j >= 0; j--)
+      if (dist2(s.x, s.y, soldiers[j].x, soldiers[j].y) < hitR * hitR) {
+        damageSoldier(j, CONFIG.sapperShotDamageMult, knockFrom(s.vx, s.vy), Math.atan2(s.vy, s.vx)); hit = true; break;
+      }
+    if (hit) sapperShots.splice(i, 1);
   }
 }
 
@@ -6014,40 +6197,56 @@ function drawDynamites() {
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.beginPath(); ctx.ellipse(0, 7, 13, 2.5, 0, 0, Math.PI*2); ctx.fill();
 
-    // 2. Body
-    ctx.fillStyle = '#FF1F1F'; ctx.fillRect(-12, -4, 24, 8);
-    // 3. Body shading — lower half darker (cylinder volume)
-    ctx.fillStyle = '#8A1010'; ctx.fillRect(-12, 0, 24, 4);
-    // 4. End caps
-    ctx.fillStyle = '#5A0808';
-    ctx.fillRect(-12, -4, 1, 8); ctx.fillRect(11, -4, 1, 8);
+    // 2-4. Body. The sapper's own bomb is round — a real bomb, not the
+    // archer's stick of dynamite; everything else about it (shadow, label,
+    // wick, spark, countdown) stays the shared look both throws already had.
+    const isBomb = d.kind === 'bomb';
+    if (isBomb) {
+      ctx.fillStyle = '#FF1F1F';
+      ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill();
+      ctx.save();
+      ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.clip();
+      ctx.fillStyle = '#8A1010'; ctx.fillRect(-10, 3, 20, 10);
+      ctx.restore();
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath(); ctx.arc(-3.5, -3.5, 2, 0, Math.PI*2); ctx.fill();
+    } else {
+      ctx.fillStyle = '#FF1F1F'; ctx.fillRect(-12, -4, 24, 8);
+      ctx.fillStyle = '#8A1010'; ctx.fillRect(-12, 0, 24, 4);
+      ctx.fillStyle = '#5A0808';
+      ctx.fillRect(-12, -4, 1, 8); ctx.fillRect(11, -4, 1, 8);
+    }
     // 5. Label rect
-    ctx.fillStyle = '#F0F0F0'; ctx.fillRect(-7, -3, 14, 6);
+    const labelW = isBomb ? 12 : 14, labelH = isBomb ? 5 : 6;
+    ctx.fillStyle = '#F0F0F0'; ctx.fillRect(-labelW/2, -labelH/2, labelW, labelH);
     // 6. Label text "TNT"
     ctx.fillStyle = '#0A0A0A'; ctx.font = 'bold 6px monospace';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('TNT', 0, 0.5);
 
-    // 7. Wick — bezier from (11,-4) arcing to (17,-10)
+    // 7. Wick — anchored on the body's own edge, so it sits flush whichever
+    //    shape the body is this time.
+    const wickBase = isBomb ? { x: 7,  y: -7  } : { x: 11, y: -4  };
+    const wickTip   = isBomb ? { x: 12, y: -13 } : { x: 17, y: -10 };
     //    Unburnt section (gold)
     ctx.strokeStyle = '#A07828'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(11, -4);
-    ctx.quadraticCurveTo(14, -7, 17, -10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(wickBase.x, wickBase.y);
+    ctx.quadraticCurveTo(wickBase.x + 3, wickBase.y - 3, wickTip.x, wickTip.y); ctx.stroke();
     // Charred section (grows from base toward tip)
     if (burntFrac > 0) {
       ctx.strokeStyle = '#3A2A1A'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(11, -4);
-      ctx.quadraticCurveTo(11 + burntFrac*3, -4 - burntFrac*3,
-                            11 + burntFrac*6, -4 - burntFrac*6); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(wickBase.x, wickBase.y);
+      ctx.quadraticCurveTo(wickBase.x + burntFrac*3, wickBase.y - burntFrac*3,
+                            wickBase.x + burntFrac*6, wickBase.y - burntFrac*6); ctx.stroke();
     }
 
     // 8. Spark outer halo
     ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 4 * Math.sin(sparkPhase);
     ctx.fillStyle = `rgba(255,180,0,0.4)`;
-    ctx.beginPath(); ctx.arc(17, -10, 3 + Math.sin(sparkPhase), 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(wickTip.x, wickTip.y, 3 + Math.sin(sparkPhase), 0, Math.PI*2); ctx.fill();
     // 8b. Spark core
     ctx.fillStyle = '#FFFFFF';
-    ctx.beginPath(); ctx.arc(17, -10, 1.5 + 0.5*Math.sin(sparkPhase), 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(wickTip.x, wickTip.y, 1.5 + 0.5*Math.sin(sparkPhase), 0, Math.PI*2); ctx.fill();
     ctx.shadowBlur = 0;
 
     ctx.rotate(-d.angle);
@@ -6061,6 +6260,39 @@ function drawDynamites() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     ctx.fillText(String(Math.max(1, Math.ceil(fuseT))), 0, -12);
     ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+}
+
+/** The sapper's barrage: small dark-iron balls, no fuse to read since they
+ *  go off on contact rather than a countdown. */
+function drawBarrageBombs() {
+  for (const b of barrageBombs) {
+    const dx = b.x, dy = b.y + CONFIG.hudHeight;
+    ctx.save(); ctx.translate(dx, dy);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.ellipse(0, 4, 5, 1.5, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#2A2A2A';
+    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath(); ctx.arc(-1.3, -1.3, 1, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+/** The sapper's shift shot: a thin glowing dart, since it flies straight and
+ *  is gone the instant it touches anything. */
+function drawSapperShots() {
+  for (const s of sapperShots) {
+    const dx = s.x, dy = s.y + CONFIG.hudHeight;
+    const a = Math.atan2(s.vy, s.vx);
+    ctx.save(); ctx.translate(dx, dy); ctx.rotate(a);
+    ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 6;
+    ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(9, 0); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.arc(9, 0, 1.6, 0, Math.PI*2); ctx.fill();
     ctx.restore();
   }
 }
@@ -7620,6 +7852,9 @@ const GLYPH = {
       ctx.moveTo(s*dx, m-s*0.3); ctx.lineTo(s*(dx+0.28), m); ctx.lineTo(s*dx, m+s*0.3); ctx.stroke(); } },
   dynamite: (s) => { ctx.fillRect(s*0.28, s*0.28, s*0.44, s*0.62);
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.5, s*0.28); ctx.lineTo(s*0.72, s*0.06); ctx.stroke(); },
+  // Three mini-bombs fanned across the barrage's own arc, not just a row.
+  barrage: (s) => { [[0.22, 0.62], [0.5, 0.42], [0.78, 0.62]].forEach(([x, y]) => {
+    ctx.beginPath(); ctx.arc(s*x, s*y, s*0.14, 0, Math.PI*2); ctx.fill(); }); },
   satchel: (s) => { ctx.fillRect(s*0.15, s*0.4, s*0.7, s*0.5);
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.3, s*0.4); ctx.lineTo(s*0.7, s*0.4); ctx.stroke(); },
   javelin: (s) => { ctx.lineWidth = 2;
@@ -7718,7 +7953,7 @@ const LANE_D = {
   ranger: ['snipe', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
-  sapper: ['charge', 'snipe', 'shield'],
+  sapper: ['charge', 'barrage', 'sapperShot', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -7737,6 +7972,10 @@ const CHIP = {
                       label: playerShield ? 'ON' : '', frac: null }),
   snipe:     () => ({ glyph: 'snipe', color: '#F0C830', lit: sniperMode,
                       label: sniperMode ? 'ON' : '', frac: null }),
+  barrage:    () => cooldownChip('barrage', sapperBarrageCD, CONFIG.sapperBarrageCooldown, 0),
+  // Reuses the snipe crosshair glyph — it is a precision shot, same read as
+  // everyone else's aim-down-it key, just cooldown-gated instead of held.
+  sapperShot: () => cooldownChip('snipe', sapperShotCD, CONFIG.sapperShotCooldown, 0),
 };
 
 /** Shared shape for anything that recharges: ready, counting down, or live. */
@@ -8164,6 +8403,7 @@ function _drawCharPreview(cx, cy, char, t) {
     wizard: { grid: buildWizardGrid(SP_TRIM.wizard),        sprite: WIZARD_SPRITE, key: 'wizard' },
     knight: { grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' },
     ranger: { grid: buildRangerGrid(rFrame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${rFrame}` },
+    sapper: { grid: buildSapperGrid(SP_TRIM.sapper),         sprite: SAPPER_SPRITE, key: 'sapper' },
   };
   const p = PREVIEW[char];
   if (!p) return;
@@ -8655,7 +8895,7 @@ function render(t) {
     for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
     for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
     for (const s of soldiers) if (litAt(s.x, s.y)) drawSoldier(s);
-    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts();
+    drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
@@ -8837,6 +9077,7 @@ function stepGame(dt) {
       if (keys['Escape']) { pausedFrom='playing'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
+      updateBarrageBombs(dt); updateSapperShots(dt);
       // The maze's warden hunts you the whole level, so he ticks here as well
       // as in a boss fight. See BOSS_HUNTS_WHILE_EXPLORING for why this is a
       // table lookup and not a kind check.
@@ -8856,6 +9097,7 @@ function stepGame(dt) {
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
+      updateBarrageBombs(dt); updateSapperShots(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       regrowth.tick(dt); updateSoldiers(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
@@ -9063,6 +9305,15 @@ export const devHooks = {
   // the protocol knows about actually has a panel to be picked from.
   charPanels: () => CHAR_PANELS,
   sapperChargeCD: () => sapperChargeCD,
+  // Barrage and shot run off the same startCharge/keydown edges the archer's
+  // secondary and the wizard's blink do, so headless tests drive them
+  // directly rather than staging a real mouse click or keypress.
+  barrage() { trySapperBarrage(); },
+  sapperShot() { trySapperShot(); },
+  sapperBarrageCD: () => sapperBarrageCD,
+  sapperShotCD: () => sapperShotCD,
+  barrageBombs: () => barrageBombs,
+  sapperShots: () => sapperShots,
   // The blink runs off a keydown edge rather than the held `keys` map, so a
   // headless test drives it the same way devHooks.shoot drives the primary.
   blink() { tryWizardBlink(); },
