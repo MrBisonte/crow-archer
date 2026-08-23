@@ -25,6 +25,7 @@ export type HitSource =
 /** Which attack a player started. */
 export type WeaponKind =
   | 'arrow'
+  | 'net'
   | 'bolt'
   | 'crossbow'
   | 'pitchfork'
@@ -60,6 +61,7 @@ export type GameEvent =
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
+  | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }
   // Player state

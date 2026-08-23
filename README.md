@@ -68,7 +68,7 @@ See the [manual](docs/manual.md#multiplayer) for hosting others, deploying, and 
 | Aim | Mouse |
 | Shoot / Cast | Space |
 | Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice: throw, then arm (Ranger) / none (Sapper) |
-| Shift | Per character: the archer draws a power shot, the knight winds up a charging sweep, the wizard blinks, the ranger and sapper get sniper mode. Tap again within 1.1 s to chain the knight's or the wizard's |
+| Shift | Per character: the archer draws a power shot, the knight winds up a charging sweep, the wizard blinks, the ranger throws a net, the sapper gets sniper mode. Tap again within 1.1 s to chain the knight's or the wizard's |
 | Pause | Escape |
 | Inventory | I (while paused) |
 
@@ -81,7 +81,7 @@ Move, Shoot, Sniper mode and Pause are remappable from the Controls screen.
 | **Archer** | bow | fastest shots, weakest hit: about five to kill |
 | **Wizard** | staff | slow, hard-hitting bolts that steer toward whoever is nearest |
 | **Knight** | spear | nothing at range; a thrust that lands twice per swing |
-| **Ranger** | crossbow | three smaller, weaker bolts per shot, each an independent hit |
+| **Ranger** | crossbow | three smaller, weaker bolts per shot, each an independent hit; a net that pins a group |
 | **Sapper** | powder charge | slowest throw, thrown at a place: it bounces, fuses, and blasts an area |
 
 See the [manual](docs/manual.md#characters) for the full kit of each: primary, special, and pickups.

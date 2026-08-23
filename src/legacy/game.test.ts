@@ -497,9 +497,10 @@ describe('the wizard blink arrival pulse', () => {
     const crows = g.crows();
     crows.length = 0;
     g.spawnCrow();
-    const crow = crows[0] as { x: number; y: number; state: string };
+    const crow = crows[0] as { x: number; y: number; baseY: number; state: string };
     crow.x = x;
     crow.y = y;
+    crow.baseY = y;   // passive crows bob around baseY, and y alone is overwritten
     crow.state = 'passive';
   }
 
@@ -820,6 +821,198 @@ describe('the archer power shot', () => {
       clearArena();
       g.shift();
       expect(g.archerDraw().drawing, character).toBe(false);
+    }
+  });
+});
+
+interface NetOpen { type: string; x: number; y: number; radius: number; caught: number }
+
+describe('the ranger net', () => {
+  /** A ranger on open ground, aiming due east. */
+  function rangerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * ts;
+    p.y = (row + 0.5) * ts;
+    p.aimAngle = 0;
+    return p;
+  }
+
+  /** Draws for `secs`, throws, and runs the sim until the net opens. */
+  function throwNet(secs: number): NetOpen {
+    let seen: NetOpen | null = null;
+    g.onEvent((e: { type: string }) => {
+      if (e.type === 'RANGER_NET_OPEN') seen = e as NetOpen;
+    });
+    g.shift();
+    g.holdNet(secs);
+    g.shiftUp();
+    for (let i = 0; i < 120 && seen === null; i++) g.stepSim(1);
+    if (seen === null) throw new Error('the net never opened');
+    return seen;
+  }
+
+  /** One crow at a point, with the rest cleared away. */
+  function loneCrowAt(x: number, y: number):
+      { x: number; y: number; hp: number; heldTimer: number; frozen: boolean } {
+    const crows = g.crows();
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0] as
+      { x: number; y: number; baseY: number; hp: number; heldTimer: number;
+        state: string; frozen: boolean };
+    crow.x = x;
+    crow.y = y;
+    crow.baseY = y;
+    crow.state = 'passive';
+    // Held still for the flight. A net is in the air for up to three quarters
+    // of a second and a passive crow drifts most of a radius in that time, so
+    // an unfrozen target turns every catch into a question about the drift.
+    crow.frozen = true;
+    return crow;
+  }
+
+  it('leaves the skirmisher free to move while he draws', () => {
+    const p = rangerAt(6, 6);
+    const keys = g.keys() as Record<string, boolean>;
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(true);
+
+    const from = p.x;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys['ArrowRight'] = false;
+    expect(p.x).toBeGreaterThan(from);
+  });
+
+  it('throws further, wider and longer the more it is drawn', () => {
+    const c = g.config();
+
+    const tapFrom = rangerAt(4, 6).x;
+    const tap = throwNet(0);
+    expect(tap.x - tapFrom).toBeCloseTo(c.netThrowMin, -1);
+    expect(tap.radius).toBeCloseTo(c.netRadiusMin, 1);
+
+    const fullFrom = rangerAt(4, 6).x;
+    const full = throwNet(c.netDrawMaxSecs);
+    expect(full.x - fullFrom).toBeCloseTo(c.netThrowMax, -1);
+    expect(full.radius).toBeCloseTo(c.netRadiusMax, 1);
+
+    expect(full.x - fullFrom).toBeGreaterThan(tap.x - tapFrom);
+    expect(full.radius).toBeGreaterThan(tap.radius);
+  });
+
+  it('holds for 0.8s at a tap and 2s at a full draw', () => {
+    const c = g.config();
+
+    const p1 = rangerAt(4, 6);
+    const tapCrow = loneCrowAt(p1.x + c.netThrowMin, p1.y);
+    throwNet(0);
+    expect(tapCrow.heldTimer).toBeGreaterThan(c.netHoldMin - 0.1);
+    expect(tapCrow.heldTimer).toBeLessThan(c.netHoldMin + 0.2);
+
+    const p2 = rangerAt(4, 6);
+    const fullCrow = loneCrowAt(p2.x + c.netThrowMax, p2.y);
+    throwNet(c.netDrawMaxSecs);
+    expect(fullCrow.heldTimer).toBeGreaterThan(c.netHoldMax - 0.1);
+    expect(fullCrow.heldTimer).toBeLessThanOrEqual(c.netHoldMax);
+  });
+
+  it('never kills what it catches: 0.9 is under a fresh creep', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const crow = loneCrowAt(p.x + c.netThrowMin, p.y);
+    expect(crow.hp).toBe(1);
+
+    throwNet(0);
+    expect(g.crows().length).toBe(1);
+    expect(crow.hp).toBeGreaterThan(0);
+    expect(crow.hp).toBeLessThan(1);
+  });
+
+  it('pins what it caught in place, and lets go when the hold runs out', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const crow = loneCrowAt(p.x + c.netThrowMin, p.y);
+    throwNet(0);
+
+    // Free to move again now the net has landed: what keeps it still from
+    // here is the hold, which is the thing under test.
+    crow.frozen = false;
+    const at = { x: crow.x, y: crow.y };
+    g.stepSim(30);                       // half a second, well inside the hold
+    expect(crow.x).toBe(at.x);
+    expect(crow.y).toBe(at.y);
+    expect(crow.heldTimer).toBeGreaterThan(0);
+
+    g.stepSim(Math.ceil(c.netHoldMin * ONE_SECOND) + 2);
+    expect(crow.heldTimer).toBe(0);
+    g.stepSim(10);
+    expect(crow.x).not.toBe(at.x);   // and it is walking again
+  });
+
+  it('catches everything under it, not just the first thing', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const crows = g.crows();
+    crows.length = 0;
+    const landing = p.x + c.netThrowMax;
+    for (const dy of [-20, 0, 20]) {
+      g.spawnCrow();
+      const crow = crows[crows.length - 1] as
+        { x: number; y: number; baseY: number; state: string; frozen: boolean };
+      crow.x = landing;
+      crow.y = p.y + dy;
+      crow.baseY = p.y + dy;
+      crow.state = 'passive';
+      crow.frozen = true;
+    }
+
+    const open = throwNet(c.netDrawMaxSecs);
+    expect(open.caught).toBe(3);
+    for (const crow of crows as Array<{ heldTimer: number }>) {
+      expect(crow.heldTimer).toBeGreaterThan(0);
+    }
+  });
+
+  it('opens against a wall rather than through it', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const wallCol = 7;
+    for (let row = 3; row <= 9; row++) g.tiles().set(row, wallCol, TILE.ROCK);
+
+    const open = throwNet(c.netDrawMaxSecs);
+    expect(open.x).toBeLessThan(wallCol * c.tileSize);
+    expect(open.x - p.x).toBeLessThan(c.netThrowMax);
+  });
+
+  it('refuses a second net until the cooldown has run', () => {
+    const c = g.config();
+    rangerAt(4, 6);
+    throwNet(0);
+    expect(g.rangerNet().cooldown).toBeGreaterThan(c.netCooldown - 1);
+    expect(g.rangerNet().cooldown).toBeLessThanOrEqual(c.netCooldown);
+
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(false);
+
+    g.stepSim(Math.ceil(c.netCooldown * ONE_SECOND) + 1);
+    expect(g.rangerNet().cooldown).toBe(0);
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(true);
+  });
+
+  it('belongs to the ranger alone', () => {
+    for (const character of ['archer', 'wizard', 'knight', 'sapper']) {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      g.shift();
+      expect(g.rangerNet().drawing, character).toBe(false);
+      expect(g.nets().length, character).toBe(0);
     }
   });
 });

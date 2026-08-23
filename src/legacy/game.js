@@ -283,6 +283,19 @@ const CONFIG = {
   // radius stays shared with dynamiteBlastRadius; only boss damage is softer.
   satchelBossDamage: 1,
 
+  // Ranger net. The hold is the point and the damage is not: 0.9 never kills a
+  // fresh 1 HP creep, it only stops it, and a netted crow left on 0.1 dies to
+  // the next scratch. Throw, spread and hold all scale off the same draw, so a
+  // full one is a committed choice rather than the default. Long cooldown to
+  // match: this is the only crowd control in the ranger's kit.
+  netCooldown: 10,
+  netDrawMaxSecs: 1.0,
+  netThrowMin: 120, netThrowMax: 320,
+  netRadiusMin: 34, netRadiusMax: 70,
+  netHoldMin: 0.8, netHoldMax: 2.0,
+  netDamage: 0.9,
+  netSpeed: 420,
+
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
 
   // Sapper. The powder charge is thrown on the primary and costs nothing but
@@ -596,7 +609,7 @@ const CHAR_PANELS = [
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
-           'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
+           'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Hold Shift: net, holds up to 2s'] },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
     lines:['Powder charges  ·  1.1s cooldown','Bounces off cover, then clears it',
@@ -739,6 +752,12 @@ let charge = { on: false, t0: 0 };
 // shape as `charge` above, and deliberately so: the hand already knows it.
 let archerDraw = { on: false, t0: 0 };
 let archerPowerCD = 0;
+// The ranger's net, the same draw-and-release shape as the archer's bow. He is
+// not rooted while he draws: it is a throw rather than an aimed shot, and the
+// skirmisher is the one character whose whole identity is not standing still.
+let rangerNet = { on: false, t0: 0 };
+let rangerNetCD = 0;
+let nets = [];
 
 function resetInv() {
   for (const [k, r] of Object.entries(CONFIG.resources)) { inv[k] = r.max; iFlash[k] = 0; }
@@ -1105,14 +1124,17 @@ function probeAhead(fromX, fromY, angle, maxDistance) {
  * own rules — the blast's are not the storm's — and folding them together
  * would mean a flag that decides which caller you are.
  *
- * `bossHit` is null for an effect the boss simply ignores.
+ * `bossHit` is null for an effect the boss simply ignores. `amount` is what
+ * each ordinary enemy takes, and defaults to the one point that kills a fresh
+ * creep outright — which is what the storm, the whirlwind and the blast all
+ * want. Only the net passes anything else, and it passes less on purpose.
  */
-function damageEnemiesInRadius(cx, cy, radius, bossHit) {
+function damageEnemiesInRadius(cx, cy, radius, bossHit, amount = 1) {
   const r2 = radius * radius;
   for (let j = crows.length - 1; j >= 0; j--)
-    if (dist2(cx, cy, crows[j].x, crows[j].y) < r2) damageCrow(j);
+    if (dist2(cx, cy, crows[j].x, crows[j].y) < r2) damageCrow(j, amount);
   for (let j = skeletons.length - 1; j >= 0; j--)
-    if (dist2(cx, cy, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
+    if (dist2(cx, cy, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j, amount);
   if (bossHit && bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2)
     damageBoss(bossHit.amount, cx, cy, bossHit.source, bossHit.flash);
 }
@@ -1217,6 +1239,103 @@ function releaseArcherDraw() {
   events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
 }
 
+/** How far the net has been drawn, 0 to 1. */
+function rangerNetFrac() {
+  if (!rangerNet.on) return 0;
+  return Math.min(1, (performance.now() - rangerNet.t0) / 1000 / CONFIG.netDrawMaxSecs);
+}
+
+/**
+ * Pins everything hostile inside a circle for a while.
+ *
+ * Separate from damageEnemiesInRadius because it is a different question and
+ * the net asks both: what does this hurt, and what does it stop. A boss is
+ * held through the daze system it already has rather than a second mechanism,
+ * which also means the minotaur is caught by the same rule that already lets a
+ * hit stun him. Returns how many it caught, for the report on screen.
+ */
+function holdEnemiesInRadius(cx, cy, radius, secs) {
+  const r2 = radius * radius;
+  let caught = 0;
+  for (const c of crows)
+    if (dist2(cx, cy, c.x, c.y) < r2) { c.heldTimer = Math.max(c.heldTimer || 0, secs); caught++; }
+  for (const s of skeletons)
+    if (dist2(cx, cy, s.x, s.y) < r2) { s.heldTimer = Math.max(s.heldTimer || 0, secs); caught++; }
+  // A shielded crow king shrugs it off, the same way a shielded hit never
+  // dazes him. Everything else with a daze timer, the minotaur included, is
+  // fair game: it is two seconds at the very most and it has to be landed.
+  if (bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2) {
+    boss.dazeTimer = Math.max(boss.dazeTimer, dazeTimerForStun(secs));
+    caught++;
+  }
+  return caught;
+}
+
+/**
+ * The ranger's net, bound to the key that means sniper mode for the sapper.
+ *
+ * Draw longer and it is thrown further, opens wider and holds longer, all off
+ * the one charge. The damage is the part that deliberately does not scale: 0.9
+ * is under a fresh creep's single hit point at every draw, so the net never
+ * kills what it catches. Stopping things is the whole of what it is for.
+ */
+function startRangerNet() {
+  if (selectedChar !== 'ranger' || rangerNet.on || !inGame()) return;
+  if (rangerNetCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  rangerNet.on = true;
+  rangerNet.t0 = performance.now();
+}
+
+function releaseRangerNet() {
+  if (!rangerNet.on) return;
+  const drawn = rangerNetFrac();
+  rangerNet.on = false;
+  if (!inGame()) return;
+
+  const lerp = (lo, hi) => lo + drawn * (hi - lo);
+  const reach = lerp(CONFIG.netThrowMin, CONFIG.netThrowMax);
+  // Where it can actually get to. probeAhead stops at the first thing solid,
+  // so a net thrown at a wall opens against the wall rather than through it.
+  const land = probeAhead(player.x, player.y, player.aimAngle, reach);
+
+  rangerNetCD = CONFIG.netCooldown;
+  nets.push({
+    x: player.x, y: player.y,
+    toX: land.x, toY: land.y,
+    radius: lerp(CONFIG.netRadiusMin, CONFIG.netRadiusMax),
+    hold: lerp(CONFIG.netHoldMin, CONFIG.netHoldMax),
+    spin: 0,
+  });
+  events.emit({ type: 'WEAPON_FIRED', kind: 'net' });
+}
+
+/** Flight is a straight run to a point already known to be clear, so a net
+ * cannot end up somewhere a body could not stand. */
+function updateNets(dt) {
+  for (let i = nets.length - 1; i >= 0; i--) {
+    const n = nets[i];
+    n.spin += dt * 6;
+    const dx = n.toX - n.x, dy = n.toY - n.y;
+    const left = Math.hypot(dx, dy);
+    const step = CONFIG.netSpeed * dt;
+    if (left <= step) {
+      n.x = n.toX; n.y = n.toY;
+      openNet(n);
+      nets.splice(i, 1);
+      continue;
+    }
+    n.x += (dx / left) * step;
+    n.y += (dy / left) * step;
+  }
+}
+
+function openNet(n) {
+  damageEnemiesInRadius(n.x, n.y, n.radius,
+    { amount: CONFIG.netDamage, source: 'net', flash: 0.1 }, CONFIG.netDamage);
+  const caught = holdEnemiesInRadius(n.x, n.y, n.radius, n.hold);
+  events.emit({ type: 'RANGER_NET_OPEN', x: n.x, y: n.y, radius: n.radius, caught });
+}
+
 /**
  * The knight's chained charge: a second press while the dash is running.
  *
@@ -1256,6 +1375,7 @@ function pressShift() {
   if (!tryKnightChainCharge()) startKnightCharge();
   tryWizardBlink();
   startArcherDraw();
+  startRangerNet();
 }
 
 /** The other half of the same key. Each of these belongs to one character and
@@ -1264,6 +1384,7 @@ function pressShift() {
 function releaseShift() {
   releaseKnightCharge();
   releaseArcherDraw();
+  releaseRangerNet();
 }
 
 /** Knight-only, bound to the key that means sniper mode for everyone else.
@@ -1507,6 +1628,7 @@ const WEAPON_FX = {
   // The sapper's lob. Reuses the knight charge's whoosh rather than the bow's
   // snap: what the ear needs to hear is that something heavy is in the air.
   charge:    { sound: () => sndChargeWhoosh, shake: [2, 60] },
+  net:       { sound: () => sndChargeWhoosh, shake: null },
 };
 
 events.on(e => {
@@ -1735,6 +1857,18 @@ events.on(e => {
       spawnShockRing(e.toX, e.toY, CONFIG.wizBlinkPulseRadius, '#8888FF');
       break;
 
+    case 'RANGER_NET_OPEN':
+      playSound(sndArm);
+      spawnShockRing(e.x, e.y, e.radius, '#E8E0C0');
+      // Only shakes when it actually caught something, so a miss is quiet.
+      if (e.caught > 0) triggerShake(2, 70);
+      burst(e.x, e.y, {
+        count: 8 + Math.min(12, e.caught * 4), colors: ['#E8E0C0','#FFFFFF'],
+        speedMin: 20, speedMax: 60, decay: 3.4, shape: 'spark',
+        shadowBlur: 4, shadowColor: '#E8E0C0'
+      });
+      break;
+
     case 'ARCHER_POWER_SHOT':
       // The shake scales with the draw, so a full one is felt and a tap is not.
       playSound(sndShoot); triggerShake(1 + 3 * e.power, 80 + 120 * e.power);
@@ -1924,6 +2058,7 @@ function initGame() {
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0;
+  rangerNet.on = false; rangerNetCD = 0; nets = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -1970,7 +2105,7 @@ function spawnCrow() {
     state: 'passive', aggroTimer: 0, team: Team.ENEMY,
     wingPhase: Math.random() * Math.PI * 2, phaseOff: Math.random() * Math.PI * 2,
     entityPhase: Math.random() * Math.PI * 2,
-    white: false, frozen: false,
+    white: false, frozen: false, heldTimer: 0,
     hp: maxHp, maxHp, hitFlash: 0,
     path: null, pathTimer: 0   // rot.js A* path cache
   });
@@ -2072,13 +2207,12 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  // Stated positively, because it is now the minority case. The knight
-  // charges, the wizard blinks and the archer draws, each on this same key.
-  // What is left is the two for whom a longer aim line is genuinely the useful
-  // thing: the sapper lobs an arc and wants to read where it lands, and the
-  // ranger has nothing of its own here yet.
-  sniperMode = (selectedChar === 'ranger' || selectedChar === 'sapper')
-    && hasButton(cmd, Button.SNIPE);
+  // Stated positively, because it is now the minority case. Every other
+  // character spends this key on an ability: the knight charges, the wizard
+  // blinks, the archer draws, the ranger throws a net. The sapper is the one
+  // left, and the one it genuinely suits — he lobs an arc rather than firing a
+  // line, so standing still to read where it lands is a real choice.
+  sniperMode = selectedChar === 'sapper' && hasButton(cmd, Button.SNIPE);
 
   // Drawing and charging root their owners the same way sniper mode roots the
   // sapper. For the archer that root is the whole cost of the power shot.
@@ -2125,6 +2259,7 @@ function updatePlayer(dt) {
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
   if (archerPowerCD       > 0) archerPowerCD      = Math.max(0, archerPowerCD      - dt);
+  if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
   if (wizBlinkChainTimer  > 0) {
@@ -2872,7 +3007,7 @@ function spawnSkeleton(kind = 'normal') {
     kind, // 'normal' | 'fire' | 'ice' | 'rat' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
-    hp: 1, maxHp: 1, hitFlash: 0,
+    hp: 1, maxHp: 1, hitFlash: 0, heldTimer: 0,
     walkPhase: Math.random() * Math.PI * 2,
     path: null, pathTimer: 0,
     // Staggered so a whole wave of ice skeletons does not fire in sync.
@@ -2979,6 +3114,7 @@ function updateSkeletons(dt) {
   for (let i = skeletons.length - 1; i >= 0; i--) {
     const s = skeletons[i];
     if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
+    if (s.heldTimer > 0) { s.heldTimer = Math.max(0, s.heldTimer - dt); continue; }
     const dx = player.x - s.x, dy = player.y - s.y, dist = Math.hypot(dx, dy);
     const reach = s.kind === 'rat' ? 11 : 14;
     if (dist < reach) {
@@ -3136,6 +3272,9 @@ function updateCrows(dt) {
     const c = crows[i];
     if (c.hitFlash > 0) c.hitFlash = Math.max(0, c.hitFlash - dt);
     if (c.frozen) continue;
+    // Netted: it still bleeds and still burns, it simply does not move or
+    // decide anything while the mesh is on it.
+    if (c.heldTimer > 0) { c.heldTimer = Math.max(0, c.heldTimer - dt); continue; }
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
       const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod();
@@ -3207,6 +3346,43 @@ function updateShockRings(dt) {
     shockRings[i].timer -= dt;
     if (shockRings[i].timer <= 0) shockRings.splice(i, 1);
   }
+}
+
+/** A net in flight: a small square of mesh, tumbling. */
+function drawNets() {
+  for (const n of nets) {
+    ctx.save();
+    ctx.translate(n.x, n.y + CONFIG.hudHeight);
+    ctx.rotate(n.spin);
+    ctx.strokeStyle = '#E8E0C0'; ctx.lineWidth = 1;
+    ctx.shadowColor = '#E8E0C0'; ctx.shadowBlur = 4;
+    for (const o of [-4, 0, 4]) {
+      ctx.beginPath(); ctx.moveTo(-6, o); ctx.lineTo(6, o); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(o, -6); ctx.lineTo(o, 6); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+}
+
+/**
+ * The mesh over whatever is pinned under it.
+ *
+ * Drawn in one pass over both enemy kinds rather than inside each painter, so
+ * a third kind that can be netted needs no new drawing code at all.
+ */
+function drawHeldMarkers() {
+  ctx.strokeStyle = '#E8E0C0'; ctx.lineWidth = 1;
+  for (const e of [...crows, ...skeletons]) {
+    if (!(e.heldTimer > 0)) continue;
+    const ey = e.y + CONFIG.hudHeight;
+    ctx.globalAlpha = 0.35 + 0.35 * Math.min(1, e.heldTimer);
+    for (const o of [-5, 0, 5]) {
+      ctx.beginPath(); ctx.moveTo(e.x - 8, ey + o); ctx.lineTo(e.x + 8, ey + o); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(e.x + o, ey - 8); ctx.lineTo(e.x + o, ey + 8); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawShockRings() {
@@ -7260,7 +7436,7 @@ const LANE_B = {
  */
 const LANE_D = {
   archer: ['power', 'shield'],
-  ranger: ['snipe', 'shield'],
+  ranger: ['net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
   sapper: ['charge', 'snipe', 'shield'],
@@ -7279,6 +7455,8 @@ const CHIP = {
   // in the lane say the same thing.
   power:     () => cooldownChip('arrow', archerPowerCD, CONFIG.archerPowerCooldown,
                                 archerDraw.on ? CONFIG.archerDrawMaxSecs : 0),
+  net:       () => cooldownChip('satchel', rangerNetCD, CONFIG.netCooldown,
+                                rangerNet.on ? CONFIG.netDrawMaxSecs : 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
                       label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
                       frac: null }),
@@ -8203,7 +8381,7 @@ function render(t) {
     // draws it has always been on forest and castle.
     for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
     for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
-    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts();
+    drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts(); drawNets(); drawHeldMarkers();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
@@ -8390,20 +8568,20 @@ function stepGame(dt) {
       // table lookup and not a kind check.
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
-      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
     case 'boss_entrance':
-      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt);
+      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt);
       break;
 
     case 'boss_fight':
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
-      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -8619,6 +8797,9 @@ export const devHooks = {
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.
   holdDraw(secs) { if (archerDraw.on) archerDraw.t0 = performance.now() - secs * 1000; },
+  holdNet(secs) { if (rangerNet.on) rangerNet.t0 = performance.now() - secs * 1000; },
+  rangerNet: () => ({ drawing: rangerNet.on, frac: rangerNetFrac(), cooldown: rangerNetCD }),
+  nets: () => nets,
   inv: () => inv,
   rings: () => shockRings,
   pickMap(kind) { selectedMapKind = kind; },

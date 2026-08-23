@@ -44,6 +44,11 @@ Frontline melee with a long spear.
 ### Ranger
 Skirmisher with a rapid-fire crossbow.
 - **Primary:** Crossbow, same quiver of 10 as the archer's. One press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
+- **Net (hold Shift):** Draws and throws a weighted net. Drawing longer throws it further (120 to 320 px), opens it wider (34 to 70 px radius) and holds longer (0.8 to 2 s), all off the one draw, so a full one is a committed choice. He is not rooted while he draws it. 10 s cooldown
+  - It deals 0.9 damage, and that number is the point: a fresh crow, skeleton or rat has exactly 1 hit point, so the net never kills what it catches. It leaves them on a sliver and holds them still. Anything already netted dies to the next scratch
+  - Everything under it is caught, not just the first thing. A caught enemy stops moving and deciding entirely; it still bleeds and still burns
+  - Bosses are held through the same daze the game already uses for a stun, the Minotaur included. It is two seconds at the very most and it has to be landed
+  - It opens against a wall rather than through one, so a net thrown into cover catches whatever is on your side of it
 - **Special:** Satchel, first click throws it inert, second click arms a 3 s fuse shown as a countdown on the bag; the ranger's own bolt sets it off instantly, armed or not
 - **Pickups:** Ricochet bolts (bounce off walls with a speed boost), fire bolts (leave burning patches). Both are the archer's own pickup effects, unchanged
 
