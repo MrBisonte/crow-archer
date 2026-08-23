@@ -6,8 +6,11 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { MAP_GEN, MAP_RULES } from '../sim/arena-map';
+import { MAP_GEN, MAP_RULES, runsWaves } from '../sim/arena-map';
 import { Regrowth } from '../sim/regrowth';
+import {
+  COMMANDER_WAVE, SOLDIER_STATS, shieldFacing, shieldStops, waveComposition,
+} from '../sim/soldiers';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
@@ -191,6 +194,24 @@ const CONFIG = {
   // the freeze duration, so a wave of them punishes standing still.
   iceSkeletonShotInterval: 3, iceSkeletonBoltSpeed: 300,
   iceSkeletonBoltDamage: 1, iceSkeletonFreezeSecs: 3,
+
+  // The cavern's garrison. Health, speed and reach are per kind and live in
+  // sim/soldiers.ts with the wave table; what is here is the timing the three
+  // share, and the two numbers that make a spearman's charge readable.
+  //
+  // Spawned into the map rather than off the canvas edge, so far enough away
+  // that a wave arriving is something you see coming rather than something
+  // that is suddenly beside you.
+  soldierSpawnMinDistance: 230, soldierMax: 16, soldierContactReach: 14,
+  // The archer's volley. Slower than an ice skeleton's, because an archer
+  // that also outranges you is otherwise the only thing worth answering.
+  soldierArcherShotInterval: 2.4, soldierArcherBoltSpeed: 300,
+  soldierArcherBoltDamage: 1,
+  // The spearman's run. Fast and short, with a long gap after: the charge is
+  // meant to be dodged by stepping off its line, which needs it committed to
+  // a heading it picked before it set off.
+  soldierSpearChargeSpeed: 265, soldierSpearChargeSecs: 0.55,
+  soldierSpearChargeGap: 2.5,
 
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
@@ -543,13 +564,16 @@ const CHAR_PANELS = [
  * Brawl skips this screen entirely and always starts on forest — see the
  * architecture doc's map-selection table. Membership is derived from
  * MAP_RULES (imported above, from arena-map.ts) rather than a hand-kept
- * list: a map earns a panel by having crows, the same fact mapHasCrows()
- * already reads off MAP_RULES, so the maze (crows: false — it's a scripted
- * brawl stage, not a free choice) excludes itself instead of needing to be
- * remembered. MAP_PANEL_INFO's presentation fields (key/color/lines) are
- * still a hand-kept table, unavoidably — display strings aren't derivable
- * from a boolean — so the construction below fails loudly at load if a row
- * is missing instead of drawing a blank panel.
+ * list: a map earns a panel by fielding a wave of its own, which `runsWaves`
+ * answers off MAP_RULES.population, so the maze (scripted — it's a brawl
+ * stage, not a free choice) excludes itself instead of needing to be
+ * remembered. That used to read `crows`, which happened to give the same
+ * answer only while every wave map's wave was made of birds; the cavern
+ * fields soldiers and would have silently lost its panel.
+ * MAP_PANEL_INFO's presentation fields (key/color/lines) are still a
+ * hand-kept table, unavoidably — display strings aren't derivable from a
+ * population — so the construction below fails loudly at load if a row is
+ * missing instead of drawing a blank panel.
  */
 // The one shade every unselected panel dims to, in both this table and
 // CHAR_PANELS above — not a per-panel choice, so it lives once here rather
@@ -566,7 +590,7 @@ const MAP_PANEL_INFO = {
     lines:['Rough chambers, still pools','Wide rooms, short blind necks','Rock cover, fungus that burns'] },
 };
 const MAP_PANELS = Object.keys(MAP_RULES)
-  .filter(kind => MAP_RULES[kind].crows)
+  .filter(kind => runsWaves(kind))
   .map(kind => {
     const info = MAP_PANEL_INFO[kind];
     // Fails at load rather than the first time the mapselect screen renders
@@ -773,10 +797,11 @@ function generateMap(kind = 'forest') {
   // cleared here, with the grid it is placed on. Every consumer then has one
   // guard, `mazeRun`, instead of its own check on mapKind.
   mazeRun = kind === 'maze' ? newMazeRun() : null;
-  // Crows belong to the map. Moving to one that has none has to take the last
-  // map's birds with it, or they keep flying through the new map's walls and
-  // keep counting toward a win condition this map does not use.
+  // A population belongs to its map. Moving to one that does not have it has
+  // to take the last map's with it, or they keep walking through the new map's
+  // walls and keep counting toward a win condition this map does not use.
   if (!mapHasCrows()) crows = [];
+  if (!mapHasSoldiers()) soldiers = [];
   // Sight is grid-shaped too, so memory of the last map is a lie about this
   // one. It stays here rather than behind MAP_GENERATED: placing torches needs
   // the grid and puts real objects in the world, which is simulation, even
@@ -841,9 +866,19 @@ function fogOfWar() {
   return MAP_RULES[mapKind].fogOfWar;
 }
 
-/** Do crows live on this map? Same table, same reason: it is a per-map fact. */
+/** Who fights on this map. Same table, same reason: it is a per-map fact. */
+function mapPopulation() {
+  return MAP_RULES[mapKind].population;
+}
+
+/** Do crows live on this map? */
 function mapHasCrows() {
-  return MAP_RULES[mapKind].crows;
+  return mapPopulation() === 'crows';
+}
+
+/** Does a garrison hold this map? */
+function mapHasSoldiers() {
+  return mapPopulation() === 'soldiers';
 }
 
 function smashTile(row, col) {
@@ -1354,6 +1389,23 @@ events.on(e => {
       break;
     }
 
+    case 'SOLDIER_KILLED': {
+      playSound(sndHitCrow);
+      // Blood and steel rather than the undead's bone and violet: a soldier is
+      // a person, and the burst is the one place that reads at a glance.
+      const troopColors = e.kind === 'archer' ? ['#C8B48A','#7A6A48','#A03028','#FFFFFF']
+                        : e.kind === 'shieldman' ? ['#B0B8C4','#5A6270','#A03028','#FFFFFF']
+                        : ['#C0A070','#6A5838','#A03028','#FFFFFF'];
+      burst(e.x, e.y, {
+        count: 14, colors: troopColors,
+        speedMin: 40, speedMax: 120, decay: 1.8,
+        shapeMix: [['circle', 0.6], ['spark', 0.4]],
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6, shadowBlur: 4, shadowColor: '#D06048',
+        pri: PRI.KILL
+      });
+      break;
+    }
+
     case 'FIRE_SKELETON_BLAST':
       playSound(sndExplosion); triggerShake(...SHAKE.fireSkelBlast);
       burst(e.x, e.y, {
@@ -1364,6 +1416,12 @@ events.on(e => {
       break;
 
     case 'ICE_BOLT_FIRED':
+      playSound(sndWizBolt);
+      break;
+
+    // Same sound as a bolt leaving a staff for now; a bow of its own is a
+    // sound to add, not a reason to have the archer emit an event about ice.
+    case 'SOLDIER_SHOT':
       playSound(sndWizBolt);
       break;
 
@@ -1636,7 +1694,13 @@ function initGame() {
   player = { x: spawn.x, y: spawn.y, facing: 1, aimAngle: 0, walkPhase: 0, team: Team.A };
   crows = [];
   skeletons = []; // only populated once brawl mode reaches its castle stage
+  soldiers = []; soldierKillCount = 0;
+  // The map's own population, which is the whole of what MAP_RULES.population
+  // decides. A crows map opens with the pace preset's flock; a garrisoned one
+  // opens with wave 1 of its own table; a scripted one opens with nothing and
+  // waits for the script.
   if (mapHasCrows()) for (let i = 0; i < CONFIG.crowStartCount; i++) spawnCrow();
+  else if (mapHasSoldiers()) spawnSoldierWave(1);
 }
 
 /**
@@ -2402,6 +2466,19 @@ function updateArrows(dt) {
       }
     }
     if (hit) continue;
+    for (let j = soldiers.length - 1; j >= 0; j--) {
+      if (dist2(a.x, a.y, soldiers[j].x, soldiers[j].y) < hitR*hitR) {
+        // The arrow's own heading is what a shieldman's guard is measured
+        // against, so it is passed rather than recomputed from the two
+        // positions: where the shot came from is not where it was aimed.
+        const landed = damageSoldier(j, 1, knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx));
+        // Spent either way — an arrow stopped by a shield is still stopped —
+        // but only a hit that landed sets fire to anything.
+        if (landed && a.type === 'fire') spawnFire(a.x, a.y);
+        arrows.splice(i, 1); hit = true; break;
+      }
+    }
+    if (hit) continue;
   }
 }
 
@@ -2669,6 +2746,173 @@ function updateSkeletons(dt) {
       s.shotCD -= dt;
       if (s.shotCD <= 0) { s.shotCD = CONFIG.iceSkeletonShotInterval; fireIceBolt(s); }
     }
+  }
+}
+
+// ── SOLDIERS ──────────────────────────────────────────────────────────────────
+
+/**
+ * The cavern's garrison: spearmen, shieldmen and archers.
+ *
+ * Their own array and their own loop rather than more kinds on `skeletons`.
+ * The castle's undead are a scripted nine-wave gauntlet whose every death is
+ * read by `killSkeleton` to decide whether to start the next wave or the dark
+ * archer's entrance; a cavern soldier dying must touch none of that. Sharing
+ * the array would mean growing an "unless it is a soldier" clause on each of
+ * those rules, which is the edit-the-core-loop shape a new variant is supposed
+ * to avoid. What they do share is the part that genuinely is the same —
+ * `chaseAlongPath`, the cached A* walk that crows, skeletons and rats already
+ * use — so nothing here reinvents crossing a room.
+ *
+ * Stats and the wave table live in sim/soldiers.ts, which is pure and tested.
+ * What lives here is the bodies.
+ */
+let soldiers = [];
+
+/** Kills of the garrison, kept apart from killCount for the reason skeletonKillCount is. */
+let soldierKillCount = 0;
+
+/**
+ * One soldier, placed out in the map rather than marched in off the canvas
+ * edge the way the castle's skeletons are.
+ *
+ * A cavern is enclosed and its garrison already lives there, so arriving from
+ * off-screen right would read as reinforcements walking in through solid rock.
+ * `openTileAwayFrom` is the same placement the maze's rats use, and it falls
+ * back to any open tile if the map is too small to honour the distance.
+ */
+function spawnSoldier(kind) {
+  const stats = SOLDIER_STATS[kind];
+  const at = openTileAwayFrom(player.x, player.y, CONFIG.soldierSpawnMinDistance)
+    ?? spawnPoint();
+  soldiers.push({
+    x: at.x, y: at.y, kind,
+    // Always hostile, and the state pathScheduler.serve() requires to path it.
+    state: 'aggro',
+    hp: stats.hp, maxHp: stats.hp, hitFlash: 0,
+    walkPhase: Math.random() * Math.PI * 2,
+    // Which way it is looking, which is the whole of the shieldman's guard.
+    facing: 0,
+    path: null, pathTimer: 0,
+    // Staggered, so a rank of archers does not volley on a single frame.
+    shotCD: kind === 'archer' ? CONFIG.soldierArcherShotInterval * Math.random() : 0,
+    charge: 0, chargeAngle: 0, chargeCD: 0,
+  });
+}
+
+/** Sends in one wave's worth, capped so a late wave cannot flood the map. */
+function spawnSoldierWave(wave) {
+  for (const kind of waveComposition(wave)) {
+    if (soldiers.length >= CONFIG.soldierMax) return;
+    spawnSoldier(kind);
+  }
+}
+
+/** An archer's shot: the same hostile bolt an ice skeleton fires, without the freeze. */
+function fireSoldierArrow(s) {
+  const ang = Math.atan2(player.y - s.y, player.x - s.x);
+  hostileBolts.push({
+    x: s.x, y: s.y,
+    vx: Math.cos(ang) * CONFIG.soldierArcherBoltSpeed,
+    vy: Math.sin(ang) * CONFIG.soldierArcherBoltSpeed,
+    life: 2.5, damage: CONFIG.soldierArcherBoltDamage, freezeSecs: 0, blastRadius: 0,
+  });
+  events.emit({ type: 'SOLDIER_SHOT', x: s.x, y: s.y });
+}
+
+/**
+ * A soldier taking a hit.
+ *
+ * `heading` is the direction the thing that hit it was travelling, and only
+ * the shieldman reads it. Returns whether the hit landed, so a caller can tell
+ * a blocked arrow from a spent one.
+ */
+function damageSoldier(j, amount = 1, knock = null, heading = null) {
+  const s = soldiers[j];
+  if (!s) return false;
+  if (s.kind === 'shieldman' && heading !== null && shieldStops(s.facing, heading)) {
+    s.hitFlash = CONFIG.hitFlashSecs;
+    events.emit({ type: 'SHIELD_BLOCKED', x: s.x, y: s.y });
+    return false;
+  }
+  s.hp -= amount;
+  if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return true; }
+  killSoldier(j);
+  return true;
+}
+
+function killSoldier(j) {
+  const s = soldiers[j];
+  score++; soldierKillCount++;
+  STREAK.onKill();
+  events.emit({ type: 'SOLDIER_KILLED', x: s.x, y: s.y, kind: s.kind });
+  const dropChance = 0.25 + HANDICAP.dropBoost();
+  dropStreak++;
+  if (dropStreak >= 3 || Math.random() < dropChance) { dropStreak = 0; spawnPickup(s.x, s.y); }
+  soldiers.splice(j, 1);
+}
+
+/**
+ * Walks the garrison.
+ *
+ * Each kind answers a different question. The shieldman just arrives, slowly,
+ * and has to be gone round. The archer stops at its reach and shoots, so
+ * standing off is the thing that does not work against it. The spearman closes
+ * and then commits to a straight run at where the player was when it set off,
+ * which is what makes stepping off that line the answer.
+ */
+function updateSoldiers(dt) {
+  if (bossDeathSeq) return;
+  for (let i = soldiers.length - 1; i >= 0; i--) {
+    const s = soldiers[i];
+    const stats = SOLDIER_STATS[s.kind];
+    if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
+    if (s.chargeCD > 0) s.chargeCD = Math.max(0, s.chargeCD - dt);
+
+    const dx = player.x - s.x, dy = player.y - s.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    // Faces where it is going, which for everything but a committed charge is
+    // the player. The shieldman's guard is read off this.
+    if (s.charge <= 0) s.facing = shieldFacing(s.x, s.y, player.x, player.y, s.facing);
+
+    if (dist < CONFIG.soldierContactReach) {
+      damagePlayer(stats.contactDamage);
+      s.charge = 0;
+      continue;
+    }
+
+    if (s.charge > 0) {
+      // Committed. Terrain still stops it, and stopping ends the run rather
+      // than sliding along the wall, so a charge broken on rock is a real
+      // opening rather than a soldier grinding into stone.
+      s.charge -= dt;
+      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * dt;
+      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * dt;
+      if (tilePassable(tileAt(nx, ny))) { s.x = nx; s.y = ny; s.walkPhase += dt * 14; }
+      else s.charge = 0;
+      continue;
+    }
+
+    if (s.kind === 'archer') {
+      s.shotCD -= dt;
+      if (dist > stats.reach) {
+        if (chaseAlongPath(s, stats.speed, dt)) s.walkPhase += dt * 8;
+      } else if (s.shotCD <= 0) {
+        s.shotCD = CONFIG.soldierArcherShotInterval;
+        fireSoldierArrow(s);
+      }
+      continue;
+    }
+
+    if (s.kind === 'spearman' && dist <= stats.reach && s.chargeCD <= 0) {
+      s.charge = CONFIG.soldierSpearChargeSecs;
+      s.chargeAngle = Math.atan2(dy, dx);
+      s.chargeCD = CONFIG.soldierSpearChargeGap;
+      s.facing = s.chargeAngle;
+      continue;
+    }
+
+    if (chaseAlongPath(s, stats.speed, dt)) s.walkPhase += dt * 8;
   }
 }
 
@@ -3147,14 +3391,28 @@ function updateEscalation(dt) {
   // the mapselect screen returned here every tick and the run never spawned
   // another crow past the opening batch.
   if (gameMode === 'brawl' && mapKind === 'castle') return;
-  // The maze's population is the rat pack and the warden. See MAP_RULES.crows.
-  if (!mapHasCrows()) return;
-  if (escalationTimer >= CONFIG.crowEscalationInterval) {
-    escalationTimer -= CONFIG.crowEscalationInterval;
-    wave++;
-    if (gameMode === 'waves') { waveAnnounce = 2.2; waveAnnounceText = `── WAVE ${wave} ──`; }
+  // The maze's population is scripted: its rat pack and its warden are placed
+  // by the stage, not by this timer. See MAP_RULES.population.
+  if (!mapHasCrows() && !mapHasSoldiers()) return;
+  if (escalationTimer < CONFIG.crowEscalationInterval) return;
+
+  escalationTimer -= CONFIG.crowEscalationInterval;
+  wave++;
+  if (gameMode === 'waves') { waveAnnounce = 2.2; waveAnnounceText = `── WAVE ${wave} ──`; }
+
+  // What a wave is made of is the map's business, not this timer's. Crows
+  // trickle in one at a time under a cap; a garrison arrives as a composed
+  // wave from sim/soldiers.ts, and at COMMANDER_WAVE it arrives behind its
+  // commander instead.
+  if (mapHasCrows()) {
     if (crows.length < CONFIG.crowMax) spawnCrow();
+    return;
   }
+  if (wave >= COMMANDER_WAVE && !boss && appState === 'playing') {
+    transitionTo('boss_entrance');
+    return;
+  }
+  spawnSoldierWave(wave);
 }
 
 // ── DAMAGE / BOSS ─────────────────────────────────────────────────────────────
@@ -5782,6 +6040,153 @@ function drawSkeleton(s) {
   ctx.restore();
 }
 
+// ── SOLDIER ART ───────────────────────────────────────────────────────────────
+
+const SOLDIER_SPRITE = { w: 16, h: 24 };
+
+/**
+ * One palette per kind, chosen so the three read apart at a distance before
+ * their silhouettes do: warm bronze for the spearman, cold steel and blue for
+ * the shieldman, green and leather for the archer. A player has to know which
+ * one is closing without waiting to see what it is carrying.
+ */
+const SOLDIER_PALETTES = {
+  spearman:  { cloth:'#8A6A38', clothHi:'#A88448', metal:'#9AA0A8', metalHi:'#C4CAD2',
+               skin:'#C89868', edge:'#2A2018', accent:'#B03028' },
+  shieldman: { cloth:'#44557A', clothHi:'#5E7296', metal:'#AAB4C0', metalHi:'#D8E0E8',
+               skin:'#C89868', edge:'#1C2230', accent:'#C8A030' },
+  archer:    { cloth:'#3E5E3A', clothHi:'#52784C', metal:'#8A8A78', metalHi:'#B0B0A0',
+               skin:'#C89868', edge:'#1A2418', accent:'#8A5A28' },
+};
+
+/**
+ * The body all three share: legs on the stride, a tunic, a belt and a head.
+ * What each kind carries is added on top by its own builder, so the walk cycle
+ * is written once.
+ *
+ * Everything is drawn facing +x. `drawSoldier` mirrors the whole sprite when
+ * the soldier is looking the other way, which is what keeps a shield on the
+ * side the shield actually guards.
+ */
+function buildSoldierBody(C, frame) {
+  const g = makePixelGrid(SOLDIER_SPRITE.w, SOLDIER_SPRITE.h);
+  const swing = frame === 'a' ? 2 : frame === 'b' ? -2 : 0;
+
+  pixelCurve(g, [6, 16], [6 + swing * 0.4, 19], [6 + swing, 22], C.cloth, 10);
+  pixelCurve(g, [9, 16], [9 - swing * 0.4, 19], [9 - swing, 22], C.cloth, 10);
+  pixelRect(g, 5 + swing, 21, 3, 2, C.edge);
+  pixelRect(g, 8 - swing, 21, 3, 2, C.edge);
+
+  pixelRect(g, 5, 9, 6, 8, C.cloth);
+  pixelRect(g, 5, 9, 6, 2, C.clothHi);
+  pixelRect(g, 5, 15, 6, 1, C.edge);
+
+  pixelEllipse(g, 8, 5, 3, 3.2, C.skin);
+  return g;
+}
+
+/** Spearman: conical helm, and the spear levelled at whatever it is walking toward. */
+function buildSoldierSpearGrid(frame) {
+  const C = SOLDIER_PALETTES.spearman;
+  const g = buildSoldierBody(C, frame);
+  pixelTriangleUp(g, 8, 4, 4, 4, C.metal);
+  pixelRect(g, 5, 4, 6, 1, C.metalHi);
+  // Shaft across the chest and out past the leading hand, head at the tip.
+  pixelRect(g, 4, 11, 12, 1, C.accent);
+  pixelTriangleUp(g, 15, 12, 2, 3, C.metalHi);
+  pixelRect(g, 10, 10, 2, 3, C.skin);
+  return pixelOutline(g, C.edge);
+}
+
+/**
+ * Shieldman: a flat-topped helm and a shield filling the leading side.
+ *
+ * The shield is deliberately large and on one side only, because that is the
+ * mechanic drawn — sim/soldiers.ts stops shots inside 60 degrees of the nose,
+ * and this is the picture a player reads that rule off.
+ */
+function buildSoldierShieldGrid(frame) {
+  const C = SOLDIER_PALETTES.shieldman;
+  const g = buildSoldierBody(C, frame);
+  pixelRect(g, 5, 2, 6, 3, C.metal);
+  pixelRect(g, 5, 2, 6, 1, C.metalHi);
+  // Sword arm tucked behind the body.
+  pixelRect(g, 4, 12, 1, 5, C.metal);
+  // Shield: edge to edge down the leading side, boss in the middle.
+  pixelRect(g, 11, 7, 4, 11, C.metal);
+  pixelRect(g, 11, 7, 4, 1, C.metalHi);
+  pixelRect(g, 11, 17, 4, 1, C.edge);
+  pixelEllipse(g, 13, 12, 1.6, 1.8, C.accent);
+  return pixelOutline(g, C.edge);
+}
+
+/** Archer: hood instead of a helm, and a bow drawn on the leading side. */
+function buildSoldierBowGrid(frame) {
+  const C = SOLDIER_PALETTES.archer;
+  const g = buildSoldierBody(C, frame);
+  pixelEllipse(g, 8, 4, 3.6, 3.4, C.cloth);
+  pixelEllipse(g, 8.5, 5, 2.4, 2.2, C.skin);
+  // Bow limb curving down the leading side, string across it.
+  pixelCurve(g, [12, 7], [15, 12], [12, 17], C.accent, 12);
+  pixelRect(g, 12, 8, 1, 9, C.metalHi);
+  pixelRect(g, 9, 11, 3, 1, C.skin);
+  return pixelOutline(g, C.edge);
+}
+
+/** One row per kind, so a fourth soldier is a builder and a row, not a branch. */
+const SOLDIER_LOOK = {
+  spearman:  { build: buildSoldierSpearGrid },
+  shieldman: { build: buildSoldierShieldGrid },
+  archer:    { build: buildSoldierBowGrid },
+};
+
+const _soldierGrids = {};
+function soldierGrid(kind, frame) {
+  const key = `${kind}|${frame}`;
+  return _soldierGrids[key] || (_soldierGrids[key] = SOLDIER_LOOK[kind].build(frame));
+}
+
+/**
+ * One soldier. Same shape as drawSkeleton — ground shadow, cached sprite,
+ * white flash on a hit — with the one addition that matters here: the sprite
+ * is mirrored to match `facing`.
+ *
+ * That mirror is not decoration. The shieldman's guard covers the way it is
+ * looking, so the side its shield is drawn on is the side that stops arrows,
+ * and a player works out to go round it by looking at it.
+ */
+function drawSoldier(s) {
+  const cx = s.x, cy = s.y + CONFIG.hudHeight;
+  const flashOn = s.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
+  const frame = animFrame3(s.walkPhase);
+  const grid = soldierGrid(s.kind, frame);
+  const knock = hitKnockOffset(s);
+
+  ctx.save();
+  ctx.translate(cx + knock.x, cy + knock.y);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI * 2); ctx.fill();
+
+  // A committed charge leans into its own heading, so a spearman mid-run does
+  // not read the same as one walking.
+  if (s.charge > 0) {
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = SOLDIER_PALETTES[s.kind].accent;
+    ctx.fillRect(-Math.cos(s.chargeAngle) * 14 - 2, -4, 4, 8);
+    ctx.globalAlpha = 1;
+  }
+
+  if (Math.cos(s.facing) < 0) ctx.scale(-1, 1);
+  const sprite = flashOn
+    ? spriteFlashCanvas(`soldier|${s.kind}|${frame}`, grid, SOLDIER_SPRITE.w, SOLDIER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`soldier|${s.kind}|${frame}`, grid, SOLDIER_SPRITE.w, SOLDIER_SPRITE.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
+  ctx.drawImage(sprite, -SOLDIER_SPRITE.w / 2, -16);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
 /**
  * Every hostile bolt in flight — a glowing shard oriented along its flight,
  * purple for the dark archer's, icy blue for a freezing one.
@@ -7719,6 +8124,7 @@ function render(t) {
     // draws it has always been on forest and castle.
     for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
     for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
+    for (const s of soldiers) if (litAt(s.x, s.y)) drawSoldier(s);
     drawArrows(); drawDynamites(); drawSatchels(); drawHostileBolts();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
@@ -7906,6 +8312,7 @@ function stepGame(dt) {
       // table lookup and not a kind check.
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
+      updateSoldiers(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt); regrowth.tick(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
@@ -7920,7 +8327,7 @@ function stepGame(dt) {
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
-      regrowth.tick(dt);
+      regrowth.tick(dt); updateSoldiers(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -8122,6 +8529,9 @@ export const devHooks = {
     window.dispatchEvent(e); document.dispatchEvent(e);
   },
   state: () => appState,
+  soldiers: () => soldiers,
+  soldierKills: () => soldierKillCount,
+  spawnSoldier(kind) { spawnSoldier(kind); },
   multiplayer: () => multiplayerSession?.describe() ?? null,
   tiles: () => tileMap,
   // Whether this map grows cover back, and how many tiles are mid-regrowth.

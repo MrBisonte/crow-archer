@@ -8,8 +8,9 @@
  * DOM at all. `devHooks.stepSim` advances the sim without a frame or a render.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { MAP_RULES, type MapKind } from '../sim/arena-map';
+import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
+import { SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 
@@ -21,7 +22,18 @@ const ONE_SECOND = 60;
  * derives them. Naming them here instead would be a third copy of a list the
  * game deliberately keeps in one place.
  */
-const CROW_MAPS = (Object.keys(MAP_RULES) as MapKind[]).filter((kind) => MAP_RULES[kind].crows);
+const WAVE_MAPS = (Object.keys(MAP_RULES) as MapKind[]).filter((kind) => runsWaves(kind));
+
+/**
+ * Waves mode remembers the last map picked, for the whole session and so
+ * across tests. A test that starts a run without saying which map opens on
+ * whichever one an earlier test happened to choose, which was harmless only
+ * while every wave map's population was crows: the cavern's is soldiers, so
+ * the leftover now decides whether a run has any birds in it at all.
+ *
+ * Every test starts from forest, and the ones that care pick their own.
+ */
+beforeEach(() => { g.pickMap('forest'); });
 
 /** Walks the boss entrance until the boss exists, then opens the fight. */
 function enterBossFight(): void {
@@ -227,28 +239,35 @@ describe('waves map select', () => {
   // table order. Written out by hand this test had to be edited to add a third
   // map, which is exactly the hand-kept second list that derivation removed.
   it('arrow keys cycle through every crow map in table order, and wrap', () => {
-    g.pickMap(CROW_MAPS[0]!);
+    g.pickMap(WAVE_MAPS[0]!);
     openWavesMapSelect();
     expect(g.state()).toBe('mapselect');
 
     const walked = [g.selectedMapKind()];
-    for (let i = 0; i < CROW_MAPS.length; i++) {
+    for (let i = 0; i < WAVE_MAPS.length; i++) {
       press('ArrowRight');
       walked.push(g.selectedMapKind());
     }
     // Every panel once, then back to where it started.
-    expect(walked).toEqual([...CROW_MAPS, CROW_MAPS[0]]);
+    expect(walked).toEqual([...WAVE_MAPS, WAVE_MAPS[0]]);
 
     press('ArrowLeft'); // and the other way, off the first panel
-    expect(g.selectedMapKind()).toBe(CROW_MAPS[CROW_MAPS.length - 1]);
+    expect(g.selectedMapKind()).toBe(WAVE_MAPS[WAVE_MAPS.length - 1]);
   });
 
-  it('leaves the maze off the screen entirely, because MAP_RULES gives it no crows', () => {
-    expect(MAP_RULES.maze.crows).toBe(false);
-    expect(CROW_MAPS).not.toContain('maze');
+  it('leaves the maze off the screen entirely, because its population is scripted', () => {
+    expect(MAP_RULES.maze.population).toBe('scripted');
+    expect(WAVE_MAPS).not.toContain('maze');
   });
 
-  it('waves on the cavern starts there and spawns the opening crows', () => {
+  // The cavern is the case the old `crows` boolean would have got wrong: it
+  // fields a wave, so it belongs on this screen, but that wave is not birds.
+  it('keeps a map whose wave is not made of crows', () => {
+    expect(MAP_RULES.cavern.population).toBe('soldiers');
+    expect(WAVE_MAPS).toContain('cavern');
+  });
+
+  it('waves on the cavern starts there and musters the garrison, not a flock', () => {
     g.go('menu');
     press('w');
     press('Enter');
@@ -256,7 +275,9 @@ describe('waves map select', () => {
     press('Enter');
     expect(g.state()).toBe('playing');
     expect(g.mapKind()).toBe('cavern');
-    expect(g.crows().length).toBe(g.config().crowStartCount);
+    // Wave 1 of its own table, and no birds at all.
+    expect(g.soldiers().length).toBe(waveComposition(1).length);
+    expect(g.crows().length).toBe(0);
   });
 
   // The Waves+Castle bug, which was a population rule keyed on mapKind where
@@ -271,9 +292,150 @@ describe('waves map select', () => {
     press('Enter');
     expect(g.mapKind()).toBe('cavern');
 
-    g.crows().length = 0;
-    g.stepSim(g.config().crowEscalationInterval * ONE_SECOND * 3);
-    expect(g.crows().length).toBeGreaterThan(0);
+    // Same shape as the castle regression above, against the garrison instead
+    // of the flock: clear the field and step well past one interval. A
+    // population rule keyed on mapKind rather than on gameMode and
+    // MAP_RULES.population is what this catches.
+    g.soldiers().length = 0;
+    g.stepSim(g.config().crowEscalationInterval * ONE_SECOND * 2);
+    expect(g.soldiers().length).toBeGreaterThan(0);
+  });
+});
+
+describe('the cavern garrison', () => {
+  /** Starts a cavern run and clears the opening wave, so a test places its own. */
+  function emptyCavern(): void {
+    g.pickMap('cavern');
+    g.go('playing');
+    g.soldiers().length = 0;
+  }
+
+  /**
+   * Puts one soldier at a spot and hands it back, having first cleared the
+   * tiles around it.
+   *
+   * The clearing is not tidiness. A cavern is better than a third rock, so a
+   * fixed spot lands inside a wall often enough that an arrow fired at it is
+   * deleted by the terrain check before it ever reaches — which for a shield
+   * test looks exactly like a successful block.
+   */
+  function place(kind: 'spearman' | 'shieldman' | 'archer', x: number, y: number) {
+    const { tileSize } = g.config();
+    const col = Math.floor(x / tileSize), row = Math.floor(y / tileSize);
+    for (let dr = -2; dr <= 2; dr++)
+      for (let dc = -2; dc <= 2; dc++) g.tiles().set(row + dr, col + dc, TILE.EMPTY);
+    g.spawnSoldier(kind);
+    const s = g.soldiers()[g.soldiers().length - 1];
+    s.x = x;
+    s.y = y;
+    return s;
+  }
+
+  it('musters wave 1 of its own table on arrival, and no crows', () => {
+    g.pickMap('cavern');
+    g.go('playing');
+    expect(g.soldiers().map((s: { kind: string }) => s.kind).sort())
+      .toEqual([...waveComposition(1)].sort());
+    expect(g.crows().length).toBe(0);
+  });
+
+  it('gives each kind the health its stats table says', () => {
+    emptyCavern();
+    for (const kind of ['spearman', 'shieldman', 'archer'] as const) {
+      const s = place(kind, 400, 300);
+      expect(s.hp).toBe(SOLDIER_STATS[kind].hp);
+    }
+  });
+
+  describe('the shieldman\'s guard', () => {
+    /**
+     * Fires one arrow travelling along `heading` into a shieldman facing +x,
+     * and reports both its health and whether the guard actually stopped
+     * something.
+     *
+     * The block event is what makes "it survived" mean anything: an arrow that
+     * never reached leaves health untouched too, so health alone would pass
+     * this test with the collision code deleted.
+     */
+    function shootAt(heading: number): { hp: number; blocked: number } {
+      emptyCavern();
+      const s = place('shieldman', 400, 300);
+      s.facing = 0; // looking +x
+      let blocked = 0;
+      g.onEvent((e: { type: string }) => { if (e.type === 'SHIELD_BLOCKED') blocked++; });
+      // An arrow already in flight, sat on top of it: this exercises the
+      // collision branch, not the player's aim.
+      g.arrows().push({
+        x: s.x, y: s.y,
+        vx: Math.cos(heading) * 400, vy: Math.sin(heading) * 400,
+        life: 1, type: 'normal', bounces: 0,
+      });
+      g.stepSim(1);
+      return { hp: s.hp, blocked };
+    }
+
+    it('turns away an arrow coming at its face', () => {
+      // Travelling -x, so arriving head on at a soldier looking +x.
+      const shot = shootAt(Math.PI);
+      expect(shot.blocked, 'the arrow never reached the shield').toBe(1);
+      expect(shot.hp).toBe(SOLDIER_STATS.shieldman.hp);
+    });
+
+    it('does not stop one that comes in from the flank', () => {
+      // Square from the side is outside the 120 degree guard.
+      const shot = shootAt(Math.PI / 2);
+      expect(shot.blocked).toBe(0);
+      expect(shot.hp).toBeLessThan(SOLDIER_STATS.shieldman.hp);
+    });
+
+    it('leaves the other two kinds with no guard at all', () => {
+      emptyCavern();
+      const s = place('spearman', 400, 300);
+      s.facing = 0;
+      g.arrows().push({
+        x: s.x, y: s.y, vx: -400, vy: 0, life: 1, type: 'normal', bounces: 0,
+      });
+      g.stepSim(1);
+      expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+  });
+
+  it('sends a spearman into a committed charge once the player is close', () => {
+    emptyCavern();
+    const player = g.player() as { x: number; y: number };
+    // Inside its reach, so the charge triggers on the next step.
+    const s = place('spearman', player.x + SOLDIER_STATS.spearman.reach - 20, player.y);
+    // One step, which is the step that commits it. Running further would be
+    // testing something else as well: a charge is stopped dead by terrain, and
+    // a cavern is a third rock, so a longer run would fail wherever the spot
+    // picked happened to have a wall in front of it.
+    g.stepSim(1);
+    expect(s.charge).toBeGreaterThan(0);
+    expect(s.chargeAngle).toBeCloseTo(Math.PI, 1); // committed at the player
+  });
+
+  it('leaves a spearman walking while the player is still out of reach', () => {
+    emptyCavern();
+    const player = g.player() as { x: number; y: number };
+    const s = place('spearman', player.x + SOLDIER_STATS.spearman.reach + 200, player.y);
+    g.stepSim(2);
+    expect(s.charge).toBe(0);
+  });
+
+  it('has an archer shoot from its reach rather than closing all the way', () => {
+    emptyCavern();
+    const player = g.player() as { x: number; y: number };
+    const s = place('archer', player.x + SOLDIER_STATS.archer.reach - 20, player.y);
+    // Counted as it is fired, not sampled off hostileBolts afterwards: a bolt
+    // has a 2.5s life and crosses the map at 300px/s, so by the end of the run
+    // the one it fired has already hit something and been spliced out, and the
+    // array is back to empty whether or not it ever shot.
+    let shots = 0;
+    g.onEvent((e: { type: string }) => { if (e.type === 'SOLDIER_SHOT') shots++; });
+    g.stepSim(g.config().soldierArcherShotInterval * ONE_SECOND + 10);
+    expect(shots).toBeGreaterThan(0);
+    // And it held its ground rather than walking into contact.
+    expect(Math.abs(s.x - player.x)).toBeGreaterThan(g.config().soldierContactReach);
   });
 });
 
@@ -405,19 +567,36 @@ describe('cover grows back', () => {
   });
 });
 
-describe('crows follow MAP_RULES, not the map name', () => {
+describe('the population follows MAP_RULES, not the map name', () => {
   it('takes the birds to a map that has them and leaves them behind on one that does not', () => {
     g.go('playing'); // forest, with the pace preset's opening crows
     expect(g.crows().length).toBeGreaterThan(0);
 
-    // crows: true, so the flock carries over rather than being cleared.
-    g.generateMap('cavern');
-    expect(MAP_RULES.cavern.crows).toBe(true);
+    // Also a crows map, so the flock carries over rather than being cleared.
+    g.generateMap('castle');
+    expect(MAP_RULES.castle.population).toBe('crows');
     expect(g.crows().length).toBeGreaterThan(0);
 
-    // crows: false. Left in place they would keep flying through the walls of
+    // Scripted. Left in place the birds would keep flying through the walls of
     // a map with no crow win condition at all.
     g.generateMap('maze');
     expect(g.crows().length).toBe(0);
+  });
+
+  it('leaves the birds behind on a map garrisoned by soldiers', () => {
+    g.go('playing');
+    expect(g.crows().length).toBeGreaterThan(0);
+
+    g.generateMap('cavern');
+    expect(g.crows().length).toBe(0);
+  });
+
+  it('takes the garrison off a map that has no garrison', () => {
+    g.pickMap('cavern');
+    g.go('playing');
+    expect(g.soldiers().length).toBeGreaterThan(0);
+
+    g.generateMap('forest');
+    expect(g.soldiers().length).toBe(0);
   });
 });

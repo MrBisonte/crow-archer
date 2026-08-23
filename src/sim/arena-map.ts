@@ -53,6 +53,46 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
 };
 
 /**
+ * Who fights on a map.
+ *
+ * `crows` is the original arena population: birds that fly in off the right
+ * edge, cross in a straight line with no terrain check, and read as wildlife
+ * over open ground. That last part is why it is not universal — the same
+ * straight line through a corridor reads as a bug, which is what kept them out
+ * of the maze.
+ *
+ * `soldiers` is a garrison: spearmen, shieldmen and archers that walk, path
+ * around terrain, and arrive in composed waves rather than one at a time. A
+ * cavern is somebody's dug-out stronghold, so its enemies are the people who
+ * dug it.
+ *
+ * `scripted` is a map whose population is placed by a stage script rather than
+ * escalating on a timer. The maze's rat pack and its warden are the only ones,
+ * and the distinction is load-bearing: a scripted map must not appear on the
+ * Waves map-select screen, because a run there would have two win conditions
+ * and mean neither.
+ */
+export type MapPopulation = 'crows' | 'soldiers' | 'scripted';
+
+/**
+ * Which populations escalate on the wave timer, and therefore which maps earn
+ * a panel on the Waves map-select screen.
+ *
+ * A table rather than `population !== 'scripted'` so that a fourth population
+ * has to state which it is, instead of defaulting itself onto a screen nobody
+ * decided to put it on.
+ */
+const WAVE_POPULATION: Record<MapPopulation, boolean> = {
+  crows: true,
+  soldiers: true,
+  scripted: false,
+};
+
+/** Does this map field an escalating population of its own in Waves mode? */
+export const runsWaves = (kind: MapKind): boolean =>
+  WAVE_POPULATION[MAP_RULES[kind].population];
+
+/**
  * Per-map rules that are not about generation, one row per MapKind.
  *
  * Separate from MAP_GEN because these outlive generation: MAP_GEN is consulted
@@ -71,21 +111,19 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
  * fiddly. A maze is a level about not knowing what is round the corner, so the
  * corner has to actually hide something.
  *
- * `crows` is where they live. A passive crow crosses the map in a straight line
- * with no terrain check, which reads as a bird over an arena and as a bug in a
- * corridor. In single player it carries a second cost: ten crow kills is the
- * forest's own win condition, and a maze that quietly swaps itself for a boss
- * fight halfway through has two win conditions and means neither. A cavern's
- * chambers are wide enough to be flown across, which is the whole reason its
- * generator smooths the scatter instead of leaving it.
+ * `population` is who lives there, and it used to be a `crows` boolean. That
+ * one flag was quietly answering two different questions — "do birds live
+ * here" and "does this map field a wave at all" — and they came apart the
+ * moment a map wanted a population that was not birds. A map with no crows is
+ * not necessarily a map with no waves.
  */
 export const MAP_RULES: Record<MapKind, {
-  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean;
+  destructibleTerrain: boolean; fogOfWar: boolean; population: MapPopulation;
 }> = {
-  forest: { destructibleTerrain: true, fogOfWar: false, crows: true },
-  castle: { destructibleTerrain: true, fogOfWar: false, crows: true },
-  maze: { destructibleTerrain: false, fogOfWar: true, crows: false },
-  cavern: { destructibleTerrain: true, fogOfWar: false, crows: true },
+  forest: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
+  castle: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
+  maze: { destructibleTerrain: false, fogOfWar: true, population: 'scripted' },
+  cavern: { destructibleTerrain: true, fogOfWar: false, population: 'soldiers' },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
