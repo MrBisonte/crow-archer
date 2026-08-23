@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { TILE, TileMap } from '../sim/tilemap';
+import type { MapKind } from '../sim/arena-map';
+import { TILE, type TileId, TileMap } from '../sim/tilemap';
 import {
   ANIMATED_THEMES,
   AnimatedTileOverlay,
@@ -42,6 +43,9 @@ const stylesOf = (rec: Recorder): string[] =>
     e.kind === 'set' && (e.name === 'fillStyle' || e.name === 'strokeStyle') && typeof e.value === 'string'
       ? [e.value]
       : []);
+
+/** The painter type TILE_THEMES holds, which tiles.ts keeps to itself. */
+type TilePainter = NonNullable<(typeof TILE_THEMES)['forest'][TileId]>;
 
 const GENERATABLE_TILES = [TILE.EMPTY, TILE.ROCK, TILE.WATER, TILE.TREE, TILE.ASH, TILE.HUT];
 
@@ -152,4 +156,99 @@ describe('AnimatedTileOverlay', () => {
     const rec = fakeContext();
     expect(() => overlay.draw(rec.ctx, 0, true)).not.toThrow();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Themed tile art
+// ---------------------------------------------------------------------------
+
+/** Tile art paints in hex, plus the rgba() contact shadows, which have to
+ * blend with whatever ground is already under them rather than replace it. */
+const PAINT_COLOUR = /^(#[0-9A-Fa-f]{6}|rgba\(\d+,\s*\d+,\s*\d+,\s*(0|1|0?\.\d+)\))$/;
+
+const TILE_NAMES: Partial<Record<TileId, string>> = {
+  [TILE.EMPTY]: 'EMPTY', [TILE.ROCK]: 'ROCK', [TILE.WATER]: 'WATER',
+  [TILE.TREE]: 'TREE', [TILE.ASH]: 'ASH', [TILE.HUT]: 'HUT',
+};
+
+/** Most of a tile's texture is gated on `seed`, so one seed sees almost none
+ * of its palette. Both hut-neighbour flags matter for the same reason. */
+const SEEDS = Array.from({ length: 24 }, (_, i) => i);
+
+const paintOnce = (
+  painter: TilePainter, seed: number, above = false, left = false, at = 0,
+): Recorder => {
+  const rec = fakeContext();
+  painter(rec.ctx, at, at, seed, { tileSize: 16, hudHeight: 0 }, above, left);
+  return rec;
+};
+
+const paletteOf = (painter: TilePainter): Set<string> => {
+  const seen = new Set<string>();
+  for (const seed of SEEDS)
+    for (const above of [false, true])
+      for (const left of [false, true])
+        for (const c of stylesOf(paintOnce(painter, seed, above, left))) seen.add(c);
+  return seen;
+};
+
+const rectsOf = (rec: Recorder): readonly (readonly number[])[] =>
+  rec.log.flatMap((e) =>
+    e.kind === 'call' && e.name === 'fillRect' && e.args.every((a) => typeof a === 'number')
+      ? [e.args as readonly number[]]
+      : []);
+
+/**
+ * Distinct fill colours each themed painter drew with before the detail pass.
+ *
+ * WATER and HUT are deliberately not widened. Water is a flat fill because the
+ * live AnimatedTileOverlay paints its colour and its ripples over the top, and
+ * the hut and the shrine were already the most detailed tiles in their themes.
+ * They are in the table so that "unchanged" reads as a decision and not as
+ * something that was missed.
+ */
+const PALETTE_BEFORE: Record<MapKind, Partial<Record<TileId, number>>> = {
+  forest: { [TILE.EMPTY]: 5, [TILE.ROCK]: 5, [TILE.WATER]: 1, [TILE.TREE]: 5, [TILE.ASH]: 4, [TILE.HUT]: 10 },
+  castle: { [TILE.EMPTY]: 4, [TILE.ROCK]: 3, [TILE.WATER]: 1, [TILE.TREE]: 4, [TILE.ASH]: 3, [TILE.HUT]: 8 },
+  maze:   { [TILE.EMPTY]: 4, [TILE.ROCK]: 4, [TILE.WATER]: 1, [TILE.TREE]: 4, [TILE.ASH]: 3, [TILE.HUT]: 8 },
+};
+
+const LEFT_ALONE = new Set<TileId>([TILE.WATER, TILE.HUT]);
+
+describe('themed tile art', () => {
+  for (const theme of Object.keys(TILE_THEMES) as MapKind[]) {
+    describe(theme, () => {
+      for (const tile of GENERATABLE_TILES) {
+        const name = TILE_NAMES[tile] ?? String(tile);
+        const painter = TILE_THEMES[theme][tile];
+
+        it(`paints ${name} in canvas colours, inside its own tile, the same way twice`, () => {
+          expect(painter).toBeTypeOf('function');
+          for (const colour of paletteOf(painter!)) expect(colour).toMatch(PAINT_COLOUR);
+
+          // Every tile shares one layer canvas, so a rect that runs past the
+          // tile's own box does not clip — it paints over the neighbour.
+          for (const seed of SEEDS) {
+            for (const [rx, ry, rw, rh] of rectsOf(paintOnce(painter!, seed, false, false, 48))) {
+              expect(rx).toBeGreaterThanOrEqual(48);
+              expect(ry).toBeGreaterThanOrEqual(48);
+              expect(rx! + rw!).toBeLessThanOrEqual(64);
+              expect(ry! + rh!).toBeLessThanOrEqual(64);
+            }
+            // Seeded texture has to be a function of the seed and nothing else,
+            // or a repaint of one tile disagrees with the layer around it.
+            expect(stylesOf(paintOnce(painter!, seed))).toEqual(stylesOf(paintOnce(painter!, seed)));
+          }
+        });
+
+        const before = PALETTE_BEFORE[theme][tile]!;
+        const widened = !LEFT_ALONE.has(tile);
+        it(`${widened ? 'widens' : 'holds'} ${name}'s palette`, () => {
+          const now = paletteOf(painter!).size;
+          if (widened) expect(now).toBeGreaterThan(before);
+          else expect(now).toBe(before);
+        });
+      }
+    });
+  }
 });

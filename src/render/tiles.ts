@@ -51,15 +51,31 @@ export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       if (seed % 7 === 0)  pixelRect(grid, (seed % 11) + 1, (seed % 9) + 1, 2, 2, '#172517');
       if (seed % 11 === 0) pixelRect(grid, (seed % 9) + 3, (seed % 7) + 3, 2, 2, '#1c2f1c');
       if (seed % 5 === 0)  setPixel(grid, (seed % 13) + 2, (seed % 10) + 8, '#213a21');
+      // A tuft of grass on some tiles, three blades of differing height. The
+      // spots above are all stains *in* the ground; a floor the player crosses
+      // constantly needs something standing on it too, and the seed keeps it
+      // from landing in the same place on every tile that has one.
+      if (seed % 4 === 1) {
+        const gx = (seed % 10) + 3, gy = (seed % 6) + 9;
+        pixelRect(grid, gx, gy - 1, 1, 2, '#254a25');
+        pixelRect(grid, gx + 1, gy - 2, 1, 3, '#2c5a2c');
+        pixelRect(grid, gx + 2, gy - 1, 1, 2, '#254a25');
+      }
     });
   },
   [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
     paintGrid(g, x, y, ts, (grid) => {
       pixelRect(grid, 0, 0, 16, 16, '#1a2a1a');
+      // The tree casts a contact shadow and the boulder did not, which left
+      // it looking like it hovered a little over the ground.
+      pixelEllipse(grid, 8, 14, 6, 1.6, 'rgba(0,0,0,0.30)');
       pixelEllipse(grid, 8, 9, 6, 5, '#585858');
       pixelEllipse(grid, 6 + (seed % 2), 7, 3, 3, '#6e6e6e');
       pixelEllipse(grid, 6, 8, 2, 2, '#828282');
       pixelEllipse(grid, 10, 11, 2, 2, '#484848');
+      // A crack down the face, and moss where it meets the ground
+      pixelRect(grid, 9 - (seed % 2), 7, 1, 4, '#3e3e3e');
+      if (seed % 3 === 0) pixelRect(grid, 4, 11, 3, 1, '#2c4a2c');
     });
   },
   [TILE.WATER](g, x, y, _seed, { tileSize: ts }) {
@@ -71,9 +87,19 @@ export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
     paintGrid(g, x, y, ts, (grid) => {
       pixelRect(grid, 0, 0, 16, 16, '#1a2a1a');
       pixelEllipse(grid, 8, 14, 5, 2, 'rgba(0,0,0,0.30)');
+      // Roots spreading off the trunk, so the tree grows out of the ground
+      // rather than being stuck into it
+      pixelRect(grid, 4, 14, 3, 1, '#4a2a12');
+      pixelRect(grid, 9, 14, 3, 1, '#4a2a12');
       pixelRect(grid, 6, 9, 3, 6, '#5c3317');
+      pixelRect(grid, 6, 9, 1, 6, '#6e4420'); // lit side of the trunk
+      setPixel(grid, 7, 11, '#43240f'); setPixel(grid, 8, 13, '#43240f'); // bark
+      // Three canopy lobes and a shaded underside: two circles of one green
+      // read as a lollipop, and every tree on the map is this one tile.
       pixelEllipse(grid, 8, 6, 5, 5, '#1e7a1e');
+      pixelEllipse(grid, 11, 8, 3, 2.5, '#186016');
       pixelEllipse(grid, 6, 5, 3.5, 3.5, '#27962a');
+      pixelEllipse(grid, 5, 4, 1.5, 1.5, '#31ad33');
     });
   },
   [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
@@ -85,6 +111,13 @@ export const TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#1e1a10');
       if (seed % 7 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 1, '#1e1a10');
       if (seed % 3 === 0) setPixel(grid, (seed % 12) + 3, (seed % 10) + 9, '#26221a');
+      // What is left of the trunk that burned, on some tiles. Ash is where a
+      // tree used to be, and nothing in the tile said so.
+      if (seed % 4 === 2) {
+        const sx = (seed % 8) + 4;
+        pixelRect(grid, sx, 9, 2, 4, '#2a2018');
+        pixelRect(grid, sx, 9, 2, 1, '#3a2c20');
+      }
     });
   },
   [TILE.HUT](g, x, y, _seed, { tileSize: ts }, hutAbove, hutLeft) {
@@ -134,15 +167,30 @@ export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       pixelRect(grid, 0, 0, 1, 16, '#2c2c2e');
       if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#333335');
       if (seed % 8 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 2, '#424244');
+      // A hairline crack and the odd chip. Deliberately not the maze's
+      // flagstone lattice: the floor is most of what a player sees, so it is
+      // most of what tells them at a glance which map they are standing on.
+      if (seed % 6 === 2) pixelRect(grid, (seed % 8) + 3, (seed % 10) + 3, 4, 1, '#2e2e30');
+      if (seed % 9 === 4) setPixel(grid, (seed % 12) + 2, (seed % 11) + 2, '#48484a');
     });
   },
   // A pillar, not a boulder: a vertical shaft with a capital and a base.
   [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
     paintGrid(g, x, y, ts, (grid) => {
       pixelRect(grid, 0, 0, 16, 16, '#3a3a3c');
+      pixelEllipse(grid, 8, 15, 6, 1.4, 'rgba(0,0,0,0.30)');
       pixelRect(grid, 4, 2, 8, 12, '#6a6a6e');
+      // Fluting and a shaded side. A flat shaft reads as a slab, and a hall
+      // of slabs has no depth in it at all.
+      pixelRect(grid, 5, 3, 1, 10, '#7c7c82');
+      pixelRect(grid, 8, 3, 1, 10, '#5a5a5e');
+      pixelRect(grid, 10, 3, 2, 10, '#4e4e52');
       pixelRect(grid, 2 + (seed % 2), 1, 12 - (seed % 2), 2, '#84848a');
       pixelRect(grid, 2 + (seed % 2), 13, 12 - (seed % 2), 2, '#84848a');
+      // Capital and base each throw a line onto the shaft, so they read as
+      // slabs resting on it rather than as more of it
+      pixelRect(grid, 4, 3, 8, 1, '#5a5a5e');
+      pixelRect(grid, 4, 12, 8, 1, '#5a5a5e');
     });
   },
   // A still, dark pool, not a sunlit pond — flat fill, same as the forest's water.
@@ -155,10 +203,16 @@ export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       pixelRect(grid, 0, 0, 16, 16, '#3a3a3c');
       pixelEllipse(grid, 8, 13, 5, 2, 'rgba(0,0,0,0.30)');
       pixelRect(grid, 3, 4, 10, 8, '#5c4326');
+      // Plank courses, a lit lid rim and nail heads at the bracing corners:
+      // the diagonals below already say "crate", these say "boards".
+      pixelRect(grid, 3, 4, 10, 1, '#7a5a34');
+      pixelRect(grid, 3, 7, 10, 1, '#4a351e');
+      pixelRect(grid, 3, 11, 10, 1, '#4a351e');
       for (let i = 0; i < 8; i++) {
         setPixel(grid, 3 + i, 4 + i, '#3a2a16');
         setPixel(grid, 12 - i, 4 + i, '#3a2a16');
       }
+      for (const [nx, ny] of [[3, 4], [12, 4], [3, 11], [12, 11]] as const) setPixel(grid, nx, ny, '#8a8a90');
     });
   },
   [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
@@ -168,6 +222,9 @@ export const CASTLE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       pixelRect(grid, 0, 0, 1, 16, '#1a1818');
       if (seed % 5 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 2, '#302c2a');
       if (seed % 7 === 0) pixelRect(grid, (seed % 9) + 4, (seed % 7) + 6, 2, 1, '#302c2a');
+      // A charred board left in the scorch, the castle's answer to the
+      // forest's burnt stump
+      if (seed % 4 === 1) pixelRect(grid, (seed % 9) + 3, (seed % 8) + 5, 3, 2, '#3a3634');
     });
   },
   // A shrine, not a hut: same 2x2/neighbour-aware silhouette (peak, archway,
@@ -224,6 +281,8 @@ export const MAZE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       pixelRect(grid, (off + 8) % 16, 8, 1, 8, '#211e1a');
       if (seed % 6 === 0) pixelRect(grid, (seed % 11) + 2, (seed % 9) + 2, 2, 1, '#332e28');
       if (seed % 9 === 0) setPixel(grid, (seed % 13) + 1, (seed % 12) + 3, '#3c352c');
+      // A chipped slab here and there, worn deeper than the grit above it
+      if (seed % 7 === 3) pixelRect(grid, (seed % 9) + 3, (seed % 10) + 4, 3, 1, '#241f1a');
     });
   },
   [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
@@ -234,6 +293,9 @@ export const MAZE_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
       for (let course = 0; course < 3; course++) {
         const top = course * 6;
         pixelRect(grid, 0, top, 16, 5, '#5c554a');
+        // Every course catches the light on its own top edge, so a wall reads
+        // as stacked blocks rather than as one field ruled into squares.
+        pixelRect(grid, 0, top, 16, 1, '#655d51');
         pixelRect(grid, 0, top + 5, 16, 1, '#332f29');
         const jog = course % 2 === 0 ? 5 : 11;
         pixelRect(grid, jog, top, 1, 5, '#332f29');
