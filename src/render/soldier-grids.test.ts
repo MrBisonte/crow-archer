@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { SOLDIER_KINDS } from '../sim/soldiers';
 import type { PixelGrid } from './pixel-grid';
 import {
+  COMMANDER_PALETTE,
   COMMANDER_SPRITE,
   SOLDIER_GRID_BUILDERS,
+  SOLDIER_PALETTES,
   SOLDIER_SPRITE,
   buildCommanderGrid,
   type StrideFrame,
@@ -26,26 +28,32 @@ const painted = (g: PixelGrid): number =>
 const shapeOf = (g: PixelGrid): string => g.map((row) => row.join(',')).join('|');
 
 /**
- * How many separate solid runs a row has.
+ * How many separate runs of *body* a row has, ignoring the outline colour.
  *
  * This is the check for limbs collapsing. A stride swings limbs in antiphase,
- * and if each one swings around its own top rather than a shared hip they
- * cross at one extreme and merge into a single block: one frame of the walk
- * shows one thick leg, which is invisible in a still and obvious in motion.
- * Counting runs in the row the feet are on is what catches it.
+ * and if each swings around its own top rather than a shared hip they cross at
+ * one extreme and merge into a single block: one frame of the walk shows one
+ * thick leg, invisible in a still and obvious in motion.
  *
- * Works on these sprites because the gap between two splayed legs is two or
- * more columns, which survives the pixelOutline pass as real emptiness rather
- * than closing up into a seam.
+ * Counting any filled cell is the obvious predicate and it is wrong on an
+ * outlined sprite. pixelOutline fills the gap between two close limbs with
+ * outline-coloured cells, so a two-column gap reads as one fused run on a
+ * sprite whose legs are plainly separate. Skipping the outline colour measures
+ * what is actually being asked — is there body, gap, body — instead of whether
+ * any raw emptiness happens to have survived.
+ *
+ * The converse trap is why the boots have a colour of their own: painted in
+ * the outline colour, as they were, this predicate goes blind the other way
+ * and reports zero runs on a row that is entirely feet.
  */
-function filledRuns(g: PixelGrid, y: number): number {
+function bodyRuns(g: PixelGrid, y: number, outline: string): number {
   const row = g[y] ?? [];
   let runs = 0;
   let inRun = false;
   for (const cell of row) {
-    const filled = cell !== null && cell !== undefined;
-    if (filled && !inRun) runs++;
-    inRun = filled;
+    const isBody = cell !== null && cell !== undefined && cell !== outline;
+    if (isBody && !inRun) runs++;
+    inRun = isBody;
   }
   return runs;
 }
@@ -90,16 +98,23 @@ describe('soldier grids', () => {
   // Both extremes, because the bug is asymmetric: the frame that splays
   // correctly proves nothing about the frame that collapses.
   it.each(SOLDIER_KINDS)('keeps %s\'s two legs apart at both ends of the stride', (kind) => {
+    // Two is right for these three because all three have visible legs. It is
+    // not a universal invariant and does not belong in a shared helper: a body
+    // in a long cloak legitimately reports one run across the whole leg band,
+    // and asserting two for every sprite would fail on the sprite rather than
+    // on the assertion.
+    const outline = SOLDIER_PALETTES[kind]['edge']!;
     for (const frame of ['a', 'b'] as const) {
       const g = SOLDIER_GRID_BUILDERS[kind](frame);
-      expect(filledRuns(g, BOOT_ROW), `${kind} ${frame} fused its legs into one`).toBe(2);
+      expect(bodyRuns(g, BOOT_ROW, outline), `${kind} ${frame} fused its legs into one`).toBe(2);
     }
   });
 
   it('lets the legs meet in the middle of the stride, which is not the bug', () => {
     // Mid-stride is legs together, so one run there is correct. Asserting two
     // everywhere would forbid a walk cycle rather than fix one.
-    expect(filledRuns(SOLDIER_GRID_BUILDERS.spearman('mid'), BOOT_ROW)).toBe(1);
+    expect(bodyRuns(SOLDIER_GRID_BUILDERS.spearman('mid'), BOOT_ROW,
+      SOLDIER_PALETTES.spearman['edge']!)).toBe(1);
   });
 
   it('is deterministic, so the sprite cache can key on kind and frame alone', () => {
@@ -148,6 +163,6 @@ describe('the commander grid', () => {
   // that swings around its own tops crosses at one extreme and reads as one
   // wide hoof. Four runs at both ends of the gait.
   it.each(['a', 'b'] as const)('keeps all four legs apart on frame %s', (frame) => {
-    expect(filledRuns(buildCommanderGrid(frame), HOOF_ROW)).toBe(4);
+    expect(bodyRuns(buildCommanderGrid(frame), HOOF_ROW, COMMANDER_PALETTE.edge)).toBe(4);
   });
 });

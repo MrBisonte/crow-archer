@@ -39,15 +39,15 @@ export const COMMANDER_SPRITE = { w: 34, h: 28 };
 export const SOLDIER_PALETTES: Record<SoldierKind, Record<string, string>> = {
   spearman: {
     cloth: '#8A6A38', clothHi: '#A88448', metal: '#9AA0A8', metalHi: '#C4CAD2',
-    skin: '#C89868', edge: '#2A2018', accent: '#B03028',
+    skin: '#C89868', edge: '#2A2018', accent: '#B03028', boot: '#4A3A22',
   },
   shieldman: {
     cloth: '#44557A', clothHi: '#5E7296', metal: '#AAB4C0', metalHi: '#D8E0E8',
-    skin: '#C89868', edge: '#1C2230', accent: '#C8A030',
+    skin: '#C89868', edge: '#1C2230', accent: '#C8A030', boot: '#39424F',
   },
   archer: {
     cloth: '#3E5E3A', clothHi: '#52784C', metal: '#8A8A78', metalHi: '#B0B0A0',
-    skin: '#C89868', edge: '#1A2418', accent: '#8A5A28',
+    skin: '#C89868', edge: '#1A2418', accent: '#8A5A28', boot: '#33402F',
   },
 };
 
@@ -84,8 +84,8 @@ function buildSoldierBody(C: Record<string, string>, frame: StrideFrame): PixelG
   pixelCurve(g, [9, 16], [(9 + hipR) / 2, 19], [hipR, 22], C['cloth']!, 10);
   // Two wide rather than three: at full swing three-wide boots close the gap
   // the legs just opened, and the collapse comes back at the feet only.
-  pixelRect(g, hipL - 1, 21, 2, 2, C['edge']!);
-  pixelRect(g, hipR - 1, 21, 2, 2, C['edge']!);
+  pixelRect(g, hipL - 1, 21, 2, 2, C['boot']!);
+  pixelRect(g, hipR - 1, 21, 2, 2, C['boot']!);
 
   pixelRect(g, 5, 9, 6, 8, C['cloth']!);
   pixelRect(g, 5, 9, 6, 2, C['clothHi']!);
