@@ -248,7 +248,10 @@ describe('the character roster reaches the single-player screen', () => {
 });
 
 describe('the sapper', () => {
-  beforeEach(() => { g.pick('sapper'); g.go('playing'); });
+  // Open ground on purpose. A thrown charge that lands in water is removed
+  // without exploding, so on a randomly generated map these counts are a
+  // question about where the generator put a pond.
+  beforeEach(() => { g.pick('sapper'); g.go('playing'); clearArena(); });
 
   it('throws a powder charge on the primary, where the archer throws an arrow', () => {
     expect(g.dynamites().length).toBe(0);
@@ -476,12 +479,15 @@ describe('the sniper key after the rework', () => {
     return p.x - from;
   }
 
-  it('still roots the characters who aim down it', () => {
-    expect(walkDistanceHoldingShift('archer')).toBe(0);
+  it('still roots the sapper, the one character it is still for', () => {
+    expect(walkDistanceHoldingShift('sapper')).toBe(0);
   });
 
-  it('no longer roots the wizard, whose bolts steer themselves anyway', () => {
+  it('no longer roots the wizard or the archer, who spend the key elsewhere', () => {
+    // Holding the key alone does nothing for either now: the wizard's blink
+    // and the archer's draw both run off the press, not off the held state.
     expect(walkDistanceHoldingShift('wizard')).toBeGreaterThan(0);
+    expect(walkDistanceHoldingShift('archer')).toBeGreaterThan(0);
   });
 });
 
@@ -606,7 +612,7 @@ describe('the knight chained charge', () => {
     p.y = 6.5 * ts;
     p.aimAngle = 0;
     g.shift();          // windup
-    g.releaseShift();   // committed east
+    g.shiftUp();        // committed east
     if (chain) g.shift();
     const from = p.x;
     g.stepSim(ticks);
@@ -682,6 +688,138 @@ describe('the knight chained charge', () => {
       clearArena();
       g.shift();
       expect(g.knightCharge().chained, character).toBe(false);
+    }
+  });
+});
+
+describe('the archer power shot', () => {
+  /** An archer on open ground, aiming due east, with the key not yet down. */
+  function archerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * ts;
+    p.y = (row + 0.5) * ts;
+    p.aimAngle = 0;
+    return p;
+  }
+
+  /** Draws for `secs` and looses. Returns the arrow it put in the air. */
+  function loose(secs: number): { vx: number; vy: number; pierceLeft: number; dmgMult: number; type: string; power: boolean } {
+    g.shift();
+    g.holdDraw(secs);
+    g.shiftUp();
+    const shot = g.arrows()[g.arrows().length - 1];
+    return shot as never;
+  }
+
+  it('roots him while he draws, which is what the shot costs', () => {
+    archerAt(6, 6);
+    const p = g.player() as { x: number };
+    const keys = g.keys() as Record<string, boolean>;
+    g.shift();
+    expect(g.archerDraw().drawing).toBe(true);
+
+    const from = p.x;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys['ArrowRight'] = false;
+    expect(p.x).toBe(from);
+  });
+
+  it('looses one arrow on release, and nothing while merely held', () => {
+    archerAt(6, 6);
+    g.shift();
+    g.stepSim(5);
+    expect(g.arrows().length).toBe(0);
+
+    g.shiftUp();
+    expect(g.arrows().length).toBe(1);
+    expect(g.archerDraw().drawing).toBe(false);
+  });
+
+  it('flies faster and pierces more the longer it is drawn', () => {
+    const c = g.config();
+
+    // The draw fraction comes off the wall clock, so a "tap" is really the
+    // millisecond or two between the press and the release. It is asserted as
+    // a narrow band rather than an exact figure for that reason; the full draw
+    // below is exact because the fraction is capped at 1.
+    archerAt(6, 6);
+    const tap = loose(0);
+    const tapSpeed = Math.hypot(tap.vx, tap.vy);
+    expect(tapSpeed).toBeGreaterThanOrEqual(c.arrowSpeed);
+    expect(tapSpeed).toBeLessThan(c.arrowSpeed * 1.05);
+    expect(tap.pierceLeft).toBe(1);
+    expect(tap.dmgMult).toBeGreaterThanOrEqual(1);
+    expect(tap.dmgMult).toBeLessThan(1.1);
+
+    archerAt(6, 6);
+    const full = loose(c.archerDrawMaxSecs);
+    expect(Math.hypot(full.vx, full.vy)).toBeCloseTo(c.arrowSpeed * c.archerPowerSpeedMult, 0);
+    expect(full.pierceLeft).toBe(c.archerPowerPierce);
+    expect(full.dmgMult).toBeCloseTo(c.archerPowerBossMult, 5);
+  });
+
+  it('is marked as a power shot, where an ordinary loosed arrow is not', () => {
+    archerAt(6, 6);
+    expect(loose(1).power).toBe(true);
+
+    archerAt(6, 6);
+    g.shoot();
+    g.stepSim(1);
+    const plain = g.arrows()[0] as { power?: boolean; pierceLeft?: number };
+    expect(plain.power).toBeUndefined();
+    expect(plain.pierceLeft).toBeUndefined();
+  });
+
+  it('spends one unit of ammo, the same as any other shot', () => {
+    archerAt(6, 6);
+    const inv = g.inv() as Record<string, number>;
+    const before = inv.arrows!;
+    loose(1);
+    expect(inv.arrows).toBe(before - 1);
+  });
+
+  it('keeps whatever ammo was queued, so a drawn fire arrow still burns', () => {
+    archerAt(6, 6);
+    const inv = g.inv() as Record<string, number>;
+    inv.fireArrows = 3;
+    expect(loose(1).type).toBe('fire');
+    expect(inv.fireArrows).toBe(2);
+  });
+
+  it('refuses a second draw until the cooldown has run', () => {
+    const c = g.config();
+    archerAt(6, 6);
+    loose(1);
+    expect(g.archerDraw().cooldown).toBeCloseTo(c.archerPowerCooldown, 5);
+
+    g.shift();
+    expect(g.archerDraw().drawing).toBe(false);
+
+    g.stepSim(Math.ceil(c.archerPowerCooldown * ONE_SECOND) + 1);
+    expect(g.archerDraw().cooldown).toBe(0);
+    g.shift();
+    expect(g.archerDraw().drawing).toBe(true);
+  });
+
+  it('does nothing on a release that never drew', () => {
+    archerAt(6, 6);
+    g.shiftUp();
+    expect(g.arrows().length).toBe(0);
+    expect(g.archerDraw().cooldown).toBe(0);
+  });
+
+  it('belongs to the archer alone', () => {
+    for (const character of ['wizard', 'knight', 'ranger', 'sapper']) {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      g.shift();
+      expect(g.archerDraw().drawing, character).toBe(false);
     }
   });
 });

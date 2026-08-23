@@ -59,6 +59,7 @@ export type GameEvent =
   | { type: 'KNIGHT_CHARGE'; x: number; y: number; power: number }
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
+  | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }
   // Player state

@@ -199,6 +199,19 @@ const CONFIG = {
 
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
+  // Archer power shot. Sniper mode used to root him for nothing but a longer
+  // aim line, which is all cost; drawing the bow is the same root buying
+  // something. A full draw is the only shot in his kit that punishes a single
+  // big target, which is the gap the fastest and weakest bow leaves.
+  //
+  // Every figure below is what a FULL draw is worth; a tap gets the bottom of
+  // each range, so the decision is how long to stand still, not whether to.
+  archerDrawMaxSecs: 1.0,
+  archerPowerCooldown: 5,
+  archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
+  archerPowerPierce: 3,      // bodies it passes through: 1 at a tap
+  archerPowerBossMult: 3,    // against a boss, versus a plain arrow's 1
+
   // Crow density and the player's ability to answer it. Every value here is
   // set by the pace preset below, so edit PACE_PRESETS, not these.
   crowPassiveSpeed: 60, crowAggroSpeed: 200, crowAggroTimeout: 4,
@@ -571,7 +584,7 @@ const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
     lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
-           'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
+           'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Hold Shift: power shot, pierces'] },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
@@ -722,6 +735,10 @@ let iFlash = {};   // empty-attempt flash timer per resource key
 
 // Dynamite charge state
 let charge = { on: false, t0: 0 };
+// The archer's draw, on the key that means sniper mode for the sapper. Same
+// shape as `charge` above, and deliberately so: the hand already knows it.
+let archerDraw = { on: false, t0: 0 };
+let archerPowerCD = 0;
 
 function resetInv() {
   for (const [k, r] of Object.entries(CONFIG.resources)) { inv[k] = r.max; iFlash[k] = 0; }
@@ -1143,6 +1160,63 @@ function tryWizardBlink() {
   events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: player.x, toY: player.y });
 }
 
+/** How far the draw has come, 0 to 1. Read by the release, the aim line and
+ * the bar, so it lives in one place. */
+function archerDrawFrac() {
+  if (!archerDraw.on) return 0;
+  return Math.min(1, (performance.now() - archerDraw.t0) / 1000 / CONFIG.archerDrawMaxSecs);
+}
+
+/**
+ * The archer's power shot, bound to the key that means sniper mode for the
+ * sapper.
+ *
+ * He is rooted while he draws, which is exactly what sniper mode already cost
+ * him. The difference is that the root now buys a shot that pierces, flies at
+ * twice the speed and hits a boss for three times a plain arrow's worth — at
+ * a full draw. A tap gets the bottom of every one of those ranges, so the
+ * decision the key asks is how long to stand still, not whether to.
+ */
+function startArcherDraw() {
+  if (selectedChar !== 'archer' || archerDraw.on || !inGame()) return;
+  if (archerPowerCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  archerDraw.on = true;
+  archerDraw.t0 = performance.now();
+}
+
+function releaseArcherDraw() {
+  if (!archerDraw.on) return;
+  const drawn = archerDrawFrac();
+  archerDraw.on = false;
+  // Let go after pausing or dying and the draw is simply lost, rather than
+  // loosing an arrow the moment play resumes.
+  if (!inGame()) return;
+
+  // A power shot spends one unit of whatever is queued, exactly as an ordinary
+  // shot does, so a fully drawn fire arrow is a fire arrow that also pierces.
+  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+  if (!hasArrows) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  let type = 'normal';
+  if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
+  else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
+  else                             { inv.arrows--;                             }
+
+  archerPowerCD = CONFIG.archerPowerCooldown;
+  const spd = CONFIG.arrowSpeed * (1 + drawn * (CONFIG.archerPowerSpeedMult - 1));
+  // The in-flight cap is deliberately not consulted. It is there to stop the
+  // bow being held down, and this is one arrow every five seconds.
+  arrows.push({ x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd,
+    vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.arrowLifetime, type, bounces: 0,
+    initSpeed: spd,
+    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    power: true,
+    pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
+    dmgMult: 1 + drawn * (CONFIG.archerPowerBossMult - 1) });
+  events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
+}
+
 /**
  * The knight's chained charge: a second press while the dash is running.
  *
@@ -1181,6 +1255,15 @@ function tryKnightChainCharge() {
 function pressShift() {
   if (!tryKnightChainCharge()) startKnightCharge();
   tryWizardBlink();
+  startArcherDraw();
+}
+
+/** The other half of the same key. Each of these belongs to one character and
+ * returns immediately for the rest, so the routing stays a list rather than a
+ * branch on who is playing. */
+function releaseShift() {
+  releaseKnightCharge();
+  releaseArcherDraw();
 }
 
 /** Knight-only, bound to the key that means sniper mode for everyone else.
@@ -1310,7 +1393,7 @@ function installInput() {
   document.addEventListener('keyup', e => {
     keys[e.key] = false;
     if (e.key === 'f' || e.key === 'F') releaseCharge();
-    if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
+    if (e.key === CONFIG.keys.snipe) releaseShift();
   });
 
   canvas.addEventListener('click', e => {
@@ -1652,6 +1735,16 @@ events.on(e => {
       spawnShockRing(e.toX, e.toY, CONFIG.wizBlinkPulseRadius, '#8888FF');
       break;
 
+    case 'ARCHER_POWER_SHOT':
+      // The shake scales with the draw, so a full one is felt and a tap is not.
+      playSound(sndShoot); triggerShake(1 + 3 * e.power, 80 + 120 * e.power);
+      burst(e.x, e.y, {
+        count: 6 + Math.round(10 * e.power), colors: ['#EAFF6A','#FFFFFF'],
+        speedMin: 30, speedMax: 60 + 90 * e.power, decay: 3.2, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#EAFF6A'
+      });
+      break;
+
     case 'KNIGHT_WHIRL_SWING':
       playSound(sndExplosion); triggerShake(3, 90);
       spawnShockRing(e.x, e.y, e.radius, '#C8C8E8');
@@ -1830,6 +1923,7 @@ function initGame() {
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
   knightChainTimer = 0;
+  archerDraw.on = false; archerPowerCD = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -1978,15 +2072,17 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  // The knight spends this button on his charge, and the wizard on a blink.
-  // Neither has an aim line worth sharpening: the knight has none at all, and
-  // the wizard's bolts steer themselves onto a target after they are cast, so
-  // a tighter angle at the moment of casting buys him almost nothing while
-  // the root that comes with it costs him everything.
-  sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && hasButton(cmd, Button.SNIPE);
+  // Stated positively, because it is now the minority case. The knight
+  // charges, the wizard blinks and the archer draws, each on this same key.
+  // What is left is the two for whom a longer aim line is genuinely the useful
+  // thing: the sapper lobs an arc and wants to read where it lands, and the
+  // ranger has nothing of its own here yet.
+  sniperMode = (selectedChar === 'ranger' || selectedChar === 'sapper')
+    && hasButton(cmd, Button.SNIPE);
 
-  // Charging roots him in place the same way sniper mode roots everyone else.
-  if (!sniperMode && !knightCharge.on) {
+  // Drawing and charging root their owners the same way sniper mode roots the
+  // sapper. For the archer that root is the whole cost of the power shot.
+  if (!sniperMode && !knightCharge.on && !archerDraw.on) {
     let vx = 0, vy = 0;
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
@@ -2028,6 +2124,7 @@ function updatePlayer(dt) {
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
+  if (archerPowerCD       > 0) archerPowerCD      = Math.max(0, archerPowerCD      - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
   if (wizBlinkChainTimer  > 0) {
@@ -5032,7 +5129,10 @@ function drawPlayer() {
   if (!hasArrows) drawPitchforkIndicators(px, py);
 
   // Dynamite charge bar
-  if (charge.on) drawChargeBar(px, py, Math.min(1, (performance.now() - charge.t0) / 1000));
+  // The draw wins the bar when both are somehow live: it is the one on a
+  // cooldown, so it is the one whose timing the player is reading.
+  if (archerDraw.on) drawChargeBar(px, py, archerDrawFrac());
+  else if (charge.on) drawChargeBar(px, py, Math.min(1, (performance.now() - charge.t0) / 1000));
 }
 
 /** Windup meter above a character's head. Shared by the archer's dynamite and
@@ -5050,10 +5150,14 @@ function drawChargeBar(px, py, frac) {
 /** Dotted aim line with a sniper-mode reticle. Shared by every character that
  * draws one — today the archer and the ranger, the game's two marksmen. */
 function drawAimLine(px, py) {
-  const aimLen = sniperMode ? 220 : 80, aimAlpha = sniperMode ? 0.75 : 0.38;
-  const aimRGB = sniperMode ? '255,255,60' : '170,255,68';
+  // A drawn bow gets the same long line the sapper's sniper mode does: it was
+  // always the good half of that mode, and it is what an archer standing still
+  // is standing still for.
+  const aiming = sniperMode || archerDraw.on;
+  const aimLen = aiming ? 220 : 80, aimAlpha = aiming ? 0.75 : 0.38;
+  const aimRGB = aiming ? '255,255,60' : '170,255,68';
   ctx.save();
-  ctx.setLineDash(sniperMode ? [5,3] : [3,4]); ctx.lineWidth = sniperMode ? 1.5 : 1;
+  ctx.setLineDash(aiming ? [5,3] : [3,4]); ctx.lineWidth = aiming ? 1.5 : 1;
   const lx1 = px + Math.cos(player.aimAngle)*aimLen, ly1 = py + Math.sin(player.aimAngle)*aimLen;
   const aimGrad = ctx.createLinearGradient(px, py, lx1, ly1);
   aimGrad.addColorStop(0, `rgba(${aimRGB},${aimAlpha})`);
@@ -5061,7 +5165,7 @@ function drawAimLine(px, py) {
   ctx.strokeStyle = aimGrad;
   ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(lx1, ly1); ctx.stroke();
   ctx.setLineDash([]);
-  if (sniperMode) {
+  if (aiming) {
     ctx.strokeStyle = `rgba(${aimRGB},0.7)`; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(lx1-7, ly1); ctx.lineTo(lx1+7, ly1); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(lx1, ly1-7); ctx.lineTo(lx1, ly1+7); ctx.stroke();
@@ -5553,6 +5657,18 @@ function drawArrows() {
 
     ctx.save(); ctx.translate(a.x, a.y + HH); ctx.rotate(angle);
     ctx.shadowBlur = 0;
+
+    // A drawn shot has to read as heavier than a loosed one, whichever ammo
+    // it spent: a bright streak behind the shaft, as long as the number of
+    // bodies it can still pass through.
+    if (a.power) {
+      const pips = a.pierceLeft || 1;
+      ctx.globalAlpha = 0.5;
+      ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 10;
+      ctx.strokeStyle = '#EAFF6A'; ctx.lineWidth = 2 + pips;
+      ctx.beginPath(); ctx.moveTo(-16 - 4 * pips, 0); ctx.lineTo(12, 0); ctx.stroke();
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    }
 
     if (a.type === 'fire') {
       const fs = a.fireSeed || 0;
@@ -7143,7 +7259,7 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['snipe', 'shield'],
+  archer: ['power', 'shield'],
   ranger: ['snipe', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
@@ -7159,6 +7275,10 @@ const CHIP = {
   charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
   storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
   blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
+  // Reads as live while the bow is bent, so the bar on the body and the chip
+  // in the lane say the same thing.
+  power:     () => cooldownChip('arrow', archerPowerCD, CONFIG.archerPowerCooldown,
+                                archerDraw.on ? CONFIG.archerDrawMaxSecs : 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
                       label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
                       frac: null }),
@@ -8493,7 +8613,13 @@ export const devHooks = {
   // The whole sniper-key path, so a test exercises the same routing the
   // keyboard does rather than calling one ability directly.
   shift() { pressShift(); },
-  releaseShift() { releaseKnightCharge(); },
+  shiftUp() { releaseShift(); },
+  archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
+  // Backdates a draw already in progress, so a test can loose a fully drawn
+  // shot without spending a real second on it: archerDrawFrac reads the wall
+  // clock, which no amount of stepSim moves.
+  holdDraw(secs) { if (archerDraw.on) archerDraw.t0 = performance.now() - secs * 1000; },
+  inv: () => inv,
   rings: () => shockRings,
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },

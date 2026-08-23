@@ -15,6 +15,7 @@ Full mechanics reference. See the [README](../README.md) for the quick start.
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Primary:** Arrows, quiver of 10, refilled by pickups
 - **Special:** Dynamite, hold to charge, release to throw, blast clears tiles and damages the boss
+- **Power shot (hold Shift):** Draws the bow, rooted while he holds it, for up to 1 s. Releasing looses one arrow that pierces up to 3 bodies, flies at up to twice the usual 500 px/s, and hits a boss for up to 3x a plain arrow. A tap gets the bottom of every one of those ranges, so the question the key asks is how long to stand still. 5 s cooldown. It spends one unit of whatever ammo is queued, so a fully drawn fire arrow still burns, and it ignores the in-flight cap
 - **Pickups:** Ricochet arrows (bounce off walls with a speed boost), fire arrows (leave burning patches)
 
 ### Wizard
