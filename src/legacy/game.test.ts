@@ -1066,6 +1066,51 @@ describe('the knight charge', () => {
     expect(p.x).toBeGreaterThan(start);
   });
 
+  // Regression: the dash ignores movement keys for its whole 1.5s, so one
+  // that ran into a tree used to pin the knight against it for the remaining
+  // second and a half with every escape key held down — measured at 85 frames
+  // before this, 1 after.
+  it('ends the moment terrain stops it, rather than holding the controls', () => {
+    const c = g.config();
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 16.5 * c.tileSize;
+    p.y = 10.5 * c.tileSize;
+
+    g.startKnightCharge();
+    g.stepSim(30);
+    g.releaseKnightCharge();
+    expect(g.knightCharge().dashing).toBe(true);
+
+    // The dash commits to whatever aim updatePlayer settled on, not to
+    // whatever a test sets beforehand, so the wall goes across the direction
+    // it actually chose.
+    const ang = g.knightCharge().angle;
+    const col = Math.floor((p.x + Math.cos(ang) * c.tileSize * 1.2) / c.tileSize);
+    const row = Math.floor((p.y + Math.sin(ang) * c.tileSize * 1.2) / c.tileSize);
+    for (let d = -6; d <= 6; d++) {
+      g.tiles().set(row + d, col, TILE.TREE);
+      g.tiles().set(row, col + d, TILE.TREE);
+    }
+
+    // Run it into the wall. Well short of the full dash, the dash is over.
+    g.stepSim(40);
+    expect(g.knightCharge().dashing).toBe(false);
+    expect(40).toBeLessThan(Math.ceil(c.knightChargeDashDuration * ONE_SECOND));
+
+    // And the knight answers the keys again.
+    const from = { x: p.x, y: p.y };
+    const keys = g.keys() as Record<string, boolean>;
+    const away = ang + Math.PI;
+    keys[Math.abs(Math.cos(away)) > Math.abs(Math.sin(away))
+      ? (Math.cos(away) > 0 ? 'ArrowRight' : 'ArrowLeft')
+      : (Math.sin(away) > 0 ? 'ArrowDown' : 'ArrowUp')] = true;
+    g.stepSim(10);
+    expect(Math.hypot(p.x - from.x, p.y - from.y)).toBeGreaterThan(0);
+  });
+
   // Regression: knightCharge.on used to be cleared only by a keyup matching
   // the live CONFIG.keys.snipe, and pausing never delivers one. A charge held
   // into the pause menu left the knight permanently rooted on resume, since

@@ -1712,6 +1712,17 @@ events.on(e => {
       });
       break;
 
+    case 'KNIGHT_CHARGE_STOPPED':
+      // A short scrape of dust so the stop reads as hitting something solid
+      // rather than the dash fizzling out on its own.
+      triggerShake(3, 90);
+      burst(e.x, e.y, {
+        count: 8, colors: ['#8A6A4A','#C8B090','#5C5C5C'],
+        speedMin: 30, speedMax: 90, decay: 3.2, shape: 'circle',
+        sizeMin: 1.5, sizeMax: 3, damping: 0.6,
+      });
+      break;
+
     case 'WIZARD_BLINK':
       // Two bursts, not one: the wizard was there and is now here, and a
       // single puff at the arrival end reads as a spawn rather than a move.
@@ -2078,10 +2089,22 @@ function updatePlayer(dt) {
       const len = Math.hypot(vx, vy);
       if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
     }
+    const fromX = player.x, fromY = player.y;
     const nx = player.x + vx;
     if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
     const ny = player.y + vy;
     if (playerFits(player.x, ny)) player.y = clampArenaY(ny);
+    // A dash terrain has stopped dead is over, rather than one that keeps the
+    // controls for the rest of its 1.5s. The dash ignores movement keys by
+    // design, so a charge that ends up grinding against a tree used to pin the
+    // player in place for well over a second with every escape key held and
+    // nothing happening — which reads as being stuck, not as a committed dash.
+    // Only a full stop counts: one axis blocked is a dash sliding along a wall,
+    // which is still going somewhere.
+    if (knightDash.timer > 0 && player.x === fromX && player.y === fromY) {
+      knightDash.timer = 0;
+      events.emit({ type: 'KNIGHT_CHARGE_STOPPED', x: player.x, y: player.y });
+    }
   }
 
   // Mid-dash the aim is locked to the committed direction, so the arc can't be
