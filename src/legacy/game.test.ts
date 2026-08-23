@@ -739,7 +739,10 @@ describe('the character roster reaches the single-player screen', () => {
 });
 
 describe('the sapper', () => {
-  beforeEach(() => { g.pick('sapper'); g.go('playing'); });
+  // Open ground on purpose. A thrown charge that lands in water is removed
+  // without exploding, so on a randomly generated map these counts are a
+  // question about where the generator put a pond.
+  beforeEach(() => { g.pick('sapper'); g.go('playing'); clearArena(); });
 
   it('throws a powder charge on the primary, where the archer throws an arrow', () => {
     expect(g.dynamites().length).toBe(0);
@@ -1451,7 +1454,7 @@ describe('the knight charge', () => {
 
 describe('the sniper key after the rework', () => {
   /** Holds the sniper key and a walk key for a beat, and reports how far the
-   * character got. Sniper mode roots whoever still has it. */
+   * character got. Nobody is rooted by holding it any more — see below. */
   function walkDistanceHoldingShift(character: string): number {
     g.pick(character);
     g.go('playing');
@@ -1469,12 +1472,23 @@ describe('the sniper key after the rework', () => {
     return p.x - from;
   }
 
-  it('still roots the characters who aim down it', () => {
-    expect(walkDistanceHoldingShift('archer')).toBe(0);
+  // Sniper mode is gone. It was last written for the sapper, as the one
+  // character with nothing else on the key — but the sapper had picked up a
+  // combo shot on another branch by then, so once both landed together the
+  // root belonged to nobody. Holding the key roots no one now.
+  it.each(CHARACTERS)('does not root the %s by being held', (character) => {
+    expect(walkDistanceHoldingShift(character)).toBeGreaterThan(0);
   });
 
-  it('no longer roots the wizard, whose bolts steer themselves anyway', () => {
-    expect(walkDistanceHoldingShift('wizard')).toBeGreaterThan(0);
+  // The two windups that do hold you still own that themselves, off the press
+  // rather than off the held state, and release into something.
+  it('leaves the knight and the archer their own windup roots', () => {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    g.startKnightCharge();
+    expect(g.knightCharge().charging).toBe(true);
+    g.releaseKnightCharge();
   });
 });
 
@@ -1682,9 +1696,10 @@ describe('the wizard blink arrival pulse', () => {
     const crows = g.crows();
     crows.length = 0;
     g.spawnCrow();
-    const crow = crows[0] as { x: number; y: number; state: string };
+    const crow = crows[0] as { x: number; y: number; baseY: number; state: string };
     crow.x = x;
     crow.y = y;
+    crow.baseY = y;   // passive crows bob around baseY, and y alone is overwritten
     crow.state = 'passive';
   }
 
@@ -1797,7 +1812,7 @@ describe('the knight chained charge', () => {
     p.y = 6.5 * ts;
     p.aimAngle = 0;
     g.shift();          // windup
-    g.releaseShift();   // committed east
+    g.shiftUp();        // committed east
     if (chain) g.shift();
     const from = p.x;
     g.stepSim(ticks);
@@ -1873,6 +1888,425 @@ describe('the knight chained charge', () => {
       clearArena();
       g.shift();
       expect(g.knightCharge().chained, character).toBe(false);
+    }
+  });
+});
+
+describe('the archer power shot', () => {
+  /** An archer on open ground, aiming due east, with the key not yet down. */
+  function archerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * ts;
+    p.y = (row + 0.5) * ts;
+    p.aimAngle = 0;
+    return p;
+  }
+
+  /** Draws for `secs` and looses. Returns the arrow it put in the air. */
+  function loose(secs: number): { vx: number; vy: number; pierceLeft: number; dmgMult: number; type: string; power: boolean } {
+    g.shift();
+    g.holdDraw(secs);
+    g.shiftUp();
+    const shot = g.arrows()[g.arrows().length - 1];
+    return shot as never;
+  }
+
+  it('roots him while he draws, which is what the shot costs', () => {
+    archerAt(6, 6);
+    const p = g.player() as { x: number };
+    const keys = g.keys() as Record<string, boolean>;
+    g.shift();
+    expect(g.archerDraw().drawing).toBe(true);
+
+    const from = p.x;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys['ArrowRight'] = false;
+    expect(p.x).toBe(from);
+  });
+
+  it('looses one arrow on release, and nothing while merely held', () => {
+    archerAt(6, 6);
+    g.shift();
+    g.stepSim(5);
+    expect(g.arrows().length).toBe(0);
+
+    g.shiftUp();
+    expect(g.arrows().length).toBe(1);
+    expect(g.archerDraw().drawing).toBe(false);
+  });
+
+  it('flies faster and pierces more the longer it is drawn', () => {
+    const c = g.config();
+
+    // The draw fraction comes off the wall clock, so a "tap" is really the
+    // millisecond or two between the press and the release. It is asserted as
+    // a narrow band rather than an exact figure for that reason; the full draw
+    // below is exact because the fraction is capped at 1.
+    archerAt(6, 6);
+    const tap = loose(0);
+    const tapSpeed = Math.hypot(tap.vx, tap.vy);
+    expect(tapSpeed).toBeGreaterThanOrEqual(c.arrowSpeed);
+    expect(tapSpeed).toBeLessThan(c.arrowSpeed * 1.05);
+    expect(tap.pierceLeft).toBe(1);
+    expect(tap.dmgMult).toBeGreaterThanOrEqual(1);
+    expect(tap.dmgMult).toBeLessThan(1.1);
+
+    archerAt(6, 6);
+    const full = loose(c.archerDrawMaxSecs);
+    expect(Math.hypot(full.vx, full.vy)).toBeCloseTo(c.arrowSpeed * c.archerPowerSpeedMult, 0);
+    expect(full.pierceLeft).toBe(c.archerPowerPierce);
+    expect(full.dmgMult).toBeCloseTo(c.archerPowerBossMult, 5);
+  });
+
+  it('is marked as a power shot, where an ordinary loosed arrow is not', () => {
+    archerAt(6, 6);
+    expect(loose(1).power).toBe(true);
+
+    archerAt(6, 6);
+    g.shoot();
+    g.stepSim(1);
+    const plain = g.arrows()[0] as { power?: boolean; pierceLeft?: number };
+    expect(plain.power).toBeUndefined();
+    expect(plain.pierceLeft).toBeUndefined();
+  });
+
+  it('spends one unit of ammo, the same as any other shot', () => {
+    archerAt(6, 6);
+    const inv = g.inv() as Record<string, number>;
+    const before = inv.arrows!;
+    loose(1);
+    expect(inv.arrows).toBe(before - 1);
+  });
+
+  it('keeps whatever ammo was queued, so a drawn fire arrow still burns', () => {
+    archerAt(6, 6);
+    const inv = g.inv() as Record<string, number>;
+    inv.fireArrows = 3;
+    expect(loose(1).type).toBe('fire');
+    expect(inv.fireArrows).toBe(2);
+  });
+
+  it('refuses a second draw until the cooldown has run', () => {
+    const c = g.config();
+    archerAt(6, 6);
+    loose(1);
+    expect(g.archerDraw().cooldown).toBeCloseTo(c.archerPowerCooldown, 5);
+
+    g.shift();
+    expect(g.archerDraw().drawing).toBe(false);
+
+    g.stepSim(Math.ceil(c.archerPowerCooldown * ONE_SECOND) + 1);
+    expect(g.archerDraw().cooldown).toBe(0);
+    g.shift();
+    expect(g.archerDraw().drawing).toBe(true);
+  });
+
+  it('does nothing on a release that never drew', () => {
+    archerAt(6, 6);
+    g.shiftUp();
+    expect(g.arrows().length).toBe(0);
+    expect(g.archerDraw().cooldown).toBe(0);
+  });
+
+  it('belongs to the archer alone', () => {
+    for (const character of ['wizard', 'knight', 'ranger', 'sapper']) {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      g.shift();
+      expect(g.archerDraw().drawing, character).toBe(false);
+    }
+  });
+});
+
+interface NetOpen { type: string; x: number; y: number; radius: number; caught: number }
+
+/**
+ * The cavern garrison against effects that were written before it existed.
+ *
+ * The net and the shared blast helper both came from a branch with no
+ * soldiers on it, so each looped over crows and skeletons and silently
+ * skipped the garrison once the two branches were put together. Neither
+ * branch could have caught this alone, which is exactly why it is pinned
+ * here rather than on either one.
+ */
+describe('area effects reach the cavern garrison', () => {
+  /** Three spearmen stood on one spot, with the rest of the wave cleared. */
+  function spearmenAt(x: number, y: number): Array<{ x: number; y: number; hp: number; heldTimer: number }> {
+    const soldiers = g.soldiers() as Array<{ x: number; y: number; hp: number; heldTimer: number }>;
+    soldiers.length = 0;
+    for (let i = 0; i < 3; i++) g.spawnSoldier('spearman');
+    for (const s of soldiers) { s.x = x; s.y = y; s.heldTimer = 0; }
+    return soldiers;
+  }
+
+  it('a blast damages soldiers, not just crows and skeletons', () => {
+    g.pick('archer');
+    g.pickMap('cavern');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const at = { x: 16.5 * ts, y: 10.5 * ts };
+    const soldiers = spearmenAt(at.x, at.y);
+    const before = soldiers.map((s) => s.hp);
+    expect(before.every((hp) => hp > 0)).toBe(true);
+
+    g.blast(at.x, at.y);
+    g.stepSim(2);
+
+    const after = (g.soldiers() as Array<{ hp: number }>).map((s) => s.hp);
+    // Either wounded or killed outright — what matters is that the blast
+    // was not simply ignored.
+    const untouched = after.length === before.length
+      && after.every((hp, i) => hp === before[i]);
+    expect(untouched).toBe(false);
+  });
+
+  it('the net holds soldiers, so the cavern cannot walk through it', () => {
+    g.pick('ranger');
+    g.pickMap('cavern');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 10.5 * ts;
+    p.y = 10.5 * ts;
+    p.aimAngle = 0;
+    const soldiers = spearmenAt(p.x + 60, p.y);
+
+    g.shift();
+    g.holdNet(g.config().netDrawMaxSecs);
+    g.shiftUp();
+
+    // The net flies to a point rather than stopping on contact, so the
+    // garrison has to be standing where it lands for this to mean anything.
+    const inFlight = g.nets() as Array<{ toX: number; toY: number }>;
+    expect(inFlight.length).toBe(1);
+    for (const s of soldiers) { s.x = inFlight[0]!.toX; s.y = inFlight[0]!.toY; }
+
+    let everHeld = 0;
+    for (let i = 0; i < 120; i++) {
+      g.stepSim(1);
+      everHeld = Math.max(everHeld, soldiers.filter((s) => s.heldTimer > 0).length);
+    }
+    expect(everHeld).toBe(soldiers.length);
+  });
+
+  it('a held soldier stays put while the mesh is on it', () => {
+    g.pick('ranger');
+    g.pickMap('cavern');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 10.5 * ts;
+    p.y = 10.5 * ts;
+    p.aimAngle = 0;
+    const soldiers = spearmenAt(p.x + 60, p.y);
+    // Held by hand rather than by a net, so this measures the hold itself.
+    for (const s of soldiers) s.heldTimer = 1.0;
+    const from = soldiers.map((s) => ({ x: s.x, y: s.y }));
+
+    g.stepSim(30);
+
+    soldiers.forEach((s, i) => {
+      expect(s.x, `soldier ${i} x`).toBeCloseTo(from[i]!.x, 5);
+      expect(s.y, `soldier ${i} y`).toBeCloseTo(from[i]!.y, 5);
+    });
+  });
+});
+
+describe('the ranger net', () => {
+  /** A ranger on open ground, aiming due east. */
+  function rangerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * ts;
+    p.y = (row + 0.5) * ts;
+    p.aimAngle = 0;
+    return p;
+  }
+
+  /** Draws for `secs`, throws, and runs the sim until the net opens. */
+  function throwNet(secs: number): NetOpen {
+    let seen: NetOpen | null = null;
+    g.onEvent((e: { type: string }) => {
+      if (e.type === 'RANGER_NET_OPEN') seen = e as NetOpen;
+    });
+    g.shift();
+    g.holdNet(secs);
+    g.shiftUp();
+    for (let i = 0; i < 120 && seen === null; i++) g.stepSim(1);
+    if (seen === null) throw new Error('the net never opened');
+    return seen;
+  }
+
+  /** One crow at a point, with the rest cleared away. */
+  function loneCrowAt(x: number, y: number):
+      { x: number; y: number; hp: number; heldTimer: number; frozen: boolean } {
+    const crows = g.crows();
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0] as
+      { x: number; y: number; baseY: number; hp: number; heldTimer: number;
+        state: string; frozen: boolean };
+    crow.x = x;
+    crow.y = y;
+    crow.baseY = y;
+    crow.state = 'passive';
+    // Held still for the flight. A net is in the air for up to three quarters
+    // of a second and a passive crow drifts most of a radius in that time, so
+    // an unfrozen target turns every catch into a question about the drift.
+    crow.frozen = true;
+    return crow;
+  }
+
+  it('leaves the skirmisher free to move while he draws', () => {
+    const p = rangerAt(6, 6);
+    const keys = g.keys() as Record<string, boolean>;
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(true);
+
+    const from = p.x;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys['ArrowRight'] = false;
+    expect(p.x).toBeGreaterThan(from);
+  });
+
+  it('throws further, wider and longer the more it is drawn', () => {
+    const c = g.config();
+
+    const tapFrom = rangerAt(4, 6).x;
+    const tap = throwNet(0);
+    expect(tap.x - tapFrom).toBeCloseTo(c.netThrowMin, -1);
+    expect(tap.radius).toBeCloseTo(c.netRadiusMin, 1);
+
+    const fullFrom = rangerAt(4, 6).x;
+    const full = throwNet(c.netDrawMaxSecs);
+    expect(full.x - fullFrom).toBeCloseTo(c.netThrowMax, -1);
+    expect(full.radius).toBeCloseTo(c.netRadiusMax, 1);
+
+    expect(full.x - fullFrom).toBeGreaterThan(tap.x - tapFrom);
+    expect(full.radius).toBeGreaterThan(tap.radius);
+  });
+
+  it('holds for 0.8s at a tap and 2s at a full draw', () => {
+    const c = g.config();
+
+    const p1 = rangerAt(4, 6);
+    const tapCrow = loneCrowAt(p1.x + c.netThrowMin, p1.y);
+    throwNet(0);
+    expect(tapCrow.heldTimer).toBeGreaterThan(c.netHoldMin - 0.1);
+    expect(tapCrow.heldTimer).toBeLessThan(c.netHoldMin + 0.2);
+
+    const p2 = rangerAt(4, 6);
+    const fullCrow = loneCrowAt(p2.x + c.netThrowMax, p2.y);
+    throwNet(c.netDrawMaxSecs);
+    expect(fullCrow.heldTimer).toBeGreaterThan(c.netHoldMax - 0.1);
+    expect(fullCrow.heldTimer).toBeLessThanOrEqual(c.netHoldMax);
+  });
+
+  it('never kills what it catches: 0.9 is under a fresh creep', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const crow = loneCrowAt(p.x + c.netThrowMin, p.y);
+    expect(crow.hp).toBe(1);
+
+    throwNet(0);
+    expect(g.crows().length).toBe(1);
+    expect(crow.hp).toBeGreaterThan(0);
+    expect(crow.hp).toBeLessThan(1);
+  });
+
+  it('pins what it caught in place, and lets go when the hold runs out', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const crow = loneCrowAt(p.x + c.netThrowMin, p.y);
+    throwNet(0);
+
+    // Free to move again now the net has landed: what keeps it still from
+    // here is the hold, which is the thing under test.
+    crow.frozen = false;
+    const at = { x: crow.x, y: crow.y };
+    g.stepSim(30);                       // half a second, well inside the hold
+    expect(crow.x).toBe(at.x);
+    expect(crow.y).toBe(at.y);
+    expect(crow.heldTimer).toBeGreaterThan(0);
+
+    g.stepSim(Math.ceil(c.netHoldMin * ONE_SECOND) + 2);
+    expect(crow.heldTimer).toBe(0);
+    g.stepSim(10);
+    expect(crow.x).not.toBe(at.x);   // and it is walking again
+  });
+
+  it('catches everything under it, not just the first thing', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const crows = g.crows();
+    crows.length = 0;
+    const landing = p.x + c.netThrowMax;
+    for (const dy of [-20, 0, 20]) {
+      g.spawnCrow();
+      const crow = crows[crows.length - 1] as
+        { x: number; y: number; baseY: number; state: string; frozen: boolean };
+      crow.x = landing;
+      crow.y = p.y + dy;
+      crow.baseY = p.y + dy;
+      crow.state = 'passive';
+      crow.frozen = true;
+    }
+
+    const open = throwNet(c.netDrawMaxSecs);
+    expect(open.caught).toBe(3);
+    for (const crow of crows as Array<{ heldTimer: number }>) {
+      expect(crow.heldTimer).toBeGreaterThan(0);
+    }
+  });
+
+  it('opens against a wall rather than through it', () => {
+    const c = g.config();
+    const p = rangerAt(4, 6);
+    const wallCol = 7;
+    for (let row = 3; row <= 9; row++) g.tiles().set(row, wallCol, TILE.ROCK);
+
+    const open = throwNet(c.netDrawMaxSecs);
+    expect(open.x).toBeLessThan(wallCol * c.tileSize);
+    expect(open.x - p.x).toBeLessThan(c.netThrowMax);
+  });
+
+  it('refuses a second net until the cooldown has run', () => {
+    const c = g.config();
+    rangerAt(4, 6);
+    throwNet(0);
+    expect(g.rangerNet().cooldown).toBeGreaterThan(c.netCooldown - 1);
+    expect(g.rangerNet().cooldown).toBeLessThanOrEqual(c.netCooldown);
+
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(false);
+
+    g.stepSim(Math.ceil(c.netCooldown * ONE_SECOND) + 1);
+    expect(g.rangerNet().cooldown).toBe(0);
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(true);
+  });
+
+  it('belongs to the ranger alone', () => {
+    for (const character of ['archer', 'wizard', 'knight', 'sapper']) {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      g.shift();
+      expect(g.rangerNet().drawing, character).toBe(false);
+      expect(g.nets().length, character).toBe(0);
     }
   });
 });

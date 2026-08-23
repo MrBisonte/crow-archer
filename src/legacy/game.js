@@ -228,6 +228,19 @@ const CONFIG = {
 
   arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
 
+  // Archer power shot. Sniper mode used to root him for nothing but a longer
+  // aim line, which is all cost; drawing the bow is the same root buying
+  // something. A full draw is the only shot in his kit that punishes a single
+  // big target, which is the gap the fastest and weakest bow leaves.
+  //
+  // Every figure below is what a FULL draw is worth; a tap gets the bottom of
+  // each range, so the decision is how long to stand still, not whether to.
+  archerDrawMaxSecs: 1.0,
+  archerPowerCooldown: 5,
+  archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
+  archerPowerPierce: 3,      // bodies it passes through: 1 at a tap
+  archerPowerBossMult: 3,    // against a boss, versus a plain arrow's 1
+
   // Crow density and the player's ability to answer it. Every value here is
   // set by the pace preset below, so edit PACE_PRESETS, not these.
   crowPassiveSpeed: 60, crowAggroSpeed: 200, crowAggroTimeout: 4,
@@ -314,6 +327,19 @@ const CONFIG = {
   // 70% of dynamite's, same cut the crossbow bolt takes against the arrow. Blast
   // radius stays shared with dynamiteBlastRadius; only boss damage is softer.
   satchelBossDamage: 1,
+
+  // Ranger net. The hold is the point and the damage is not: 0.9 never kills a
+  // fresh 1 HP creep, it only stops it, and a netted crow left on 0.1 dies to
+  // the next scratch. Throw, spread and hold all scale off the same draw, so a
+  // full one is a committed choice rather than the default. Long cooldown to
+  // match: this is the only crowd control in the ranger's kit.
+  netCooldown: 10,
+  netDrawMaxSecs: 1.0,
+  netThrowMin: 120, netThrowMax: 320,
+  netRadiusMin: 34, netRadiusMax: 70,
+  netHoldMin: 0.8, netHoldMax: 2.0,
+  netDamage: 0.9,
+  netSpeed: 420,
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
 
@@ -685,7 +711,7 @@ const CHAR_PANELS = [
     hook: 'Longbow and quiver', range: 4, damage: 3,
     skills: { main: 'Longbow, three arrows in flight',
               secondary: 'Dynamite, thrown further the longer held',
-              shift: 'Sniper mode: root for a longer aim' } },
+              shift: 'Draw a power shot that pierces' } },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     preview: () => ({ grid: buildWizardGrid(SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: 'wizard' }),
@@ -708,7 +734,7 @@ const CHAR_PANELS = [
     hook: 'Fast skirmisher', range: 3, damage: 2,
     skills: { main: 'Crossbow burst of three weaker bolts',
               secondary: 'Satchel charge: throw, then click to arm',
-              shift: 'Sniper mode: root for a longer aim' } },
+              shift: 'Throw a net that holds what it catches' } },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
     preview: () => ({ grid: buildSapperGrid(SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: 'sapper' }),
@@ -835,7 +861,6 @@ let castleWave = 0;
 let bossStage = 1;
 let boss = null, bossDeathSeq = null, entrance = null;
 let winScore = 0, winKills = 0, winSkeletons = 0, winHP = 0;
-let sniperMode = false;
 
 // Character selection — persists for the session, reset only on new run
 let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
@@ -883,6 +908,16 @@ let iFlash = {};   // empty-attempt flash timer per resource key
 
 // Dynamite charge state
 let charge = { on: false, t0: 0 };
+// The archer's draw, on the key that means sniper mode for the sapper. Same
+// shape as `charge` above, and deliberately so: the hand already knows it.
+let archerDraw = { on: false, t0: 0 };
+let archerPowerCD = 0;
+// The ranger's net, the same draw-and-release shape as the archer's bow. He is
+// not rooted while he draws: it is a throw rather than an aimed shot, and the
+// skirmisher is the one character whose whole identity is not standing still.
+let rangerNet = { on: false, t0: 0 };
+let rangerNetCD = 0;
+let nets = [];
 
 function resetInv() {
   for (const [k, r] of Object.entries(CONFIG.resources)) { inv[k] = r.max; iFlash[k] = 0; }
@@ -1402,7 +1437,10 @@ function probeAhead(fromX, fromY, angle, maxDistance) {
  * own rules — the blast's are not the storm's — and folding them together
  * would mean a flag that decides which caller you are.
  *
- * `bossHit` is null for an effect the boss simply ignores.
+ * `bossHit` is null for an effect the boss simply ignores. `amount` is what
+ * each ordinary enemy takes, and defaults to the one point that kills a fresh
+ * creep outright — which is what the storm, the whirlwind and the blast all
+ * want. Only the net passes anything else, and it passes less on purpose.
  */
 function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   const r2 = radius * radius;
@@ -1418,7 +1456,9 @@ function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   // everything it reaches, and that long held still. It overrides falloff
   // rather than scaling it, because "one damage" is the entire deal.
   const ice = opts.element === 'ice';
-  const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : falloffAt(tx, ty));
+  // A caller's flat damage, tapered by falloff when one is configured.
+  const base = opts.amount ?? 1;
+  const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : base * falloffAt(tx, ty));
   const chill = (e) => { if (ice) freezeEnemy(e, CONFIG.iceBlastFreezeSecs); };
 
   for (let j = crows.length - 1; j >= 0; j--) {
@@ -1485,6 +1525,166 @@ function tryWizardBlink() {
   events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: player.x, toY: player.y });
 }
 
+/** How far the draw has come, 0 to 1. Read by the release, the aim line and
+ * the bar, so it lives in one place. */
+function archerDrawFrac() {
+  if (!archerDraw.on) return 0;
+  return Math.min(1, (performance.now() - archerDraw.t0) / 1000 / CONFIG.archerDrawMaxSecs);
+}
+
+/**
+ * The archer's power shot, bound to the key that means sniper mode for the
+ * sapper.
+ *
+ * He is rooted while he draws, which is exactly what sniper mode already cost
+ * him. The difference is that the root now buys a shot that pierces, flies at
+ * twice the speed and hits a boss for three times a plain arrow's worth — at
+ * a full draw. A tap gets the bottom of every one of those ranges, so the
+ * decision the key asks is how long to stand still, not whether to.
+ */
+function startArcherDraw() {
+  if (selectedChar !== 'archer' || archerDraw.on || !inGame()) return;
+  if (archerPowerCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  archerDraw.on = true;
+  archerDraw.t0 = performance.now();
+}
+
+function releaseArcherDraw() {
+  if (!archerDraw.on) return;
+  const drawn = archerDrawFrac();
+  archerDraw.on = false;
+  // Let go after pausing or dying and the draw is simply lost, rather than
+  // loosing an arrow the moment play resumes.
+  if (!inGame()) return;
+
+  // A power shot spends one unit of whatever is queued, exactly as an ordinary
+  // shot does, so a fully drawn fire arrow is a fire arrow that also pierces.
+  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+  if (!hasArrows) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  let type = 'normal';
+  if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
+  else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
+  else                             { inv.arrows--;                             }
+
+  archerPowerCD = CONFIG.archerPowerCooldown;
+  const spd = CONFIG.arrowSpeed * (1 + drawn * (CONFIG.archerPowerSpeedMult - 1));
+  // The in-flight cap is deliberately not consulted. It is there to stop the
+  // bow being held down, and this is one arrow every five seconds.
+  arrows.push({ x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd,
+    vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.arrowLifetime, type, bounces: 0,
+    initSpeed: spd,
+    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    power: true,
+    pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
+    dmgMult: 1 + drawn * (CONFIG.archerPowerBossMult - 1) });
+  events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
+}
+
+/** How far the net has been drawn, 0 to 1. */
+function rangerNetFrac() {
+  if (!rangerNet.on) return 0;
+  return Math.min(1, (performance.now() - rangerNet.t0) / 1000 / CONFIG.netDrawMaxSecs);
+}
+
+/**
+ * Pins everything hostile inside a circle for a while.
+ *
+ * Separate from damageEnemiesInRadius because it is a different question and
+ * the net asks both: what does this hurt, and what does it stop. A boss is
+ * held through the daze system it already has rather than a second mechanism,
+ * which also means the minotaur is caught by the same rule that already lets a
+ * hit stun him. Returns how many it caught, for the report on screen.
+ */
+function holdEnemiesInRadius(cx, cy, radius, secs) {
+  const r2 = radius * radius;
+  let caught = 0;
+  for (const c of crows)
+    if (dist2(cx, cy, c.x, c.y) < r2) { c.heldTimer = Math.max(c.heldTimer || 0, secs); caught++; }
+  for (const s of skeletons)
+    if (dist2(cx, cy, s.x, s.y) < r2) { s.heldTimer = Math.max(s.heldTimer || 0, secs); caught++; }
+  // The garrison, for the same reason the blast helper had to grow a
+  // soldiers loop: the net was written on a branch where soldiers did not
+  // exist, and a net the cavern walks straight through is not a net.
+  for (const s of soldiers)
+    if (dist2(cx, cy, s.x, s.y) < r2) { s.heldTimer = Math.max(s.heldTimer || 0, secs); caught++; }
+  // A shielded crow king shrugs it off, the same way a shielded hit never
+  // dazes him. Everything else with a daze timer, the minotaur included, is
+  // fair game: it is two seconds at the very most and it has to be landed.
+  if (bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2) {
+    boss.dazeTimer = Math.max(boss.dazeTimer, dazeTimerForStun(secs));
+    caught++;
+  }
+  return caught;
+}
+
+/**
+ * The ranger's net, bound to the key that means sniper mode for the sapper.
+ *
+ * Draw longer and it is thrown further, opens wider and holds longer, all off
+ * the one charge. The damage is the part that deliberately does not scale: 0.9
+ * is under a fresh creep's single hit point at every draw, so the net never
+ * kills what it catches. Stopping things is the whole of what it is for.
+ */
+function startRangerNet() {
+  if (selectedChar !== 'ranger' || rangerNet.on || !inGame()) return;
+  if (rangerNetCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  rangerNet.on = true;
+  rangerNet.t0 = performance.now();
+}
+
+function releaseRangerNet() {
+  if (!rangerNet.on) return;
+  const drawn = rangerNetFrac();
+  rangerNet.on = false;
+  if (!inGame()) return;
+
+  const lerp = (lo, hi) => lo + drawn * (hi - lo);
+  const reach = lerp(CONFIG.netThrowMin, CONFIG.netThrowMax);
+  // Where it can actually get to. probeAhead stops at the first thing solid,
+  // so a net thrown at a wall opens against the wall rather than through it.
+  const land = probeAhead(player.x, player.y, player.aimAngle, reach);
+
+  rangerNetCD = CONFIG.netCooldown;
+  nets.push({
+    x: player.x, y: player.y,
+    toX: land.x, toY: land.y,
+    radius: lerp(CONFIG.netRadiusMin, CONFIG.netRadiusMax),
+    hold: lerp(CONFIG.netHoldMin, CONFIG.netHoldMax),
+    spin: 0,
+  });
+  events.emit({ type: 'WEAPON_FIRED', kind: 'net' });
+}
+
+/** Flight is a straight run to a point already known to be clear, so a net
+ * cannot end up somewhere a body could not stand. */
+function updateNets(dt) {
+  for (let i = nets.length - 1; i >= 0; i--) {
+    const n = nets[i];
+    n.spin += dt * 6;
+    const dx = n.toX - n.x, dy = n.toY - n.y;
+    const left = Math.hypot(dx, dy);
+    const step = CONFIG.netSpeed * dt;
+    if (left <= step) {
+      n.x = n.toX; n.y = n.toY;
+      openNet(n);
+      nets.splice(i, 1);
+      continue;
+    }
+    n.x += (dx / left) * step;
+    n.y += (dy / left) * step;
+  }
+}
+
+function openNet(n) {
+  damageEnemiesInRadius(n.x, n.y, n.radius,
+    { amount: CONFIG.netDamage, source: 'net', flash: 0.1 },
+    { amount: CONFIG.netDamage });
+  const caught = holdEnemiesInRadius(n.x, n.y, n.radius, n.hold);
+  events.emit({ type: 'RANGER_NET_OPEN', x: n.x, y: n.y, radius: n.radius, caught });
+}
+
 /**
  * The knight's chained charge: a second press while the dash is running.
  *
@@ -1523,6 +1723,18 @@ function tryKnightChainCharge() {
 function pressShift() {
   if (!tryKnightChainCharge()) startKnightCharge();
   tryWizardBlink();
+  startArcherDraw();
+  startRangerNet();
+  trySapperShot();
+}
+
+/** The other half of the same key. Each of these belongs to one character and
+ * returns immediately for the rest, so the routing stays a list rather than a
+ * branch on who is playing. */
+function releaseShift() {
+  releaseKnightCharge();
+  releaseArcherDraw();
+  releaseRangerNet();
 }
 
 /** Knight-only, bound to the key that means sniper mode for everyone else.
@@ -1673,7 +1885,7 @@ function installInput() {
   document.addEventListener('keyup', e => {
     keys[e.key] = false;
     if (e.key === 'f' || e.key === 'F') releaseCharge();
-    if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
+    if (e.key === CONFIG.keys.snipe) releaseShift();
   });
   // Focus can vanish without ever delivering the matching keyup (alt-tab, a
   // notification stealing the window) — see cancelHeldActions().
@@ -1805,6 +2017,7 @@ const WEAPON_FX = {
   barrage:   { sound: () => sndChargeWhoosh, shake: [4, 120] },
   // The shot itself is light — what it sets off is not.
   sapperShot: { sound: () => sndCrossbow, shake: [2, 70] },
+  net:       { sound: () => sndChargeWhoosh, shake: null },
 };
 
 events.on(e => {
@@ -2082,6 +2295,28 @@ events.on(e => {
       spawnShockRing(e.toX, e.toY, CONFIG.wizBlinkPulseRadius, '#8888FF');
       break;
 
+    case 'RANGER_NET_OPEN':
+      playSound(sndArm);
+      spawnShockRing(e.x, e.y, e.radius, '#E8E0C0');
+      // Only shakes when it actually caught something, so a miss is quiet.
+      if (e.caught > 0) triggerShake(2, 70);
+      burst(e.x, e.y, {
+        count: 8 + Math.min(12, e.caught * 4), colors: ['#E8E0C0','#FFFFFF'],
+        speedMin: 20, speedMax: 60, decay: 3.4, shape: 'spark',
+        shadowBlur: 4, shadowColor: '#E8E0C0'
+      });
+      break;
+
+    case 'ARCHER_POWER_SHOT':
+      // The shake scales with the draw, so a full one is felt and a tap is not.
+      playSound(sndShoot); triggerShake(1 + 3 * e.power, 80 + 120 * e.power);
+      burst(e.x, e.y, {
+        count: 6 + Math.round(10 * e.power), colors: ['#EAFF6A','#FFFFFF'],
+        speedMin: 30, speedMax: 60 + 90 * e.power, decay: 3.2, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#EAFF6A'
+      });
+      break;
+
     case 'KNIGHT_WHIRL_SWING':
       playSound(sndExplosion); triggerShake(3, 90);
       spawnShockRing(e.x, e.y, e.radius, '#C8C8E8');
@@ -2262,6 +2497,8 @@ function initGame() {
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
   knightChainTimer = 0;
+  archerDraw.on = false; archerPowerCD = 0;
+  rangerNet.on = false; rangerNetCD = 0; nets = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -2314,7 +2551,7 @@ function spawnCrow() {
     state: 'passive', aggroTimer: 0, team: Team.ENEMY,
     wingPhase: Math.random() * Math.PI * 2, phaseOff: Math.random() * Math.PI * 2,
     entityPhase: Math.random() * Math.PI * 2,
-    white: false, frozen: false,
+    white: false, frozen: false, heldTimer: 0,
     hp: maxHp, maxHp, hitFlash: 0,
     path: null, pathTimer: 0   // rot.js A* path cache
   });
@@ -2424,16 +2661,12 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  // The knight spends this button on his charge, the wizard on a blink, and
-  // the sapper on his shot. None of the three has an aim line worth
-  // sharpening: the knight has none at all, the wizard's bolts steer
-  // themselves onto a target after they are cast, and the sapper's shot flies
-  // in one straight, undeflected line already — a tighter angle at the moment
-  // of firing buys any of them almost nothing while the root that comes with
-  // it costs everything.
-  sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && selectedChar !== 'sapper'
-    && hasButton(cmd, Button.SNIPE);
-
+  // Sniper mode is gone, and this is where it used to be set. Every one of
+  // the five now spends this key on an ability — knight charges, wizard
+  // blinks, archer draws, ranger nets, sapper fires his combo shot — so the
+  // root that used to be the default had nobody left to belong to. The two
+  // windups that do root, the knight's and the archer's, own that themselves
+  // and say so in the movement gate below.
   // What the player is actually asking for this frame, before the dash decides
   // whether it is listening. Read up here because the dash needs it too.
   let wantX = 0, wantY = 0;
@@ -2456,8 +2689,9 @@ function updatePlayer(dt) {
     }
   }
 
-  // Charging roots him in place the same way sniper mode roots everyone else.
-  if (!sniperMode && !knightCharge.on) {
+  // Drawing and charging root their owners the same way sniper mode roots the
+  // sapper. For the archer that root is the whole cost of the power shot.
+  if (!knightCharge.on && !archerDraw.on) {
     let vx = 0, vy = 0;
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
@@ -2511,6 +2745,8 @@ function updatePlayer(dt) {
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
+  if (archerPowerCD       > 0) archerPowerCD      = Math.max(0, archerPowerCD      - dt);
+  if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
   if (wizBlinkChainTimer  > 0) {
@@ -3371,7 +3607,7 @@ function spawnSkeleton(kind = 'normal') {
     kind, // 'normal' | 'fire' | 'ice' | 'rat' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
-    hp: 1, maxHp: 1, hitFlash: 0,
+    hp: 1, maxHp: 1, hitFlash: 0, heldTimer: 0,
     walkPhase: Math.random() * Math.PI * 2,
     path: null, pathTimer: 0,
     // Staggered so a whole wave of ice skeletons does not fire in sync.
@@ -3480,6 +3716,7 @@ function updateSkeletons(dt) {
     if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
     // Iced: no walking, no reaching, no shooting until it wears off.
     if (tickFrozen(s, dt)) continue;
+    if (s.heldTimer > 0) { s.heldTimer = Math.max(0, s.heldTimer - dt); continue; }
     const dx = player.x - s.x, dy = player.y - s.y, dist = Math.hypot(dx, dy);
     const reach = s.kind === 'rat' ? 11 : 14;
     if (dist < reach) {
@@ -3618,6 +3855,9 @@ function updateSoldiers(dt) {
     // Iced: held in place, guard and all. Ticked after the cooldowns above so
     // a frozen soldier is not also having its next attack held back.
     if (tickFrozen(s, dt)) continue;
+    // Netted. Checked after the freeze so the two cannot cut each other
+    // short when a soldier catches both at once.
+    if (s.heldTimer > 0) { s.heldTimer = Math.max(0, s.heldTimer - dt); continue; }
 
     const dx = player.x - s.x, dy = player.y - s.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -3900,6 +4140,9 @@ function updateCrows(dt) {
     if (c.frozen) continue;
     // Iced: still there, still shootable, just not going anywhere.
     if (tickFrozen(c, dt)) continue;
+    // Netted: it still bleeds and still burns, it simply does not move or
+    // decide anything while the mesh is on it.
+    if (c.heldTimer > 0) { c.heldTimer = Math.max(0, c.heldTimer - dt); continue; }
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
       const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod();
@@ -3971,6 +4214,43 @@ function updateShockRings(dt) {
     shockRings[i].timer -= dt;
     if (shockRings[i].timer <= 0) shockRings.splice(i, 1);
   }
+}
+
+/** A net in flight: a small square of mesh, tumbling. */
+function drawNets() {
+  for (const n of nets) {
+    ctx.save();
+    ctx.translate(n.x, n.y + CONFIG.hudHeight);
+    ctx.rotate(n.spin);
+    ctx.strokeStyle = '#E8E0C0'; ctx.lineWidth = 1;
+    ctx.shadowColor = '#E8E0C0'; ctx.shadowBlur = 4;
+    for (const o of [-4, 0, 4]) {
+      ctx.beginPath(); ctx.moveTo(-6, o); ctx.lineTo(6, o); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(o, -6); ctx.lineTo(o, 6); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+}
+
+/**
+ * The mesh over whatever is pinned under it.
+ *
+ * Drawn in one pass over both enemy kinds rather than inside each painter, so
+ * a third kind that can be netted needs no new drawing code at all.
+ */
+function drawHeldMarkers() {
+  ctx.strokeStyle = '#E8E0C0'; ctx.lineWidth = 1;
+  for (const e of [...crows, ...skeletons]) {
+    if (!(e.heldTimer > 0)) continue;
+    const ey = e.y + CONFIG.hudHeight;
+    ctx.globalAlpha = 0.35 + 0.35 * Math.min(1, e.heldTimer);
+    for (const o of [-5, 0, 5]) {
+      ctx.beginPath(); ctx.moveTo(e.x - 8, ey + o); ctx.lineTo(e.x + 8, ey + o); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(e.x + o, ey - 8); ctx.lineTo(e.x + o, ey + 8); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawShockRings() {
@@ -5998,7 +6278,10 @@ function drawPlayer() {
   if (!hasArrows) drawPitchforkIndicators(px, py);
 
   // Dynamite charge bar
-  if (charge.on) drawChargeBar(px, py, Math.min(1, (performance.now() - charge.t0) / 1000));
+  // The draw wins the bar when both are somehow live: it is the one on a
+  // cooldown, so it is the one whose timing the player is reading.
+  if (archerDraw.on) drawChargeBar(px, py, archerDrawFrac());
+  else if (charge.on) drawChargeBar(px, py, Math.min(1, (performance.now() - charge.t0) / 1000));
 }
 
 /** Windup meter above a character's head. Shared by the archer's dynamite and
@@ -6016,10 +6299,14 @@ function drawChargeBar(px, py, frac) {
 /** Dotted aim line with a sniper-mode reticle. Shared by every character that
  * draws one — today the archer and the ranger, the game's two marksmen. */
 function drawAimLine(px, py) {
-  const aimLen = sniperMode ? 220 : 80, aimAlpha = sniperMode ? 0.75 : 0.38;
-  const aimRGB = sniperMode ? '255,255,60' : '170,255,68';
+  // A drawn bow gets the same long line the sapper's sniper mode does: it was
+  // always the good half of that mode, and it is what an archer standing still
+  // is standing still for.
+  const aiming = archerDraw.on;
+  const aimLen = aiming ? 220 : 80, aimAlpha = aiming ? 0.75 : 0.38;
+  const aimRGB = aiming ? '255,255,60' : '170,255,68';
   ctx.save();
-  ctx.setLineDash(sniperMode ? [5,3] : [3,4]); ctx.lineWidth = sniperMode ? 1.5 : 1;
+  ctx.setLineDash(aiming ? [5,3] : [3,4]); ctx.lineWidth = aiming ? 1.5 : 1;
   const lx1 = px + Math.cos(player.aimAngle)*aimLen, ly1 = py + Math.sin(player.aimAngle)*aimLen;
   const aimGrad = ctx.createLinearGradient(px, py, lx1, ly1);
   aimGrad.addColorStop(0, `rgba(${aimRGB},${aimAlpha})`);
@@ -6027,7 +6314,7 @@ function drawAimLine(px, py) {
   ctx.strokeStyle = aimGrad;
   ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(lx1, ly1); ctx.stroke();
   ctx.setLineDash([]);
-  if (sniperMode) {
+  if (aiming) {
     ctx.strokeStyle = `rgba(${aimRGB},0.7)`; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(lx1-7, ly1); ctx.lineTo(lx1+7, ly1); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(lx1, ly1-7); ctx.lineTo(lx1, ly1+7); ctx.stroke();
@@ -6523,6 +6810,18 @@ function drawArrows() {
 
     ctx.save(); ctx.translate(a.x, a.y + HH); ctx.rotate(angle);
     ctx.shadowBlur = 0;
+
+    // A drawn shot has to read as heavier than a loosed one, whichever ammo
+    // it spent: a bright streak behind the shaft, as long as the number of
+    // bodies it can still pass through.
+    if (a.power) {
+      const pips = a.pierceLeft || 1;
+      ctx.globalAlpha = 0.5;
+      ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 10;
+      ctx.strokeStyle = '#EAFF6A'; ctx.lineWidth = 2 + pips;
+      ctx.beginPath(); ctx.moveTo(-16 - 4 * pips, 0); ctx.lineTo(12, 0); ctx.stroke();
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    }
 
     if (a.type === 'fire') {
       const fs = a.fireSeed || 0;
@@ -8495,8 +8794,8 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['snipe', 'shield'],
-  ranger: ['snipe', 'shield'],
+  archer: ['power', 'shield'],
+  ranger: ['net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
   sapper: ['charge', 'barrage', 'sapperShot', 'shield'],
@@ -8511,13 +8810,17 @@ const CHIP = {
   charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
   storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
   blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
+  // Reads as live while the bow is bent, so the bar on the body and the chip
+  // in the lane say the same thing.
+  power:     () => cooldownChip('arrow', archerPowerCD, CONFIG.archerPowerCooldown,
+                                archerDraw.on ? CONFIG.archerDrawMaxSecs : 0),
+  net:       () => cooldownChip('satchel', rangerNetCD, CONFIG.netCooldown,
+                                rangerNet.on ? CONFIG.netDrawMaxSecs : 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
                       label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
                       frac: null }),
   shield:    () => ({ glyph: 'shield', color: '#FFB400', lit: playerShield,
                       label: playerShield ? 'ON' : '', frac: null }),
-  snipe:     () => ({ glyph: 'snipe', color: '#F0C830', lit: sniperMode,
-                      label: sniperMode ? 'ON' : '', frac: null }),
   barrage:    () => cooldownChip('barrage', sapperBarrageCD, CONFIG.sapperBarrageCooldown, 0),
   // Reuses the snipe crosshair glyph — it is a precision shot, same read as
   // everyone else's aim-down-it key, just cooldown-gated instead of held.
@@ -9546,7 +9849,7 @@ function render(t) {
     for (const c of crows) if (litAt(c.x, c.y)) { drawCrow(c); drawFrozenOverlay(c); }
     for (const s of skeletons) if (litAt(s.x, s.y)) { drawSkeleton(s); drawFrozenOverlay(s); }
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
-    drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts();
+    drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts(); drawNets(); drawHeldMarkers();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
@@ -9734,21 +10037,21 @@ function stepGame(dt) {
       // table lookup and not a kind check.
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
-      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt);
       updateSoldiers(dt); regrowth.tick(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
     case 'boss_entrance':
-      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt);
+      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt);
       break;
 
     case 'boss_fight':
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
-      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       updateSoldiers(dt); regrowth.tick(dt); updateBarrageBombs(dt); updateSapperShots(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
@@ -9900,7 +10203,6 @@ export const devHooks = {
   fits: (x = player.x, y = player.y) => playerFits(x, y),
   movementBlockers: () => ({
     frozen: playerFrozenTimer,
-    sniperMode,
     charging: knightCharge.on,
     dashing: knightDash.timer,
     buried: !playerFits(player.x, player.y),
@@ -9997,7 +10299,15 @@ export const devHooks = {
   // The whole sniper-key path, so a test exercises the same routing the
   // keyboard does rather than calling one ability directly.
   shift() { pressShift(); },
-  releaseShift() { releaseKnightCharge(); },
+  shiftUp() { releaseShift(); },
+  archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
+  // Backdates a draw already in progress, so a test can loose a fully drawn
+  // shot without spending a real second on it: archerDrawFrac reads the wall
+  // clock, which no amount of stepSim moves.
+  holdDraw(secs) { if (archerDraw.on) archerDraw.t0 = performance.now() - secs * 1000; },
+  holdNet(secs) { if (rangerNet.on) rangerNet.t0 = performance.now() - secs * 1000; },
+  rangerNet: () => ({ drawing: rangerNet.on, frac: rangerNetFrac(), cooldown: rangerNetCD }),
+  nets: () => nets,
   rings: () => shockRings,
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },
