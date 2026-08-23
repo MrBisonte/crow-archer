@@ -778,23 +778,98 @@ describe('the sapper', () => {
     expect(thrown).toBe(2);
   });
 
-  it('spends no ammo, so it keeps throwing past what a pouch would hold', () => {
-    const pouch = g.config().resources.dynamites.max;
+  it('opens with a full pouch of ten and spends one per throw', () => {
+    expect(g.config().resources.bombs.max).toBe(10);
+    expect((g.inv() as Record<string, number>).bombs).toBe(10);
+    g.shoot();
+    g.stepSim(1);
+    expect((g.inv() as Record<string, number>).bombs).toBe(9);
+  });
+
+  it('falls back to the pitchfork once the pouch is empty', () => {
     const step = Math.ceil(g.config().sapperChargeCooldown * ONE_SECOND) + 1;
     let thrown = 0;
-    for (let i = 0; i < pouch + 3; i++) {
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'charge') thrown++;
+    });
+
+    // Empty it, then keep pressing.
+    for (let i = 0; i < g.config().resources.bombs.max + 3; i++) {
       g.shoot();
       g.stepSim(1);
-      thrown++;
       g.stepSim(step);
     }
-    expect(thrown).toBeGreaterThan(pouch);
-    // And every one of them went off rather than piling up: the last throw is
-    // still mid-fuse when the loop ends, so wait out a full fuse first. The
-    // sapper's bomb burns longer than the archer's stick, so it is that fuse
-    // this has to outlast.
-    g.stepSim(Math.ceil(g.config().sapperBombLifetime * ONE_SECOND) + 2);
-    expect(g.dynamites().length).toBe(0);
+    expect(thrown).toBe(g.config().resources.bombs.max);
+    expect((g.inv() as Record<string, number>).bombs).toBe(0);
+
+    // The next press swings rather than doing nothing at all. The presses that
+    // emptied the pouch already fell through to the pitchfork, so wait out its
+    // own cooldown first or this only proves that swings have a cooldown.
+    g.stepSim(Math.ceil(g.config().pitchforkCooldown * ONE_SECOND) + 2);
+    let swung = 0;
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'pitchfork') swung++;
+    });
+    g.shoot();
+    g.stepSim(1);
+    expect(swung).toBe(1);
+  });
+
+  it('takes one bomb per pickup, not a refill to full', () => {
+    expect(g.config().resources.bombs.restore).toBe(1);
+  });
+
+  describe('elemental bombs', () => {
+    it('spends fire before ice before plain, the archer\'s own order', () => {
+      const step = Math.ceil(g.config().sapperChargeCooldown * ONE_SECOND) + 1;
+      (g.inv() as Record<string, number>).fireBombs = 1;
+      (g.inv() as Record<string, number>).iceBombs = 1;
+      const kinds: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        g.shoot();
+        g.stepSim(1);
+        kinds.push(g.dynamites()[g.dynamites().length - 1].element);
+        g.stepSim(step);
+      }
+      expect(kinds).toEqual(['fire', 'ice', 'none']);
+    });
+
+    it('leaves the ground burning where a fire bomb went off', () => {
+      clearArena();
+      const p = g.player() as { x: number; y: number };
+      p.x = 10.5 * g.config().tileSize;
+      p.y = 8.5 * g.config().tileSize;
+      expect(g.fires().length).toBe(0);
+      g.blast(p.x + 40, p.y, 'fire');
+      expect(g.fires().length).toBe(1);
+      expect(g.fires()[0].life).toBe(g.config().fireBlastPatchDuration);
+      expect(g.fires()[0].dps).toBe(g.config().fireBlastPatchDps);
+    });
+
+    it('freezes what an ice bomb reaches instead of killing it', () => {
+      clearArena();
+      const p = g.player() as { x: number; y: number };
+      p.x = 10.5 * g.config().tileSize;
+      p.y = 8.5 * g.config().tileSize;
+      g.crows().length = 0;
+      g.spawnCrow();
+      const crow = g.crows()[0];
+      crow.x = p.x + 30; crow.y = p.y; crow.baseY = p.y;
+      crow.hp = 5;   // enough to survive the single point an ice blast deals
+
+      g.blast(crow.x, crow.y, 'ice');
+      expect(crow.hp).toBe(5 - g.config().iceBlastDamage);
+      expect(crow.frozenTimer).toBe(g.config().iceBlastFreezeSecs);
+
+      // Held in place: a passive crow otherwise drifts west every frame.
+      const heldX = crow.x;
+      g.stepSim(30);
+      expect(crow.x).toBe(heldX);
+
+      // And moving again once it wears off.
+      g.stepSim(Math.ceil(g.config().iceBlastFreezeSecs * ONE_SECOND) + 5);
+      expect(crow.x).not.toBe(heldX);
+    });
   });
 
   it('starts every run with the charge ready rather than winding', () => {

@@ -338,6 +338,13 @@ const CONFIG = {
   sapperShotCooldown: 10, sapperShotSpeed: 600, sapperShotLifetime: 1.5,
   sapperShotDamageMult: 3, sapperShotBossDamage: 3,
   sapperComboRadiusMult: 1.33, sapperComboFalloffMax: 10, sapperComboFalloffMin: 2,
+  // A fire bomb leaves the ground burning where it went off. Shorter-lived
+  // than a fire arrow's patch and worth less per second, because a blast
+  // already did its damage up front — this is the after-effect, not the hit.
+  fireBlastPatchDuration: 1.5, fireBlastPatchDps: 1.5,
+  // An ice bomb trades damage for time: one point to anything it reaches, and
+  // that long standing still. The freeze is the whole of what it buys.
+  iceBlastDamage: 1, iceBlastFreezeSecs: 1.5,
 
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
@@ -411,7 +418,11 @@ const CONFIG = {
   resources: {
     arrows:    { max: 10, restore: 5, color: '#aaff44', dim: '#2d2d2d', icon: '▶', spacing: 13 },
     dynamites: { max:  3, restore: 1, color: '#FFB400', dim: '#2d2d2d', icon: '■', spacing: 13 },
-    satchels:  { max:  3, restore: 1, color: '#ffcc00', dim: '#2d2d2d', icon: '●', spacing: 13 }
+    satchels:  { max:  3, restore: 1, color: '#ffcc00', dim: '#2d2d2d', icon: '●', spacing: 13 },
+    // The sapper's own pouch. A pickup is worth one bomb, not a refill to
+    // full, so a run's supply is the ten it opened with plus whatever it
+    // picks up one at a time — the cooldown paces the throwing, this caps it.
+    bombs:     { max: 10, restore: 1, color: '#FF7A1A', dim: '#2d2d2d', icon: '●', spacing: 13 }
   },
 
   audio: true,
@@ -621,8 +632,8 @@ const CHAR_PANELS = [
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
-    lines:['Bombs  ·  1.1s cooldown, long reach','Special: 5-bomb barrage, 45° fan',
-           'Shift: piercing shot, 3x dmg (10s)','Snipe your own bomb for a combo blast','Demolition playstyle'] },
+    lines:['10 bombs  ·  1.1s CD  ·  pitchfork at 0','Pickup: Fire / Ice bombs',
+           'Special: 5-bomb barrage, 45° fan','Shift: 3x shot, or combo your own bomb','Demolition playstyle'] },
 ];
 
 /**
@@ -764,6 +775,9 @@ let charge = { on: false, t0: 0 };
 function resetInv() {
   for (const [k, r] of Object.entries(CONFIG.resources)) { inv[k] = r.max; iFlash[k] = 0; }
   inv.ricochetArrows = 0; inv.fireArrows = 0;
+  // Elemental bombs are pickup-only, the way fire arrows are: the pouch opens
+  // full of plain ones and these arrive during the run.
+  inv.fireBombs = 0; inv.iceBombs = 0;
   inv.fireBolts = 0; inv.laserStreams = 0;
   inv.knightJavelins = 0; inv.knightFireSwordTimer = 0;
   charge.on = false;
@@ -2422,13 +2436,13 @@ function startWhirlwind() {
  * so the two throws can never drift into being two slightly different
  * explosives.
  */
-function launchCharge(speed, kind = 'dynamite') {
+function launchCharge(speed, kind = 'dynamite', element = 'none') {
   const lifetime = kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime;
   dynamites.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * speed,
     vy: Math.sin(player.aimAngle) * speed,
-    life: lifetime, fuseTotal: lifetime, kind,
+    life: lifetime, fuseTotal: lifetime, kind, element,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
 }
@@ -2440,19 +2454,26 @@ function throwDynamite(chargeFrac) {
 }
 
 /**
- * The sapper's powder charge: the same throw, on the primary, gated by a
- * cooldown instead of a pouch.
+ * The sapper's bomb: thrown on the primary, out of a pouch and on a cooldown
+ * both. The cooldown paces how fast they leave the hand; the pouch caps how
+ * many there are to throw.
  *
- * Nothing is spent, so there is no empty-quiver branch and no pitchfork
- * fallback - a sapper who cannot throw yet is a sapper waiting, which is what
- * the cooldown chip in lane D is there to show. The throw is uncharged: one
- * press is one arc, always the same, because a primary that had to be held
- * would be a secondary.
+ * Fire and ice are spent first when held, the same order and for the same
+ * reason the archer spends fire before ricochet before plain: the special is
+ * the one you picked up for a reason, and holding it back to the end of the
+ * pouch wastes it. Run the pouch dry and the sapper falls back on the same
+ * pitchfork the archer and ranger swing when the quiver is empty, rather
+ * than standing there with nothing at all.
  */
 function trySapperCharge() {
+  if (inv.bombs <= 0 && inv.fireBombs <= 0 && inv.iceBombs <= 0) { tryPitchfork(); return; }
   if (sapperChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   sapperChargeCD = CONFIG.sapperChargeCooldown;
-  launchCharge(CONFIG.sapperBombSpeed, 'bomb');
+  let element = 'none';
+  if      (inv.fireBombs > 0) { inv.fireBombs--; element = 'fire'; }
+  else if (inv.iceBombs  > 0) { inv.iceBombs--;  element = 'ice';  }
+  else                        { inv.bombs--;                       }
+  launchCharge(CONFIG.sapperBombSpeed, 'bomb', element);
   events.emit({ type: 'WEAPON_FIRED', kind: 'charge' });
 }
 
@@ -2796,8 +2817,46 @@ function updateArrows(dt) {
   }
 }
 
-function spawnFire(x, y) {
-  fires.push({ x, y, life: CONFIG.fireArrowDuration, phase: Math.random()*Math.PI*2, damageTimer: 0 });
+/**
+ * A patch of burning ground.
+ *
+ * `dps` is damage per second rather than damage per tick, so the figure in
+ * CONFIG stays the same if the tick interval is ever retuned. The default is
+ * the fire arrow's original one point every fireArrowDamageInterval, written
+ * as the rate that produces — a fire bomb's patch is shorter and weaker and
+ * passes its own.
+ */
+function spawnFire(x, y, opts = {}) {
+  fires.push({
+    x, y,
+    life: opts.duration ?? CONFIG.fireArrowDuration,
+    dps: opts.dps ?? 1 / CONFIG.fireArrowDamageInterval,
+    phase: Math.random()*Math.PI*2, damageTimer: 0,
+  });
+}
+
+/**
+ * Locks a body in place for a while. One helper rather than three copies,
+ * since crows, skeletons and soldiers each run their own update loop and all
+ * three have to answer the same question the same way.
+ *
+ * Bosses are deliberately not freezable: a boss held still for a second and a
+ * half is a boss not fighting, and every one of them is a scripted state
+ * machine that would have to be taught to be interrupted.
+ */
+function freezeEnemy(e, secs) {
+  if (!e) return;
+  e.frozenTimer = Math.max(e.frozenTimer || 0, secs);
+}
+
+/** Is this body currently iced in place? */
+function isFrozen(e) { return (e.frozenTimer || 0) > 0; }
+
+/** Ticks a body's freeze down, and reports whether it is still held. */
+function tickFrozen(e, dt) {
+  if (!(e.frozenTimer > 0)) return false;
+  e.frozenTimer = Math.max(0, e.frozenTimer - dt);
+  return true;
 }
 
 function updateFires(dt) {
@@ -2824,10 +2883,16 @@ function updateFires(dt) {
     f.damageTimer -= dt;
     if (f.damageTimer <= 0) {
       f.damageTimer = CONFIG.fireArrowDamageInterval;
+      // Per-tick damage derived from the patch's own rate, so a patch that
+      // burns for less can also burn for less per second.
+      const bite = (f.dps ?? 1 / CONFIG.fireArrowDamageInterval) * CONFIG.fireArrowDamageInterval;
+      const r2 = CONFIG.firePatchRadius * CONFIG.firePatchRadius;
       for (let j = crows.length - 1; j >= 0; j--)
-        if (dist2(f.x, f.y, crows[j].x, crows[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) damageCrow(j);
+        if (dist2(f.x, f.y, crows[j].x, crows[j].y) < r2) damageCrow(j, bite);
       for (let j = skeletons.length - 1; j >= 0; j--)
-        if (dist2(f.x, f.y, skeletons[j].x, skeletons[j].y) < CONFIG.firePatchRadius*CONFIG.firePatchRadius) damageSkeleton(j);
+        if (dist2(f.x, f.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j, bite);
+      for (let j = soldiers.length - 1; j >= 0; j--)
+        if (dist2(f.x, f.y, soldiers[j].x, soldiers[j].y) < r2) damageSoldier(j, bite);
     }
   }
 }
@@ -3047,6 +3112,8 @@ function updateSkeletons(dt) {
   for (let i = skeletons.length - 1; i >= 0; i--) {
     const s = skeletons[i];
     if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
+    // Iced: no walking, no reaching, no shooting until it wears off.
+    if (tickFrozen(s, dt)) continue;
     const dx = player.x - s.x, dy = player.y - s.y, dist = Math.hypot(dx, dy);
     const reach = s.kind === 'rat' ? 11 : 14;
     if (dist < reach) {
@@ -3182,6 +3249,9 @@ function updateSoldiers(dt) {
     const stats = SOLDIER_STATS[s.kind];
     if (s.hitFlash > 0) s.hitFlash = Math.max(0, s.hitFlash - dt);
     if (s.chargeCD > 0) s.chargeCD = Math.max(0, s.chargeCD - dt);
+    // Iced: held in place, guard and all. Ticked after the cooldowns above so
+    // a frozen soldier is not also having its next attack held back.
+    if (tickFrozen(s, dt)) continue;
 
     const dx = player.x - s.x, dy = player.y - s.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -3303,20 +3373,40 @@ function explodeExplosive(d, source, opts = {}) {
     return opts.falloff.max - frac * (opts.falloff.max - opts.falloff.min);
   };
 
+  // Ice trades the blast's damage away for time: a flat single point to
+  // everything it reaches, and that long held still. It overrides falloff
+  // rather than scaling it, because "one damage" is the entire deal.
+  const ice = d.element === 'ice';
+  const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : falloffAt(tx, ty));
+  const chill = (e) => { if (ice) freezeEnemy(e, CONFIG.iceBlastFreezeSecs); };
+
   for (let j = crows.length - 1; j >= 0; j--) {
     const c = crows[j];
-    if (dist2(d.x, d.y, c.x, c.y) < r2) damageCrow(j, falloffAt(c.x, c.y));
+    if (dist2(d.x, d.y, c.x, c.y) < r2) { chill(c); damageCrow(j, hitFor(c.x, c.y)); }
   }
   for (let j = skeletons.length - 1; j >= 0; j--) {
     const s = skeletons[j];
-    if (dist2(d.x, d.y, s.x, s.y) < r2) damageSkeleton(j, falloffAt(s.x, s.y));
+    if (dist2(d.x, d.y, s.x, s.y) < r2) { chill(s); damageSkeleton(j, hitFor(s.x, s.y)); }
+  }
+  for (let j = soldiers.length - 1; j >= 0; j--) {
+    const s = soldiers[j];
+    if (dist2(d.x, d.y, s.x, s.y) < r2) { chill(s); damageSoldier(j, hitFor(s.x, s.y)); }
   }
   if (bossInPlay() && !boss.shield &&
       dist2(d.x, d.y, boss.x, boss.y) < r2) {
     const base = source === 'satchel' ? CONFIG.satchelBossDamage
                 : source === 'barrage' ? CONFIG.sapperBarrageDamage
                 : CONFIG.dynamiteBossDamage;
-    damageBoss(base * falloffAt(boss.x, boss.y), d.x, d.y, source, 0.25);
+    // Bosses take an ice bomb's damage but not its freeze — see freezeEnemy.
+    damageBoss(ice ? CONFIG.iceBlastDamage : base * falloffAt(boss.x, boss.y),
+               d.x, d.y, source, 0.25);
+  }
+
+  // Fire leaves the ground burning where it went off.
+  if (d.element === 'fire' && !onWater) {
+    spawnFire(d.x, d.y, {
+      duration: CONFIG.fireBlastPatchDuration, dps: CONFIG.fireBlastPatchDps,
+    });
   }
 }
 
@@ -3472,6 +3562,8 @@ function updateCrows(dt) {
     const c = crows[i];
     if (c.hitFlash > 0) c.hitFlash = Math.max(0, c.hitFlash - dt);
     if (c.frozen) continue;
+    // Iced: still there, still shootable, just not going anywhere.
+    if (tickFrozen(c, dt)) continue;
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
       const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod();
@@ -3769,7 +3861,7 @@ function checkPickupCollection() {
     if (dist2(player.x, player.y, p.x, p.y) >= CONFIG.pickupRadius*CONFIG.pickupRadius) continue;
     // Base ammo restore (archer and ranger — both run a countable quiver;
     // wizard/knight use different systems entirely)
-    if (selectedChar === 'archer' || selectedChar === 'ranger') {
+    if (selectedChar === 'archer' || selectedChar === 'ranger' || selectedChar === 'sapper') {
       for (const [k, r] of Object.entries(CONFIG.resources))
         if (inv[k] < r.max) inv[k] = Math.min(r.max, inv[k] + r.restore);
     }
@@ -3777,10 +3869,14 @@ function checkPickupCollection() {
     if (p.type === 'ricochet') {
       if      (selectedChar === 'wizard') inv.laserStreams  += CONFIG.wizSpecialBoltCount;
       else if (selectedChar === 'knight') inv.knightJavelins += CONFIG.knightJavelinsPerPickup;
+      // The sapper has nothing to bounce off a wall, so this slot buys the
+      // other half of his elemental pair instead.
+      else if (selectedChar === 'sapper') inv.iceBombs       += CONFIG.specialArrowPickupCount;
       else                                inv.ricochetArrows += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'fire') {
       if      (selectedChar === 'wizard') inv.fireBolts          += CONFIG.wizSpecialBoltCount;
       else if (selectedChar === 'knight') inv.knightFireSwordTimer += CONFIG.knightFireSwordDuration;
+      else if (selectedChar === 'sapper') inv.fireBombs            += CONFIG.specialArrowPickupCount;
       else                                inv.fireArrows           += CONFIG.specialArrowPickupCount;
     } else if (p.type === 'shield') {
       playerShield = true;
@@ -5812,8 +5908,12 @@ function drawSapper() {
   // 4. The charge held out along the aim, with a fuse that only burns while
   // one is ready to throw. A dead fuse is the cooldown, readable from the
   // sprite instead of only from the HUD chip.
-  const ready = sapperChargeCD <= 0;
+  // Nothing in hand at all once the pouch is empty — the pitchfork is the
+  // attack then, and a bomb still drawn there would be a lie.
+  const held = inv.bombs > 0 || inv.fireBombs > 0 || inv.iceBombs > 0;
+  const ready = sapperChargeCD <= 0 && held;
   const gx = Math.cos(localAngle) * 9, gy = Math.sin(localAngle) * 9;
+  if (!held) { drawPitchfork(localAngle); ctx.restore(); return; }
   ctx.strokeStyle = '#D9B98A'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(gx, gy); ctx.stroke();
 
@@ -6225,11 +6325,17 @@ function drawDynamites() {
     // wick, spark, countdown) stays the shared look both throws already had.
     const isBomb = d.kind === 'bomb';
     if (isBomb) {
-      ctx.fillStyle = '#FF1F1F';
+      // Elemental bombs keep the shape and the label and change only the
+      // casing's colour, so a fire bomb still reads as the same bomb.
+      const body = d.element === 'fire' ? '#FF7A1F' : d.element === 'ice' ? '#40D0F0' : '#FF1F1F';
+      const shade = d.element === 'fire' ? '#A03A00' : d.element === 'ice' ? '#1E6A90' : '#8A1010';
+      if (d.element !== 'none') { ctx.shadowColor = body; ctx.shadowBlur = 8; }
+      ctx.fillStyle = body;
       ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur = 0;
       ctx.save();
       ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.clip();
-      ctx.fillStyle = '#8A1010'; ctx.fillRect(-10, 3, 20, 10);
+      ctx.fillStyle = shade; ctx.fillRect(-10, 3, 20, 10);
       ctx.restore();
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
       ctx.beginPath(); ctx.arc(-3.5, -3.5, 2, 0, Math.PI*2); ctx.fill();
@@ -6439,6 +6545,46 @@ const _crowGrids = {};
 function crowGrid(kind, frame) {
   const key = `${kind}|${frame}`;
   return _crowGrids[key] || (_crowGrids[key] = buildCrowGrid(kind, frame));
+}
+
+/**
+ * The rime over anything an ice bomb caught: a blue wash, a brighter shell,
+ * and a few crystals. Drawn over the finished sprite rather than by recolouring
+ * it, so it works the same for a crow, a skeleton and a soldier without any of
+ * the three needing to know about it.
+ *
+ * The last third fades out, which is the only warning that a frozen thing is
+ * about to start moving again.
+ */
+function drawFrozenOverlay(e) {
+  const t = e.frozenTimer || 0;
+  if (t <= 0) return;
+  const cx = e.x, cy = e.y + CONFIG.hudHeight;
+  const fade = Math.min(1, t / (CONFIG.iceBlastFreezeSecs * 0.33));
+  const r = 11;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.globalAlpha = 0.45 * fade;
+  ctx.fillStyle = '#40D0F0';
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+
+  ctx.globalAlpha = 0.85 * fade;
+  ctx.strokeStyle = '#A8D8F0'; ctx.lineWidth = 1.5;
+  ctx.shadowColor = '#40D0F0'; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Crystals, at fixed angles so a frozen body reads as set solid rather than
+  // shimmering.
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1;
+  for (const a of [-0.9, 0.4, 2.1, 3.6]) {
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r * 0.45, Math.sin(a) * r * 0.45);
+    ctx.lineTo(Math.cos(a) * r * 0.95, Math.sin(a) * r * 0.95);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawCrow(c) {
@@ -7878,6 +8024,9 @@ const GLYPH = {
   // Three mini-bombs fanned across the barrage's own arc, not just a row.
   barrage: (s) => { [[0.22, 0.62], [0.5, 0.42], [0.78, 0.62]].forEach(([x, y]) => {
     ctx.beginPath(); ctx.arc(s*x, s*y, s*0.14, 0, Math.PI*2); ctx.fill(); }); },
+  // Round body and a stub of fuse: the sapper's bomb, not a stick of dynamite.
+  bomb: (s) => { ctx.beginPath(); ctx.arc(s*0.48, s*0.6, s*0.3, 0, Math.PI*2); ctx.fill();
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.66, s*0.36); ctx.lineTo(s*0.84, s*0.14); ctx.stroke(); },
   satchel: (s) => { ctx.fillRect(s*0.15, s*0.4, s*0.7, s*0.5);
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.3, s*0.4); ctx.lineTo(s*0.7, s*0.4); ctx.stroke(); },
   javelin: (s) => { ctx.lineWidth = 2;
@@ -7939,6 +8088,9 @@ const POOL = {
   ricochetArrows: { glyph: 'ricochet',  color: '#39E0FF' },
   fireArrows:     { glyph: 'fireArrow', color: '#FF7A1F' },
   dynamites:      { glyph: 'dynamite',  color: '#FFB400' },
+  bombs:          { glyph: 'bomb',      color: '#FF7A1A' },
+  fireBombs:      { glyph: 'bomb',      color: '#FF7A1F' },
+  iceBombs:       { glyph: 'bomb',      color: '#40D0F0' },
   satchels:       { glyph: 'satchel',   color: '#B23A00' },
   knightJavelins: { glyph: 'javelin',   color: '#D9B98A' },
   laserStreams:   { glyph: 'laser',     color: '#39E0FF' },
@@ -7958,9 +8110,9 @@ const LANE_B = {
   ranger: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'satchels'] },
   knight: { active: null,     reserve: ['knightJavelins'] },
   wizard: { active: null,     reserve: ['laserStreams', 'fireBolts'] },
-  // Nothing countable at all: the sapper's charges are made on the spot, so
-  // both slots are empty and lane D's cooldown chip carries the whole story.
-  sapper: { active: null,     reserve: [] },
+  // A pouch like the archer's now rather than nothing: the bombs being thrown,
+  // then the two elemental kinds in reserve.
+  sapper: { active: 'bombs',  reserve: ['fireBombs', 'iceBombs'] },
 };
 
 /**
@@ -8915,9 +9067,12 @@ function render(t) {
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
-    for (const c of crows) if (litAt(c.x, c.y)) drawCrow(c);
-    for (const s of skeletons) if (litAt(s.x, s.y)) drawSkeleton(s);
-    for (const s of soldiers) if (litAt(s.x, s.y)) drawSoldier(s);
+    // The ice overlay goes on at the call site rather than inside each of the
+    // three draw functions: it is the same rime over whatever was just drawn,
+    // and one copy beats three that could drift.
+    for (const c of crows) if (litAt(c.x, c.y)) { drawCrow(c); drawFrozenOverlay(c); }
+    for (const s of skeletons) if (litAt(s.x, s.y)) { drawSkeleton(s); drawFrozenOverlay(s); }
+    for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
     drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
@@ -9245,7 +9400,12 @@ export const devHooks = {
   // dark_archer → dark_knight → win chain can be walked without grinding
   // out every stage's HP bar by hand.
   killBoss() { if (boss && boss.bstate !== 'dead') startBossDeath(); },
-  blast(x, y) { explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'dynamite'); },
+  blast(x, y, element = 'none') {
+    explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0, element }, 'dynamite');
+  },
+  // The pouch and the burning ground, for the sapper's ammo and fire tests.
+  inv: () => inv,
+  fires: () => fires,
   floaters: () => floaters,
   arrows: () => arrows,
   pickups: () => pickups,
