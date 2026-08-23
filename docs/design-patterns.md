@@ -313,3 +313,138 @@ does: `` spriteCanvas(`skeleton|${kind}`, ...) ``.
 > `spriteFlashCanvas`, with the now-unused per-frame loop
 > (`drawPixelSprite`/`drawPixelSpriteFlash`) deleted rather than kept
 > alongside it.
+
+## Diagnosing a human's bug report: a second stream over the same events, not a second event system
+
+A player says "the game went back to the menu and I don't know why." Before
+this decision there was nothing to check: no record of what actually
+happened, in what order, right before it went wrong — only guessing, then
+re-simulating a few hundred plausible seeds and key sequences hoping one of
+them reproduces it. That does not scale, and it is not evidence even when it
+works: it proves *a* bug is reachable, not that it is *the* bug that was
+reported.
+
+The obvious first question — does `EventBus`/`GameEvent`
+(`src/sim/events.ts`) already do this? — has a clear no. That system is
+built for a different job: a closed union of gameplay *facts*
+(`CROW_KILLED`, `BOSS_HIT`, `MAP_GENERATED`, ...) that the render/audio layer
+reacts to, with no level, no timestamp, no history — `emit()` fans out
+synchronously and nothing is kept. Widening that union with a `LOG_MESSAGE`
+variant for arbitrary debug strings would be the "second list to keep in
+sync" failure this file's other entries specifically avoid, applied to a
+type that was never meant to hold freeform text in the first place.
+
+### Building blocks
+
+| Name | Type | Holds |
+|---|---|---|
+| `LogLevel` | `'debug' \| 'info' \| 'warn' \| 'error'` | The floor a call is checked against before anything is built. |
+| `LogEvent` | interface | `id`, `level`, `timestamp`, `source`, `message`, optional `code`, optional `data`. |
+| `Logger` | class | One bounded ring buffer, one level, one console-mirroring threshold. |
+| `log` | `Logger` singleton | The one shared instance every call site imports. |
+| `attachToEvents` | `(logger, bus) => unsubscribe` | Folds an `EventBus`'s gameplay events into a logger as debug entries. |
+
+- `LogLevel`, `LogEvent`, `Logger` are defined in `src/sim/log.ts`.
+- `log`, the singleton, is exported from the same file and mirrors `stamps`
+  in `src/render/stamps.ts` — one instance, imported wherever it's needed,
+  never reconstructed per call site.
+- `attachToEvents` is the seam to the existing system: called once, at
+  module scope in `game.js` right next to `const events = new EventBus()`,
+  not inside `boot()` — subscribing has no DOM dependency, so unlike the
+  rest of `boot()` it doesn't need to wait for one.
+
+### How it works
+
+```mermaid
+flowchart LR
+    call["log.info('transitionTo', 'menu -> charselect', {...})"]
+    gate{"level >= floor?"}
+    drop(["dropped — one comparison, no allocation"])
+    ring["ring buffer\n(oldest drops past capacity)"]
+    console["console.log/warn/error\n(if >= consoleLevel)"]
+
+    call --> gate
+    gate -- no --> drop
+    gate -- yes --> ring
+    ring --> console
+
+    bus["events.emit(gameplayFact)"]
+    attach["attachToEvents subscription"]
+    bus --> attach --> call
+```
+
+A disabled call — the default in real play, floor at `'warn'` — costs
+exactly the `level >= floor` comparison in `record()`; the `LogEvent` object
+is never built. An enabled one is recorded once, unconditionally, and
+mirrored to `console` only if it also clears the separate `consoleLevel`
+threshold, so the ring buffer can hold more than a human watching DevTools
+needs to see scroll past.
+
+### The alternative considered
+
+Route diagnostics through `EventBus` itself: add a `type: 'LOG'` variant
+carrying `level`/`message`/`data`, and have `game.js` call `events.emit(...)`
+everywhere a `log.*()` call would otherwise go. Rejected for the reason
+above — `GameEvent` is typed as a closed set of specific gameplay facts
+precisely so a render handler's `switch` can be exhaustive over it. A
+`LOG` variant with a freeform `message: string` payload defeats that: every
+future gameplay-fact variant added for a real reason would sit in the same
+union as an admin's ad-hoc debug string, and the render layer would need to
+either ignore `LOG` explicitly (a case that means nothing to it) or the
+switch stops being exhaustive over what actually matters to drawing.
+
+### Why the seam wins here
+
+- **The two systems answer different questions.** `GameEvent` answers "what
+  happened that a player should see or hear." The logger answers "what
+  happened that a developer needs to reconstruct, in order, after the
+  fact." Forcing one shape to answer both questions is the same mistake the
+  rejected class hierarchy for characters would have been: two genuinely
+  different concerns sharing one type because they both involve "something
+  happened."
+- **Reuse still happens, at the one seam that's actually the same shape.**
+  Every `GameEvent` already carries what a render handler needs; folding it
+  into the log via `attachToEvents` costs one subscription, not a rewrite of
+  every `emit()` call site. That is the reuse this file's other entries ask
+  for, applied where the shapes genuinely match rather than forced where
+  they don't.
+- **Performance was a stated constraint, not an afterthought.** A game loop
+  runs at 60Hz; a logging call inside `updatePlayer` or `updateCrows` that
+  always allocated would be a real, measurable cost. The level gate is
+  checked first and returns before any object is built, so the "off"
+  state — the default during real play — is a single comparison per call,
+  the same reasoning `spriteCanvas`'s cache-by-key has for why the blit
+  loop the previous section replaced was worth replacing.
+
+### Example: instrumenting a call site
+
+`transitionTo()` in `game.js` was the first real one, chosen because it's
+exactly the shape of evidence a "the game did something I didn't expect"
+report needs:
+
+```js
+// src/legacy/game.js
+function transitionTo(next) {
+  if (next === 'controls') controlsFrom = appState;
+  const prev = appState;
+  appState = next;
+  if (prev !== next) log.info('transitionTo', `${prev} -> ${next}`, { prev, next, gameMode, mapKind });
+  ...
+```
+
+A future call site follows the same shape: `log.debug(sourceFnName,
+message, data)` for anything routine, `log.warn`/`log.error` for anything
+that shouldn't happen, `code` on the `error()` call when the failure is
+common enough to deserve a stable, greppable tag rather than only a
+sentence.
+
+### Notes
+
+> **Note.** `devHooks.logs()` returns a snapshot (`Logger.events()` copies
+> the ring buffer, so it is safe to hold onto after the call).
+> `devHooks.setLogLevel(level)` and `devHooks.clearLogs()` round out the
+> harness surface. `?log=debug` (or `info`/`warn`/`error`) on the URL sets
+> the level at boot for a human testing session without touching devtools
+> at all. Capacity defaults to 500 events; oldest drops first once a
+> session runs long, so memory stays bounded without anyone having to
+> remember to call `clear()`.
