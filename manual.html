@@ -282,6 +282,7 @@
     <p>The classic. Fastest shots, weakest hit; about five to kill an equal fight.</p>
     <ul>
       <li><strong>Bow</strong> — quiver of 10, up to <em>3 arrows in flight</em> at once.</li>
+      <li><strong>Power shot</strong> — hold <span class="key">SHIFT</span> to draw, up to 1s, rooted while you do. Release and the arrow <em>pierces up to 3 bodies</em>, flies at double speed and hits a boss for 3x. A tap gets the weakest version of all three. 5s cooldown, and it keeps whatever ammo was queued.</li>
       <li><strong>Dynamite</strong> — hold to charge, release to throw. Clears tiles and hurts bosses.</li>
       <li><strong>Pickups</strong> — fire arrows (leave burning patches), ricochet arrows (bounce off walls, faster each bounce).</li>
     </ul>
@@ -290,6 +291,9 @@
     <p>Teleguided damage and area control, with nothing to hide behind up close.</p>
     <ul>
       <li><strong>Magic bolts</strong> — 2s cooldown, they <em>steer toward the nearest enemy</em> on their own.</li>
+      <li><strong>Blink</strong> — tap <span class="key">SHIFT</span> to step 160px down your aim, <em>taking no damage</em> for a moment on arrival. 6s cooldown. It stops at walls rather than passing through them, and a blink with nowhere to go costs you nothing.</li>
+      <li><strong>Blink chain</strong> — tap again <em>within 1.1s</em> and the second hop is free. Two is the cap; let the window lapse and you wait out the full cooldown.</li>
+      <li><strong>Arrival pulse</strong> — every hop lets off a 56px pulse where it lands, killing what is in it and taking 1 off a boss. The ring you see is drawn at the radius the damage actually used.</li>
       <li><strong>Lightning Storm</strong> — instant AoE around you; levels rock, trees and huts.</li>
       <li><strong>Pickups</strong> — fire bolt (3 dmg, homing), laser (3 dmg, <em>passes through walls</em>).</li>
     </ul>
@@ -299,6 +303,7 @@
     <ul>
       <li><strong>Long spear</strong> — melee reach, and the thrust <em>lands twice per swing</em>.</li>
       <li><strong>Charge</strong> — hold <span class="key">SHIFT</span> to wind up, rooted and <em>taking no damage</em>, then sweep forward through a wide arc. Anything caught in it dies outright.</li>
+      <li><strong>Charge chain</strong> — tap <span class="key">SHIFT</span> again <em>within 1.1s</em> of releasing, with room still ahead, and he commits: the dash speeds up for the rest of its run and he lands one 60px whirlwind swing where he stands. Once per dash, and it cannot steer — the direction was fixed when you let go.</li>
       <li><strong>Block</strong> — passive, no key. Banks one absorbed hit every 10 seconds, by itself.</li>
       <li><strong>Whirlwind</strong> — a spinning AoE that chews through terrain.</li>
       <li><strong>Pickups</strong> — Iron Javelin (thrown, pierces), Fire Sword (2&times; damage and reach, 8s).</li>
@@ -308,8 +313,18 @@
     <p>Skirmisher. Three chances to land a hit instead of one.</p>
     <ul>
       <li><strong>Crossbow</strong> — one press fires <em>3 independent bolts</em> in a narrow spread, each 30% weaker than an arrow.</li>
+      <li><strong>Net</strong> — hold <span class="key">SHIFT</span> to draw, then throw. A longer draw means a longer throw, a wider net and a longer hold, <em>0.8s up to 2s</em>. 10s cooldown, and you can keep moving while you draw it.</li>
+      <li><strong>The net does not kill</strong> — 0.9 damage against a creep's 1 hit point, on purpose. It catches <em>everything under it</em>, pins it completely, and leaves it on a sliver. Bosses are held too, briefly, the Minotaur included.</li>
       <li><strong>Satchel</strong> — first click throws it inert; second click arms a 3s fuse. Your own bolt sets it off early, armed or not.</li>
       <li><strong>Pickups</strong> — fire and ricochet bolts, same effects the archer gets.</li>
+    </ul>
+
+    <h3><span class="red">SAPPER</span> &mdash; <span class="ylw">HARD</span></h3>
+    <p>Demolition. The only opening move in the game thrown at a <em>place</em> rather than at a person.</p>
+    <ul>
+      <li><strong>Powder charge</strong> — one press lobs it, every 1.1s. It bounces off cover, runs a 1.5s fuse, and goes off where it stops: <em>everything in the blast takes it</em>, and rock, trees and huts come down.</li>
+      <li><strong>No ammo</strong> — charges are made on the spot. The cooldown is the only limit, so there is no quiver, no refill to chase, and no pitchfork to fall back on.</li>
+      <li><strong>No second weapon</strong> — on purpose. The primary is already the explosive.</li>
     </ul>
   </section>
 
@@ -325,7 +340,7 @@
     face your aim, because the weapon behind them does.</p>
 
     <div class="ret">
-      <div class="cap"><span>FIG 2 — THE FOUR RETICLES, LIVE</span><span>SHOWN AT 2&times; SIZE</span></div>
+      <div class="cap"><span>FIG 2 — THE FIVE RETICLES, LIVE</span><span>SHOWN AT 2&times; SIZE</span></div>
       <canvas id="ret-canvas" aria-label="Interactive demo: each character's aim reticle following the pointer"></canvas>
       <div class="bar">
         <span class="hint">MOVE YOUR POINTER IN THE BOX &#9656;</span>
@@ -333,6 +348,7 @@
         <button class="key" type="button" data-char="wizard">W WIZARD</button>
         <button class="key" type="button" data-char="knight">K KNIGHT</button>
         <button class="key" type="button" data-char="ranger">X RANGER</button>
+        <button class="key" type="button" data-char="sapper">S SAPPER</button>
       </div>
     </div>
 
@@ -341,6 +357,7 @@
       <li><span class="cyn">WIZARD</span> — a wand, <em>turned onto your aim</em>, its tip sparking on a pulse.</li>
       <li><span class="wht">KNIGHT</span> — a spearhead, <em>turned onto your aim</em>, pointing where the thrust lands.</li>
       <li><span class="ylw">RANGER</span> — a plain crosshair, the honest read for bolts that fly straight.</li>
+      <li><span class="red">SAPPER</span> — a dashed ring at the <em>blast radius</em>, the only reticle that marks an area instead of a point.</li>
     </ul>
 
     <table>
@@ -350,8 +367,8 @@
         <tr><td>&#8592; &#8593; &#8595; &#8594;</td><td class="act">Move</td></tr>
         <tr><td>MOUSE</td><td class="act">Aim. Your reticle changes with the character you picked</td></tr>
         <tr><td>SPACE / LEFT-CLICK</td><td class="act">Shoot or cast</td></tr>
-        <tr><td>RIGHT-CLICK</td><td class="act">Second weapon — <span class="cyn">hold</span> to charge (Archer), <span class="cyn">tap</span> (Wizard, Knight), <span class="cyn">tap twice</span> to throw then arm (Ranger)</td></tr>
-        <tr><td>SHIFT</td><td class="act">Sniper mode — slows you down, tightens the shot. <span class="cyn">The knight has no shot to tighten, so he winds up a charging sweep instead</span></td></tr>
+        <tr><td>RIGHT-CLICK</td><td class="act">Second weapon — <span class="cyn">hold</span> to charge (Archer), <span class="cyn">tap</span> (Wizard, Knight), <span class="cyn">tap twice</span> to throw then arm (Ranger). The Sapper has none: the primary is already the explosive</td></tr>
+        <tr><td>SHIFT</td><td class="act">Sniper mode, for the sapper — slows you down, lengthens the aim line. <span class="cyn">Everyone else spends the key on their own: the archer draws a power shot, the knight winds up a charging sweep, the wizard blinks, the ranger throws a net. The knight's and the wizard's chain on a second tap within 1.1s</span></td></tr>
         <tr><td>ESC</td><td class="act">Pause</td></tr>
         <tr><td>I</td><td class="act">Inventory, while paused — spend feathers</td></tr>
         <tr><td>R</td><td class="act">Restart, from the game-over screen</td></tr>
@@ -405,8 +422,9 @@
     <h3>FEATHERS</h3>
     <p>Kills pay out in feathers <span class="cyn">&#9670;</span>, which survive the run in
     <em>localStorage</em>. Spend them from the inventory (<span class="key">ESC</span> then
-    <span class="key">I</span>) on more arrows, more health, more range, more speed. They are the
-    only thing that carries forward.</p>
+    <span class="key">I</span>) on more arrows, more health, more range, more speed, a deeper tool
+    pouch, a bigger refill off every pickup, a bounty that pays more feathers per kill, and a
+    ward that starts every run shielded. They are the only thing that carries forward.</p>
   </section>
 
   <!-- ============ BOSSES ============ -->
@@ -482,7 +500,7 @@
         <tr><td>M</td><td class="act">Open multiplayer from the main menu</td></tr>
         <tr><td>H</td><td class="act">Host — shows a <strong>four-letter code</strong> to read out</td></tr>
         <tr><td>J</td><td class="act">Join — type the code, press <span class="key">ENTER</span></td></tr>
-        <tr><td>A / W / K / X</td><td class="act">Pick archer, wizard, knight or ranger</td></tr>
+        <tr><td>A / W / K / X / S</td><td class="act">Pick archer, wizard, knight, ranger or sapper</td></tr>
         <tr><td>D / C</td><td class="act">Host only: deathmatch or co-op</td></tr>
         <tr><td>G / V</td><td class="act">Host only: forest or castle map</td></tr>
         <tr><td>F / T</td><td class="act">Host only: play to a frag target (10&ndash;30) or a time limit (5&ndash;10 min). Pick one, not both</td></tr>
@@ -547,7 +565,7 @@
   var ctx = canvas.getContext("2d");
   var buttons = document.querySelectorAll("[data-char]");
 
-  var CHAR_COLOR = { archer: "#39FF14", wizard: "#8888FF", knight: "#C8C8E8", ranger: "#FFCC00" };
+  var CHAR_COLOR = { archer: "#39FF14", wizard: "#8888FF", knight: "#C8C8E8", ranger: "#FFCC00", sapper: "#FF7A1A" };
   var selected = "archer";
   var w = 0, h = 0;            // CSS pixels
   var px = 0, py = 0;          // the "you" marker
@@ -583,6 +601,27 @@
     ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
     ctx.fillStyle = "#FFCC00";
     ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  /* The blast ring is drawn smaller than the game's 90px radius: at 2x the
+     real thing would fill the whole demo box. Everything else about it is the
+     game's own reticle. */
+  function sapper(t) {
+    var pulse = 0.7 + 0.3 * Math.sin(t * 4);
+    ctx.globalAlpha = 0.18 + 0.3 * pulse;
+    ctx.strokeStyle = "#FF7A1A"; ctx.lineWidth = 1.2;
+    ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.25 + 0.55 * pulse;
+    ctx.shadowColor = "#FF7A1A"; ctx.shadowBlur = 5 + 3 * pulse;
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) {
+      ctx.beginPath(); ctx.moveTo(d[0] * 5, d[1] * 5); ctx.lineTo(d[0] * 10, d[1] * 10); ctx.stroke();
+    });
+    ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "#FF7A1A";
+    ctx.beginPath(); ctx.arc(0, 0, 1.6, 0, Math.PI * 2); ctx.fill();
     ctx.globalAlpha = 1;
   }
 
@@ -637,7 +676,7 @@
     ctx.globalAlpha = 1;
   }
 
-  var PAINTERS = { archer: archer, wizard: wizard, knight: knight, ranger: ranger };
+  var PAINTERS = { archer: archer, wizard: wizard, knight: knight, ranger: ranger, sapper: sapper };
 
   /* The arena floor. One path for every line rather than one path per line:
      same pixels, ~65 draw calls saved on each frame. */
