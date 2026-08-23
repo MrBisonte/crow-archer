@@ -25,7 +25,9 @@ Tech stack, dependencies and the framework decisions behind them. See the [READM
 Reference for every kind-tagged content system: what the tag is, which
 tables key off it, and what actually happens when a new value is added.
 Rationale and worked examples for *why* this shape was chosen live in
-[Design patterns](design-patterns.md#composition-over-inheritance-character-definition);
+[Design patterns](design-patterns.md#composition-over-inheritance-character-definition),
+and the case for one number per character rather than a column per boss in
+[One dial per character](design-patterns.md#one-dial-per-character-not-a-column-per-boss);
 this section is the flat data reference across every kind, not just
 character.
 
@@ -37,8 +39,8 @@ character.
 | Map | `MapKind` | `forest \| castle \| maze \| cavern` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
 | Skeleton (single-player) | plain string | `normal \| fire \| ice` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
-| Boss | plain string, **not tabled** | `crowking \| dark_archer \| dark_knight` | none (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
-| Weapon | implicit, via `PRIMARY` | `Bow \| Staff \| Spear \| Crossbow` | each implements the `Weapon` interface | sim, net |
+| Boss | plain string, **HP tabled, behavior branched** | `crowking \| dark_archer \| dark_knight \| minotaur \| commander` | `BOSS_HP_KEY` (HP), `BOSS_ON_HIT`, `BOSS_HUNTS_WHILE_EXPLORING` (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
+| Weapon | implicit, via `PRIMARY` | `Bow \| Staff \| Spear \| Crossbow \| PowderCharge` | each implements the `Weapon` interface | sim, net |
 
 Two systems only exist in `src/legacy/game.js` (skeletons, bosses): the
 castle stage's monster content is single-player-only today, with no
@@ -137,7 +139,7 @@ sequenceDiagram
     Match->>Match: StaticTileLayer(TILE_THEMES[mapKind])
 ```
 
-Single-player's `gameMode` (`'brawl' | 'waves'`, `src/legacy/game.js:337`)
+Single-player's `gameMode` (`'brawl' | 'waves'`, `src/legacy/game.js:635`)
 is a different, older concept from multiplayer's `GameMode`
 (`'coop' | 'deathmatch'`, `src/net/protocol.ts:72`). Same name, unrelated
 values, picked at the main menu, not per-match. Worth not confusing the two
@@ -145,18 +147,47 @@ when this gets built.
 
 ### Boss: the deliberate exception
 
-`boss.kind` (`'crowking' | 'dark_archer' | 'dark_knight'`,
-`src/legacy/game.js`) is plain string branching, not a `Record<Kind, X>`
-table. That's the same call `GameMode` makes over `CharacterKind`, and the
-right one here too: exactly three bosses, ever, each with genuinely
-divergent behavior (shield-window mechanic vs. none, orbit vs. charge
-tuning, different secondary attacks) rather than a shared data shape a
-table could hold. A table earns its keep when new rows are mostly data;
-bosses here are mostly algorithm.
+`boss.kind` (`'crowking' | 'dark_archer' | 'dark_knight' | 'minotaur' |
+'commander'`, `src/legacy/game.js`) is a plain string with five values, and
+what keys off it is split by field, not by kind.
+
+| Field | Where it lives | What a row is |
+|---|---|---|
+| HP | `BOSS_HP_KEY` | one CONFIG key per boss, the same pool whoever is fighting it |
+| What a landed hit does | `BOSS_ON_HIT` | one function per kind |
+| Alive outside a boss fight | `BOSS_HUNTS_WHILE_EXPLORING` | one flag per kind |
+| Shield window, orbit vs. charge tuning, secondary attacks | branched, no table | no row: genuinely divergent algorithm, not a shared data shape a table could hold |
+
+A table earns its keep when new rows are mostly data, and a boss is mostly
+algorithm, which is the same call `GameMode` makes over `CharacterKind`. The
+two behavior tables are not a counter-example: a row holds a function or a
+flag that selects one, so they are that branch written out per kind, which
+makes a fifth boss answer the question rather than inherit whichever answer
+an `if` happened to give it.
+
+HP is the one field that failed the test the other way. It used to be twelve
+hand-tuned numbers, four bosses times three named characters, read by a
+ternary on `selectedChar`; it is one pool per boss now, scaled by one
+`bossDamageMult` per character, so the two axes add instead of multiplying.
+Same test, applied per field rather than per kind. See
+[One dial per character](design-patterns.md#one-dial-per-character-not-a-column-per-boss)
+for the decision and [Balance](balance.md#boss-health) for the numbers.
+
+The minotaur is why the split is worth naming. He has no HP row at all,
+`bossHpFor` returns `Infinity` for him, and a hit buys a stun rather than
+damage: he sits in both behavior tables and outside the data one.
 
 ### Data structures (verified against current code)
 
 ```ts
+// src/net/protocol.ts
+type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper'
+
+// src/sim/arena.ts
+interface CharacterStats { speed: number; maxHp: number; bossDamageMult: number }
+const CHARACTER_STATS: Record<CharacterKind, CharacterStats>
+// rows are no longer identical; the figures are in docs/balance.md
+
 // src/sim/arena-map.ts
 type MapKind = 'forest' | 'castle' | 'maze' | 'cavern'
 const MAP_GEN: Record<MapKind, MapGenerator>
@@ -193,7 +224,11 @@ class Regrowth  // ash -> sapling -> tree, on destructibleTerrain maps only
 // src/legacy/game.js: single-player only, not compiler-checked
 let gameMode: 'brawl' | 'waves'
 const SKELETON_PALETTES: Record<'normal' | 'fire' | 'ice', Palette>
-// boss.kind: 'crowking' | 'dark_archer' | 'dark_knight' (branched, not tabled)
+// boss.kind is a plain string; BossKind is this block's name for its five values
+type BossKind = 'crowking' | 'dark_archer' | 'dark_knight' | 'minotaur' | 'commander'
+const BOSS_HP_KEY: Record<Exclude<BossKind, 'minotaur'>, string>  // kind -> CONFIG key
+const BOSS_ON_HIT: Record<BossKind, (amount: number) => void>
+const BOSS_HUNTS_WHILE_EXPLORING: Record<BossKind, boolean>
 ```
 
 `CharacterKind` and its five tables are the most complete instance of this
@@ -220,7 +255,11 @@ alternative, in
   `Record`; pickups have a third kind, `'ricochet'`, that the multiplayer
   `PickupKind` doesn't). Where the two diverge it's deliberate: PvE and
   PvP numbers are tuned separately. It means "add a kind" is two separate
-  edits today, not one.
+  edits today, not one. `CHARACTER_STATS` now carries that seam inside one
+  table: `BattleWorld` reads `speed` and `maxHp` out of it, so the roster's
+  bodies really are shared, while `bossDamageMult` in the same row is read
+  only by `src/legacy/game.js`, because multiplayer has no bosses. The field
+  name carries its own scope. See [Balance](balance.md#multiplayer).
 
 ## Netcode
 
@@ -244,5 +283,6 @@ Sound comes from a small synth in `src/legacy/game.js` that reads [ZzFX](https:/
 ## See also
 
 - [Design patterns](design-patterns.md): composition over inheritance for character definitions
+- [Balance](balance.md): what every character and every boss is worth, and the one rule relating them
 - [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it
 - [Design system](../.design-system/README.md): draw specs in pixels and hex, live preview cards, a playable UI kit demo

@@ -70,7 +70,7 @@ describe('a new run', () => {
 
   it('spawns the pace preset\'s opening crows at full health', () => {
     expect(g.crows().length).toBe(g.config().crowStartCount);
-    expect(g.hp()).toBe(g.config().playerMaxHP);
+    expect(g.hp()).toBe(CHARACTER_STATS[g.selectedChar() as CharacterKind].maxHp);
     expect(g.killCount()).toBe(0);
   });
 
@@ -1623,6 +1623,8 @@ describe('walk cycles keep their limbs apart', () => {
 interface CharPanel {
   char: string;
   hook: string;
+  /** The authored DAMAGE bar, checked against bossDamageMult's ordering. */
+  damage: number;
   skills: { main: string; secondary: string; shift: string };
   statBars: ReadonlyArray<{ label: string; pips: number }>;
   preview: (frame: 'a' | 'mid' | 'b') => { grid: PixelGrid; sprite: { w: number; h: number }; key: string };
@@ -2308,5 +2310,142 @@ describe('the ranger net', () => {
       expect(g.rangerNet().drawing, character).toBe(false);
       expect(g.nets().length, character).toBe(0);
     }
+  });
+});
+
+describe('the balance model', () => {
+  /**
+   * Opens a boss fight as `character`, and hands back the boss.
+   *
+   * Stage 2 is the dark archer, who is the one shieldless boss in the game, so
+   * a hit staged here lands rather than being swallowed by the crow king's
+   * mandatory opening shield.
+   */
+  function bossFightAs(character: CharacterKind, stage = 2): { hp: number; x: number; y: number } {
+    g.pick(character);
+    g.go('playing');
+    g.spawnBossNow(stage);
+    g.go('boss_fight');
+    return g.boss() as { hp: number; x: number; y: number };
+  }
+
+  /** What one dynamite blast at the epicentre actually takes off the boss. */
+  function blastDealtAs(character: CharacterKind): number {
+    const boss = bossFightAs(character);
+    const before = boss.hp;
+    g.blast(boss.x, boss.y);
+    return before - (g.boss() as { hp: number }).hp;
+  }
+
+  it('opens every boss on one health pool, whoever walks into the fight', () => {
+    // The whole of what the twelve-cell matrix used to do. Stage 4 is the
+    // minotaur, who has no health at all, so he is not a pool to compare.
+    for (const stage of [1, 2, 3, 5]) {
+      const pools = CHARACTERS.map((character) => bossFightAs(character, stage).hp);
+      expect(new Set(pools), `stage ${stage}`).toEqual(new Set([pools[0]]));
+    }
+  });
+
+  it('takes the character\'s multiplier off the boss, not the weapon\'s raw figure', () => {
+    // One explosive, at its own epicentre so no falloff is in play, fired by
+    // each hero in turn. The only thing that differs between the runs is who
+    // is holding it.
+    const raw = g.config().dynamiteBossDamage;
+    for (const character of CHARACTERS) {
+      expect(blastDealtAs(character), character)
+        .toBeCloseTo(raw * CHARACTER_STATS[character].bossDamageMult, 6);
+    }
+  });
+
+  it('scales the burn from the hit that lit it, and does not count it twice', () => {
+    // igniteBoss derives burnDps from the raw damage of the igniting hit, and
+    // that raw figure passes through applyBossDamage once per tick like any
+    // other. Multiplying at the weapon instead would have squared it here.
+    const boss = bossFightAs('wizard');
+    const c = g.config();
+    const before = boss.hp;
+    g.igniteBoss(c.arrowBossDamage);
+    g.stepSim(Math.ceil(c.bossBurnDuration * ONE_SECOND) + 2);
+    const burnt = before - (g.boss() as { hp: number }).hp;
+    const expected = c.arrowBossDamage * c.bossBurnDamage * CHARACTER_STATS.wizard.bossDamageMult;
+    expect(burnt).toBeCloseTo(expected, 4);
+  });
+
+  it('never reaches a crow, so even the softest hitter kills one outright', () => {
+    // The reason the field is bossDamageMult and not damageMult. A fresh crow
+    // has exactly 1 hit point; the ranger's 0.8 applied here would leave it
+    // alive on a sliver, and his crossbow would stop killing birds.
+    const softest = [...CHARACTERS]
+      .sort((a, b) => CHARACTER_STATS[a].bossDamageMult - CHARACTER_STATS[b].bossDamageMult)[0]!;
+    expect(CHARACTER_STATS[softest].bossDamageMult).toBeLessThan(1);
+
+    g.pick(softest);
+    g.go('playing');
+    clearArena();
+    const crows = g.crows();
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0] as { x: number; y: number };
+    g.blast(crow.x, crow.y);
+    expect(g.crows().length, softest).toBe(0);
+  });
+
+  it('opens a run on the selected character\'s own health', () => {
+    for (const character of CHARACTERS) {
+      g.pick(character);
+      g.go('playing');
+      expect(g.hp(), character).toBe(CHARACTER_STATS[character].maxHp);
+    }
+  });
+
+  it('walks each character at its own speed', () => {
+    const travelled = (character: CharacterKind): number => {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      const c = g.config();
+      const p = g.player() as { x: number; y: number };
+      p.x = 5 * c.tileSize;
+      p.y = 6 * c.tileSize;
+      const from = p.x;
+      const keys = g.keys() as Record<string, boolean>;
+      keys['ArrowRight'] = true;
+      g.stepSim(30);
+      keys['ArrowRight'] = false;
+      return p.x - from;
+    };
+
+    const walked = Object.fromEntries(
+      CHARACTERS.map((character) => [character, travelled(character)]),
+    ) as Record<CharacterKind, number>;
+
+    expect(walked.ranger).toBeGreaterThan(walked.archer);
+    expect(walked.archer).toBeGreaterThan(walked.wizard);
+    expect(walked.wizard).toBeGreaterThan(walked.knight);
+    expect(walked.sapper).toBeCloseTo(walked.archer, 5);
+  });
+
+  it('never advertises a DAMAGE bar that contradicts the multipliers', () => {
+    // The same invariant assertPanelDamageOrder refuses to load without. It is
+    // asserted here as well because a load-time throw says the roster is
+    // wrong; this says which pair of heroes disagree.
+    const ranked = [...charPanels()].sort((a, b) =>
+      CHARACTER_STATS[b.char as CharacterKind].bossDamageMult
+      - CHARACTER_STATS[a.char as CharacterKind].bossDamageMult);
+    for (let i = 1; i < ranked.length; i++) {
+      const softer = ranked[i]!, harder = ranked[i - 1]!;
+      expect(softer.damage, `${softer.char} must not out-rate ${harder.char}`)
+        .toBeLessThanOrEqual(harder.damage);
+    }
+  });
+
+  it('leaves the wizard able to finish the Crow King, which is why this exists', () => {
+    // The fight the pass was for: fourteen bolts at one per two seconds, about
+    // half a minute of uninterrupted hits, against an archer's five arrows.
+    const c = g.config();
+    const perBolt = c.wizBoltDamage * CHARACTER_STATS.wizard.bossDamageMult;
+    const bolts = Math.ceil(c.bossHP / perBolt);
+    expect(bolts).toBeLessThanOrEqual(5);
+    expect(bolts * c.wizBoltCooldown).toBeLessThan(10);
   });
 });

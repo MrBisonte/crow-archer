@@ -76,15 +76,15 @@ Move, Shoot, Sniper mode and Pause are remappable from the Controls screen.
 
 ## Characters
 
-| | weapon | rhythm |
-|---|---|---|
-| **Archer** | bow | fastest shots, weakest hit: about five to kill |
-| **Wizard** | staff | slow, hard-hitting bolts that steer toward whoever is nearest |
-| **Knight** | spear | nothing at range; a thrust that lands twice per swing |
-| **Ranger** | crossbow | three smaller, weaker bolts per shot, each an independent hit; a net that pins a group |
-| **Sapper** | powder charge | slowest throw, thrown at a place: it bounces, fuses, and blasts an area |
+| | weapon | body | rhythm |
+|---|---|---|---|
+| **Archer** | bow | middling health, quick | fastest shots, weakest hit: about seven to kill the Crow King |
+| **Wizard** | staff | frailest, slow | hardest single hit, bolts that steer toward whoever is nearest |
+| **Knight** | spear | most health, slowest | nothing at range; a thrust that lands twice per swing |
+| **Ranger** | crossbow | frail, quickest | three smaller, weaker bolts per shot, each an independent hit; a net that pins a group |
+| **Sapper** | powder charge | middling health, quick | slowest throw, thrown at a place: it bounces, fuses, and blasts an area |
 
-See the [manual](docs/manual.md#characters) for the full kit of each: primary, special, and pickups.
+See the [manual](docs/manual.md#characters) for the full kit of each: primary, special, and pickups, and [balance](docs/balance.md#character-stats) for the exact numbers.
 
 ## Docs
 
@@ -92,6 +92,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 |---|---|
 | [Manual (retro page)](https://mrbisonte.github.io/crow-archer/manual.html) | The same manual, styled — start here if you just want to play |
 | [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
+| [Balance](docs/balance.md) | Character stats, boss health, and the one dial that relates them |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
 
 ## License

@@ -524,11 +524,13 @@ Three things went wrong with it, and only the third was ever noticed:
 |---|---|---|
 | `bossDamageMult` | `number`, a field on `CharacterStats` | The whole of how hard one character hits. One number per hero. |
 | `CHARACTER_STATS` | `Record<CharacterKind, CharacterStats>` | The row it lives in, beside `speed` and `maxHp`. |
-| `BOSS_HP` | `Record<string, number>` | One health pool per boss, the same for everybody. |
+| `BOSS_HP_KEY` | `Record<BossKind, string>` | Which CONFIG key holds a boss's health. One key per boss, where each row used to be a `[normal, wizard, knight]` tuple. |
 | `applyBossDamage` | `(amount) => void` | The one place boss health is lowered, and so the one place the multiplier is applied. |
 
 - `CharacterStats` and `CHARACTER_STATS` are defined at `src/sim/arena.ts`.
-- `BOSS_HP` and `applyBossDamage` are in `src/legacy/game.js`.
+- `BOSS_HP_KEY` and `applyBossDamage` are in `src/legacy/game.js`. The pools
+  themselves stay in `CONFIG` alongside every other tunable number, so the
+  table holds the name of one rather than the number itself.
 - The figures themselves, and the reasoning per row, are in
   [Balance](balance.md).
 
@@ -548,7 +550,7 @@ flowchart LR
     end
 
     subgraph AFTER["after: 4 numbers and 5, neither one indexed by the other"]
-        pools["BOSS_HP\ncrowking 10, dark_archer 12,\ndark_knight 16, commander 20"]
+        pools["BOSS_HP_KEY, into CONFIG\ncrowking 10, dark_archer 12,\ndark_knight 16, commander 20"]
         dials["CHARACTER_STATS[kind].bossDamageMult\nwizard 2.5, knight 1.5, archer 1.4,\nsapper 1.2, ranger 0.8"]
     end
 
