@@ -213,13 +213,20 @@ describe('soldier grids', () => {
     // character-grids.ts: there every builder owns its outline call, but the
     // token `outline` names three palette keys, a property access and the
     // knight's local const, so file-wide cannot tell one binding from three
-    // strangers that share its spelling without re-implementing scope. Per
-    // builder disambiguates it there; file-wide is the only shape that sees
-    // the deviation here. The test for which applies is whether every builder
-    // owns a call — builders equal to calls means per-builder is available,
-    // fewer calls than builders means a shared helper exists and the scope has
-    // to be the file. Porting this by analogy rather than by that check is the
-    // same mistake as picking a sample row by analogy.
+    // strangers that share its spelling without re-implementing scope.
+    //
+    // There is no one-line rule for choosing. "Builders equal to calls" was
+    // tried and is wrong: legacy/game.js has 7 builders and 5 calls, the same
+    // arithmetic as this file, and wants the opposite scope. Here the missing
+    // call means buildSoldierBody is a fragment composed into another
+    // builder's grid and outlined by its caller; there it means buildRatGrid
+    // and buildMinotaurGrid are standalone sprites that legitimately have no
+    // seam at all. Counting cannot tell those apart, and they want opposite
+    // answers.
+    //
+    // So: decide the scope by looking at what the unmatched functions are, not
+    // by counting them. Porting this by analogy with another file is the
+    // mistake this check has already been through more than once.
     const offenders = code
       .split('\n')
       .map((line, i) => ({ line: line.trim(), n: i + 1 }))
