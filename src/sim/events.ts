@@ -71,6 +71,7 @@ export type GameEvent =
   // The escape hatch fired: the player had nowhere to move and was lifted out.
   | { type: 'PLAYER_UNSTUCK'; x: number; y: number; toX: number; toY: number }
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
+  | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }
   // Player state

@@ -371,6 +371,24 @@ const CONFIG = {
   knightChargeBossDamage: 2, knightChargeRadius: 90,
   knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
   knightChargeTickRate: 0.2,
+  // Chained charge: a second press mid-dash, inside shiftChainSecs and with
+  // room left ahead, commits him harder in the direction he already picked.
+  // The dash goes from half speed to a little over walking pace, and he lands
+  // one whirlwind swing where he stands. Once per dash — the chain is a
+  // decision taken during the commitment, not a button to hold down.
+  knightChargeChainSpeedMult: 1.1,
+  knightChainWhirlRadius: 60, knightChainWhirlBossDamage: 1,
+  // How much room ahead counts as somewhere to go. A body width, so a knight
+  // already nose-first into a wall cannot chain into it.
+  knightChainMinRoom: 24,
+
+  // A second press this soon after the first extends an ability instead of
+  // starting one. Shared by the wizard's blink and the knight's charge so both
+  // hands learn one rhythm rather than two.
+  shiftChainSecs: 1.1,
+  // How long an area effect's ring stays on screen. Long enough to read the
+  // reach, short enough not to sit over the fight that follows.
+  shockRingSecs: 0.35,
 
   // Wizard. Blink is the answer to the one question the rest of the kit does
   // not: something is on me right now. Five tiles is far enough to break
@@ -381,6 +399,15 @@ const CONFIG = {
   // for two pixels of travel.
   wizBlinkDistance: 160, wizBlinkCooldown: 6, wizBlinkIFrames: 0.3,
   wizBlinkMinDistance: 32,
+  // A blink may be chained once, into a second hop, if the key comes down
+  // again inside shiftChainSecs and there is somewhere to go. Two is the cap
+  // on purpose: three would cross the arena on one cooldown, and the point of
+  // the ability is to break contact, not to travel.
+  wizBlinkMaxHops: 2,
+  // The pulse each arrival lets off. Small enough that it is an escape which
+  // punishes whoever was chasing, rather than a repositioning nuke: it clears
+  // the ring of crows that closed in, and takes one point off a boss.
+  wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
   wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
@@ -665,14 +692,14 @@ const CHAR_PANELS = [
     hook: 'Homing glass cannon', range: 4, damage: 4,
     skills: { main: 'Homing bolts that seek the nearest target',
               secondary: 'Lightning storm across a wide area',
-              shift: 'Arcane blink, a short safe teleport' } },
+              shift: 'Blink, tap again to chain a second hop' } },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     preview: () => ({ grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' }),
     hook: 'Armoured brawler', range: 1, damage: 4,
     skills: { main: 'Long spear at melee reach, hits twice',
               secondary: 'Whirlwind that breaks the tiles around you',
-              shift: 'Hold to charge, release a sweeping dash' } },
+              shift: 'Charge a dash, tap again to chain it' } },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
     // The one animated preview: its cloak sway is a real 3-frame cycle, so the
@@ -826,6 +853,12 @@ let sapperBarrageCD = 0, sapperShotCD = 0;
 // short mercy window on arrival, without which blinking out of a swarm still
 // takes the hit you blinked away from.
 let wizBlinkCD = 0, wizBlinkIFrame = 0;
+// Hops still available in the current chain, and the window they must be
+// taken in. The window is what makes a chain a rhythm rather than a stored
+// charge: let it lapse and the ability is back to its plain cooldown.
+let wizBlinkHops = 0, wizBlinkChainTimer = 0;
+// The same window for the knight, opened when a dash starts.
+let knightChainTimer = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 
@@ -1337,6 +1370,79 @@ function clampArenaY(y) {
 }
 
 /**
+ * How far the body can travel from a point along an angle before something
+ * solid stops it, and where it ends up.
+ *
+ * Walks in short steps and keeps the last point the body actually fits in, so
+ * no caller can be handed a destination inside a wall. The wizard's blink uses
+ * it to find where it lands; the knight's chained charge uses it only to ask
+ * whether there is anywhere left to go.
+ */
+function probeAhead(fromX, fromY, angle, maxDistance) {
+  const step = 4;
+  const dx = Math.cos(angle) * step, dy = Math.sin(angle) * step;
+  let x = fromX, y = fromY;
+  for (let travelled = 0; travelled < maxDistance; travelled += step) {
+    const nx = clampArenaX(x + dx), ny = clampArenaY(y + dy);
+    if (!playerFits(nx, ny)) break;
+    x = nx; y = ny;
+  }
+  return { x, y, moved: Math.hypot(x - fromX, y - fromY) };
+}
+
+/**
+ * Kills or wounds everything hostile inside a circle.
+ *
+ * These three loops were written out in the storm, the whirlwind and the
+ * blast, and the blink's pulse and the knight's chained swing would have made
+ * five. They live here once instead, parameterised by what actually differs:
+ * where the circle is, how wide it is, and what the boss takes from it.
+ *
+ * Terrain is deliberately not part of this. Each caller breaks tiles under its
+ * own rules — the blast's are not the storm's — and folding them together
+ * would mean a flag that decides which caller you are.
+ *
+ * `bossHit` is null for an effect the boss simply ignores.
+ */
+function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
+  const r2 = radius * radius;
+
+  // Flat 1x with no falloff configured, otherwise a linear taper from max at
+  // the epicentre to min at the very edge of the radius.
+  const falloffAt = (tx, ty) => {
+    if (!opts.falloff) return 1;
+    const frac = Math.min(1, Math.sqrt(dist2(cx, cy, tx, ty)) / radius);
+    return opts.falloff.max - frac * (opts.falloff.max - opts.falloff.min);
+  };
+  // Ice trades the blast's damage away for time: a flat single point to
+  // everything it reaches, and that long held still. It overrides falloff
+  // rather than scaling it, because "one damage" is the entire deal.
+  const ice = opts.element === 'ice';
+  const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : falloffAt(tx, ty));
+  const chill = (e) => { if (ice) freezeEnemy(e, CONFIG.iceBlastFreezeSecs); };
+
+  for (let j = crows.length - 1; j >= 0; j--) {
+    const c = crows[j];
+    if (dist2(cx, cy, c.x, c.y) < r2) { chill(c); damageCrow(j, hitFor(c.x, c.y)); }
+  }
+  for (let j = skeletons.length - 1; j >= 0; j--) {
+    const k = skeletons[j];
+    if (dist2(cx, cy, k.x, k.y) < r2) { chill(k); damageSkeleton(j, hitFor(k.x, k.y)); }
+  }
+  // The garrison arrived with the cavern on a different branch, after this
+  // helper was written. Every caller — storm, whirlwind, blink pulse, chain
+  // whirl, every explosive — was quietly skipping soldiers until this line.
+  for (let j = soldiers.length - 1; j >= 0; j--) {
+    const s = soldiers[j];
+    if (dist2(cx, cy, s.x, s.y) < r2) { chill(s); damageSoldier(j, hitFor(s.x, s.y)); }
+  }
+  // Bosses take an ice bomb's damage but not its freeze — see freezeEnemy.
+  if (bossHit && bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2)
+    damageBoss(ice ? CONFIG.iceBlastDamage : bossHit.amount * falloffAt(boss.x, boss.y),
+               cx, cy, bossHit.source, bossHit.flash);
+}
+
+/**
  * The wizard's Arcane Blink, bound to the key that means sniper mode for
  * everyone else.
  *
@@ -1349,30 +1455,74 @@ function clampArenaY(y) {
  */
 function tryWizardBlink() {
   if (selectedChar !== 'wizard' || !inGame()) return;
-  if (wizBlinkCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // A hop inside the window is paid for by the first blink and ignores the
+  // cooldown the first one started; anything else has to wait it out.
+  const chaining = wizBlinkHops > 0 && wizBlinkChainTimer > 0;
+  if (!chaining && wizBlinkCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
 
-  const step = 4;
-  const dx = Math.cos(player.aimAngle) * step, dy = Math.sin(player.aimAngle) * step;
-  let x = player.x, y = player.y;
-  for (let travelled = 0; travelled < CONFIG.wizBlinkDistance; travelled += step) {
-    const nx = clampArenaX(x + dx), ny = clampArenaY(y + dy);
-    if (!playerFits(nx, ny)) break;
-    x = nx; y = ny;
-  }
+  const hop = probeAhead(player.x, player.y, player.aimAngle, CONFIG.wizBlinkDistance);
 
   // Blinking face-first into a wall would otherwise cost the whole cooldown
   // for a couple of pixels, which reads as the button being broken rather
-  // than as the wall being solid.
-  if (Math.hypot(x - player.x, y - player.y) < CONFIG.wizBlinkMinDistance) {
+  // than as the wall being solid. A refused hop also costs no chain: the
+  // window keeps running and a hop into open ground is still available.
+  if (hop.moved < CONFIG.wizBlinkMinDistance) {
     events.emit({ type: 'ACTION_BLOCKED' });
     return;
   }
 
   const fromX = player.x, fromY = player.y;
-  player.x = x; player.y = y;
-  wizBlinkCD     = CONFIG.wizBlinkCooldown;
-  wizBlinkIFrame = CONFIG.wizBlinkIFrames;
-  events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: x, toY: y });
+  player.x = hop.x; player.y = hop.y;
+  wizBlinkHops       = chaining ? wizBlinkHops - 1 : CONFIG.wizBlinkMaxHops - 1;
+  wizBlinkChainTimer = CONFIG.shiftChainSecs;
+  wizBlinkCD         = CONFIG.wizBlinkCooldown;
+  wizBlinkIFrame     = CONFIG.wizBlinkIFrames;
+
+  // Arriving is itself the attack. Resolved here rather than on a timer, so
+  // what the ring shows a moment later is a report of what was already hit.
+  damageEnemiesInRadius(player.x, player.y, CONFIG.wizBlinkPulseRadius,
+    { amount: CONFIG.wizBlinkPulseBossDamage, source: 'storm', flash: 0.1 });
+  events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: player.x, toY: player.y });
+}
+
+/**
+ * The knight's chained charge: a second press while the dash is running.
+ *
+ * He cannot steer — the angle was committed at release and stays committed —
+ * so the chain buys speed in the direction already chosen and one whirlwind
+ * swing where he is standing when he asks for it. Once per dash.
+ *
+ * Returns whether the press was the knight's, so the key handler knows not to
+ * also read it as the start of a fresh windup.
+ */
+function tryKnightChainCharge() {
+  if (selectedChar !== 'knight' || !inGame()) return false;
+  if (knightDash.timer <= 0 || knightDash.chained || knightChainTimer <= 0) return false;
+
+  // Somewhere to go, along the line he is already committed to. A knight who
+  // has already run out of room gets the refusal flash rather than a free
+  // whirlwind out of a charge that is over in everything but the timer.
+  if (probeAhead(player.x, player.y, knightDash.angle, CONFIG.knightChainMinRoom * 2).moved
+      < CONFIG.knightChainMinRoom) {
+    events.emit({ type: 'ACTION_BLOCKED' });
+    return true;
+  }
+
+  knightDash.chained = true;
+  damageEnemiesInRadius(player.x, player.y, CONFIG.knightChainWhirlRadius,
+    { amount: CONFIG.knightChainWhirlBossDamage, source: 'whirlwind', flash: 0.1 });
+  events.emit({ type: 'KNIGHT_WHIRL_SWING', x: player.x, y: player.y,
+                radius: CONFIG.knightChainWhirlRadius });
+  return true;
+}
+
+/**
+ * What the sniper key does on the way down. One function so the headless tests
+ * drive the same path a real keyboard does, rather than a parallel one.
+ */
+function pressShift() {
+  if (!tryKnightChainCharge()) startKnightCharge();
+  tryWizardBlink();
 }
 
 /** Knight-only, bound to the key that means sniper mode for everyone else.
@@ -1391,6 +1541,8 @@ function releaseKnightCharge() {
   // queueing a dash that fires the moment play resumes.
   if (!inGame()) return;
   knightDash.bossHit = false;
+  knightDash.chained = false;
+  knightChainTimer   = CONFIG.shiftChainSecs;
   knightDash.timer   = CONFIG.knightChargeDashDuration;
   knightDash.frac    = held;
   knightDash.angle   = player.aimAngle;   // committed here, not re-read per frame
@@ -1514,7 +1666,7 @@ function installInput() {
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
-    if (!keys[e.key] && e.key === CONFIG.keys.snipe) { startKnightCharge(); tryWizardBlink(); trySapperShot(); }
+    if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
     keys[e.key] = true;
     if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
@@ -1547,6 +1699,9 @@ let player = {}, arrows = [], crows = [], pickups = [], particles = [], dynamite
 // neither shares their physics (mini-bombs explode on contact rather than a
 // fuse; the shift shot flies straight and never bounces).
 let barrageBombs = [], sapperShots = [];
+// Expanding rings that show how far an area effect actually reached. Purely
+// cosmetic: the damage is resolved before one is ever spawned.
+let shockRings = [];
 // The castle stage's critter. A parallel array to crows, not a variant of it —
 // see damageSkeleton/killSkeleton and updateSkeletons for why.
 let skeletons = [];
@@ -1923,6 +2078,18 @@ events.on(e => {
         speedMin: 40, speedMax: 110, decay: 2.4, shape: 'spark',
         shadowBlur: 8, shadowColor: '#8888FF'
       });
+      // The arrival pulse's reach, at the radius the damage already used.
+      spawnShockRing(e.toX, e.toY, CONFIG.wizBlinkPulseRadius, '#8888FF');
+      break;
+
+    case 'KNIGHT_WHIRL_SWING':
+      playSound(sndExplosion); triggerShake(3, 90);
+      spawnShockRing(e.x, e.y, e.radius, '#C8C8E8');
+      burst(e.x, e.y, {
+        count: 14, colors: ['#C8C8E8','#FFFFFF'],
+        speedMin: 60, speedMax: 130, decay: 2.8, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#C8C8E8'
+      });
       break;
 
     case 'WHIRLWIND_START':
@@ -2083,16 +2250,18 @@ function initGame() {
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   knightBlockCD = 0;
-  knightCharge.on = false; knightDash.timer = 0; knightDash.bossHit = false;
+  knightCharge.on = false; knightDash.timer = 0; knightDash.bossHit = false; knightDash.chained = false;
   knightChargeTick = 0; knightChargeCD = 0;
   shootPressed = false;
-  arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
+  arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = []; shockRings = [];
   // WARD FEATHER, if it has been bought, is the only thing that opens a run
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
+  wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
+  knightChainTimer = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -2293,7 +2462,11 @@ function updatePlayer(dt) {
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
       // resolution below so it stops on walls like any other movement.
-      const spd = FEATHERS.speed() * CONFIG.knightChargeDashSpeedMult * dt;
+      // Half speed normally; a chained charge commits him at a little over
+      // walking pace instead, which is the whole of what the chain buys.
+      const dashMult = knightDash.chained
+        ? CONFIG.knightChargeChainSpeedMult : CONFIG.knightChargeDashSpeedMult;
+      const spd = FEATHERS.speed() * dashMult * dt;
       vx = Math.cos(knightDash.angle) * spd;
       vy = Math.sin(knightDash.angle) * spd;
       player.walkPhase += 8 * dt;
@@ -2337,6 +2510,13 @@ function updatePlayer(dt) {
   if (sapperShotCD        > 0) sapperShotCD       = Math.max(0, sapperShotCD       - dt);
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
+  if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
+  // The hops die with the window rather than waiting for the next blink to
+  // notice, so a chain can never be resumed after a pause in the middle of it.
+  if (wizBlinkChainTimer  > 0) {
+    wizBlinkChainTimer = Math.max(0, wizBlinkChainTimer - dt);
+    if (wizBlinkChainTimer === 0) wizBlinkHops = 0;
+  }
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
   if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
@@ -2445,16 +2625,8 @@ function updatePlayer(dt) {
     if (knightWhirlwindTick <= 0) {
       knightWhirlwindTick = CONFIG.knightWhirlwindTickRate;
       const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
-      // Damage crows
-      for (let j = crows.length - 1; j >= 0; j--)
-        if (dist2(player.x, player.y, crows[j].x, crows[j].y) < wr2) damageCrow(j);
-      for (let j = skeletons.length - 1; j >= 0; j--)
-        if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < wr2) damageSkeleton(j);
-      // Damage boss
-      if (bossInPlay() && !boss.shield &&
-          dist2(player.x, player.y, boss.x, boss.y) < wr2) {
-        damageBoss(1, player.x, player.y, 'whirlwind', 0.1);
-      }
+      damageEnemiesInRadius(player.x, player.y, wr,
+        { amount: 1, source: 'whirlwind', flash: 0.1 });
       // Break tiles in radius
       const tileR = Math.ceil(wr / CONFIG.tileSize);
       const tc = Math.floor(player.x / CONFIG.tileSize);
@@ -2729,14 +2901,8 @@ function fireLightningStorm() {
   events.emit({ type: 'STORM_CAST', x: player.x, y: player.y });
   // Damage enemies
   const r2 = STORM_R ** 2;
-  for (let j = crows.length - 1; j >= 0; j--)
-    if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) damageCrow(j);
-  for (let j = skeletons.length - 1; j >= 0; j--)
-    if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) damageSkeleton(j);
-  if (bossInPlay() && !boss.shield &&
-      dist2(player.x, player.y, boss.x, boss.y) < r2) {
-    damageBoss(CONFIG.stormBossDamage, player.x, player.y, 'storm', CONFIG.stormFlashDuration);
-  }
+  damageEnemiesInRadius(player.x, player.y, STORM_R,
+    { amount: CONFIG.stormBossDamage, source: 'storm', flash: CONFIG.stormFlashDuration });
   // Destroy ROCK and TREE tiles within storm radius (protect border walls)
   const tileR = Math.ceil(STORM_R / CONFIG.tileSize);
   const tc = Math.floor(player.x / CONFIG.tileSize);
@@ -3565,42 +3731,12 @@ function explodeExplosive(d, source, opts = {}) {
     }
   }
 
-  // Flat 1x with no falloff configured, otherwise a linear taper from max at
-  // the epicentre to min at the very edge of the radius.
-  const falloffAt = (tx, ty) => {
-    if (!opts.falloff) return 1;
-    const frac = Math.min(1, Math.sqrt(dist2(d.x, d.y, tx, ty)) / radius);
-    return opts.falloff.max - frac * (opts.falloff.max - opts.falloff.min);
-  };
-
-  // Ice trades the blast's damage away for time: a flat single point to
-  // everything it reaches, and that long held still. It overrides falloff
-  // rather than scaling it, because "one damage" is the entire deal.
-  const ice = d.element === 'ice';
-  const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : falloffAt(tx, ty));
-  const chill = (e) => { if (ice) freezeEnemy(e, CONFIG.iceBlastFreezeSecs); };
-
-  for (let j = crows.length - 1; j >= 0; j--) {
-    const c = crows[j];
-    if (dist2(d.x, d.y, c.x, c.y) < r2) { chill(c); damageCrow(j, hitFor(c.x, c.y)); }
-  }
-  for (let j = skeletons.length - 1; j >= 0; j--) {
-    const s = skeletons[j];
-    if (dist2(d.x, d.y, s.x, s.y) < r2) { chill(s); damageSkeleton(j, hitFor(s.x, s.y)); }
-  }
-  for (let j = soldiers.length - 1; j >= 0; j--) {
-    const s = soldiers[j];
-    if (dist2(d.x, d.y, s.x, s.y) < r2) { chill(s); damageSoldier(j, hitFor(s.x, s.y)); }
-  }
-  if (bossInPlay() && !boss.shield &&
-      dist2(d.x, d.y, boss.x, boss.y) < r2) {
-    const base = source === 'satchel' ? CONFIG.satchelBossDamage
-                : source === 'barrage' ? CONFIG.sapperBarrageDamage
-                : CONFIG.dynamiteBossDamage;
-    // Bosses take an ice bomb's damage but not its freeze — see freezeEnemy.
-    damageBoss(ice ? CONFIG.iceBlastDamage : base * falloffAt(boss.x, boss.y),
-               d.x, d.y, source, 0.25);
-  }
+  const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage
+              : source === 'barrage' ? CONFIG.sapperBarrageDamage
+              : CONFIG.dynamiteBossDamage;
+  damageEnemiesInRadius(d.x, d.y, radius,
+    { amount: bossDamage, source, flash: 0.25 },
+    { falloff: opts.falloff, element: d.element });
 
   // Fire leaves the ground burning where it went off.
   if (d.element === 'fire' && !onWater) {
@@ -3815,6 +3951,41 @@ function aggroAllWhiteCrows() {
 // ── PICKUPS & PARTICLES ───────────────────────────────────────────────────────
 
 function updatePickups(dt) { for (const p of pickups) p.pulsePhase += dt * (2*Math.PI/0.6); }
+
+/**
+ * Marks where an area effect reached, as a ring that opens out to the real
+ * radius and fades.
+ *
+ * A blast that is only a puff of sparks leaves the player guessing how far it
+ * went, and guessing wrong is how an ability feels unreliable. The ring is
+ * drawn at the figure the damage actually used, so what is on screen is a
+ * report rather than a decoration.
+ */
+function spawnShockRing(wx, wy, radius, color) {
+  shockRings.push({ x: wx, y: wy, radius, color,
+                    timer: CONFIG.shockRingSecs, total: CONFIG.shockRingSecs });
+}
+
+function updateShockRings(dt) {
+  for (let i = shockRings.length - 1; i >= 0; i--) {
+    shockRings[i].timer -= dt;
+    if (shockRings[i].timer <= 0) shockRings.splice(i, 1);
+  }
+}
+
+function drawShockRings() {
+  for (const r of shockRings) {
+    const t = 1 - r.timer / r.total;            // 0 on cast, 1 as it dies
+    const rad = r.radius * (0.35 + 0.65 * t);   // opens out to the real reach
+    ctx.globalAlpha = (1 - t) * 0.9;
+    ctx.strokeStyle = r.color; ctx.lineWidth = 2;
+    ctx.shadowColor = r.color; ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y + CONFIG.hudHeight, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+}
 
 function updateParticles(dt) {
   if (particles.length > 120) particles.splice(0, particles.length - 120);
@@ -9365,7 +9536,7 @@ function render(t) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
-    drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawPickups(); drawFires(); drawParticles();
+    drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawPickups(); drawFires(); drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
@@ -9563,23 +9734,22 @@ function stepGame(dt) {
       // table lookup and not a kind check.
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
       updateHostileBolts(dt);
-      updateSoldiers(dt);
-      updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
-      updateMazeObjective(dt); regrowth.tick(dt);
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
+      updateMazeObjective(dt);
+      updateSoldiers(dt); regrowth.tick(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
     case 'boss_entrance':
-      updateBossEntrance(dt); updateParticles(dt); updateFloaters(dt);
+      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt);
       break;
 
     case 'boss_fight':
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
-      updateBarrageBombs(dt); updateSapperShots(dt);
-      updatePickups(dt); updateParticles(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
-      regrowth.tick(dt); updateSoldiers(dt);
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
+      updateSoldiers(dt); regrowth.tick(dt); updateBarrageBombs(dt); updateSapperShots(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -9793,6 +9963,7 @@ export const devHooks = {
     dashing: knightDash.timer > 0, dashTimer: knightDash.timer,
     dashFrac: knightDash.frac, bossDamage: knightDashBossDamage(),
     angle: knightDash.angle, cooldown: knightChargeCD,
+    chained: !!knightDash.chained, chainWindow: knightChainTimer,
   }),
   // Charge/release run off keydown/keyup edges rather than the held `keys`
   // map, so headless tests drive them directly the same way devHooks.blink
@@ -9821,7 +9992,13 @@ export const devHooks = {
   // The blink runs off a keydown edge rather than the held `keys` map, so a
   // headless test drives it the same way devHooks.shoot drives the primary.
   blink() { tryWizardBlink(); },
-  wizBlink: () => ({ cd: wizBlinkCD, iframe: wizBlinkIFrame }),
+  wizBlink: () => ({ cd: wizBlinkCD, iframe: wizBlinkIFrame,
+                     hops: wizBlinkHops, chainWindow: wizBlinkChainTimer }),
+  // The whole sniper-key path, so a test exercises the same routing the
+  // keyboard does rather than calling one ability directly.
+  shift() { pressShift(); },
+  releaseShift() { releaseKnightCharge(); },
+  rings: () => shockRings,
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },
   spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },

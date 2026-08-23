@@ -13,7 +13,7 @@ import { CHARACTER_STATS } from '../sim/arena';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
-import { TILE } from '../sim/tilemap';
+import { TILE, tilePassable } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
@@ -1068,21 +1068,59 @@ describe('the wizard blink', () => {
     expect(g.wizBlink().cd).toBe(0);
   });
 
-  it('will not blink again until the cooldown has run', () => {
+  it('chains a second hop straight away, and refuses a third', () => {
+    const c = g.config();
+    const p = wizardAt(4, 6);
+
+    g.blink();
+    const first = p.x;
+    expect(g.wizBlink().cd).toBeCloseTo(c.wizBlinkCooldown, 5);
+    expect(g.wizBlink().hops).toBe(c.wizBlinkMaxHops - 1);
+
+    // Inside the window the cooldown does not apply: this hop was paid for by
+    // the first blink.
+    g.blink();
+    const second = p.x;
+    expect(second - first).toBeCloseTo(c.wizBlinkDistance, 0);
+    expect(g.wizBlink().hops).toBe(0);
+
+    // Two is the cap, however fast the third press comes.
+    g.blink();
+    expect(p.x).toBe(second);
+  });
+
+  it('will not chain once the window has lapsed', () => {
     const c = g.config();
     const p = wizardAt(4, 6);
     g.blink();
     const landed = p.x;
-    expect(g.wizBlink().cd).toBeCloseTo(c.wizBlinkCooldown, 5);
+    expect(g.wizBlink().chainWindow).toBeCloseTo(c.shiftChainSecs, 5);
+
+    // Let the window run out, but stop well short of the cooldown.
+    g.stepSim(Math.ceil(c.shiftChainSecs * ONE_SECOND) + 1);
+    expect(g.wizBlink().chainWindow).toBe(0);
+    expect(g.wizBlink().hops).toBe(0);
+    expect(g.wizBlink().cd).toBeGreaterThan(0);
 
     g.blink();
     expect(p.x).toBe(landed);
+  });
+
+  it('will not blink again until the cooldown has run, once the chain is spent', () => {
+    const c = g.config();
+    const p = wizardAt(4, 6);
+    g.blink();
+    g.blink();
+    const landed = p.x;
 
     // One tick past the nominal cooldown: every cooldown in the game counts
     // down by max(0, cd - dt), so an exact multiple of the step leaves a
     // float's worth of dust behind and the next tick clears it.
     g.stepSim(Math.ceil(c.wizBlinkCooldown * ONE_SECOND) + 1);
     expect(g.wizBlink().cd).toBe(0);
+    // player.aimAngle is re-read from the pointer every step, so the wait
+    // above has turned him; point him east again before asking him to move.
+    p.aimAngle = 0;
     g.blink();
     expect(p.x).toBeGreaterThan(landed);
   });
@@ -1634,6 +1672,207 @@ describe('character-select panel data', () => {
           .toEqual({ w: shown.sprite.w, h: shown.sprite.h });
         expect(invalidColours(shown.grid), `${p.char}|${frame}`).toEqual([]);
       }
+    }
+  });
+});
+
+describe('the wizard blink arrival pulse', () => {
+  /** Drops a single crow at a point, with every other crow cleared away. */
+  function loneCrowAt(x: number, y: number): void {
+    const crows = g.crows();
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0] as { x: number; y: number; state: string };
+    crow.x = x;
+    crow.y = y;
+    crow.state = 'passive';
+  }
+
+  it('kills what is standing where it lands', () => {
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    loneCrowAt(p.x + c.wizBlinkDistance, p.y);
+    expect(g.crows().length).toBe(1);
+
+    g.blink();
+    expect(g.crows().length).toBe(0);
+  });
+
+  it('leaves what is out of reach alone', () => {
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    // Beyond the pulse, measured from where the blink actually lands.
+    loneCrowAt(p.x + c.wizBlinkDistance, p.y - c.wizBlinkPulseRadius * 2);
+
+    g.blink();
+    expect(g.crows().length).toBe(1);
+  });
+
+  it('does not go off on a blink that was refused', () => {
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    p.x = c.tileSize + c.playerRadius;
+    p.aimAngle = Math.PI;              // hard against the border, facing into it
+    loneCrowAt(p.x, p.y);              // standing on the wizard
+
+    g.blink();
+    expect(g.wizBlink().cd).toBe(0);   // refused
+    expect(g.crows().length).toBe(1);  // and nothing was hit
+  });
+
+  it('shows a ring at the radius the damage used', () => {
+    const c = g.config();
+    wizardAt(6, 6);
+    g.blink();
+    const rings = g.rings() as Array<{ radius: number }>;
+    expect(rings.length).toBe(1);
+    expect(rings[0]!.radius).toBe(c.wizBlinkPulseRadius);
+  });
+});
+
+describe('blinking never strands the wizard', () => {
+  /** Every corner of the body on a passable tile, which is the property the
+   * blink promises and the one a stuck character has lost. */
+  function bodyOnOpenGround(p: { x: number; y: number }): boolean {
+    const c = g.config();
+    const r = c.playerRadius;
+    const corner = (x: number, y: number): boolean =>
+      tilePassable(g.tiles().get(Math.floor(y / c.tileSize), Math.floor(x / c.tileSize)));
+    return corner(p.x - r, p.y - r) && corner(p.x + r, p.y - r)
+        && corner(p.x - r, p.y + r) && corner(p.x + r, p.y + r);
+  }
+
+  it('always lands on ground the body fits on, on every bearing and both hops', () => {
+    const BEARINGS = 12;
+    for (let i = 0; i < BEARINGS; i++) {
+      // A fresh run per bearing, so both hops are available rather than the
+      // second onwards being eaten by the cooldown.
+      const p = wizardAt(6, 6);
+      // A pillar field dense enough that most bearings run into something
+      // inside one hop. The wizard's own tile stays clear: a body that starts
+      // inside a wall is a different bug from the one under test.
+      for (let row = 3; row <= 12; row++)
+        for (let col = 5; col <= 20; col++)
+          if ((row + col) % 3 === 0 && !(row === 6 && col === 6))
+            g.tiles().set(row, col, TILE.ROCK);
+
+      p.aimAngle = (i / BEARINGS) * Math.PI * 2;
+      expect(bodyOnOpenGround(p), `bearing ${i} start`).toBe(true);
+      g.blink();
+      expect(bodyOnOpenGround(p), `bearing ${i} hop 1`).toBe(true);
+      g.blink();
+      expect(bodyOnOpenGround(p), `bearing ${i} hop 2`).toBe(true);
+    }
+  });
+
+  it('refuses rather than making it worse when the body is already boxed in', () => {
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    // Walled in on all four sides, one tile out.
+    for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const)
+      g.tiles().set(6 + dr, 6 + dc, TILE.ROCK);
+    const from = { x: p.x, y: p.y };
+
+    for (let i = 0; i < 8; i++) {
+      p.aimAngle = (i / 8) * Math.PI * 2;
+      g.blink();
+    }
+    expect(p.x).toBe(from.x);
+    expect(p.y).toBe(from.y);
+    expect(g.wizBlink().cd).toBe(0);   // nothing was spent on any of them
+    expect(c.wizBlinkMinDistance).toBeGreaterThan(0);
+  });
+});
+
+describe('the knight chained charge', () => {
+  /** Winds up and releases a charge due east from a known tile, then reports
+   * how far the dash travels over `ticks`, with or without the chain. */
+  function dashRun(chain: boolean, ticks = 20): number {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 4 * ts;
+    p.y = 6.5 * ts;
+    p.aimAngle = 0;
+    g.shift();          // windup
+    g.releaseShift();   // committed east
+    if (chain) g.shift();
+    const from = p.x;
+    g.stepSim(ticks);
+    return p.x - from;
+  }
+
+  it('starts a dash the sniper key can chain into', () => {
+    dashRun(false, 0);
+    expect(g.knightCharge().dashing).toBe(true);
+    expect(g.knightCharge().chained).toBe(false);
+    expect(g.knightCharge().chainWindow).toBeGreaterThan(0);
+  });
+
+  it('covers more ground when the second press lands', () => {
+    const plain = dashRun(false);
+    const chained = dashRun(true);
+    expect(chained).toBeGreaterThan(plain);
+  });
+
+  it('commits harder without steering: the angle stays where it was released', () => {
+    const before = g.knightCharge().angle;
+    dashRun(true, 0);
+    expect(g.knightCharge().chained).toBe(true);
+    expect(g.knightCharge().angle).toBe(0);
+    expect(before).toBeDefined();
+  });
+
+  it('chains once per dash, however many times the key comes down', () => {
+    dashRun(true, 0);
+    const p = g.player() as { x: number };
+    g.stepSim(5);
+    const after = p.x;
+    g.shift();
+    g.shift();
+    g.stepSim(5);
+    // Still one chain: a second would show as another whirl ring.
+    expect(g.rings().length).toBe(1);
+    expect(p.x).toBeGreaterThan(after);
+  });
+
+  it('will not chain once the window has lapsed', () => {
+    const c = g.config();
+    dashRun(false, 0);
+    g.stepSim(Math.ceil(c.shiftChainSecs * ONE_SECOND) + 1);
+    expect(g.knightCharge().chainWindow).toBe(0);
+    g.shift();
+    expect(g.knightCharge().chained).toBe(false);
+  });
+
+  it('swings a whirlwind where he stands, and shows its reach', () => {
+    const c = g.config();
+    dashRun(false, 0);
+    const p = g.player() as { x: number; y: number };
+    const crows = g.crows();
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0] as { x: number; y: number; state: string };
+    crow.x = p.x;
+    crow.y = p.y;
+    crow.state = 'passive';
+
+    g.shift();
+    expect(g.crows().length).toBe(0);
+    const rings = g.rings() as Array<{ radius: number }>;
+    expect(rings.length).toBe(1);
+    expect(rings[0]!.radius).toBe(c.knightChainWhirlRadius);
+  });
+
+  it('belongs to the knight: nobody else chains a charge', () => {
+    for (const character of ['archer', 'wizard', 'ranger', 'sapper']) {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      g.shift();
+      expect(g.knightCharge().chained, character).toBe(false);
     }
   });
 });
