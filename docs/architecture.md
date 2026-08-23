@@ -33,7 +33,7 @@ character.
 
 | Class | Kind type | Values today | Tables keyed on it | Cross-cuts |
 |---|---|---|---|---|
-| Character | `CharacterKind` | `archer \| wizard \| knight \| ranger` | `PRIMARY`, `SILHOUETTES`, `PAINTERS`, `CHARACTER_STATS`, `CHARACTER_KEYS` | sim, render, net, ui |
+| Character | `CharacterKind` | `archer \| wizard \| knight \| ranger \| sapper` | `PRIMARY`, `SILHOUETTES`, `PAINTERS`, `CHARACTER_STATS`, `CHARACTER_KEYS` | sim, render, net, ui |
 | Map | `MapKind` | `forest \| castle` | `MAP_GEN`, `TILE_THEMES`, `ANIMATED_THEMES` | sim, render, net |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
 | Skeleton (single-player) | plain string | `normal \| fire \| ice` | `SKELETON_PALETTES` | `src/legacy/game.js` only |

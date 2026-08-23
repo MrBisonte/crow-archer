@@ -12,6 +12,11 @@ import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { log, attachToEvents } from '../sim/log';
+import {
+  UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
+  featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
+  perkHeld, purchase, statValue,
+} from '../sim/upgrades';
 import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
@@ -24,13 +29,14 @@ import {
   WIZARD_SPRITE, buildWizardGrid,
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
+  SAPPER_SPRITE, buildSapperGrid,
 } from '../render/character-grids';
 
 // Single-player has no team concept, so each hero gets one fixed trim
 // colour instead of the multiplayer per-team one. Archer's was already its
 // tunic accent; the others are new, small, low-stakes additions in the same
 // spirit (see buildWizardGrid/buildRangerGrid's hem/hood-brim trim).
-const SP_TRIM = { archer: '#39FF14', wizard: '#FFB400', ranger: '#FFCC00', knightNormal: '#3A5CC8', knightFireSword: '#CC3300' };
+const SP_TRIM = { archer: '#39FF14', wizard: '#FFB400', ranger: '#FFCC00', sapper: '#FF7A1A', knightNormal: '#3A5CC8', knightFireSword: '#CC3300' };
 import { MultiplayerSession } from '../ui/multiplayer-session';
 
 // Standalone synth reading ZzFX-style parameter arrays.
@@ -267,6 +273,13 @@ const CONFIG = {
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
 
+  // Sapper. The powder charge is thrown on the primary and costs nothing but
+  // time, so this cooldown is the whole of its ammo economy: there is no
+  // quiver to run dry and so no pitchfork fallback either. Slower than every
+  // primary but the wizard's bolt, matching SAPPER_CHARGE_COOLDOWN_TICKS in
+  // sim/weapons.ts.
+  sapperChargeCooldown: 1.1,
+
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
   // Knight
@@ -292,7 +305,15 @@ const CONFIG = {
   knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
   knightChargeTickRate: 0.2,
 
-  // Wizard
+  // Wizard. Blink is the answer to the one question the rest of the kit does
+  // not: something is on me right now. Five tiles is far enough to break
+  // contact with anything that walks, short enough that it crosses a room and
+  // not the map. The cooldown is the storm's own, since both are the wizard's
+  // "once in a while" buttons and neither should be the answer twice in a row.
+  // The refusal threshold keeps a blink into a wall from costing five seconds
+  // for two pixels of travel.
+  wizBlinkDistance: 160, wizBlinkCooldown: 6, wizBlinkIFrames: 0.3,
+  wizBlinkMinDistance: 32,
   wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
@@ -386,6 +407,11 @@ function applyPace(name) {
   CONFIG.maxArrowsInFlight     = preset.maxArrowsInFlight;
   CONFIG.baseArrows            = preset.baseArrows;
   CONFIG.baseDynamites         = preset.baseDynamites;
+  // Every base* figure here is the un-upgraded starting point FEATHERS stacks
+  // its levels on, which is why the restore rate gets one too: without it,
+  // FEATHERS.applyToGame() would have to add its bonus to whatever the last
+  // run left behind, and the rate would climb every time a run started.
+  CONFIG.baseArrowRestore      = preset.arrowRestore;
   CONFIG.resources.arrows.max     = preset.baseArrows;
   CONFIG.resources.arrows.restore = preset.arrowRestore;
   CONFIG.resources.dynamites.max = preset.baseDynamites;
@@ -523,15 +549,19 @@ const CHAR_PANELS = [
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
-           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
+           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Tap Shift: Arcane Blink (6s)'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     lines:['Long spear  ·  melee range','Hold Shift: charge sweep (2× dmg)',
            'Pickups: Javelin  ·  Fire Sword','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
-  { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+  { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
     lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
            'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
+  { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
+    difficulty: DIFFICULTY.hard,
+    lines:['Powder charges  ·  1.1s cooldown','Bounces off cover, then clears it',
+           'No quiver: the cooldown is the limit','Blast hits everything in radius','Demolition playstyle'] },
 ];
 
 /**
@@ -631,6 +661,11 @@ let selectedMapKind = 'forest';   // 'forest' | 'castle'
 
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
+let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
+// Arcane Blink: what the wizard spends the sniper key on. The iframe is the
+// short mercy window on arrival, without which blinking out of a swarm still
+// takes the hit you blinked away from.
+let wizBlinkCD = 0, wizBlinkIFrame = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 
@@ -962,6 +997,72 @@ function knightChargeFrac() {
   return Math.min(1, (performance.now() - knightCharge.t0) / 1000 / CONFIG.knightChargeMaxHoldSecs);
 }
 
+/**
+ * Whether the player's body fits with its centre at a point: all four
+ * collision corners on passable tiles.
+ *
+ * Extracted from the movement resolution, which is still its main caller, so
+ * that walking and the wizard's blink cannot come to disagree about what
+ * counts as a wall.
+ */
+function playerFits(x, y) {
+  const r = CONFIG.playerRadius;
+  return tilePassable(tileAt(x-r, y-r)) && tilePassable(tileAt(x+r, y-r)) &&
+         tilePassable(tileAt(x-r, y+r)) && tilePassable(tileAt(x+r, y+r));
+}
+
+/* Clamp bounds keep the player's collision corners inside the first passable
+ * row/col (index 1) so they never straddle the solid border tiles and get
+ * stuck. Two functions rather than one returning a point: this runs twice a
+ * frame per axis and has no business allocating. */
+function clampArenaX(x) {
+  const r = CONFIG.playerRadius;
+  return Math.max(CONFIG.tileSize + r, Math.min(CONFIG.canvasW - r, x));
+}
+function clampArenaY(y) {
+  const r = CONFIG.playerRadius;
+  return Math.max(CONFIG.tileSize + r, Math.min((CONFIG.rows - 1) * CONFIG.tileSize - r, y));
+}
+
+/**
+ * The wizard's Arcane Blink, bound to the key that means sniper mode for
+ * everyone else.
+ *
+ * Walks the aim line in short steps and keeps the last point the body
+ * actually fits in, rather than jumping to the end and asking afterwards. So
+ * a blink never crosses a wall and never lands inside one: it closes on cover
+ * instead of passing through it. That is not a limitation to work around, it
+ * is what keeps the maze a maze - its walls are the level, and nothing else
+ * in the game can pass them either.
+ */
+function tryWizardBlink() {
+  if (selectedChar !== 'wizard' || !inGame()) return;
+  if (wizBlinkCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+
+  const step = 4;
+  const dx = Math.cos(player.aimAngle) * step, dy = Math.sin(player.aimAngle) * step;
+  let x = player.x, y = player.y;
+  for (let travelled = 0; travelled < CONFIG.wizBlinkDistance; travelled += step) {
+    const nx = clampArenaX(x + dx), ny = clampArenaY(y + dy);
+    if (!playerFits(nx, ny)) break;
+    x = nx; y = ny;
+  }
+
+  // Blinking face-first into a wall would otherwise cost the whole cooldown
+  // for a couple of pixels, which reads as the button being broken rather
+  // than as the wall being solid.
+  if (Math.hypot(x - player.x, y - player.y) < CONFIG.wizBlinkMinDistance) {
+    events.emit({ type: 'ACTION_BLOCKED' });
+    return;
+  }
+
+  const fromX = player.x, fromY = player.y;
+  player.x = x; player.y = y;
+  wizBlinkCD     = CONFIG.wizBlinkCooldown;
+  wizBlinkIFrame = CONFIG.wizBlinkIFrames;
+  events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: x, toY: y });
+}
+
 /** Knight-only, bound to the key that means sniper mode for everyone else.
  * Winds up in place; releaseKnightCharge() converts the hold into the dash. */
 function startKnightCharge() {
@@ -1080,7 +1181,7 @@ function installInput() {
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
-    if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
+    if (!keys[e.key] && e.key === CONFIG.keys.snipe) { startKnightCharge(); tryWizardBlink(); }
     keys[e.key] = true;
     if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
@@ -1201,6 +1302,9 @@ const WEAPON_FX = {
   pitchfork: { sound: () => sndPitchfork, shake: [3, 90] },
   spear:     { sound: () => sndPitchfork, shake: [2, 70] },
   javelin:   { sound: () => sndPitchfork, shake: [3, 80] },
+  // The sapper's lob. Reuses the knight charge's whoosh rather than the bow's
+  // snap: what the ear needs to hear is that something heavy is in the air.
+  charge:    { sound: () => sndChargeWhoosh, shake: [2, 60] },
 };
 
 events.on(e => {
@@ -1411,6 +1515,22 @@ events.on(e => {
       });
       break;
 
+    case 'WIZARD_BLINK':
+      // Two bursts, not one: the wizard was there and is now here, and a
+      // single puff at the arrival end reads as a spawn rather than a move.
+      playSound(sndLightning);
+      burst(e.x, e.y, {
+        count: 12, colors: ['#8888FF','#C8C8FF','#FFFFFF'],
+        speedMin: 20, speedMax: 70, decay: 3.0, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#8888FF'
+      });
+      burst(e.toX, e.toY, {
+        count: 16, colors: ['#8888FF','#FFFFFF'],
+        speedMin: 40, speedMax: 110, decay: 2.4, shape: 'spark',
+        shadowBlur: 8, shadowColor: '#8888FF'
+      });
+      break;
+
     case 'WHIRLWIND_START':
       playSound(sndExplosion); triggerShake(...SHAKE.whirlwindStart);
       burst(e.x, e.y, {
@@ -1573,8 +1693,11 @@ function initGame() {
   knightChargeTick = 0; knightChargeCD = 0;
   shootPressed = false;
   arrows = []; pickups = []; particles = []; dynamites = []; satchels = []; fires = []; floaters = [];
-  playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = false;
-  wizBoltCD = 0; stormCD = 0; _stormFlash = 0;
+  // WARD FEATHER, if it has been bought, is the only thing that opens a run
+  // with the shield already up; without it this is the plain reset it was.
+  playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
+  wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  wizBlinkCD = 0; wizBlinkIFrame = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -1723,9 +1846,12 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  // The knight spends this button on his charge instead: he has no aim line
-  // to sharpen, so sniper mode was a pure downside for him.
-  sniperMode = selectedChar !== 'knight' && hasButton(cmd, Button.SNIPE);
+  // The knight spends this button on his charge, and the wizard on a blink.
+  // Neither has an aim line worth sharpening: the knight has none at all, and
+  // the wizard's bolts steer themselves onto a target after they are cast, so
+  // a tighter angle at the moment of casting buys him almost nothing while
+  // the root that comes with it costs him everything.
+  sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && hasButton(cmd, Button.SNIPE);
 
   // Charging roots him in place the same way sniper mode roots everyone else.
   if (!sniperMode && !knightCharge.on) {
@@ -1745,20 +1871,10 @@ function updatePlayer(dt) {
       const len = Math.hypot(vx, vy);
       if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
     }
-    const r = CONFIG.playerRadius;
-    // Clamp bounds keep the player's collision corners (±r) inside the first passable
-    // row/col (index 1) so they never straddle the solid border tiles and get stuck.
-    const ts = CONFIG.tileSize;
-    const minX = ts + r, maxX = CONFIG.canvasW - r;
-    const minY = ts + r, maxY = (CONFIG.rows - 1) * ts - r;
     const nx = player.x + vx;
-    if (tilePassable(tileAt(nx-r, player.y-r)) && tilePassable(tileAt(nx+r, player.y-r)) &&
-        tilePassable(tileAt(nx-r, player.y+r)) && tilePassable(tileAt(nx+r, player.y+r)))
-      player.x = Math.max(minX, Math.min(maxX, nx));
+    if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
     const ny = player.y + vy;
-    if (tilePassable(tileAt(player.x-r, ny-r)) && tilePassable(tileAt(player.x+r, ny-r)) &&
-        tilePassable(tileAt(player.x-r, ny+r)) && tilePassable(tileAt(player.x+r, ny+r)))
-      player.y = Math.max(minY, Math.min(maxY, ny));
+    if (playerFits(player.x, ny)) player.y = clampArenaY(ny);
   }
 
   // Mid-dash the aim is locked to the committed direction, so the arc can't be
@@ -1772,6 +1888,9 @@ function updatePlayer(dt) {
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
+  if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
+  if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
+  if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
   if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
@@ -1945,6 +2064,7 @@ function tryShoot() {
   if (selectedChar === 'wizard') { tryWizardBolt(); return; }
   if (selectedChar === 'knight') { tryKnightAttack(); return; }
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
+  if (selectedChar === 'sapper') { trySapperCharge(); return; }
   const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
   if (!hasArrows) { tryPitchfork(); return; }
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
@@ -2059,17 +2179,45 @@ function startWhirlwind() {
 }
 
 
-function throwDynamite(chargeFrac) {
-  if (inv.dynamites <= 0) return;
-  inv.dynamites--;
-  const spd = CONFIG.dynamiteSpeed * (1 + chargeFrac * 2);
+/**
+ * Puts one stick of powder in the air along the current aim.
+ *
+ * Shared by the archer's charged throw and the sapper's primary: same flight,
+ * bounce, fuse and blast, and the only difference is what each spends to get
+ * it there and how fast it leaves the hand. Extracted rather than copied, so
+ * the two can never drift into being two slightly different explosives.
+ */
+function launchCharge(speed) {
   dynamites.push({
     x: player.x, y: player.y,
-    vx: Math.cos(player.aimAngle) * spd,
-    vy: Math.sin(player.aimAngle) * spd,
+    vx: Math.cos(player.aimAngle) * speed,
+    vy: Math.sin(player.aimAngle) * speed,
     life: CONFIG.dynamiteLifetime, fuseTotal: CONFIG.dynamiteLifetime,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
+}
+
+function throwDynamite(chargeFrac) {
+  if (inv.dynamites <= 0) return;
+  inv.dynamites--;
+  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2));
+}
+
+/**
+ * The sapper's powder charge: the same throw, on the primary, gated by a
+ * cooldown instead of a pouch.
+ *
+ * Nothing is spent, so there is no empty-quiver branch and no pitchfork
+ * fallback - a sapper who cannot throw yet is a sapper waiting, which is what
+ * the cooldown chip in lane D is there to show. The throw is uncharged: one
+ * press is one arc, always the same, because a primary that had to be held
+ * would be a secondary.
+ */
+function trySapperCharge() {
+  if (sapperChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  sapperChargeCD = CONFIG.sapperChargeCooldown;
+  launchCharge(CONFIG.dynamiteSpeed);
+  events.emit({ type: 'WEAPON_FIRED', kind: 'charge' });
 }
 
 function fireLightningStorm() {
@@ -3155,6 +3303,9 @@ function damagePlayer(amount, crowIndex = -1) {
   // Winding up the charge is the knight's whole defence for those seconds: he
   // cannot move or attack, so he eats nothing. The dash afterwards is exposed.
   if (knightCharge.on) return;
+  // And the moment after a blink is the wizard's, for the same reason: an
+  // escape that still eats the hit it escaped is not an escape.
+  if (wizBlinkIFrame > 0) return;
   if (playerShield) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
@@ -4252,30 +4403,16 @@ const STREAK = (() => {
 })();
 
 // ── FEATHERS: meta-currency + persistent upgrade tree ─────────────────────────
+//
+// The tree itself — which axes exist, what a level costs, and what it is worth
+// — lives in ../sim/upgrades.ts, where it is pure and can be checked without a
+// canvas. What stays here is everything that needs a browser: the wallet, the
+// save file, the cursor and the screen.
 const FEATHERS = (() => {
   const LS_KEY  = 'crow_archer_v1';
-  const UPGRADES = [
-    {
-      id: 'arrows',  label: 'QUIVER DEPTH',  desc: '+2 arrow capacity / level',
-      costs: [5, 12, 25], maxLv: 3,
-    },
-    {
-      id: 'hp',      label: 'VITALITY',      desc: '+1 max HP / level',
-      costs: [8, 20, 40], maxLv: 3,
-    },
-    {
-      id: 'pfRange', label: 'TINE REACH',    desc: '+8 px pitchfork range / level',
-      costs: [6, 15, 30], maxLv: 3,
-    },
-    {
-      id: 'speed',   label: 'SWIFTNESS',     desc: '+20 move speed / level',
-      costs: [7, 18, 35], maxLv: 3,
-    },
-  ];
-  const DEFAULTS = { arrows: 0, hp: 0, pfRange: 0, speed: 0 };
 
   let _feathers = 0;
-  let _levels   = { ...DEFAULTS };
+  let _levels   = { ...NO_UPGRADES };
   let _cursor   = 0;
 
   function _save() {
@@ -4287,8 +4424,8 @@ const FEATHERS = (() => {
       const raw = localStorage.getItem(LS_KEY);
       const d   = raw ? JSON.parse(raw) : null;
       if (d) {
-        _feathers = d.feathers || 0;
-        _levels   = Object.assign({ ...DEFAULTS }, d.levels || {});
+        _feathers = feathersFrom(d.feathers);
+        _levels   = levelsFrom(d.levels);
       }
     } catch (_) { /* ignore */ }
   }
@@ -4296,35 +4433,42 @@ const FEATHERS = (() => {
   function onCrowKill(isWhite) {
     const base   = isWhite ? 2 : 1;
     const bonus  = Math.random() < 0.5 ? 1 : 0;
-    const earned = base + bonus;
+    const earned = featherYield(_levels, base + bonus);
     _feathers += earned;
     _save();
     return earned;
   }
 
-  function maxHP()   { return CONFIG.playerMaxHP  + (_levels.hp      || 0); }
-  function pfRange() { return CONFIG.pitchforkRange + (_levels.pfRange || 0) * 8; }
-  function speed()   { return CONFIG.playerSpeed    + (_levels.speed   || 0) * 20; }
+  function maxHP()   { return statValue(_levels, 'hp',      CONFIG.playerMaxHP); }
+  function pfRange() { return statValue(_levels, 'pfRange', CONFIG.pitchforkRange); }
+  function speed()   { return statValue(_levels, 'speed',   CONFIG.playerSpeed); }
   function wallet()  { return _feathers; }
+  // Whether a run opens with the shield already up, through the same
+  // playerShield a pickup and the knight's block already raise.
+  function wardStart() { return perkHeld(_levels, 'ward'); }
 
   function applyToGame() {
-    // Arrow capacity from upgrade level must be refreshed at game start.
-    // The base comes from the pace preset, so upgrades stack on it.
-    CONFIG.resources.arrows.max = CONFIG.baseArrows + (_levels.arrows || 0) * 2;
+    // Resource figures derived from upgrade levels must be refreshed at game
+    // start. Every base comes from the pace preset, so upgrades stack on the
+    // preset rather than on whatever the previous run left behind.
+    CONFIG.resources.arrows.max     = statValue(_levels, 'arrows',  CONFIG.baseArrows);
+    CONFIG.resources.arrows.restore = statValue(_levels, 'restore', CONFIG.baseArrowRestore);
+    // One axis for "the tool this hero throws": the archer's dynamite and the
+    // ranger's satchels are the same tier and already share a preset figure,
+    // so raising one without the other would make the axis a hero tax.
+    CONFIG.resources.dynamites.max  = statValue(_levels, 'tools', CONFIG.baseDynamites);
+    CONFIG.resources.satchels.max   = statValue(_levels, 'tools', CONFIG.baseDynamites);
   }
 
   function moveCursor(dir) {
-    _cursor = (_cursor + dir + UPGRADES.length) % UPGRADES.length;
+    _cursor = (_cursor + dir + UPGRADE_ORDER.length) % UPGRADE_ORDER.length;
   }
 
   function buyCurrent() {
-    const u  = UPGRADES[_cursor];
-    const lv = _levels[u.id] || 0;
-    if (lv >= u.maxLv) return false;
-    const cost = u.costs[lv];
-    if (_feathers < cost) return false;
-    _feathers -= cost;
-    _levels[u.id] = lv + 1;
+    const result = purchase({ feathers: _feathers, levels: _levels }, UPGRADE_ORDER[_cursor]);
+    if (result.kind !== 'bought') return false;
+    _feathers = result.progress.feathers;
+    _levels   = result.progress.levels;
     _save();
     return true;
   }
@@ -4348,19 +4492,29 @@ const FEATHERS = (() => {
     ctx.fillText(`◆ ${_feathers}  FEATHERS  (persists across runs)`, CONFIG.canvasW / 2, 96);
     ctx.shadowBlur = 0;
 
+    // Row pitch shrinks to fit however many upgrades the table holds today,
+    // the way the char-select panels size themselves to CHAR_PANELS. Four
+    // rows still lay out at the 96 this screen has always used; it only
+    // tightens once the tree grows past what the canvas fits at that pitch.
+    const rowTop = 170;
+    const rowFoot = CONFIG.canvasH - 54; // clear of the key hint along the bottom
+    const pitch = Math.min(96, Math.floor((rowFoot - rowTop) / UPGRADE_ORDER.length));
+    const bandH = Math.min(76, pitch - 8);
+
     // Upgrade rows
-    UPGRADES.forEach((u, i) => {
-      const lv    = _levels[u.id] || 0;
+    UPGRADE_ORDER.forEach((id, i) => {
+      const u     = UPGRADES[id];
+      const lv    = levelOf(_levels, id);
       const sel   = i === _cursor;
-      const maxed = lv >= u.maxLv;
-      const cost  = maxed ? null : u.costs[lv];
-      const oy    = 170 + i * 96;
+      const maxed = isMaxed(_levels, id);
+      const cost  = nextCost(_levels, id);
+      const oy    = rowTop + i * pitch;
       const barX  = CONFIG.canvasW / 2 - 260;
       const barR  = CONFIG.canvasW / 2 + 260;
 
       if (sel) {
         ctx.fillStyle = 'rgba(57,255,20,0.08)';
-        ctx.fillRect(CONFIG.canvasW / 2 - 280, oy - 32, 560, 76);
+        ctx.fillRect(CONFIG.canvasW / 2 - 280, oy + 6 - bandH / 2, 560, bandH);
         ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 14;
       }
 
@@ -4373,7 +4527,7 @@ const FEATHERS = (() => {
       // Level pips (right-aligned)
       ctx.textAlign = 'right';
       ctx.fillStyle = maxed ? '#FFB400' : (sel ? '#39FF14' : '#1a7a08');
-      ctx.fillText('■'.repeat(lv) + '□'.repeat(u.maxLv - lv), barR, oy - 12);
+      ctx.fillText('■'.repeat(lv) + '□'.repeat(maxLevel(id) - lv), barR, oy - 12);
 
       // Description
       ctx.textAlign = 'left';
@@ -4397,7 +4551,7 @@ const FEATHERS = (() => {
     ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [B]  BACK', CONFIG.canvasW / 2, CONFIG.canvasH - 22);
   }
 
-  return { init, onCrowKill, maxHP, pfRange, speed, wallet, applyToGame, moveCursor, buyCurrent, draw };
+  return { init, onCrowKill, maxHP, pfRange, speed, wallet, wardStart, applyToGame, moveCursor, buyCurrent, draw };
 })();
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
@@ -4675,6 +4829,7 @@ function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
   if (selectedChar === 'knight') { drawKnight(); return; }
   if (selectedChar === 'ranger') { drawRanger(); return; }
+  if (selectedChar === 'sapper') { drawSapper(); return; }
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
 
   drawAimLine(px, py);
@@ -4961,6 +5116,66 @@ function drawRanger() {
   ctx.restore();
 
   if (!hasArrows) drawPitchforkIndicators(px, py);
+}
+
+function drawSapper() {
+  const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
+
+  drawAimLine(px, py);
+  drawHitFlashGhost(px, py);
+
+  ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+  const localAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
+  const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash * 20) % 2 === 0;
+
+  // 1. Ground shadow, wider than the archer's: this one is built heavy
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath(); ctx.ellipse(0, 10, 11, 3, 0, 0, Math.PI*2); ctx.fill();
+
+  // 2. Pixel-art keg/apron/helm (see buildSapperGrid). One fixed pose, no walk
+  // frames: the sapper's silhouette carries no cloak to sway.
+  const sGrid = buildSapperGrid(SP_TRIM.sapper);
+  const sDx = -(SAPPER_SPRITE.w) / 2, sDy = -22;
+  const sCanvas = flashOn
+    ? spriteFlashCanvas('sapper', sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`sapper|${SP_TRIM.sapper}`, sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h);
+  ctx.drawImage(sCanvas, sDx, sDy);
+
+  // 3. Shield halo
+  if (playerShield) {
+    const shP = loopT * 4;
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 14 + 5 * Math.sin(shP);
+    ctx.strokeStyle = `rgba(255,180,0,${(0.6 + 0.3 * Math.sin(shP)).toFixed(2)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -1, 17 + Math.sin(shP * 1.3), 0, Math.PI*2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // 4. The charge held out along the aim, with a fuse that only burns while
+  // one is ready to throw. A dead fuse is the cooldown, readable from the
+  // sprite instead of only from the HUD chip.
+  const ready = sapperChargeCD <= 0;
+  const gx = Math.cos(localAngle) * 9, gy = Math.sin(localAngle) * 9;
+  ctx.strokeStyle = '#D9B98A'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(gx, gy); ctx.stroke();
+
+  ctx.fillStyle = '#3B3630';
+  ctx.beginPath(); ctx.arc(gx, gy, 3.4, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#8A6A22'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(gx, gy, 3.4, 0, Math.PI*2); ctx.stroke();
+
+  ctx.strokeStyle = '#1E1A16'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(gx, gy - 3); ctx.lineTo(gx + 1.5, gy - 6.5); ctx.stroke();
+  if (ready) {
+    const flare = 0.7 + 0.3 * Math.sin(loopT * 11);
+    ctx.shadowColor = '#C6501B'; ctx.shadowBlur = 6 * flare;
+    ctx.fillStyle = '#FF7A1A';
+    ctx.beginPath(); ctx.arc(gx + 1.5, gy - 6.5, 1.4 * flare, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.restore();
 }
 
 // Same body shape, two palettes — the fire sword's "powered up" recolor of
@@ -6711,6 +6926,16 @@ const GLYPH = {
   feather: (s) => { const m = s/2; ctx.beginPath();
     ctx.moveTo(m, 0); ctx.quadraticCurveTo(s, m, m, s); ctx.quadraticCurveTo(0, m, m, 0);
     ctx.closePath(); ctx.fill(); },
+  // Two chevrons pointing the same way with a gap between them: something
+  // that was here, and is now there.
+  blink: (s) => { const m = s/2; ctx.lineWidth = 2;
+    [[-0.30, -0.06], [0.06, 0.30]].forEach(([a, b]) => {
+      ctx.beginPath();
+      ctx.moveTo(m + s*a, m - s*0.22);
+      ctx.lineTo(m + s*b, m);
+      ctx.lineTo(m + s*a, m + s*0.22);
+      ctx.stroke();
+    }); },
   snipe: (s) => { const m = s/2; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(m, m, s*0.3, 0, Math.PI*2); ctx.stroke();
     [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => { ctx.beginPath();
@@ -6746,6 +6971,9 @@ const LANE_B = {
   ranger: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'satchels'] },
   knight: { active: null,     reserve: ['knightJavelins'] },
   wizard: { active: null,     reserve: ['laserStreams', 'fireBolts'] },
+  // Nothing countable at all: the sapper's charges are made on the spot, so
+  // both slots are empty and lane D's cooldown chip carries the whole story.
+  sapper: { active: null,     reserve: [] },
 };
 
 /**
@@ -6760,7 +6988,8 @@ const LANE_D = {
   archer: ['snipe', 'shield'],
   ranger: ['snipe', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
-  wizard: ['bolt', 'storm', 'snipe', 'shield'],
+  wizard: ['bolt', 'storm', 'blink', 'shield'],
+  sapper: ['charge', 'snipe', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -6769,7 +6998,9 @@ const CHIP = {
   whirlwind: () => cooldownChip('spin', knightWhirlwindCD, CONFIG.knightWhirlwindCooldown, knightWhirlwindTimer),
   block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, CONFIG.knightBlockCooldown, 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
+  charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
   storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
+  blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
                       label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
                       frac: null }),
@@ -7554,6 +7785,7 @@ const RETICLE_PAINTERS = {
   wizard: drawWizardReticle,
   knight: drawKnightReticle,
   ranger: drawRangerReticle,
+  sapper: drawSapperReticle,
 };
 
 function drawReticle() {
@@ -7593,6 +7825,31 @@ function drawRangerReticle() {
   ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
   ctx.fillStyle = '#FFCC00';
   ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Sapper: a wide dashed ring at the blast radius, with a dot at the aim point.
+ *
+ * The only reticle that shows an area rather than a point, because the only
+ * thing a sapper needs to judge is what the charge will reach - and how close
+ * that is to their own feet.
+ */
+function drawSapperReticle() {
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  ctx.globalAlpha = 0.18 + 0.3 * pulse;
+  ctx.strokeStyle = '#FF7A1A'; ctx.lineWidth = 1.2;
+  ctx.setLineDash([4, 5]);
+  ctx.beginPath(); ctx.arc(0, 0, CONFIG.dynamiteBlastRadius, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.25 + 0.55 * pulse;
+  ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 5 + 3 * pulse;
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+    ctx.beginPath(); ctx.moveTo(dx * 5, dy * 5); ctx.lineTo(dx * 10, dy * 10); ctx.stroke();
+  });
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#FF7A1A';
+  ctx.beginPath(); ctx.arc(0, 0, 1.6, 0, Math.PI * 2); ctx.fill();
   ctx.globalAlpha = 1;
 }
 
@@ -7983,6 +8240,9 @@ export const devHooks = {
   },
   // Dev triggers that drive real sim paths, for headless event-bus checks.
   kill(i = 0) { if (i >= 0 && i < crows.length) killCrow(i); },
+  // Lands a hit through the real damage path, so a test can check what does
+  // and does not absorb one without staging a collision to produce it.
+  hurt(amount = 1) { damagePlayer(amount); },
   killSkel(i = 0) { if (i >= 0 && i < skeletons.length) killSkeleton(i); },
   // Drives the same death path a real kill shot would, so the crowking →
   // dark_archer → dark_knight → win chain can be walked without grinding
@@ -8062,6 +8322,14 @@ export const devHooks = {
   go(s) { transitionTo(s); },
   pick(c) { selectedChar = c; },
   selectedChar: () => selectedChar,
+  // The char-select table itself, so a test can check that every character
+  // the protocol knows about actually has a panel to be picked from.
+  charPanels: () => CHAR_PANELS,
+  sapperChargeCD: () => sapperChargeCD,
+  // The blink runs off a keydown edge rather than the held `keys` map, so a
+  // headless test drives it the same way devHooks.shoot drives the primary.
+  blink() { tryWizardBlink(); },
+  wizBlink: () => ({ cd: wizBlinkCD, iframe: wizBlinkIFrame }),
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },
   spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },

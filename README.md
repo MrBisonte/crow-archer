@@ -67,8 +67,8 @@ See the [manual](docs/manual.md#multiplayer) for hosting others, deploying, and 
 | Move | Arrow keys |
 | Aim | Mouse |
 | Shoot / Cast | Space |
-| Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice: throw, then arm (Ranger) |
-| Sniper mode / Knight charge | Shift (the knight winds up a charging sweep instead) |
+| Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice: throw, then arm (Ranger) / none (Sapper) |
+| Sniper mode / Knight charge / Wizard blink | Shift (the knight winds up a charging sweep, the wizard blinks) |
 | Pause | Escape |
 | Inventory | I (while paused) |
 
@@ -82,6 +82,7 @@ Move, Shoot, Sniper mode and Pause are remappable from the Controls screen.
 | **Wizard** | staff | slow, hard-hitting bolts that steer toward whoever is nearest |
 | **Knight** | spear | nothing at range; a thrust that lands twice per swing |
 | **Ranger** | crossbow | three smaller, weaker bolts per shot, each an independent hit |
+| **Sapper** | powder charge | slowest throw, thrown at a place: it bounces, fuses, and blasts an area |
 
 See the [manual](docs/manual.md#characters) for the full kit of each: primary, special, and pickups.
 

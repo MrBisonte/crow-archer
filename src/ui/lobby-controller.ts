@@ -38,6 +38,8 @@ const CHARACTER_KEYS: Record<CharacterKind, string> = {
   wizard: 'w',
   knight: 'k',
   ranger: 'x',
+  // 's' rather than an initial for the same reason as the others: it was free.
+  sapper: 's',
 };
 
 /** The reverse lookup the picker actually reads a keypress against. */
