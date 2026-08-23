@@ -295,8 +295,12 @@ const rectsOf = (rec: Recorder): readonly (readonly number[])[] =>
  * the hut and the shrine were already the most detailed tiles in their themes.
  * They are in the table so that "unchanged" reads as a decision and not as
  * something that was missed.
+ *
+ * Partial rather than Record<MapKind, ...>: cavern arrived on a separate
+ * branch after this pass, so there is no "before" to widen against. The loop
+ * below runs only the themes with an entry here.
  */
-const PALETTE_BEFORE: Record<MapKind, Partial<Record<TileId, number>>> = {
+const PALETTE_BEFORE: Partial<Record<MapKind, Partial<Record<TileId, number>>>> = {
   forest: { [TILE.EMPTY]: 5, [TILE.ROCK]: 5, [TILE.WATER]: 1, [TILE.TREE]: 5, [TILE.ASH]: 4, [TILE.HUT]: 10 },
   castle: { [TILE.EMPTY]: 4, [TILE.ROCK]: 3, [TILE.WATER]: 1, [TILE.TREE]: 4, [TILE.ASH]: 3, [TILE.HUT]: 8 },
   maze:   { [TILE.EMPTY]: 4, [TILE.ROCK]: 4, [TILE.WATER]: 1, [TILE.TREE]: 4, [TILE.ASH]: 3, [TILE.HUT]: 8 },
@@ -305,7 +309,9 @@ const PALETTE_BEFORE: Record<MapKind, Partial<Record<TileId, number>>> = {
 const LEFT_ALONE = new Set<TileId>([TILE.WATER, TILE.HUT]);
 
 describe('themed tile art', () => {
-  for (const theme of Object.keys(TILE_THEMES) as MapKind[]) {
+  // Only the themes the detail pass actually snapshotted: cavern arrived on a
+  // separate branch and gets its own coverage above, not a fabricated before.
+  for (const theme of Object.keys(PALETTE_BEFORE) as MapKind[]) {
     describe(theme, () => {
       for (const tile of GENERATABLE_TILES) {
         const name = TILE_NAMES[tile] ?? String(tile);
@@ -330,7 +336,7 @@ describe('themed tile art', () => {
           }
         });
 
-        const before = PALETTE_BEFORE[theme][tile]!;
+        const before = PALETTE_BEFORE[theme]![tile]!;
         const widened = !LEFT_ALONE.has(tile);
         it(`${widened ? 'widens' : 'holds'} ${name}'s palette`, () => {
           const now = paletteOf(painter!).size;
