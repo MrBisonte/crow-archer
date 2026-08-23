@@ -42,9 +42,26 @@ const shapeOf = (g: PixelGrid): string => g.map((row) => row.join(',')).join('|'
  * what is actually being asked — is there body, gap, body — instead of whether
  * any raw emptiness happens to have survived.
  *
- * The converse trap is why the boots have a colour of their own: painted in
- * the outline colour, as they were, this predicate goes blind the other way
- * and reports zero runs on a row that is entirely feet.
+ * `outline` must be the colour pixelOutline was actually called with, which
+ * for these builders is C.edge. It is deliberately a parameter rather than
+ * read off a palette slot named `edge`, because that name cannot be trusted
+ * across sprites: the legacy rat's palette carries an `edge` slot so nothing
+ * downstream has to know a rat is not a skeleton, but the rat never outlines
+ * and paints its legs, tail and ear in it. Masking by slot name there erases
+ * the whole row and reports zero legs on a sprite that has four.
+ *
+ * The converse trap is why the boots have a colour of their own. Anything
+ * painted in the masked colour vanishes from this count, and the boots were:
+ * the row came back as zero runs on a row that is entirely feet.
+ *
+ * Zero is the loud version, and it only happens when nothing else shares the
+ * row. The quiet version is partial blindness, and this codebase already has
+ * it — the archer's and the wizard's eyes are setPixel'd in C.outline
+ * (render/character-grids.ts), so a face row has skin either side of them and
+ * comes back nonzero and merely wrong. "Assert the band is not wholly masked"
+ * therefore catches a badly chosen row, which is worth having, but it does not
+ * catch this. The rule that does: structure must not be drawn in the seam
+ * colour on any row this predicate is pointed at.
  */
 function bodyRuns(g: PixelGrid, y: number, outline: string): number {
   const row = g[y] ?? [];
