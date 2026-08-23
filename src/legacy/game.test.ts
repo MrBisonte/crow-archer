@@ -908,6 +908,58 @@ describe('the wizard blink', () => {
   });
 });
 
+describe('the knight charge', () => {
+  it('winds up in place, then commits to a dash on release', () => {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    p.aimAngle = 0;
+    const start = p.x;
+
+    g.startKnightCharge();
+    expect(g.knightCharge().charging).toBe(true);
+    g.stepSim(10);
+    // The windup roots the knight in place, same as sniper mode elsewhere.
+    expect(p.x).toBe(start);
+
+    g.releaseKnightCharge();
+    expect(g.knightCharge().dashing).toBe(true);
+    g.stepSim(5);
+    expect(p.x).toBeGreaterThan(start);
+  });
+
+  // Regression: knightCharge.on used to be cleared only by a keyup matching
+  // the live CONFIG.keys.snipe, and pausing never delivers one. A charge held
+  // into the pause menu left the knight permanently rooted on resume, since
+  // going 'paused' -> 'playing' skips the initGame() reset that would
+  // otherwise have cleared it.
+  it('does not leave the knight stuck after a pause mid-charge', () => {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+
+    g.startKnightCharge();
+    expect(g.knightCharge().charging).toBe(true);
+
+    g.go('paused');
+    expect(g.knightCharge().charging).toBe(false);
+    g.go('playing');
+
+    const from = p.x;
+    const keys = g.keys() as Record<string, boolean>;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys['ArrowRight'] = false;
+    expect(p.x).toBeGreaterThan(from);
+  });
+});
+
 describe('the sniper key after the rework', () => {
   /** Holds the sniper key and a walk key for a beat, and reports how far the
    * character got. Sniper mode roots whoever still has it. */

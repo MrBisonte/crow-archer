@@ -763,6 +763,9 @@ function transitionTo(next) {
   if (next === 'multiplayer' && prev !== 'multiplayer') openMultiplayer();
   if (prev === 'multiplayer' && next !== 'multiplayer') closeMultiplayer();
   if (next === 'playing' && prev !== 'paused' && prev !== 'controls' && prev !== 'inventory') initGame();
+  // A charge/dash held into the pause menu has nowhere left to receive the
+  // keyup that would normally release it — see cancelHeldActions().
+  if (next === 'paused') cancelHeldActions();
   if (next === 'boss_entrance') entrance = {
     timer: 0, textProgress: 0, overlayAlpha: 0,
     fadeOut: false, crowsWhite: false, bossMoved: false,
@@ -1250,6 +1253,23 @@ function releaseCharge() {
   if (inGame() && selectedChar === 'archer') throwDynamite(Math.min(1, (performance.now() - charge.t0) / 1000));
 }
 
+/**
+ * Drops every held key and cancels knightCharge/charge with no side effect —
+ * no dash, no throw. A keyup is the only other thing that clears those, and
+ * a keyup can be lost outright: a mid-charge Controls remap changes which
+ * physical key the eventual keyup has to match, and an OS focus change
+ * (alt-tab, a notification) swallows it with nothing here listening for
+ * blur. Either way the flag stays stuck true — rooting the character — until
+ * some later, unrelated keypress both releases it and fires an unintended
+ * dash. Called on pause and on window blur so neither path can reach that
+ * state.
+ */
+function cancelHeldActions() {
+  knightCharge.on = false;
+  charge.on = false;
+  for (const k in keys) delete keys[k];
+}
+
 let mouseRightHeld = false;
 // Held, not just pressed: multiplayer samples the button once per frame rather
 // than reacting to the event, the same way it reads the keyboard.
@@ -1307,6 +1327,10 @@ function installInput() {
     if (e.key === 'f' || e.key === 'F') releaseCharge();
     if (e.key === CONFIG.keys.snipe) releaseKnightCharge();
   });
+  // Focus can vanish without ever delivering the matching keyup (alt-tab, a
+  // notification stealing the window) — see cancelHeldActions().
+  window.addEventListener('blur', cancelHeldActions);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelHeldActions(); });
 
   canvas.addEventListener('click', e => {
     initAudio();
@@ -9024,6 +9048,11 @@ export const devHooks = {
     dashFrac: knightDash.frac, bossDamage: knightDashBossDamage(),
     angle: knightDash.angle, cooldown: knightChargeCD,
   }),
+  // Charge/release run off keydown/keyup edges rather than the held `keys`
+  // map, so headless tests drive them directly the same way devHooks.blink
+  // drives the wizard's edge-triggered ability.
+  startKnightCharge() { startKnightCharge(); },
+  releaseKnightCharge() { releaseKnightCharge(); },
   // Tap the event bus, for verifying which gameplay events fire.
   onEvent: fn => events.on(fn),
   // Drive a real state transition, and pick a character, for scripted runs.
