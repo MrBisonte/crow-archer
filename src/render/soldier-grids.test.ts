@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { SOLDIER_KINDS } from '../sim/soldiers';
@@ -134,37 +138,53 @@ describe('soldier grids', () => {
       SOLDIER_PALETTES.spearman['edge']!)).toBe(1);
   });
 
-  // The precondition the masking predicate needs, asserted over every row
-  // rather than at the one or two the other tests happen to sample.
-  //
-  // A row painted entirely in the seam colour vanishes under masking, so any
-  // check later pointed at it reports zero and reads as a broken sprite. The
-  // belt and the shieldman's shield rim were exactly that until they were
-  // given a shade of their own. buildKnightGrid is the codebase's worked
-  // example: it has a dedicated `visor` slot and reaches for the outline
-  // colour nowhere but the outline call, which is why it is the one hero with
-  // no masking problem.
-  //
-  // NOT TESTED, deliberately, and this is the note explaining why.
-  //
-  // The precondition the masking predicate needs is that structure is never
-  // painted in the seam colour. It cannot be asserted from a finished grid:
-  // once pixelOutline has run, a seam cell and a structural cell of the same
-  // colour are the same cell, and nothing downstream can tell them apart.
-  //
-  // Two attempts are worth recording, because both look workable. "No row is
-  // entirely seam" fails on the outline's own caps, the seam across the top of
-  // the helm. Narrowing it to interior rows fails on the neck: the seam
-  // between head and torso spans the full width and is legitimately all seam.
-  // Every further narrowing is a way of not testing it while appearing to.
-  //
-  // So this is maintained by convention instead, following buildKnightGrid,
-  // the codebase's one hero with no masking problem: it gives its visor a
-  // palette slot of its own and reaches for the outline colour nowhere but the
-  // outline call. The soldiers now do the same — boots and belts and the
-  // shield's rim have a `shade` of their own — and the reason that slot is not
-  // called `edge` is the legacy rat, whose `edge` means "darkest structural
-  // tone" and whose legs vanish under a mask keyed on the name.
+  /**
+   * The precondition the masking predicate needs: structure is never painted
+   * in the seam colour.
+   *
+   * Checked against the source, because it cannot be checked against a grid.
+   * Once pixelOutline has run, a seam cell and a structural cell of the same
+   * colour are the same cell and nothing downstream can tell them apart. Two
+   * attempts to do it from the finished grid are worth recording, because both
+   * look workable: "no row is entirely seam" fails on the outline's own cap
+   * across the top of the helm, and narrowing it to interior rows fails on the
+   * neck, where the seam between head and torso spans the full width and is
+   * legitimately all seam. Every further narrowing is a way of not testing it
+   * while appearing to.
+   *
+   * The information is destroyed in the grid but not in the source, so this
+   * reads the source — the same move src/sim/events.coverage.test.ts already
+   * makes to catch a declared event with no handler, and for the same reason.
+   * It encodes the convention exactly rather than a proxy for it, and it is
+   * precisely the grep that found every real deviation: the archer's and
+   * wizard's eyes, and this file's own belt and shield rim.
+   *
+   * The convention is buildKnightGrid's, the codebase's one hero with no
+   * masking problem: a palette slot of its own for the visor, and the outline
+   * colour reached for nowhere but the outline call. The slot here is `shade`
+   * rather than `edge` because of the legacy rat, whose `edge` means "darkest
+   * structural tone" and whose legs vanish under a mask keyed on that name.
+   */
+  it('reaches for the seam colour nowhere but the pixelOutline call', () => {
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), 'soldier-grids.ts'),
+      'utf8',
+    );
+    // Comments discuss the seam colour by name at length, a few lines above
+    // this. Stripping them first is the difference between a check and a
+    // tripwire on its own documentation.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    const offenders = code
+      .split('\n')
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      // A read of the slot, not its definition: `edge: '#...'` declares it.
+      .filter(({ line }) => /\['edge'\]|\.edge\b/.test(line))
+      .filter(({ line }) => !line.includes('pixelOutline'));
+
+    expect(offenders, `structure painted in the seam colour: ${JSON.stringify(offenders)}`)
+      .toEqual([]);
+  });
 
   it('is deterministic, so the sprite cache can key on kind and frame alone', () => {
     for (const kind of SOLDIER_KINDS) {
