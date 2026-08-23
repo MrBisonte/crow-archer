@@ -739,9 +739,9 @@ const SKILL_SLOTS = [['MAIN', 'main'], ['SECONDARY', 'secondary'], ['SHIFT', 'sh
 const DIM_PANEL_BG = 'rgba(255,255,255,0.025)';
 const MAP_PANEL_INFO = {
   forest: { key:'F', color:'#39FF14', bg:'rgba(57,255,20,0.08)', dim:'#1a7a08', dimBg: DIM_PANEL_BG,
-    lines:['Open ground, scattered cover','Long sightlines, easy crow paths','The classic run'] },
+    lines:['Open ground, scattered cover','Long sightlines for crows','The classic run'] },
   castle: { key:'C', color:'#AAB4C0', bg:'rgba(170,180,192,0.10)', dim:'#4A5560', dimBg: DIM_PANEL_BG,
-    lines:['Denser walls, tighter corridors','Crows funnel, fights stay close','A sharper, closer fight'] },
+    lines:['Denser walls, tight corridors','Crows funnel, fights close','A sharper, closer fight'] },
   // V, not C: the castle has that. Same reason the multiplayer lobby's map
   // keys are mnemonics, and the same reason RANGER answers to X.
   cavern: { key:'V', color:'#5AD8B0', bg:'rgba(90,216,176,0.10)', dim:'#2A6858', dimBg: DIM_PANEL_BG,
@@ -8847,6 +8847,12 @@ function drawMapSelect(t) {
   const startX = CONFIG.canvasW/2 - totalW/2;
   const panelY = 160;
 
+  // A 2px inset either side rather than charselect's 12: these panels are only
+  // as wide as their longest line already, so a full pad would truncate copy
+  // that fits the panel perfectly well. The inset is there to keep a glyph off
+  // the border, not to reserve a margin.
+  const innerW = panelW - 4;
+
   MAP_PANELS.forEach((p, idx) => {
     const px = startX + idx * (panelW + gapX);
     const sel = selectedMapKind === p.kind;
@@ -8857,7 +8863,7 @@ function drawMapSelect(t) {
     ctx.strokeRect(px, panelY, panelW, panelH); ctx.shadowBlur=0;
     ctx.fillStyle = sel ? p.color : p.dim;
     ctx.font='19px "Courier New",monospace';
-    ctx.fillText(`[${p.key}] ${p.kind.toUpperCase()}`, px+panelW/2, panelY+34);
+    ctx.fillText(_fitText(`[${p.key}] ${p.kind.toUpperCase()}`, innerW), px+panelW/2, panelY+34);
     // Terrain swatch — flat color, not art, just enough to read as "ground"
     ctx.globalAlpha = sel ? 0.85 : 0.3;
     ctx.fillStyle = p.color;
@@ -8865,7 +8871,7 @@ function drawMapSelect(t) {
     ctx.globalAlpha = 1;
     ctx.font='11px "Courier New",monospace';
     ctx.fillStyle = sel ? p.color : p.dim;
-    p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+192+i*22));
+    p.lines.forEach((line, i) => ctx.fillText(_fitText(line, innerW), px+panelW/2, panelY+192+i*22));
   });
 
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
