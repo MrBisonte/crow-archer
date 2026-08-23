@@ -44,12 +44,14 @@ flowchart LR
     wizard((wizard))
     knight((knight))
     ranger((ranger))
+    sapper((sapper))
 
     subgraph STATS["CHARACTER_STATS, one row per tag"]
-        sa["speed 200, maxHp 10"]
-        sw["speed 200, maxHp 10"]
-        sk["speed 200, maxHp 10"]
-        sr["speed 200, maxHp 10"]
+        sa["speed 200, maxHp 9, dmg x1.4"]
+        sw["speed 175, maxHp 7, dmg x2.5"]
+        sk["speed 150, maxHp 12, dmg x1.5"]
+        sr["speed 250, maxHp 8, dmg x0.8"]
+        ss["speed 200, maxHp 9, dmg x1.2"]
     end
 
     subgraph PRIMARY["PRIMARY, one row per tag"]
@@ -57,23 +59,27 @@ flowchart LR
         pw["wizard maps to Staff"]
         pk["knight maps to Spear"]
         pr["ranger maps to Crossbow"]
+        ps["sapper maps to PowderCharge"]
     end
 
     Bow["Bow: 500 spd, 2 dmg, 0.35s cd"]
     Staff["Staff: 468 spd, 3 dmg, homing"]
     Spear["Spear: melee, 2 dmg x2"]
     Crossbow["Crossbow: 3 bolts, 0.7 dmg each"]
+    Powder["PowderCharge: bounces, fuses, blasts"]
     Weapon{{"Weapon interface: use()"}}
 
     archer --> sa
     wizard --> sw
     knight --> sk
     ranger --> sr
+    sapper --> ss
 
     archer --> pa --> Bow --> Weapon
     wizard --> pw --> Staff --> Weapon
     knight --> pk --> Spear --> Weapon
     ranger --> pr --> Crossbow --> Weapon
+    sapper --> ps --> Powder --> Weapon
 ```
 
 A tag carries no behavior. A fifth character would be a new circle, one new
@@ -101,28 +107,28 @@ classDiagram
 
     class Archer {
         +speed = 200
-        +maxHp = 10
+        +maxHp = 9
         +weapon() Bow
         +paint(ctx)
     }
 
     class Wizard {
-        +speed = 200
-        +maxHp = 10
+        +speed = 175
+        +maxHp = 7
         +weapon() Staff
         +paint(ctx)
     }
 
     class Knight {
-        +speed = 200
-        +maxHp = 10
+        +speed = 150
+        +maxHp = 12
         +weapon() Spear
         +paint(ctx)
     }
 
     class Ranger {
-        +speed = 200
-        +maxHp = 10
+        +speed = 250
+        +maxHp = 8
         +weapon() Crossbow
         +paint(ctx)
     }
@@ -153,7 +159,8 @@ routine actually differ from the others.
 ### Why composition wins here
 
 - **The differences are data, not algorithm.** A speed number, an HP number,
-  a `Silhouette` record, a `Weapon` instance from a factory. Movement,
+  a damage multiplier, a `Silhouette` record, a `Weapon` instance from a
+  factory. Movement,
   collision, and damage resolution run through one path for every character,
   in `src/sim/battle-world.ts` and `src/sim/collide.ts`. Inheritance earns
   its keep when a subclass overrides how something is computed. When it only
@@ -199,10 +206,12 @@ the honest measure of what the composition pattern buys on the TS side.
 ### Notes
 
 > **Note.** The three gaps identified alongside this decision are now built.
-> `CHARACTER_STATS: Record<CharacterKind, { speed: number; maxHp: number }>`
-> lives in `src/sim/arena.ts`, consumed by `BattleWorld`'s movement and
-> respawn; every row is still the shared 200/10 today, since no hero has
-> asked to differ yet. `secondaryWeapon(character, mode)` in
+> `CHARACTER_STATS: Record<CharacterKind, CharacterStats>` lives in
+> `src/sim/arena.ts`, consumed by `BattleWorld`'s movement and respawn. Every
+> row held the shared 200/10 until the balance pass gave each hero its own
+> speed, health and damage multiplier — see
+> [One dial per character](#one-dial-per-character-not-a-column-per-boss) and
+> [Balance](balance.md). `secondaryWeapon(character, mode)` in
 > `src/sim/weapons.ts` replaced the `carriesDynamite` special case: it
 > returns an exhaustive `Secondary` union (`none | dynamite | satchel`), and
 > the ranger's own secondary, the satchel, is one of its two real branches
@@ -463,3 +472,169 @@ sentence.
 > at all. Capacity defaults to 500 events; oldest drops first once a
 > session runs long, so memory stays bounded without anyone having to
 > remember to call `clear()`.
+
+## One dial per character, not a column per boss
+
+Single-player did not balance characters against each other. It balanced each
+boss against each character, by giving the boss a different health pool
+depending on who walked into the fight.
+
+```js
+// src/legacy/game.js, before
+const BOSS_HP_KEYS = {
+  crowking:    ['bossHP', 'bossHPWizard', 'bossHPKnight'],
+  dark_archer: ['darkArcherHP', 'darkArcherHPWizard', 'darkArcherHPKnight'],
+  dark_knight: ['darkKnightHP', 'darkKnightHPWizard', 'darkKnightHPKnight'],
+  commander:   ['commanderHP', 'commanderHPWizard', 'commanderHPKnight'],
+};
+
+function bossHpFor(kind) {
+  if (kind === 'minotaur') return Infinity;
+  const [normal, wizard, knight] = BOSS_HP_KEYS[kind];
+  const key = selectedChar === 'wizard' ? wizard : selectedChar === 'knight' ? knight : normal;
+  return CONFIG[key];
+}
+```
+
+Four bosses times three named cases, twelve hand-tuned numbers, and the
+comment above the table said it existed so `bossHpFor` had "one home instead
+of a third near-identical ternary chain". It was the right instinct pointed
+at the wrong half of the problem: the chain was consolidated, the matrix it
+read was not.
+
+Three things went wrong with it, and only the third was ever noticed:
+
+1. **The rows are positional, not keyed.** Each is a fixed
+   `[normal, wizard, knight]` tuple. It is a table in name and an array in
+   fact, so `Record<CharacterKind, X>`'s guarantee — the compiler names every
+   row a new hero is missing — never applied to it.
+2. **A new hero falls through in silence.** `sapper` is not `'wizard'` and
+   not `'knight'`, so it took `normal`. The sapper fought the Crow King's
+   5-point pool with a 2-damage charge, three throws, while the wizard needed
+   fourteen bolts at one per two seconds against the same boss. Nobody chose
+   either number. One was a fall-through and the other was a column nobody
+   re-checked after the wizard's kit changed.
+3. **It only reaches bosses.** Crows, skeletons and rats have exactly 1 hit
+   point and die to one hit of anything, so a character's damage identity
+   existed inside boss fights and nowhere else in the game.
+
+### Building blocks
+
+| Name | Type | Holds |
+|---|---|---|
+| `bossDamageMult` | `number`, a field on `CharacterStats` | The whole of how hard one character hits. One number per hero. |
+| `CHARACTER_STATS` | `Record<CharacterKind, CharacterStats>` | The row it lives in, beside `speed` and `maxHp`. |
+| `BOSS_HP` | `Record<string, number>` | One health pool per boss, the same for everybody. |
+| `applyBossDamage` | `(amount) => void` | The one place boss health is lowered, and so the one place the multiplier is applied. |
+
+- `CharacterStats` and `CHARACTER_STATS` are defined at `src/sim/arena.ts`.
+- `BOSS_HP` and `applyBossDamage` are in `src/legacy/game.js`.
+- The figures themselves, and the reasoning per row, are in
+  [Balance](balance.md).
+
+### How it works
+
+```mermaid
+flowchart LR
+    classDef gone stroke-dasharray:6 3
+
+    subgraph BEFORE["before: 12 numbers, read by a ternary"]
+        m1["bossHP / bossHPWizard / bossHPKnight"]:::gone
+        m2["darkArcherHP / ...Wizard / ...Knight"]:::gone
+        m3["darkKnightHP / ...Wizard / ...Knight"]:::gone
+        m4["commanderHP / ...Wizard / ...Knight"]:::gone
+        tern["selectedChar === 'wizard' ? w :\nselectedChar === 'knight' ? k : normal"]:::gone
+        m1 & m2 & m3 & m4 --> tern
+    end
+
+    subgraph AFTER["after: 4 numbers and 5, neither one indexed by the other"]
+        pools["BOSS_HP\ncrowking 10, dark_archer 12,\ndark_knight 16, commander 20"]
+        dials["CHARACTER_STATS[kind].bossDamageMult\nwizard 2.5, knight 1.5, archer 1.4,\nsapper 1.2, ranger 0.8"]
+    end
+
+    tern -.-> pools
+    tern -.-> dials
+    pools --> hp["boss.hp at spawn"]
+    dials --> dmg["applyBossDamage(amount x mult)"]
+```
+
+The two axes stop multiplying into a grid. Adding a sixth hero adds one
+number; adding a fifth boss adds one number; neither adds a row to the other.
+
+### The alternative considered
+
+The obvious smaller fix is to keep the inversion and only tidy the storage:
+give each boss one pool and each character a **`bossHpMult`**, so the boss's
+health scales per fighter. It was worked out in full before being rejected,
+and it is genuinely tempting, because it reproduces every one of the twelve
+existing cells to within a few percent from five numbers:
+
+| Character | `bossHpMult` | Crow King | Dark Archer | Dark Knight | Commander |
+|---|---|---|---|---|---|
+| knight | 2.4 | 12 vs 12 | 14.4 vs 14 | 19.2 vs 18 | 24 vs 22 |
+| wizard | 2.8 | 14 vs 14 | 16.8 vs 16 | 22.4 vs 20 | 28 vs 24 |
+| everyone else | 1.0 | 5 vs 5 | 6 vs 6 | 8 vs 8 | 10 vs 10 |
+
+That the twelve cells collapse this cleanly is the evidence that they were
+always one multiplier per character wearing twelve numbers' clothing. It was
+still rejected, for two reasons:
+
+- **It keeps the inversion.** "The wizard makes the boss tougher" is the
+  sentence that shape forces you to say, and it is not what anybody means.
+  What they mean is that the wizard hits harder, which the same arithmetic
+  can express directly.
+- **It stays boss-only.** A multiplier on boss health cannot ever affect a
+  crow, so the third problem above survives the fix intact.
+
+A second alternative — a `Record<CharacterKind, number>` per boss, keeping the
+per-fighter pools but making them compiler-checked — fixes the silent
+fall-through and nothing else. It is twenty cells instead of twelve once a
+sixth hero lands.
+
+### Why one dial wins here
+
+- **It collapses a product into a sum.** Twelve numbers were characters times
+  bosses. Nine are characters plus bosses. The grid was never carrying
+  information a grid is needed for: no cell disagreed with what one
+  multiplier would have predicted by more than about ten percent.
+- **The compiler can finally hold it.** `bossDamageMult` is a field on
+  `CharacterStats`, so a hero added without one does not build. That is
+  exactly the guarantee `PRIMARY`, `SILHOUETTES` and `PAINTERS` already give
+  and the tuple rows never could — the sapper's fall-through would have been
+  a compile error rather than a stealth difficulty setting.
+- **It is one sentence.** Every weapon has a damage, every character has a
+  multiplier, every boss has one pool. The thing being explained is now the
+  same size as the explanation.
+- **It applies where damage is a quantity.** `applyBossDamage` is already
+  documented as the single place boss health is lowered, so every weapon and
+  the fire burn route through it without any of them learning that a
+  multiplier exists. A new weapon is scaled by having damage at all.
+
+The scope limit is real and deliberate: `bossDamageMult` is boss damage, and
+the name says so. Crows die to one hit of anything, so scaling a hit that
+already kills changes nothing, and scaling the ranger's below 1 would stop
+his bolts killing crows outright. See
+[What the multiplier does not touch](balance.md#what-the-multiplier-does-not-touch).
+
+### Example: rebalancing a character
+
+The wizard was unwinnable in single-player, which is what started this. Under
+the old shape the fix was a guess at three coupled numbers — his bolt damage,
+his cooldown, and the two `bossHP*Wizard` columns — with no way to see the
+result except in a fight.
+
+Under the new one it is a division. He needs to kill the Crow King in about
+four bolts, his bolt is worth 1, the pool is 10, so his dial is 2.5. The
+cooldown is a separate question about how long he spends unable to answer
+anything, and it moves on its own from 2.0 s to 1.2 s. `wizBoltDamage` was
+never touched: it is what a bolt is worth, and a bolt did not change.
+
+### Notes
+
+> **Note.** One weapon constant moved with this. `knightSpearBossDamage`
+> drops from 2 to 1, still landing twice per swing, because a 4-point swing
+> against a baseline 1-point arrow was four times the roster's unit of damage
+> and `bossHPKnight: 12` was the thing absorbing it. That key sat in the
+> Knight block of `CONFIG` with the comment "knight has high DPS so boss
+> needs more HP" — the matrix documenting its own purpose two hundred lines
+> away from the boss numbers it was compensating.
