@@ -17,6 +17,7 @@ import {
 } from '../render/soldier-grids';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
+import { CHARACTER_STATS } from '../sim/arena';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { log, attachToEvents } from '../sim/log';
@@ -621,35 +622,96 @@ const DIFFICULTY = {
   hard:      { label: 'HARD',       color: '#FF8C00' },
   extraHard: { label: 'EXTRA HARD', color: '#FF3B30' },
 };
+/** How many pips a stat row draws, so the rating scale and the art agree. */
+const STAT_SCALE = 5;
+
+/**
+ * The best speed and HP any character has, which the derived ratings are
+ * scaled against. Read off CHARACTER_STATS rather than written down, so a
+ * character that really is faster or tougher moves the whole scale instead of
+ * quietly exceeding a hardcoded ceiling.
+ */
+const STAT_PEAKS = Object.values(CHARACTER_STATS).reduce(
+  (peak, s) => ({ speed: Math.max(peak.speed, s.speed), maxHp: Math.max(peak.maxHp, s.maxHp) }),
+  { speed: 1, maxHp: 1 },
+);
+
+/** A raw stat as 1..STAT_SCALE pips, relative to the roster's best. */
+const statPips = (value, peak) =>
+  Math.min(STAT_SCALE, Math.max(1, Math.ceil((value / peak) * STAT_SCALE)));
+
+/**
+ * `range` and `damage` are a judgement call per row, deliberately. Neither
+ * summarises one number the way HP and speed do — an archer's range is its
+ * bow, its pickups and a sniper root together, and the sapper's damage is a
+ * bomb, a barrage and a detonation with falloff. There is nothing to derive
+ * them from, so they are authored, and they are the only two that are.
+ *
+ * HP and SPEED are not here: they come from CHARACTER_STATS below, because a
+ * number typed here would be free to drift away from the one the simulation
+ * actually runs on.
+ */
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
     preview: () => ({ grid: buildArcherGrid(SP_TRIM.archer), sprite: ARCHER_SPRITE, key: 'archer' }),
-    lines:['Longbow  ·  Quiver system','Up to 3 arrows in-flight',
-           'Pickup: Fire / Ricochet arrows','Tool: Dynamite (charged throw)','Classic playstyle'] },
+    hook: 'Longbow and quiver', range: 4, damage: 3,
+    skills: { main: 'Longbow, three arrows in flight',
+              secondary: 'Dynamite, thrown further the longer held',
+              shift: 'Sniper mode: root for a longer aim' } },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     preview: () => ({ grid: buildWizardGrid(SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: 'wizard' }),
-    lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
-           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Tap Shift: Arcane Blink (6s)'] },
+    hook: 'Homing glass cannon', range: 4, damage: 4,
+    skills: { main: 'Homing bolts that seek the nearest target',
+              secondary: 'Lightning storm across a wide area',
+              shift: 'Arcane blink, a short safe teleport' } },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     preview: () => ({ grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' }),
-    lines:['Long spear  ·  melee range','Hold Shift: charge sweep (2× dmg)',
-           'Pickups: Javelin  ·  Fire Sword','Tool: Whirlwind (breaks tiles)','Special: Block (1 hit, 10s)'] },
+    hook: 'Armoured brawler', range: 1, damage: 4,
+    skills: { main: 'Long spear at melee reach, hits twice',
+              secondary: 'Whirlwind that breaks the tiles around you',
+              shift: 'Hold to charge, release a sweeping dash' } },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
     // The one animated preview: its cloak sway is a real 3-frame cycle, so the
     // frame is a parameter rather than baked like every other row's.
     preview: (frame) => ({ grid: buildRangerGrid(frame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${frame}` }),
-    lines:['Crossbow  ·  3-bolt burst','Independent bolts, 30% weaker',
-           'Pickup: Fire / Ricochet bolts','Tool: Satchel (throw, arm)','Skirmisher playstyle'] },
+    hook: 'Fast skirmisher', range: 3, damage: 2,
+    skills: { main: 'Crossbow burst of three weaker bolts',
+              secondary: 'Satchel charge: throw, then click to arm',
+              shift: 'Sniper mode: root for a longer aim' } },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
     preview: () => ({ grid: buildSapperGrid(SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: 'sapper' }),
-    lines:['10 bombs  ·  1.1s CD  ·  pitchfork at 0','Pickup: Fire / Ice bombs',
-           'Special: 5-bomb barrage, 45° fan','Shift: 3x shot, or combo your own bomb','Demolition playstyle'] },
-];
+    hook: 'Bombs and pitchfork', range: 2, damage: 5,
+    skills: { main: 'Ten bombs, pitchfork when the pouch empties',
+              secondary: 'Five-bomb barrage in a wide fan',
+              shift: 'Piercing triple shot, sets off your bombs' } },
+].map((p) => {
+  const stats = CHARACTER_STATS[p.char];
+  // Loud at load rather than a panel with two blank bars. A character with a
+  // panel and no CHARACTER_STATS row is the same silent gap the preview lookup
+  // used to have, and the sapper is what that cost last time.
+  if (!stats) throw new Error(`CHARACTER_STATS has no row for '${p.char}' (CHAR_PANELS has a panel for it)`);
+  return { ...p, statBars: [
+    { label: 'RANGE',  pips: p.range },
+    { label: 'DAMAGE', pips: p.damage },
+    { label: 'HP',     pips: statPips(stats.maxHp, STAT_PEAKS.maxHp) },
+    { label: 'SPEED',  pips: statPips(stats.speed, STAT_PEAKS.speed) },
+  ] };
+});
+
+/**
+ * The three ability slots a selected panel lists, as [heading, row key], in
+ * the order they appear. One list rather than three repeated draw calls, so
+ * the headings and the keys they read cannot drift apart, and the slots are
+ * the real ones: `main` is the shoot key, `secondary` is startCharge(), and
+ * `shift` is the snipe key — which is sniper mode for the archer and ranger
+ * and a distinct ability for the other three.
+ */
+const SKILL_SLOTS = [['MAIN', 'main'], ['SECONDARY', 'secondary'], ['SHIFT', 'shift']];
 
 /**
  * The map-select screen shown between character-select and the run, Waves
@@ -8602,6 +8664,58 @@ function _cornerFrame(color) {
     .forEach(([fx,fy,sx,sy]) => { ctx.beginPath(); ctx.moveTo(fx+sx*cl,fy); ctx.lineTo(fx,fy); ctx.lineTo(fx,fy+sy*cl); ctx.stroke(); });
 }
 
+/**
+ * `text` cut down until it fits inside `maxW`, with a trailing ellipsis when
+ * anything was dropped.
+ *
+ * Every string a panel draws goes through this rather than being trusted to
+ * fit. Panels are sized by how many characters the roster holds, so a line
+ * that fits five panels overflows six, and this screen shipped with its
+ * description text drawn straight over its own borders for exactly that
+ * reason: a fifth character narrowed the panels and nothing re-measured.
+ *
+ * The caller sets ctx.font first. measureText reads the live font, so fitting
+ * against one font and drawing in another silently defeats the whole point.
+ */
+function _fitText(text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let cut = text;
+  while (cut.length > 0 && ctx.measureText(`${cut}…`).width > maxW) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
+/** The muted tone the stat labels and skill slot names share, so the panel's
+ * own colour stays on the values rather than being spent on the chrome. */
+const PANEL_LABEL_COLOR = '#8a8a8a';
+
+/**
+ * One `LABEL ●●●○○` row, label left and pips right-aligned to `maxW`.
+ *
+ * Pips are drawn as rectangles rather than written as characters so the row's
+ * width is arithmetic instead of a font measurement — a star-string would be
+ * one more thing that fits at five panels and not at six.
+ */
+function _drawStatBar(lx, ly, maxW, bar, color) {
+  ctx.textAlign = 'left';
+  ctx.font = '9.5px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(bar.label, lx, ly);
+
+  const pipW = 7, pipGap = 3, pipH = 7;
+  const rowW = STAT_SCALE * pipW + (STAT_SCALE - 1) * pipGap;
+  const x0 = lx + maxW - rowW, top = ly - pipH / 2;
+  for (let i = 0; i < STAT_SCALE; i++) {
+    const px = x0 + i * (pipW + pipGap);
+    if (i < bar.pips) {
+      ctx.fillStyle = color;
+      ctx.fillRect(px, top, pipW, pipH);
+    } else {
+      ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 1;
+      ctx.strokeRect(px + 0.5, top + 0.5, pipW - 1, pipH - 1);
+    }
+  }
+}
+
 /** Reuses the same cached grids gameplay draws from — one real sprite per
  * hero instead of a fifth hand-drawn mini-vector copy per character. The
  * gentle bob is the only animation now; the vector version's per-character
@@ -8648,40 +8762,73 @@ function _selectionScreenBackdrop(title, subtitle) {
 function drawCharSelect(t) {
   _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${gameMode.toUpperCase()}`);
 
-  // Panel width shrinks to fit however many CHAR_PANELS holds today — four
-  // panels at the old 296px width would run 182px wider than the canvas.
-  const gapX = 12, panelH = 390;
-  const panelW = Math.floor((1000 - gapX * (CHAR_PANELS.length - 1)) / CHAR_PANELS.length);
-  const totalW = panelW*CHAR_PANELS.length + gapX*(CHAR_PANELS.length-1);
-  const startX = CONFIG.canvasW/2 - totalW/2;
-  const panelY = 118;
+  // The selected panel takes a fixed share of the row and the rest split what
+  // is left. Five equal panels could not hold five description lines without
+  // spilling over their own borders, and narrowing them further for a sixth
+  // character only made that worse; giving the detail to one panel at a time
+  // means the text that has to fit lives somewhere that has room for it, and
+  // a new character narrows the four minimal panels rather than that one.
+  const gapX = 12, panelY = 118, selW = Math.floor(1000 * 0.35), selH = 420, restH = 230;
+  const others = CHAR_PANELS.length - 1;
+  const restW = Math.floor((1000 - selW - gapX * others) / others);
+  const totalW = selW + restW * others + gapX * others;
+  // Panels are centred on one line so the selected one expands about its own
+  // middle instead of growing downward out of the row.
+  const midY = panelY + selH / 2;
 
-  CHAR_PANELS.forEach((p, idx) => {
-    const px = startX + idx * (panelW + gapX);
+  let px = Math.round(CONFIG.canvasW / 2 - totalW / 2);
+  CHAR_PANELS.forEach((p) => {
     const sel = selectedChar === p.char;
+    const w = sel ? selW : restW, h = sel ? selH : restH;
+    const py = Math.round(midY - h / 2);
+    const pad = 12, innerW = w - pad * 2, cx = px + w / 2;
+
     ctx.fillStyle = sel ? p.bg : p.dimBg;
-    ctx.fillRect(px, panelY, panelW, panelH);
+    ctx.fillRect(px, py, w, h);
     if (sel) { ctx.shadowColor=p.color; ctx.shadowBlur=16; }
     ctx.strokeStyle = sel ? p.color : p.dim; ctx.lineWidth=1.5;
-    ctx.strokeRect(px, panelY, panelW, panelH); ctx.shadowBlur=0;
+    ctx.strokeRect(px, py, w, h); ctx.shadowBlur=0;
+
+    ctx.textAlign='center';
     ctx.fillStyle = sel ? p.color : p.dim;
     ctx.font='19px "Courier New",monospace';
-    ctx.fillText(`[${p.key}] ${p.char.toUpperCase()}`, px+panelW/2, panelY+30);
+    ctx.fillText(_fitText(`[${p.key}] ${p.char.toUpperCase()}`, innerW), cx, py+28);
     if (p.newBadge) {
       ctx.font='bold 10px "Courier New",monospace';
       ctx.shadowColor='#FFB400'; ctx.shadowBlur=7;
-      ctx.fillStyle='#FFB400'; ctx.fillText('[ NEW ]', px+panelW/2, panelY+50);
+      ctx.fillStyle='#FFB400'; ctx.fillText('[ NEW ]', cx, py+48);
       ctx.shadowBlur=0;
     }
-    _drawCharPreview(px+panelW/2, panelY+114, p, t);
+    _drawCharPreview(cx, py+108, p, t);
+
+    // The one line every panel carries, selected or not.
     ctx.font='10.5px "Courier New",monospace';
-    ctx.fillStyle = sel ? p.color.replace('FF','88') : p.dim;
-    p.lines.forEach((line, i) => ctx.fillText(line, px+panelW/2, panelY+208+i*30));
+    ctx.fillStyle = sel ? p.color : p.dim;
+    ctx.fillText(_fitText(p.hook, innerW), cx, py+160);
+
+    if (sel) {
+      p.statBars.forEach((bar, i) => _drawStatBar(px+pad, py+186+i*19, innerW, bar, p.color));
+      SKILL_SLOTS.forEach(([label, slot], i) => {
+        const sy = py + 276 + i * 40;
+        ctx.textAlign='left';
+        ctx.font='9px "Courier New",monospace';
+        ctx.fillStyle = PANEL_LABEL_COLOR;
+        ctx.fillText(label, px+pad, sy);
+        ctx.font='10.5px "Courier New",monospace';
+        ctx.fillStyle = p.color;
+        ctx.fillText(_fitText(p.skills[slot], innerW), px+pad, sy+15);
+      });
+      ctx.textAlign='center';
+    }
+
     ctx.font='11px "Courier New",monospace';
     ctx.shadowColor = p.difficulty.color; ctx.shadowBlur = 6;
     ctx.fillStyle = p.difficulty.color;
-    ctx.fillText(`DIFFICULTY: ${p.difficulty.label}`, px+panelW/2, panelY+360);
+    const diff = sel ? `DIFFICULTY: ${p.difficulty.label}` : p.difficulty.label;
+    ctx.fillText(_fitText(diff, innerW), cx, py+h-24);
     ctx.shadowBlur = 0;
+
+    px += w + gapX;
   });
 
   ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
