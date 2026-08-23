@@ -304,7 +304,15 @@ const CONFIG = {
   knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
   knightChargeTickRate: 0.2,
 
-  // Wizard
+  // Wizard. Blink is the answer to the one question the rest of the kit does
+  // not: something is on me right now. Five tiles is far enough to break
+  // contact with anything that walks, short enough that it crosses a room and
+  // not the map. The cooldown is the storm's own, since both are the wizard's
+  // "once in a while" buttons and neither should be the answer twice in a row.
+  // The refusal threshold keeps a blink into a wall from costing five seconds
+  // for two pixels of travel.
+  wizBlinkDistance: 160, wizBlinkCooldown: 6, wizBlinkIFrames: 0.3,
+  wizBlinkMinDistance: 32,
   wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
@@ -540,7 +548,7 @@ const CHAR_PANELS = [
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     lines:['Homing magic bolts  2s CD','Fire Bolt pickup: 3 dmg homing',
-           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Caster playstyle'] },
+           'Laser pickup: 3 dmg, pierces walls','Special: Lightning Storm AoE','Tap Shift: Arcane Blink (6s)'] },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     lines:['Long spear  ·  melee range','Hold Shift: charge sweep (2× dmg)',
@@ -653,6 +661,10 @@ let selectedMapKind = 'forest';   // 'forest' | 'castle'
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
 let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
+// Arcane Blink: what the wizard spends the sniper key on. The iframe is the
+// short mercy window on arrival, without which blinking out of a swarm still
+// takes the hit you blinked away from.
+let wizBlinkCD = 0, wizBlinkIFrame = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 
@@ -983,6 +995,72 @@ function knightChargeFrac() {
   return Math.min(1, (performance.now() - knightCharge.t0) / 1000 / CONFIG.knightChargeMaxHoldSecs);
 }
 
+/**
+ * Whether the player's body fits with its centre at a point: all four
+ * collision corners on passable tiles.
+ *
+ * Extracted from the movement resolution, which is still its main caller, so
+ * that walking and the wizard's blink cannot come to disagree about what
+ * counts as a wall.
+ */
+function playerFits(x, y) {
+  const r = CONFIG.playerRadius;
+  return tilePassable(tileAt(x-r, y-r)) && tilePassable(tileAt(x+r, y-r)) &&
+         tilePassable(tileAt(x-r, y+r)) && tilePassable(tileAt(x+r, y+r));
+}
+
+/* Clamp bounds keep the player's collision corners inside the first passable
+ * row/col (index 1) so they never straddle the solid border tiles and get
+ * stuck. Two functions rather than one returning a point: this runs twice a
+ * frame per axis and has no business allocating. */
+function clampArenaX(x) {
+  const r = CONFIG.playerRadius;
+  return Math.max(CONFIG.tileSize + r, Math.min(CONFIG.canvasW - r, x));
+}
+function clampArenaY(y) {
+  const r = CONFIG.playerRadius;
+  return Math.max(CONFIG.tileSize + r, Math.min((CONFIG.rows - 1) * CONFIG.tileSize - r, y));
+}
+
+/**
+ * The wizard's Arcane Blink, bound to the key that means sniper mode for
+ * everyone else.
+ *
+ * Walks the aim line in short steps and keeps the last point the body
+ * actually fits in, rather than jumping to the end and asking afterwards. So
+ * a blink never crosses a wall and never lands inside one: it closes on cover
+ * instead of passing through it. That is not a limitation to work around, it
+ * is what keeps the maze a maze - its walls are the level, and nothing else
+ * in the game can pass them either.
+ */
+function tryWizardBlink() {
+  if (selectedChar !== 'wizard' || !inGame()) return;
+  if (wizBlinkCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+
+  const step = 4;
+  const dx = Math.cos(player.aimAngle) * step, dy = Math.sin(player.aimAngle) * step;
+  let x = player.x, y = player.y;
+  for (let travelled = 0; travelled < CONFIG.wizBlinkDistance; travelled += step) {
+    const nx = clampArenaX(x + dx), ny = clampArenaY(y + dy);
+    if (!playerFits(nx, ny)) break;
+    x = nx; y = ny;
+  }
+
+  // Blinking face-first into a wall would otherwise cost the whole cooldown
+  // for a couple of pixels, which reads as the button being broken rather
+  // than as the wall being solid.
+  if (Math.hypot(x - player.x, y - player.y) < CONFIG.wizBlinkMinDistance) {
+    events.emit({ type: 'ACTION_BLOCKED' });
+    return;
+  }
+
+  const fromX = player.x, fromY = player.y;
+  player.x = x; player.y = y;
+  wizBlinkCD     = CONFIG.wizBlinkCooldown;
+  wizBlinkIFrame = CONFIG.wizBlinkIFrames;
+  events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: x, toY: y });
+}
+
 /** Knight-only, bound to the key that means sniper mode for everyone else.
  * Winds up in place; releaseKnightCharge() converts the hold into the dash. */
 function startKnightCharge() {
@@ -1101,7 +1179,7 @@ function installInput() {
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
-    if (!keys[e.key] && e.key === CONFIG.keys.snipe) startKnightCharge();
+    if (!keys[e.key] && e.key === CONFIG.keys.snipe) { startKnightCharge(); tryWizardBlink(); }
     keys[e.key] = true;
     if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
@@ -1429,6 +1507,22 @@ events.on(e => {
       });
       break;
 
+    case 'WIZARD_BLINK':
+      // Two bursts, not one: the wizard was there and is now here, and a
+      // single puff at the arrival end reads as a spawn rather than a move.
+      playSound(sndLightning);
+      burst(e.x, e.y, {
+        count: 12, colors: ['#8888FF','#C8C8FF','#FFFFFF'],
+        speedMin: 20, speedMax: 70, decay: 3.0, shape: 'spark',
+        shadowBlur: 6, shadowColor: '#8888FF'
+      });
+      burst(e.toX, e.toY, {
+        count: 16, colors: ['#8888FF','#FFFFFF'],
+        speedMin: 40, speedMax: 110, decay: 2.4, shape: 'spark',
+        shadowBlur: 8, shadowColor: '#8888FF'
+      });
+      break;
+
     case 'WHIRLWIND_START':
       playSound(sndExplosion); triggerShake(...SHAKE.whirlwindStart);
       burst(e.x, e.y, {
@@ -1595,6 +1689,7 @@ function initGame() {
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  wizBlinkCD = 0; wizBlinkIFrame = 0;
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -1743,9 +1838,12 @@ function updatePlayer(dt) {
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
-  // The knight spends this button on his charge instead: he has no aim line
-  // to sharpen, so sniper mode was a pure downside for him.
-  sniperMode = selectedChar !== 'knight' && hasButton(cmd, Button.SNIPE);
+  // The knight spends this button on his charge, and the wizard on a blink.
+  // Neither has an aim line worth sharpening: the knight has none at all, and
+  // the wizard's bolts steer themselves onto a target after they are cast, so
+  // a tighter angle at the moment of casting buys him almost nothing while
+  // the root that comes with it costs him everything.
+  sniperMode = selectedChar !== 'knight' && selectedChar !== 'wizard' && hasButton(cmd, Button.SNIPE);
 
   // Charging roots him in place the same way sniper mode roots everyone else.
   if (!sniperMode && !knightCharge.on) {
@@ -1765,20 +1863,10 @@ function updatePlayer(dt) {
       const len = Math.hypot(vx, vy);
       if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
     }
-    const r = CONFIG.playerRadius;
-    // Clamp bounds keep the player's collision corners (±r) inside the first passable
-    // row/col (index 1) so they never straddle the solid border tiles and get stuck.
-    const ts = CONFIG.tileSize;
-    const minX = ts + r, maxX = CONFIG.canvasW - r;
-    const minY = ts + r, maxY = (CONFIG.rows - 1) * ts - r;
     const nx = player.x + vx;
-    if (tilePassable(tileAt(nx-r, player.y-r)) && tilePassable(tileAt(nx+r, player.y-r)) &&
-        tilePassable(tileAt(nx-r, player.y+r)) && tilePassable(tileAt(nx+r, player.y+r)))
-      player.x = Math.max(minX, Math.min(maxX, nx));
+    if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
     const ny = player.y + vy;
-    if (tilePassable(tileAt(player.x-r, ny-r)) && tilePassable(tileAt(player.x+r, ny-r)) &&
-        tilePassable(tileAt(player.x-r, ny+r)) && tilePassable(tileAt(player.x+r, ny+r)))
-      player.y = Math.max(minY, Math.min(maxY, ny));
+    if (playerFits(player.x, ny)) player.y = clampArenaY(ny);
   }
 
   // Mid-dash the aim is locked to the committed direction, so the arc can't be
@@ -1793,6 +1881,8 @@ function updatePlayer(dt) {
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
+  if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
+  if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
   if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
@@ -3205,6 +3295,9 @@ function damagePlayer(amount, crowIndex = -1) {
   // Winding up the charge is the knight's whole defence for those seconds: he
   // cannot move or attack, so he eats nothing. The dash afterwards is exposed.
   if (knightCharge.on) return;
+  // And the moment after a blink is the wizard's, for the same reason: an
+  // escape that still eats the hit it escaped is not an escape.
+  if (wizBlinkIFrame > 0) return;
   if (playerShield) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
@@ -6825,6 +6918,16 @@ const GLYPH = {
   feather: (s) => { const m = s/2; ctx.beginPath();
     ctx.moveTo(m, 0); ctx.quadraticCurveTo(s, m, m, s); ctx.quadraticCurveTo(0, m, m, 0);
     ctx.closePath(); ctx.fill(); },
+  // Two chevrons pointing the same way with a gap between them: something
+  // that was here, and is now there.
+  blink: (s) => { const m = s/2; ctx.lineWidth = 2;
+    [[-0.30, -0.06], [0.06, 0.30]].forEach(([a, b]) => {
+      ctx.beginPath();
+      ctx.moveTo(m + s*a, m - s*0.22);
+      ctx.lineTo(m + s*b, m);
+      ctx.lineTo(m + s*a, m + s*0.22);
+      ctx.stroke();
+    }); },
   snipe: (s) => { const m = s/2; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(m, m, s*0.3, 0, Math.PI*2); ctx.stroke();
     [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => { ctx.beginPath();
@@ -6877,7 +6980,7 @@ const LANE_D = {
   archer: ['snipe', 'shield'],
   ranger: ['snipe', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
-  wizard: ['bolt', 'storm', 'snipe', 'shield'],
+  wizard: ['bolt', 'storm', 'blink', 'shield'],
   sapper: ['charge', 'snipe', 'shield'],
 };
 
@@ -6889,6 +6992,7 @@ const CHIP = {
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
   charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
   storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
+  blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
                       label: inv.knightFireSwordTimer > 0 ? inv.knightFireSwordTimer.toFixed(1) + 's' : '',
                       frac: null }),
@@ -8128,6 +8232,9 @@ export const devHooks = {
   },
   // Dev triggers that drive real sim paths, for headless event-bus checks.
   kill(i = 0) { if (i >= 0 && i < crows.length) killCrow(i); },
+  // Lands a hit through the real damage path, so a test can check what does
+  // and does not absorb one without staging a collision to produce it.
+  hurt(amount = 1) { damagePlayer(amount); },
   killSkel(i = 0) { if (i >= 0 && i < skeletons.length) killSkeleton(i); },
   // Drives the same death path a real kill shot would, so the crowking →
   // dark_archer → dark_knight → win chain can be walked without grinding
@@ -8211,6 +8318,10 @@ export const devHooks = {
   // the protocol knows about actually has a panel to be picked from.
   charPanels: () => CHAR_PANELS,
   sapperChargeCD: () => sapperChargeCD,
+  // The blink runs off a keydown edge rather than the held `keys` map, so a
+  // headless test drives it the same way devHooks.shoot drives the primary.
+  blink() { tryWizardBlink(); },
+  wizBlink: () => ({ cd: wizBlinkCD, iframe: wizBlinkIFrame }),
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },
   spawnSkeleton(kind = 'normal') { spawnSkeleton(kind); },

@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CHARACTERS } from '../net/protocol';
+import { TILE } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 
 /** One second of simulation, at the fixed 60 Hz step the loop uses. */
@@ -298,5 +299,150 @@ describe('the sapper', () => {
 
   it('starts every run with the charge ready rather than winding', () => {
     expect(g.sapperChargeCD()).toBe(0);
+  });
+});
+
+/**
+ * Flattens the arena to open floor.
+ *
+ * The map is procedural, so "blink five tiles east" is otherwise a question
+ * about whichever tree the generator happened to put there. These tests are
+ * about the rule, not the map, so they lay their own walls where they want
+ * them and leave the rest empty.
+ */
+function clearArena(): void {
+  const c = g.config();
+  const tiles = g.tiles();
+  for (let row = 1; row < c.rows - 1; row++)
+    for (let col = 1; col < c.cols - 1; col++) tiles.set(row, col, TILE.EMPTY);
+}
+
+/** Puts the wizard at a tile centre, aiming due east, on open ground. */
+function wizardAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
+  g.pick('wizard');
+  g.go('playing');
+  clearArena();
+  const ts = g.config().tileSize;
+  const p = g.player() as { x: number; y: number; aimAngle: number };
+  p.x = (col + 0.5) * ts;
+  p.y = (row + 0.5) * ts;
+  p.aimAngle = 0;
+  return p;
+}
+
+describe('the wizard blink', () => {
+  it('carries the wizard down the aim line, the whole distance on open ground', () => {
+    const p = wizardAt(6, 6);
+    const from = p.x;
+    g.blink();
+    expect(p.x - from).toBeCloseTo(g.config().wizBlinkDistance, 0);
+    expect(p.y).toBeCloseTo((6 + 0.5) * g.config().tileSize, 5);
+  });
+
+  it('stops in front of a wall rather than passing through it', () => {
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    const from = p.x;
+    // A column of rock three tiles east, taller than the body, well within
+    // the blink's reach.
+    const wallCol = 9;
+    for (let row = 4; row <= 8; row++) g.tiles().set(row, wallCol, TILE.ROCK);
+
+    g.blink();
+    expect(p.x).toBeGreaterThan(from);                       // it did move
+    expect(p.x - from).toBeLessThan(c.wizBlinkDistance);     // but not all the way
+    expect(p.x + c.playerRadius).toBeLessThanOrEqual(wallCol * c.tileSize);
+  });
+
+  it('refuses a blink with nowhere to go, and charges nothing for it', () => {
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    // Hard against the western border, facing into it.
+    p.x = c.tileSize + c.playerRadius;
+    p.aimAngle = Math.PI;
+    const from = p.x;
+
+    g.blink();
+    expect(p.x).toBe(from);
+    expect(g.wizBlink().cd).toBe(0);
+  });
+
+  it('will not blink again until the cooldown has run', () => {
+    const c = g.config();
+    const p = wizardAt(4, 6);
+    g.blink();
+    const landed = p.x;
+    expect(g.wizBlink().cd).toBeCloseTo(c.wizBlinkCooldown, 5);
+
+    g.blink();
+    expect(p.x).toBe(landed);
+
+    // One tick past the nominal cooldown: every cooldown in the game counts
+    // down by max(0, cd - dt), so an exact multiple of the step leaves a
+    // float's worth of dust behind and the next tick clears it.
+    g.stepSim(Math.ceil(c.wizBlinkCooldown * ONE_SECOND) + 1);
+    expect(g.wizBlink().cd).toBe(0);
+    g.blink();
+    expect(p.x).toBeGreaterThan(landed);
+  });
+
+  it('eats the hit it blinked away from, and only that one', () => {
+    const c = g.config();
+    wizardAt(6, 6);
+    const before = g.hp();
+
+    g.blink();
+    expect(g.wizBlink().iframe).toBeGreaterThan(0);
+    g.hurt(3);
+    expect(g.hp()).toBe(before);
+
+    // Once the window closes the wizard is as soft as ever.
+    g.stepSim(Math.ceil(c.wizBlinkIFrames * ONE_SECOND) + 1);
+    expect(g.wizBlink().iframe).toBe(0);
+    g.hurt(3);
+    expect(g.hp()).toBe(before - 3);
+  });
+
+  it('belongs to the wizard alone', () => {
+    for (const character of ['archer', 'knight', 'ranger', 'sapper']) {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      const p = g.player() as { x: number; aimAngle: number };
+      p.aimAngle = 0;
+      const from = p.x;
+      g.blink();
+      expect(p.x, character).toBe(from);
+      expect(g.wizBlink().cd, character).toBe(0);
+    }
+  });
+});
+
+describe('the sniper key after the rework', () => {
+  /** Holds the sniper key and a walk key for a beat, and reports how far the
+   * character got. Sniper mode roots whoever still has it. */
+  function walkDistanceHoldingShift(character: string): number {
+    g.pick(character);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    const from = p.x;
+    const keys = g.keys() as Record<string, boolean>;
+    keys[g.config().keys.snipe] = true;
+    keys['ArrowRight'] = true;
+    g.stepSim(15);
+    keys[g.config().keys.snipe] = false;
+    keys['ArrowRight'] = false;
+    return p.x - from;
+  }
+
+  it('still roots the characters who aim down it', () => {
+    expect(walkDistanceHoldingShift('archer')).toBe(0);
+  });
+
+  it('no longer roots the wizard, whose bolts steer themselves anyway', () => {
+    expect(walkDistanceHoldingShift('wizard')).toBeGreaterThan(0);
   });
 });

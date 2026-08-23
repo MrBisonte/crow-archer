@@ -20,8 +20,14 @@ Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 ### Wizard
 Teleguided magic with area control.
 - **Primary:** Magic bolts, 3 s cooldown, home toward the nearest enemy, disappear on contact
+- **Blink (tap Shift):** Steps 160 px down the aim line, instantly, and ignores damage for 0.3 s on arrival. 6 s cooldown. It never crosses a wall: it walks the aim in short steps and stops at the last point the body fits, so it closes on cover rather than passing through it. A blink with nowhere to go is refused outright and costs no cooldown
 - **Special:** Lightning Storm, 450 px AoE around the player, destroys ROCK, TREE and HUT tiles, damages all enemies
 - **Pickups:** Fire bolt (2x damage), laser stream (passes through walls, stops on the first enemy)
+
+The wizard has no sniper mode. Bolts steer themselves onto a target after they
+are cast, so a tighter angle at the moment of casting buys almost nothing while
+the root it comes with costs everything — the same reasoning that gave the
+knight his charge on the same key.
 
 ### Knight
 Frontline melee with a long spear.
