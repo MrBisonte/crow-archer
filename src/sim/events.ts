@@ -68,6 +68,8 @@ export type GameEvent =
   | { type: 'KNIGHT_CHARGE'; x: number; y: number; power: number }
   // The dash met something it could not push through and ended early.
   | { type: 'KNIGHT_CHARGE_STOPPED'; x: number; y: number }
+  // The escape hatch fired: the player had nowhere to move and was lifted out.
+  | { type: 'PLAYER_UNSTUCK'; x: number; y: number; toX: number; toY: number }
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }

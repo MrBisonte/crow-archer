@@ -789,6 +789,8 @@ let killCount = 0, dropStreak = 0, playerShield = false;
 // returns before reading input while it is positive, so movement, aiming
 // and every weapon lock out together for the duration.
 let playerFrozenTimer = 0;
+// Counts down to the next escape-hatch probe — see unstickPlayer().
+let unstickCheck = 0;
 // Rat venom. Mirrors playerFrozenTimer's shape: one countdown owns the whole
 // effect, so the damage tick, the slow and the tint all read one source. A
 // fresh bite refreshes rather than stacks, the same call dazeBoss makes.
@@ -1237,6 +1239,88 @@ function playerFits(x, y) {
   const r = CONFIG.playerRadius;
   return tilePassable(tileAt(x-r, y-r)) && tilePassable(tileAt(x+r, y-r)) &&
          tilePassable(tileAt(x-r, y+r)) && tilePassable(tileAt(x+r, y+r));
+}
+
+/** The eight ways off a tile, for the walled-in test below. */
+const STEP_DIRS = [[1,0], [-1,0], [0,1], [0,-1], [1,1], [1,-1], [-1,1], [-1,-1]];
+
+/**
+ * Is a body at this point walled in — no full tile step in any direction
+ * landing somewhere it fits?
+ *
+ * A whole tile rather than a nudge on purpose: inside one open tile every
+ * small step still fits, so a body sealed into a single tile would look free
+ * to move. This asks whether there is anywhere to actually go.
+ *
+ * A legitimate corridor or corner always passes, because the way the body
+ * walked in is still a direction that fits.
+ */
+function boxedInAt(x, y) {
+  const d = CONFIG.tileSize;
+  for (const [dx, dy] of STEP_DIRS) if (playerFits(x + dx*d, y + dy*d)) return false;
+  return true;
+}
+
+/**
+ * The nearest tile centre a body both fits in and can leave again.
+ *
+ * Unlike nearestOpenTile, which asks only whether one tile is passable, this
+ * honours the four-corner box the movement code collides with and refuses a
+ * spot that is itself sealed — otherwise the escape hatch below could move a
+ * trapped player into a second trap, or leave them where they were.
+ */
+function nearestFreeTile(wx, wy) {
+  const ts = CONFIG.tileSize;
+  const col0 = Math.floor(wx / ts), row0 = Math.floor(wy / ts);
+  for (let radius = 0; radius <= 12; radius++) {
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        if (radius > 0 && Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
+        const r = row0 + dr, c = col0 + dc;
+        if (r < 0 || r >= CONFIG.rows || c < 0 || c >= CONFIG.cols) continue;
+        const x = c * ts + ts / 2, y = r * ts + ts / 2;
+        if (playerFits(x, y) && !boxedInAt(x, y)) return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Last-resort escape hatch: never leave the player with nowhere to go.
+ *
+ * Three separate root causes have put a player somewhere they could not move
+ * out of, and each was found only after it had been reported, guessed at and
+ * reproduced from scratch. Whatever the fourth turns out to be, being unable
+ * to move is the one symptom they all share, so this catches the symptom
+ * directly rather than waiting to catch the next cause.
+ *
+ * Deliberately narrow, so it cannot fire during normal play: it wants the
+ * body either overlapping a wall outright, or sealed in with no tile step
+ * anywhere that fits. Walking into a wall, standing in a corridor and sitting
+ * in a corner all still leave somewhere to go, and none of them trip this.
+ *
+ * Logs at warn with the position, so a recurrence leaves evidence of where
+ * and on which map instead of another report with nothing to go on.
+ */
+function unstickPlayer() {
+  if (!inGame() || !Number.isFinite(player.x) || !Number.isFinite(player.y)) return;
+  const buried = !playerFits(player.x, player.y);
+  if (!buried && !boxedInAt(player.x, player.y)) return;
+
+  const spot = nearestFreeTile(player.x, player.y);
+  const to = spot ?? spawnPoint();
+  log.warn('unstickPlayer', buried ? 'body inside terrain' : 'walled in with no way out', {
+    from: { x: Math.round(player.x), y: Math.round(player.y) },
+    to: { x: Math.round(to.x), y: Math.round(to.y) },
+    map: mapKind, char: selectedChar, usedSpawnFallback: spot === null,
+  });
+  const fromX = player.x, fromY = player.y;
+  player.x = to.x; player.y = to.y;
+  // Whatever was driving him is void now — a dash resuming after a rescue
+  // would just push him back into it.
+  knightDash.timer = 0; knightCharge.on = false;
+  events.emit({ type: 'PLAYER_UNSTUCK', x: fromX, y: fromY, toX: to.x, toY: to.y });
 }
 
 /* Clamp bounds keep the player's collision corners inside the first passable
@@ -1803,6 +1887,17 @@ events.on(e => {
       });
       break;
 
+    case 'PLAYER_UNSTUCK':
+      // A puff at both ends, so a rescue reads as a move rather than the
+      // player teleporting for no reason they can see.
+      for (const [px, py] of [[e.x, e.y], [e.toX, e.toY]])
+        burst(px, py, {
+          count: 10, colors: ['#FFFFFF', '#A8D8F0', '#C8C8E8'],
+          speedMin: 30, speedMax: 110, decay: 2.8, shape: 'spark',
+          shadowBlur: 6, shadowColor: '#A8D8F0',
+        });
+      break;
+
     case 'KNIGHT_CHARGE_STOPPED':
       // A short scrape of dust so the stop reads as hitting something solid
       // rather than the dash fizzling out on its own.
@@ -2149,6 +2244,14 @@ function updatePlayer(dt) {
   // stop you bleeding, and a poison that paused whenever an ice bolt landed
   // would quietly reward getting hit by two things at once.
   updatePlayerPoison(dt);
+
+  // The escape hatch, twice a second rather than every frame: it walks eight
+  // probes and there is no such thing as getting stuck between two frames.
+  // Ahead of the freeze gate so a frozen player is still rescued, and ahead of
+  // everything else so the rest of this function works from a valid position.
+  unstickCheck -= dt;
+  if (unstickCheck <= 0) { unstickCheck = 0.5; unstickPlayer(); }
+
   if (playerFrozenTimer > 0) { playerFrozenTimer = Math.max(0, playerFrozenTimer - dt); return; }
 
   const cmd = playerInput.sample();
@@ -9605,6 +9708,11 @@ export const devHooks = {
   // Everything that can refuse the player movement, in one place. A stuck
   // player is always one of these, so a harness that catches one can say which
   // rather than guessing.
+  // The escape hatch and its two predicates, so a test can check the rescue
+  // without waiting out the half-second probe timer.
+  unstick() { unstickPlayer(); },
+  boxedIn: () => boxedInAt(player.x, player.y),
+  fits: (x = player.x, y = player.y) => playerFits(x, y),
   movementBlockers: () => ({
     frozen: playerFrozenTimer,
     sniperMode,

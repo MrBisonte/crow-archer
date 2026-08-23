@@ -1118,6 +1118,116 @@ describe('the wizard blink', () => {
   });
 });
 
+/**
+ * The escape hatch. Three separate causes have trapped a player so far, so
+ * these cover the symptom — nowhere to move — rather than any one cause.
+ */
+describe('never leaves the player with nowhere to go', () => {
+  /** Walls the player into the single tile they are standing on. */
+  function sealIn(): { x: number; y: number } {
+    const c = g.config();
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    const col = 16, row = 10;
+    p.x = (col + 0.5) * c.tileSize;
+    p.y = (row + 0.5) * c.tileSize;
+    for (let dr = -1; dr <= 1; dr++)
+      for (let dc = -1; dc <= 1; dc++)
+        if (dr || dc) g.tiles().set(row + dr, col + dc, TILE.ROCK);
+    return p;
+  }
+
+  it('lifts a player out of a tile that has been walled off around them', () => {
+    const p = sealIn();
+    expect(g.fits(p.x, p.y)).toBe(true);   // the pocket itself is open ground
+    expect(g.boxedIn()).toBe(true);        // but there is no way out of it
+    const from = { x: p.x, y: p.y };
+
+    g.unstick();
+
+    expect(g.boxedIn()).toBe(false);
+    expect(g.fits(p.x, p.y)).toBe(true);
+    expect({ x: p.x, y: p.y }).not.toEqual(from);
+  });
+
+  it('lifts a player whose body is inside terrain', () => {
+    const c = g.config();
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    const col = 16, row = 10;
+    p.x = (col + 0.5) * c.tileSize;
+    p.y = (row + 0.5) * c.tileSize;
+    g.tiles().set(row, col, TILE.ROCK);    // buried where they stand
+    expect(g.fits(p.x, p.y)).toBe(false);
+
+    g.unstick();
+    expect(g.fits(p.x, p.y)).toBe(true);
+  });
+
+  it('fires on its own within a second, without being asked', () => {
+    const p = sealIn();
+    const from = { x: p.x, y: p.y };
+    g.stepSim(ONE_SECOND);
+    expect({ x: p.x, y: p.y }).not.toEqual(from);
+  });
+
+  it('says where it happened, so a recurrence leaves evidence', () => {
+    g.clearLogs();
+    g.setLogLevel('warn');
+    sealIn();
+    g.unstick();
+    const rescued = g.logs().filter((e) => e.source === 'unstickPlayer');
+    expect(rescued.length).toBe(1);
+    expect(rescued[0]!.data).toMatchObject({ map: 'forest', char: 'archer' });
+  });
+
+  // The guard that keeps this from firing during ordinary play. Each of these
+  // leaves somewhere to go, so none of them is stuck.
+  it('leaves ordinary play alone', () => {
+    const c = g.config();
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    const col = 16, row = 10;
+    p.x = (col + 0.5) * c.tileSize;
+    p.y = (row + 0.5) * c.tileSize;
+
+    // Open ground.
+    expect(g.boxedIn()).toBe(false);
+
+    // Flat against a wall.
+    g.tiles().set(row, col + 1, TILE.ROCK);
+    expect(g.boxedIn()).toBe(false);
+
+    // In a corner.
+    g.tiles().set(row + 1, col, TILE.ROCK);
+    expect(g.boxedIn()).toBe(false);
+
+    // In a one-tile-wide corridor, walls both sides.
+    clearArena();
+    g.tiles().set(row - 1, col, TILE.ROCK);
+    g.tiles().set(row + 1, col, TILE.ROCK);
+    expect(g.boxedIn()).toBe(false);
+
+    // A dead end, open on one side only.
+    clearArena();
+    const deadEnd: ReadonlyArray<readonly [number, number]> =
+      [[-1, 0], [1, 0], [0, 1], [-1, 1], [1, 1], [-1, -1], [1, -1]];
+    for (const [dr, dc] of deadEnd) g.tiles().set(row + dr, col + dc, TILE.ROCK);
+    expect(g.boxedIn()).toBe(false);
+
+    // And none of that moved anyone.
+    const before = { x: p.x, y: p.y };
+    g.stepSim(ONE_SECOND * 2);
+    expect({ x: p.x, y: p.y }).toEqual(before);
+  });
+});
+
 describe('the knight charge', () => {
   it('winds up in place, then commits to a dash on release', () => {
     g.pick('knight');
