@@ -76,10 +76,18 @@ export function pixelTriangleUp(g: PixelGrid, cx: number, baseY: number, halfW: 
   }
 }
 
+/** The three frames animFrame3 buckets into, in stride order: one extreme,
+ * the level pass between them, the other extreme. Every builder that bakes a
+ * cycle is called with exactly these, so anything enumerating a sprite's
+ * frames reads the set from here instead of writing it out again. */
+export const ANIM_FRAMES = ['a', 'mid', 'b'] as const;
+
+export type AnimFrame = (typeof ANIM_FRAMES)[number];
+
 /** Buckets a continuous animation phase into one of 3 pixel-art frames: a
  * flap/stride cycle only reads as pixel art if it steps between hand-drawn
  * poses instead of interpolating smoothly. */
-export function animFrame3(phase: number): 'a' | 'mid' | 'b' {
+export function animFrame3(phase: number): AnimFrame {
   const s = Math.sin(phase);
   return s > 0.33 ? 'b' : s < -0.33 ? 'a' : 'mid';
 }
