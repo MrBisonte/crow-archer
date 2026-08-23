@@ -805,9 +805,9 @@ const MAP_PANELS = Object.keys(MAP_RULES)
   .map(kind => {
     const info = MAP_PANEL_INFO[kind];
     // Fails at load rather than the first time the mapselect screen renders
-    // an undefined-riddled panel: a map added to MAP_RULES with crows:true
+    // an undefined-riddled panel: a map whose MAP_RULES row runs waves
     // still needs a row here, this just makes forgetting one loud and early.
-    if (!info) throw new Error(`MAP_PANEL_INFO has no entry for '${kind}' (MAP_RULES marks it crows: true)`);
+    if (!info) throw new Error(`MAP_PANEL_INFO has no entry for '${kind}' (runsWaves says it earns a panel)`);
     return { kind, ...info };
   });
 
@@ -867,7 +867,7 @@ let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
 
 // Map selection for Waves mode — persists for the session. Brawl ignores this
 // and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
-// One of MAP_PANELS' kinds, which is every MAP_RULES map with crows.
+// One of MAP_PANELS' kinds, which is every MAP_RULES map that runs waves.
 let selectedMapKind = 'forest';
 
 // Wizard combat cooldowns
@@ -1011,7 +1011,7 @@ const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
  * Generates the map, defaulting to 'forest' so a bare call is still a valid
  * one. `kind` comes from three real sources today: brawl's own scripted
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
- * screen (`selectedMapKind`, any map MAP_RULES gives crows), and the dev
+ * screen (`selectedMapKind`, any map runsWaves accepts), and the dev
  * harness.
  */
 function generateMap(kind = 'forest') {
