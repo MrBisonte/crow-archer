@@ -1164,6 +1164,126 @@ describe('the wizard blink', () => {
  * The escape hatch. Three separate causes have trapped a player so far, so
  * these cover the symptom — nowhere to move — rather than any one cause.
  */
+/**
+ * The player's own way out, and the report that explains why they needed it.
+ *
+ * These exist because the stuck-player bug has now been reported from real
+ * play more times than it has been reproduced in a harness, and because the
+ * last thing to be silently dropped by a merge — the sapper's shot falling
+ * out of pressShift() — had no test holding it in place. Nothing here is
+ * subtle; it is here so that losing any of it fails loudly.
+ */
+describe('the player can always free themselves', () => {
+  /** Walls the player into the tile they are standing on. */
+  function sealIn(): { x: number; y: number } {
+    const c = g.config();
+    g.pick('wizard');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    const col = 16, row = 10;
+    p.x = (col + 0.5) * c.tileSize;
+    p.y = (row + 0.5) * c.tileSize;
+    for (let dr = -1; dr <= 1; dr++)
+      for (let dc = -1; dc <= 1; dc++)
+        if (dr || dc) g.tiles().set(row + dr, col + dc, TILE.ROCK);
+    return p;
+  }
+
+  it('binds a key to it', () => {
+    expect(g.config().keys.unstick).toBeTruthy();
+  });
+
+  it('tells the player about that key on the controls screen', () => {
+    const listed = (g.ctrlActions() as Array<{ key: string }>).map((a) => a.key);
+    expect(listed).toContain('unstick');
+  });
+
+  it('frees a player who is walled in', () => {
+    const p = sealIn();
+    expect(g.boxedIn()).toBe(true);
+    const from = { x: p.x, y: p.y };
+
+    g.forceUnstick();
+
+    expect(g.boxedIn()).toBe(false);
+    expect(g.fits(p.x, p.y)).toBe(true);
+    expect({ x: p.x, y: p.y }).not.toEqual(from);
+  });
+
+  // Unconditional on purpose: the automatic hatch only acts when it can prove
+  // the body is trapped, and the trap still being reported is one it cannot
+  // see. Asking to be freed does not require passing a test first.
+  it('frees a player who is not trapped at all, if they ask', () => {
+    const c = g.config();
+    g.pick('wizard');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 16.5 * c.tileSize;
+    p.y = 10.5 * c.tileSize;
+    expect(g.boxedIn()).toBe(false);
+    const from = { x: p.x, y: p.y };
+
+    g.forceUnstick();
+
+    expect({ x: p.x, y: p.y }).not.toEqual(from);
+  });
+
+  it('clears whatever was driving or holding the player', () => {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    g.startKnightCharge();
+    expect(g.knightCharge().charging).toBe(true);
+
+    g.forceUnstick();
+
+    expect(g.knightCharge().charging).toBe(false);
+    expect(g.knightCharge().dashTimer).toBe(0);
+    expect(g.frozenTimer()).toBe(0);
+  });
+
+  it('says where and in what state, so a report arrives with evidence', () => {
+    g.setLogLevel('warn');
+    g.clearLogs();
+    sealIn();
+    g.forceUnstick();
+
+    const asked = g.logs().filter((e) => e.source === 'forceUnstick');
+    expect(asked.length).toBe(1);
+    expect(asked[0]!.data).toMatchObject({ map: 'forest', char: 'wizard', boxedIn: true });
+    // The fields that would identify the cause next time.
+    for (const field of ['buried', 'frozen', 'charging', 'dashing', 'drawing', 'netting', 'heldKeys'])
+      expect(asked[0]!.data, field).toHaveProperty(field);
+  });
+
+  it('reports a player who asks to move and cannot, with the same evidence', () => {
+    const c = g.config();
+    g.pick('wizard');
+    g.go('playing');
+    clearArena();
+    g.setLogLevel('warn');
+    g.clearLogs();
+    const p = g.player() as { x: number; y: number };
+    const col = 16, row = 10;
+    p.x = (col + 0.5) * c.tileSize;
+    p.y = (row + 0.5) * c.tileSize;
+    g.tiles().set(row, col + 1, TILE.ROCK);   // a wall to the east
+
+    const keys = g.keys() as Record<string, boolean>;
+    keys['ArrowRight'] = true;
+    for (let i = 0; i < 8; i++) g.stepSim(20);   // past the one-second threshold
+    keys['ArrowRight'] = false;
+
+    const refused = g.logs().filter((e) => e.source === 'movementRefused');
+    expect(refused.length).toBe(1);            // once per episode, not per frame
+    expect(refused[0]!.data).toMatchObject({ char: 'wizard' });
+    for (const field of ['want', 'at', 'buried', 'boxedIn', 'openDirections', 'heldKeys'])
+      expect(refused[0]!.data, field).toHaveProperty(field);
+  });
+});
+
 describe('never leaves the player with nowhere to go', () => {
   /** Walls the player into the single tile they are standing on. */
   function sealIn(): { x: number; y: number } {

@@ -1347,11 +1347,16 @@ function boxedInAt(x, y) {
  * honours the four-corner box the movement code collides with and refuses a
  * spot that is itself sealed — otherwise the escape hatch below could move a
  * trapped player into a second trap, or leave them where they were.
+ *
+ * `minRadius` of 1 skips the tile the player is already on, which is what
+ * the manual key wants: if it decides the player is fine and leaves them
+ * exactly where they were, then it has done nothing for the one player it
+ * exists for — the one who is stuck in a way we cannot yet detect.
  */
-function nearestFreeTile(wx, wy) {
+function nearestFreeTile(wx, wy, minRadius = 0) {
   const ts = CONFIG.tileSize;
   const col0 = Math.floor(wx / ts), row0 = Math.floor(wy / ts);
-  for (let radius = 0; radius <= 12; radius++) {
+  for (let radius = minRadius; radius <= 12; radius++) {
     for (let dr = -radius; dr <= radius; dr++) {
       for (let dc = -radius; dc <= radius; dc++) {
         if (radius > 0 && Math.abs(dr) !== radius && Math.abs(dc) !== radius) continue;
@@ -1394,7 +1399,7 @@ function nearestFreeTile(wx, wy) {
  */
 function forceUnstick() {
   if (!inGame()) return;
-  const spot = nearestFreeTile(player.x, player.y) ?? spawnPoint();
+  const spot = nearestFreeTile(player.x, player.y, 1) ?? spawnPoint();
   log.warn('forceUnstick', 'player asked to be freed', {
     from: { x: Math.round(player.x), y: Math.round(player.y) },
     to: { x: Math.round(spot.x), y: Math.round(spot.y) },
@@ -10287,6 +10292,7 @@ export const devHooks = {
   // The escape hatch and its two predicates, so a test can check the rescue
   // without waiting out the half-second probe timer.
   unstick() { unstickPlayer(); },
+  forceUnstick() { forceUnstick(); },
   boxedIn: () => boxedInAt(player.x, player.y),
   fits: (x = player.x, y = player.y) => playerFits(x, y),
   movementBlockers: () => ({
@@ -10369,6 +10375,7 @@ export const devHooks = {
   // The char-select table itself, so a test can check that every character
   // the protocol knows about actually has a panel to be picked from.
   charPanels: () => CHAR_PANELS,
+  ctrlActions: () => CTRL_ACTIONS,
   sapperChargeCD: () => sapperChargeCD,
   // Barrage and shot run off the same startCharge/keydown edges the archer's
   // secondary and the wizard's blink do, so headless tests drive them
