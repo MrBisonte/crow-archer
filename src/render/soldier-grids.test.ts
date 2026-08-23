@@ -175,11 +175,30 @@ describe('soldier grids', () => {
     // tripwire on its own documentation.
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
+    // The seam colours are whatever the pixelOutline calls are actually
+    // passed, read off those call sites rather than written down here.
+    //
+    // Keyed on a slot named `edge` this check would have had the exact flaw it
+    // exists to catch. That name is the one the rat proves cannot be trusted,
+    // and this file only satisfies it by coincidence: hardcode it and the
+    // check is accidentally correct, which is the state it is meant to end.
+    // Read from the call site it stays correct through a rename, and it ports
+    // to builders that bind the colour differently without asking them to
+    // agree on anything first.
+    const seams = new Set(
+      [...code.matchAll(/pixelOutline\(\s*\w+\s*,\s*([^)]+?)\s*\)/g)]
+        .map((m) => m[1]!.replace(/!$/, '').trim()),
+    );
+    expect(seams.size, 'no pixelOutline call found to read the seam colour from')
+      .toBeGreaterThan(0);
+
+    // Whole file, not per builder: buildSoldierBody carries the belt and has
+    // no pixelOutline call of its own, so a per-function scope would skip the
+    // one helper the belt deviation actually lived in.
     const offenders = code
       .split('\n')
       .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-      // A read of the slot, not its definition: `edge: '#...'` declares it.
-      .filter(({ line }) => /\['edge'\]|\.edge\b/.test(line))
+      .filter(({ line }) => [...seams].some((seam) => line.includes(seam)))
       .filter(({ line }) => !line.includes('pixelOutline'));
 
     expect(offenders, `structure painted in the seam colour: ${JSON.stringify(offenders)}`)
