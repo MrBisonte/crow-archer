@@ -134,6 +134,38 @@ describe('soldier grids', () => {
       SOLDIER_PALETTES.spearman['edge']!)).toBe(1);
   });
 
+  // The precondition the masking predicate needs, asserted over every row
+  // rather than at the one or two the other tests happen to sample.
+  //
+  // A row painted entirely in the seam colour vanishes under masking, so any
+  // check later pointed at it reports zero and reads as a broken sprite. The
+  // belt and the shieldman's shield rim were exactly that until they were
+  // given a shade of their own. buildKnightGrid is the codebase's worked
+  // example: it has a dedicated `visor` slot and reaches for the outline
+  // colour nowhere but the outline call, which is why it is the one hero with
+  // no masking problem.
+  //
+  // NOT TESTED, deliberately, and this is the note explaining why.
+  //
+  // The precondition the masking predicate needs is that structure is never
+  // painted in the seam colour. It cannot be asserted from a finished grid:
+  // once pixelOutline has run, a seam cell and a structural cell of the same
+  // colour are the same cell, and nothing downstream can tell them apart.
+  //
+  // Two attempts are worth recording, because both look workable. "No row is
+  // entirely seam" fails on the outline's own caps, the seam across the top of
+  // the helm. Narrowing it to interior rows fails on the neck: the seam
+  // between head and torso spans the full width and is legitimately all seam.
+  // Every further narrowing is a way of not testing it while appearing to.
+  //
+  // So this is maintained by convention instead, following buildKnightGrid,
+  // the codebase's one hero with no masking problem: it gives its visor a
+  // palette slot of its own and reaches for the outline colour nowhere but the
+  // outline call. The soldiers now do the same — boots and belts and the
+  // shield's rim have a `shade` of their own — and the reason that slot is not
+  // called `edge` is the legacy rat, whose `edge` means "darkest structural
+  // tone" and whose legs vanish under a mask keyed on the name.
+
   it('is deterministic, so the sprite cache can key on kind and frame alone', () => {
     for (const kind of SOLDIER_KINDS) {
       expect(shapeOf(SOLDIER_GRID_BUILDERS[kind]('a')))

@@ -39,15 +39,18 @@ export const COMMANDER_SPRITE = { w: 34, h: 28 };
 export const SOLDIER_PALETTES: Record<SoldierKind, Record<string, string>> = {
   spearman: {
     cloth: '#8A6A38', clothHi: '#A88448', metal: '#9AA0A8', metalHi: '#C4CAD2',
-    skin: '#C89868', edge: '#2A2018', accent: '#B03028', boot: '#4A3A22',
+    skin: '#C89868', edge: '#2A2018', accent: '#B03028',
+    boot: '#4A3A22', shade: '#3E3022',
   },
   shieldman: {
     cloth: '#44557A', clothHi: '#5E7296', metal: '#AAB4C0', metalHi: '#D8E0E8',
-    skin: '#C89868', edge: '#1C2230', accent: '#C8A030', boot: '#39424F',
+    skin: '#C89868', edge: '#1C2230', accent: '#C8A030',
+    boot: '#39424F', shade: '#2C3547',
   },
   archer: {
     cloth: '#3E5E3A', clothHi: '#52784C', metal: '#8A8A78', metalHi: '#B0B0A0',
-    skin: '#C89868', edge: '#1A2418', accent: '#8A5A28', boot: '#33402F',
+    skin: '#C89868', edge: '#1A2418', accent: '#8A5A28',
+    boot: '#33402F', shade: '#28352A',
   },
 };
 
@@ -89,7 +92,7 @@ function buildSoldierBody(C: Record<string, string>, frame: StrideFrame): PixelG
 
   pixelRect(g, 5, 9, 6, 8, C['cloth']!);
   pixelRect(g, 5, 9, 6, 2, C['clothHi']!);
-  pixelRect(g, 5, 15, 6, 1, C['edge']!);
+  pixelRect(g, 5, 15, 6, 1, C['shade']!);
 
   pixelEllipse(g, 8, 5, 3, 3.2, C['skin']!);
   return g;
@@ -125,7 +128,7 @@ export function buildShieldmanGrid(frame: StrideFrame): PixelGrid {
   // Shield: edge to edge down the leading side, boss in the middle.
   pixelRect(g, 11, 7, 4, 11, C['metal']!);
   pixelRect(g, 11, 7, 4, 1, C['metalHi']!);
-  pixelRect(g, 11, 17, 4, 1, C['edge']!);
+  pixelRect(g, 11, 17, 4, 1, C['shade']!);
   pixelEllipse(g, 13, 12, 1.6, 1.8, C['accent']!);
   return pixelOutline(g, C['edge']!);
 }
