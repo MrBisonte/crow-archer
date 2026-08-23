@@ -68,7 +68,7 @@ See the [manual](docs/manual.md#multiplayer) for hosting others, deploying, and 
 | Aim | Mouse |
 | Shoot / Cast | Space |
 | Charge special | Right-click hold (Archer) / Right-click (Wizard, Knight) / Right-click twice: throw, then arm (Ranger) / none (Sapper) |
-| Sniper mode / Knight charge / Wizard blink | Shift (the knight winds up a charging sweep, the wizard blinks) |
+| Sniper mode / Knight charge / Wizard blink | Shift (the knight winds up a charging sweep, the wizard blinks). Tap again within 1.1 s to chain either |
 | Pause | Escape |
 | Inventory | I (while paused) |
 
