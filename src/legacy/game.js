@@ -487,7 +487,12 @@ const CONFIG = {
     // Striking a torch is a decision, so it gets a button. Keys, the chest and
     // the door do not: your inventory has already decided those, and a prompt
     // in front of a foregone conclusion is a button press, not a choice.
-    use: 'e'
+    use: 'e',
+    // The way out, for when something has gone wrong and the character
+    // will not move. Bound because three separate causes have trapped a
+    // player so far and the fourth is not found yet: the player should
+    // never be waiting on us to ship a fix before they can walk again.
+    unstick: 'u'
   }
 };
 
@@ -844,6 +849,9 @@ let killCount = 0, dropStreak = 0, playerShield = false;
 let playerFrozenTimer = 0;
 // Counts down to the next escape-hatch probe — see unstickPlayer().
 let unstickCheck = 0;
+// How long the player has been asking to move without moving, and how far
+// they were when it started — see the refusal report in updatePlayer().
+let refusedFor = 0, refusedAt = null, refusedReported = false;
 // Rat venom. Mirrors playerFrozenTimer's shape: one countdown owns the whole
 // effect, so the damage tick, the slow and the tint all read one source. A
 // fresh bite refreshes rather than stacks, the same call dazeBoss makes.
@@ -1374,6 +1382,37 @@ function nearestFreeTile(wx, wy) {
  * Logs at warn with the position, so a recurrence leaves evidence of where
  * and on which map instead of another report with nothing to go on.
  */
+/**
+ * The player asking to be freed, by hand.
+ *
+ * Unconditional on purpose. unstickPlayer() below only acts when it can prove
+ * the body is trapped, and the trap that keeps getting reported is one it
+ * cannot see yet — so the manual version does not ask. It moves the player to
+ * open ground, clears everything that could be driving or holding them, and
+ * says so in the log with the full state at that moment, which is the evidence
+ * the automatic path has never managed to capture.
+ */
+function forceUnstick() {
+  if (!inGame()) return;
+  const spot = nearestFreeTile(player.x, player.y) ?? spawnPoint();
+  log.warn('forceUnstick', 'player asked to be freed', {
+    from: { x: Math.round(player.x), y: Math.round(player.y) },
+    to: { x: Math.round(spot.x), y: Math.round(spot.y) },
+    map: mapKind, char: selectedChar,
+    // Everything that can refuse movement, captured at the moment it mattered.
+    buried: !playerFits(player.x, player.y), boxedIn: boxedInAt(player.x, player.y),
+    frozen: playerFrozenTimer, charging: knightCharge.on, dashing: knightDash.timer,
+    drawing: archerDraw.on, netting: rangerNet.on,
+    heldKeys: Object.keys(keys).filter(k => keys[k]),
+  });
+  const fromX = player.x, fromY = player.y;
+  player.x = spot.x; player.y = spot.y;
+  knightDash.timer = 0; knightCharge.on = false;
+  archerDraw.on = false; rangerNet.on = false;
+  playerFrozenTimer = 0;
+  events.emit({ type: 'PLAYER_UNSTUCK', x: fromX, y: fromY, toX: spot.x, toY: spot.y });
+}
+
 function unstickPlayer() {
   if (!inGame() || !Number.isFinite(player.x) || !Number.isFinite(player.y)) return;
   const buried = !playerFits(player.x, player.y);
@@ -1883,6 +1922,7 @@ function installInput() {
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
+    if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
     keys[e.key] = true;
     // Which name this physical key went down under. e.key is what the key
     // *produces*, so it depends on the modifiers held at the time, and the
@@ -2739,6 +2779,36 @@ function updatePlayer(dt) {
     // the controls after it stopped being a charge at anything.
     const blockedX = vx !== 0 && player.x === fromX;
     const blockedY = vy !== 0 && player.y === fromY;
+
+    // Asking to go somewhere and not going. Reported once per episode, at warn,
+    // with everything that could be refusing — because this has now been
+    // reported from real play four times and reproduced in a harness none of
+    // them, so the next occurrence should leave evidence rather than a guess.
+    // Walking into a wall trips this too, which is why it reports rather than
+    // acts: what matters is the state, not the verdict.
+    if ((wantX || wantY) && knightDash.timer <= 0
+        && player.x === fromX && player.y === fromY) {
+      if (refusedAt === null) { refusedAt = { x: player.x, y: player.y }; refusedFor = 0; }
+      refusedFor += dt;
+      if (refusedFor > 1.5 && !refusedReported) {
+        refusedReported = true;
+        log.warn('movementRefused', 'asked to move and did not, for over a second', {
+          seconds: Number(refusedFor.toFixed(2)),
+          want: { x: wantX, y: wantY },
+          at: { x: Math.round(player.x), y: Math.round(player.y) },
+          map: mapKind, char: selectedChar,
+          buried: !playerFits(player.x, player.y), boxedIn: boxedInAt(player.x, player.y),
+          openDirections: STEP_DIRS
+            .filter(([dx, dy]) => playerFits(player.x + dx * CONFIG.tileSize,
+                                             player.y + dy * CONFIG.tileSize)).length,
+          frozen: playerFrozenTimer, charging: knightCharge.on, dashing: knightDash.timer,
+          drawing: archerDraw.on, netting: rangerNet.on,
+          heldKeys: Object.keys(keys).filter((k) => keys[k]),
+        });
+      }
+    } else {
+      refusedFor = 0; refusedAt = null; refusedReported = false;
+    }
     if (knightDash.timer > 0 && (blockedX || blockedY)) {
       knightDash.timer = 0;
       events.emit({ type: 'KNIGHT_CHARGE_STOPPED', x: player.x, y: player.y });
@@ -9558,6 +9628,7 @@ const CTRL_ACTIONS = [
   { label: 'SHOOT',      key: 'shoot' },
   { label: 'SNIPE/CHARGE', key: 'snipe' },
   { label: 'LIGHT TORCH', key: 'use'   },
+  { label: 'GET UNSTUCK', key: 'unstick' },
   { label: 'PAUSE',      key: 'pause' }
 ];
 
