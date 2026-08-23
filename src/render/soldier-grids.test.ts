@@ -185,16 +185,41 @@ describe('soldier grids', () => {
     // Read from the call site it stays correct through a rename, and it ports
     // to builders that bind the colour differently without asking them to
     // agree on anything first.
-    const seams = new Set(
-      [...code.matchAll(/pixelOutline\(\s*\w+\s*,\s*([^)]+?)\s*\)/g)]
-        .map((m) => m[1]!.replace(/!$/, '').trim()),
-    );
-    expect(seams.size, 'no pixelOutline call found to read the seam colour from')
+    const parsed = [...code.matchAll(/pixelOutline\(\s*\w+\s*,\s*([^)]+?)\s*\)/g)];
+    const calls = (code.match(/pixelOutline\(/g) ?? []).length;
+
+    // The failure mode this check would otherwise have is silent exemption,
+    // which is the worst kind: a call the pattern cannot read yields no seam
+    // colour, that builder's structure goes unexamined, and nothing goes red.
+    // Splitting a call across lines would do it. So every call has to parse —
+    // an unreadable one is an assertion failure, not an abstention.
+    //
+    // Counting rather than declaring which builders outline: a list would have
+    // to be maintained, and the count is derived from the same source it
+    // guards. A builder that legitimately never outlines, as the legacy rat
+    // and minotaur never do, simply contributes no call to either total.
+    expect(calls, 'no pixelOutline call found to read the seam colour from')
       .toBeGreaterThan(0);
+    expect(parsed.length, `a pixelOutline call did not parse, so its builder would go unchecked`)
+      .toBe(calls);
+
+    const seams = new Set(parsed.map((m) => m[1]!.replace(/!$/, '').trim()));
 
     // Whole file, not per builder: buildSoldierBody carries the belt and has
     // no pixelOutline call of its own, so a per-function scope would skip the
     // one helper the belt deviation actually lived in.
+    //
+    // That is a decision, not a default, and it goes the other way in
+    // character-grids.ts: there every builder owns its outline call, but the
+    // token `outline` names three palette keys, a property access and the
+    // knight's local const, so file-wide cannot tell one binding from three
+    // strangers that share its spelling without re-implementing scope. Per
+    // builder disambiguates it there; file-wide is the only shape that sees
+    // the deviation here. The test for which applies is whether every builder
+    // owns a call — builders equal to calls means per-builder is available,
+    // fewer calls than builders means a shared helper exists and the scope has
+    // to be the file. Porting this by analogy rather than by that check is the
+    // same mistake as picking a sample row by analogy.
     const offenders = code
       .split('\n')
       .map((line, i) => ({ line: line.trim(), n: i + 1 }))
