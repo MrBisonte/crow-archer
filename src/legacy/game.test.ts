@@ -8,7 +8,8 @@
  * DOM at all. `devHooks.stepSim` advances the sim without a frame or a render.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CHARACTERS } from '../net/protocol';
+import { CHARACTERS, type CharacterKind } from '../net/protocol';
+import { CHARACTER_STATS } from '../sim/arena';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
@@ -1554,5 +1555,85 @@ describe('walk cycles keep their limbs apart', () => {
   it('gives the rat all four legs in every frame', () => {
     for (const frame of ANIM_FRAMES)
       expect(filledRuns(gridOf('rat', 'rat', frame), 8)).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Character-select panel data
+// ---------------------------------------------------------------------------
+//
+// The panels are a table, so they are checked as data. The reason this exists
+// at all is that the row this table used to keep separately — the portrait
+// lookup — was checked by nothing, and a missing row draws nothing rather than
+// failing, which is how the sapper shipped with a panel and no face. Every
+// field a row now carries is asserted here so the next omission is loud.
+
+interface CharPanel {
+  char: string;
+  hook: string;
+  skills: { main: string; secondary: string; shift: string };
+  statBars: ReadonlyArray<{ label: string; pips: number }>;
+  preview: (frame: 'a' | 'mid' | 'b') => { grid: PixelGrid; sprite: { w: number; h: number }; key: string };
+}
+
+const charPanels = (): readonly CharPanel[] => g.charPanels() as readonly CharPanel[];
+
+/** 1..5, scaled against the roster's best — the same shape statPips uses. */
+const expectedPips = (value: number, peak: number): number =>
+  Math.min(5, Math.max(1, Math.ceil((value / peak) * 5)));
+
+describe('character-select panel data', () => {
+  it('gives every panel a hook and all three skill lines', () => {
+    for (const p of charPanels()) {
+      expect(p.hook, p.char).toBeTruthy();
+      for (const slot of ['main', 'secondary', 'shift'] as const) {
+        expect(p.skills?.[slot], `${p.char}.${slot}`).toBeTruthy();
+        // A budget, not a style rule. The selected panel is 350px wide less
+        // 12px padding a side, and Courier New advances 0.6em, so at 10.5px
+        // about 51 characters fit; past that the screen truncates with an
+        // ellipsis, which reads as a bug. 48 leaves room for font
+        // substitution. The exact check needs measureText and a canvas, so it
+        // lives in the browser pass — this is the cheap guard that runs here.
+        expect(p.skills[slot].length, `${p.char}.${slot}`).toBeLessThanOrEqual(48);
+      }
+    }
+  });
+
+  it('rates every panel on the same four stats, each 1 to 5', () => {
+    for (const p of charPanels()) {
+      expect(p.statBars.map((b) => b.label), p.char).toEqual(['RANGE', 'DAMAGE', 'HP', 'SPEED']);
+      for (const b of p.statBars) {
+        expect(Number.isInteger(b.pips), `${p.char}.${b.label}`).toBe(true);
+        expect(b.pips, `${p.char}.${b.label}`).toBeGreaterThanOrEqual(1);
+        expect(b.pips, `${p.char}.${b.label}`).toBeLessThanOrEqual(5);
+      }
+    }
+  });
+
+  it('derives HP and SPEED from CHARACTER_STATS rather than from the panel row', () => {
+    // The whole point of deriving them: a number typed into the panel table is
+    // free to drift from the one the simulation actually runs on. This fails
+    // if either is ever hardcoded back into CHAR_PANELS.
+    const stats = Object.values(CHARACTER_STATS);
+    const peakHp = Math.max(...stats.map((s) => s.maxHp));
+    const peakSpeed = Math.max(...stats.map((s) => s.speed));
+    for (const p of charPanels()) {
+      const mine = CHARACTER_STATS[p.char as CharacterKind];
+      const pips = (label: string): number => p.statBars.find((b) => b.label === label)!.pips;
+      expect(pips('HP'), p.char).toBe(expectedPips(mine.maxHp, peakHp));
+      expect(pips('SPEED'), p.char).toBe(expectedPips(mine.speed, peakSpeed));
+    }
+  });
+
+  it('gives every panel a portrait out of its own row', () => {
+    for (const p of charPanels()) {
+      for (const frame of ANIM_FRAMES) {
+        const shown = p.preview(frame);
+        expect(shown.key, `${p.char}|${frame}`).toBeTruthy();
+        expect(gridSize(shown.grid), `${p.char}|${frame}`)
+          .toEqual({ w: shown.sprite.w, h: shown.sprite.h });
+        expect(invalidColours(shown.grid), `${p.char}|${frame}`).toEqual([]);
+      }
+    }
   });
 });

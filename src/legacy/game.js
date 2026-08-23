@@ -8787,6 +8787,25 @@ function _fitText(text, maxW) {
   return `${cut}…`;
 }
 
+/**
+ * The box a select-screen panel sits in: its fill, its border, and the glow
+ * that marks the selected one.
+ *
+ * Shared by charselect and mapselect because it was the same five statements
+ * in each, and how selection reads is one decision — a change to the glow
+ * should not be able to land on one screen and not the other. `p` is a row
+ * from either panel table; both carry the same four colours (bg/dimBg for the
+ * fill, color/dim for the border), which is what lets one helper serve both.
+ */
+function _panelFrame(px, py, w, h, sel, p) {
+  ctx.fillStyle = sel ? p.bg : p.dimBg;
+  ctx.fillRect(px, py, w, h);
+  if (sel) { ctx.shadowColor = p.color; ctx.shadowBlur = 16; }
+  ctx.strokeStyle = sel ? p.color : p.dim; ctx.lineWidth = 1.5;
+  ctx.strokeRect(px, py, w, h);
+  ctx.shadowBlur = 0;
+}
+
 /** The muted tone the stat labels and skill slot names share, so the panel's
  * own colour stays on the values rather than being spent on the chrome. */
 const PANEL_LABEL_COLOR = '#8a8a8a';
@@ -8873,24 +8892,24 @@ function drawCharSelect(t) {
   // a new character narrows the four minimal panels rather than that one.
   const gapX = 12, panelY = 118, selW = Math.floor(1000 * 0.35), selH = 420, restH = 230;
   const others = CHAR_PANELS.length - 1;
-  const restW = Math.floor((1000 - selW - gapX * others) / others);
-  const totalW = selW + restW * others + gapX * others;
+  // Guarded and then summed rather than computed in closed form: a one-row
+  // roster would divide by zero here, and Infinity * 0 is NaN, which reaches
+  // every fillRect on the screen and draws nothing at all.
+  const restW = others > 0 ? Math.floor((1000 - selW - gapX * others) / others) : 0;
+  const widths = CHAR_PANELS.map((p) => (selectedChar === p.char ? selW : restW));
+  const totalW = widths.reduce((sum, w) => sum + w, 0) + gapX * others;
   // Panels are centred on one line so the selected one expands about its own
   // middle instead of growing downward out of the row.
   const midY = panelY + selH / 2;
 
   let px = Math.round(CONFIG.canvasW / 2 - totalW / 2);
-  CHAR_PANELS.forEach((p) => {
+  CHAR_PANELS.forEach((p, idx) => {
     const sel = selectedChar === p.char;
-    const w = sel ? selW : restW, h = sel ? selH : restH;
+    const w = widths[idx], h = sel ? selH : restH;
     const py = Math.round(midY - h / 2);
     const pad = 12, innerW = w - pad * 2, cx = px + w / 2;
 
-    ctx.fillStyle = sel ? p.bg : p.dimBg;
-    ctx.fillRect(px, py, w, h);
-    if (sel) { ctx.shadowColor=p.color; ctx.shadowBlur=16; }
-    ctx.strokeStyle = sel ? p.color : p.dim; ctx.lineWidth=1.5;
-    ctx.strokeRect(px, py, w, h); ctx.shadowBlur=0;
+    _panelFrame(px, py, w, h, sel, p);
 
     ctx.textAlign='center';
     ctx.fillStyle = sel ? p.color : p.dim;
@@ -8959,11 +8978,7 @@ function drawMapSelect(t) {
   MAP_PANELS.forEach((p, idx) => {
     const px = startX + idx * (panelW + gapX);
     const sel = selectedMapKind === p.kind;
-    ctx.fillStyle = sel ? p.bg : p.dimBg;
-    ctx.fillRect(px, panelY, panelW, panelH);
-    if (sel) { ctx.shadowColor=p.color; ctx.shadowBlur=16; }
-    ctx.strokeStyle = sel ? p.color : p.dim; ctx.lineWidth=1.5;
-    ctx.strokeRect(px, panelY, panelW, panelH); ctx.shadowBlur=0;
+    _panelFrame(px, panelY, panelW, panelH, sel, p);
     ctx.fillStyle = sel ? p.color : p.dim;
     ctx.font='19px "Courier New",monospace';
     ctx.fillText(_fitText(`[${p.key}] ${p.kind.toUpperCase()}`, innerW), px+panelW/2, panelY+34);
