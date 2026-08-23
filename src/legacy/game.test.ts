@@ -317,6 +317,66 @@ describe('cover grows back', () => {
     expect(g.regrowth().pending).toBe(0);
   });
 
+  // Reported from play: "chars get stuck in rocks and trees sometimes".
+  //
+  // A body is a box of CONFIG.playerRadius, not the point at its centre, and
+  // updatePlayer only moves when all four corners of that box are passable. So
+  // a body standing near a tile edge is partly on the next tile over, and a
+  // tree maturing there locks it in place: every incremental step keeps the
+  // same corner inside the new tree, so all four directions refuse and the
+  // only way out is burning the tile back down.
+  //
+  // Occupancy has to mean "overlaps", not "is centred on".
+  it('does not mature into the half of a body hanging over the next tile', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    const { tileSize, playerRadius } = g.config();
+    const player = g.player() as { x: number; y: number };
+
+    // Park the player just inside one tile, close enough to the edge that its
+    // box spills into the next column.
+    const col = Math.floor(player.x / tileSize);
+    const row = Math.floor(player.y / tileSize);
+    player.x = (col + 1) * tileSize - 2;
+    player.y = row * tileSize + tileSize / 2;
+    expect(Math.floor((player.x + playerRadius) / tileSize),
+      'the test did not actually straddle two tiles').toBe(col + 1);
+
+    // Burn the tile the overhang is on, then wait out the whole regrowth.
+    g.tiles().set(row, col + 1, TILE.ASH);
+    g.stepSim(seconds(
+      regrowthDelay(DEFAULT_REGROWTH, 'sprout', row, col + 1)
+      + regrowthDelay(DEFAULT_REGROWTH, 'mature', row, col + 1),
+    ));
+
+    expect(g.tiles().get(row, col + 1)).toBe(TILE.SAPLING);
+  });
+
+  it('matures it as soon as that body steps clear', () => {
+    g.go('playing');
+    g.generateMap('forest');
+    g.respawnPlayer();
+    const { tileSize } = g.config();
+    const player = g.player() as { x: number; y: number };
+    const col = Math.floor(player.x / tileSize);
+    const row = Math.floor(player.y / tileSize);
+    player.x = (col + 1) * tileSize - 2;
+    player.y = row * tileSize + tileSize / 2;
+
+    g.tiles().set(row, col + 1, TILE.ASH);
+    g.stepSim(seconds(
+      regrowthDelay(DEFAULT_REGROWTH, 'sprout', row, col + 1)
+      + regrowthDelay(DEFAULT_REGROWTH, 'mature', row, col + 1),
+    ));
+    expect(g.tiles().get(row, col + 1)).toBe(TILE.SAPLING);
+
+    // Step the body fully back into its own tile, and it finishes.
+    player.x = col * tileSize + tileSize / 2;
+    g.stepSim(ONE_SECOND);
+    expect(g.tiles().get(row, col + 1)).toBe(TILE.TREE);
+  });
+
   it('grows nothing on the maze, the map that refuses to be broken', () => {
     g.go('playing');
     g.generateMap('maze');

@@ -717,8 +717,29 @@ let mapKind = 'forest';
  */
 const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
   const ts = CONFIG.tileSize;
-  const onTile = (b) => !!b && Math.floor(b.x / ts) === col && Math.floor(b.y / ts) === row;
-  return onTile(player) || onTile(boss) || skeletons.some(onTile) || pickups.some(onTile);
+  // Overlap, not "is centred on", and each body asked about with the radius its
+  // own movement code collides with.
+  //
+  // updatePlayer samples all four corners of a playerRadius box and only moves
+  // when every one is passable. A body near a tile edge is therefore partly on
+  // the next tile, and a tree maturing there locks it in place for good: each
+  // incremental step keeps that same corner inside the new tree, so all four
+  // directions refuse and nothing short of burning the tile frees it. Asking
+  // only about the centre tile is what let that happen.
+  //
+  // Radius 0 for the rest because that is genuinely their collision model:
+  // updateBoss and updateSkeletons test the single point at their centre, and
+  // a pickup is a point on the ground. Giving them a box here would be
+  // inventing a footprint the movement code does not honour.
+  const overlaps = (b, radius) => {
+    if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
+    return Math.floor((b.x - radius) / ts) <= col && col <= Math.floor((b.x + radius) / ts)
+        && Math.floor((b.y - radius) / ts) <= row && row <= Math.floor((b.y + radius) / ts);
+  };
+  return overlaps(player, CONFIG.playerRadius)
+    || overlaps(boss, 0)
+    || skeletons.some((s) => overlaps(s, 0))
+    || pickups.some((p) => overlaps(p, 0));
 });
 
 /**
