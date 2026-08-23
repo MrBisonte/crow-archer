@@ -142,6 +142,14 @@ describe('wizard homing bolts', () => {
     g.pick('wizard');
     g.go('playing');
     enterBossFight();
+    // Cleared for the same reason wizardAt() clears it, and this was the one
+    // wizard test that did not: a bolt that hits a tile has its vx negated,
+    // which swings the heading by most of a half-turn and has nothing to do
+    // with what it was homing on. The map seed is Math.random(), so with the
+    // trees left standing this failed about one run in sixty — measured over
+    // 60 trials, every failure a bounce — whenever one grew between the wizard
+    // and the boss.
+    clearArena();
 
     const boss = g.boss();
     // `player` starts life as a bare object literal in the module, so its
