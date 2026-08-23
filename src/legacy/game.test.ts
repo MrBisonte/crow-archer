@@ -64,6 +64,50 @@ describe('map generation', () => {
   });
 });
 
+describe('diagnostic logging', () => {
+  it('records a state transition at info level, with prev/next in the data', () => {
+    g.clearLogs();
+    g.setLogLevel('info');
+    g.go('menu');
+    g.go('charselect');
+
+    const transitions = g.logs().filter((e) => e.source === 'transitionTo');
+    expect(transitions.length).toBeGreaterThan(0);
+    const last = transitions[transitions.length - 1]!;
+    expect(last.message).toBe('menu -> charselect');
+    expect(last.data).toMatchObject({ prev: 'menu', next: 'charselect' });
+  });
+
+  it('does not log a no-op transition (going to the state already active)', () => {
+    g.clearLogs();
+    g.setLogLevel('info');
+    g.go('menu');
+    const countAfterFirst = g.logs().filter((e) => e.source === 'transitionTo').length;
+    g.go('menu'); // already there
+    const countAfterSecond = g.logs().filter((e) => e.source === 'transitionTo').length;
+    expect(countAfterSecond).toBe(countAfterFirst);
+  });
+
+  it('gameplay events reach the log too, at debug, via the same bus everything else uses', () => {
+    g.clearLogs();
+    g.setLogLevel('debug');
+    g.pick('archer');
+    g.go('playing');
+    g.kill(0); // a real crow kill, not a synthetic log call
+    const crowKilled = g.logs().find((e) => e.message === 'CROW_KILLED');
+    expect(crowKilled).toBeDefined();
+    expect(crowKilled!.source).toBe('EventBus');
+  });
+
+  it('below the log floor, nothing is recorded at all — the default stays warn', () => {
+    g.clearLogs();
+    g.setLogLevel('warn');
+    g.go('menu');
+    g.go('charselect');
+    expect(g.logs().filter((e) => e.source === 'transitionTo')).toHaveLength(0);
+  });
+});
+
 describe('wizard homing bolts', () => {
   it('locks onto the boss rather than the nearest passive crow', () => {
     g.pick('wizard');

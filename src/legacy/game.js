@@ -11,6 +11,7 @@ import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton } from '../sim/input';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
+import { log, attachToEvents } from '../sim/log';
 import { ScreenShake } from '../render/shake';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
@@ -667,6 +668,7 @@ function transitionTo(next) {
   if (next === 'controls') controlsFrom = appState;
   const prev = appState;
   appState = next;
+  if (prev !== next) log.info('transitionTo', `${prev} -> ${next}`, { prev, next, gameMode, mapKind });
   // The multiplayer screen owns a socket, so entering opens one and leaving
   // closes it. Handled here rather than at each call site, because every route
   // out of the screen (back, error, match start) must not leak the connection.
@@ -1133,6 +1135,12 @@ const playerInput = new LocalInput(() => {
 // The server will run the same sim and ignore these (or forward the
 // network-relevant ones), so cosmetics never touch the simulation.
 const events = new EventBus();
+// Every gameplay event also becomes a debug-level log entry — see
+// src/sim/log.ts. Registering the subscription costs nothing and touches no
+// DOM, so unlike the rest of boot() it doesn't need to wait for it: this
+// runs on import, same as the module-scope tables above it, and is exactly
+// as inert as they are until something actually calls log.setLevel('debug').
+attachToEvents(log, events);
 
 /**
  * Screen-shake ladder, one home so the ordering is reviewable at a glance.
@@ -8066,6 +8074,12 @@ export const devHooks = {
   tiles: () => tileMap,
   mapKind: () => mapKind,
   selectedMapKind: () => selectedMapKind,
+  // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
+  // hold onto after the call; setLogLevel changes what future calls record,
+  // it does not retroactively add or remove anything already in the ring.
+  logs: () => log.events(),
+  setLogLevel(level) { log.setLevel(level); },
+  clearLogs() { log.clear(); },
   generateMap(kind) { generateMap(kind); },
   // Regenerating the map under a player already placed leaves them wherever
   // they were, which on a carved map is often inside a wall. This is the
@@ -8111,6 +8125,16 @@ export function boot() {
   vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
 
   if (query.has('perf')) PERF = makePerf();
+
+  // ?log=debug (or info/warn/error) for a human testing session; omitted,
+  // the logger stays at its default 'warn' floor so real play pays for
+  // nothing. The EventBus subscription that feeds gameplay events into the
+  // log already happened at module scope, next to `events` itself — see
+  // src/sim/log.ts for why that's reuse, not a second event system.
+  const logLevel = query.get('log');
+  if (logLevel === 'debug' || logLevel === 'info' || logLevel === 'warn' || logLevel === 'error') {
+    log.setLevel(logLevel);
+  }
 
   installInput();
 
