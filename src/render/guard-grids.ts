@@ -45,7 +45,7 @@
 import type { GuardKind } from '../sim/guards';
 import { MAX_RANK } from '../sim/guards';
 import {
-  makePixelGrid, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
+  makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
   type AnimFrame, type PixelGrid,
 } from './pixel-grid';
 
@@ -83,7 +83,7 @@ export const GUARD_SPRITE = { w: 16, h: 24 };
  * across the bastion, and a horse that fits inside a man's cell is a pony seen
  * from a distance at which it is a smudge.
  */
-const MOUNTED_SPRITE = { w: 32, h: 28 };
+const MOUNTED_SPRITE = { w: 34, h: 28 };
 
 /**
  * Per-kind sprite bounds. The mounted knight is wider than the rest.
@@ -743,6 +743,160 @@ export function buildPriestGuardGrid(frame: StrideFrame, rank: number): PixelGri
  * its numbers, and it holds for a kind that is never recruited exactly as it
  * does for one that is: `GuardKind` is the whole roster, not the roll.
  */
+
+// ── MOUNT VARIANTS, UNDER REVIEW ─────────────────────────────────────────────
+//
+// Three candidate mounts plus the one that shipped, so they can be looked at
+// side by side ON THE MAP rather than in a preview: a sprite that reads at 10x
+// in a review image is not the same claim as one that reads at 32px in a fight.
+//
+// This is scaffolding with a end date. When a direction is chosen the other
+// three go, `KNIGHT_VARIANTS` goes with them, and `buildKnightGuardGrid` keeps
+// only the winner's body. Nothing outside this file should learn these names.
+//
+// What went wrong in the original, recorded because it is the trap: the neck
+// was drawn as a column and the head set near the top of it, which is a camel.
+// A horse's profile is ONE stroke — rising from the withers, turning over at
+// the poll, coming back down the face to a muzzle — with a jaw notch to say
+// where the head begins.
+
+export type KnightVariant = 'current' | 'destrier' | 'courser' | 'barded';
+
+const HOOF_Y = 25;
+
+/** Four hooves in two pairs, each pair opening about a shared centre. */
+function mountLegs(g: PixelGrid, C: GuardPalette & MountPalette, swing: number, fore: number, hind: number, top: number): void {
+  for (const x of [fore - 1 - swing, fore + 1 + swing, hind - 1 - swing, hind + 1 + swing]) {
+    pixelRect(g, x, top, 2, HOOF_Y - top, C.horse);
+    pixelRect(g, x, top, 1, HOOF_Y - top, C.horseDark);
+    pixelRect(g, x, HOOF_Y, 2, 2, C.horseDark);
+  }
+}
+
+/**
+ * Neck and head as one continuous tapering arch, ending in a squared muzzle.
+ *
+ * `plated` swaps the coat for armour, which is the whole of the barded variant
+ * above the shoulder — a chanfron and crinet rather than a different animal.
+ */
+function mountForehand(g: PixelGrid, C: GuardPalette & MountPalette, wx: number, wy: number, plated: boolean): void {
+  const body = plated ? C.metal : C.horse;
+  const hi = plated ? C.metalHi : C.horseHi;
+  const spine: readonly (readonly [number, number, number])[] = [
+    [wx, wy, 6], [wx + 1, wy - 1, 6], [wx + 2, wy - 2, 5], [wx + 3, wy - 3, 5],
+    [wx + 4, wy - 4, 4], [wx + 5, wy - 5, 4], [wx + 6, wy - 5, 4],
+    [wx + 7, wy - 4, 3], [wx + 8, wy - 3, 3], [wx + 9, wy - 2, 2],
+  ];
+  for (const [x, top, depth] of spine) {
+    pixelRect(g, x, top, 1, depth, body);
+    setPixel(g, x, top, hi);
+  }
+  pixelRect(g, wx + 8, wy - 1, 2, 2, body);
+  setPixel(g, wx + 9, wy, C.horseDark);
+  // The jaw notch. Without it the arch reads as one bent tube.
+  setPixel(g, wx + 6, wy - 1, C.horseDark);
+  setPixel(g, wx + 7, wy, C.horseDark);
+  // The eye takes the boot slate, not the seam colour: pixelOutline owns edge,
+  // and structure painted in it is invisible to bodyRuns — which is the whole
+  // reason this file has a test asserting the seam appears in exactly one call.
+  if (!plated) setPixel(g, wx + 6, wy - 4, C.boot);
+  pixelRect(g, wx + 5, wy - 7, 1, 2, body);
+  for (let i = 0; i < 6; i++) setPixel(g, wx + i, wy - i - 1, plated ? hi : C.horseDark);
+}
+
+/**
+ * The rider, shared by all three candidates, with the lance UPRIGHT.
+ *
+ * Couched, the shaft runs at exactly the height the head occupies and the two
+ * merge into one bright bar at sprite scale. Upright it is a vertical instead,
+ * it still says lancer, and it leaves the forehand alone.
+ */
+function mountRider(g: PixelGrid, C: GuardPalette, seatX: number, seatY: number, lean: number, rank: number): void {
+  pixelRect(g, seatX - 5, seatY, 11, 3, C.livery);
+  pixelRect(g, seatX - 5, seatY, 11, 1, C.liveryHi);
+  pixelRect(g, seatX - 2, seatY + 2, 2, 5, C.boot);
+  pixelRect(g, seatX - 3 + lean, seatY - 7, 7, 8, C.cloth);
+  pixelRect(g, seatX - 3 + lean, seatY - 7, 7, 2, C.clothHi);
+  pixelRect(g, seatX - 3 + lean, seatY - 1, 7, 1, C.shade);
+  pixelRect(g, seatX + 3 + lean, seatY - 6, 2, 3, C.metal);
+  pixelEllipse(g, seatX + lean, seatY - 10, 3.2, 2.8, C.metal);
+  pixelRect(g, seatX - 3 + lean, seatY - 11, 7, 1, C.metalHi);
+  pixelRect(g, seatX + 1 + lean, seatY - 10, 3, 1, C.shade);
+  pixelRect(g, seatX - 1 + lean, seatY - 14, 2, 3, C.livery);
+  pixelRect(g, seatX - 1 + lean, seatY - 14, 1, 3, C.liveryHi);
+  const shaft = seatX + 4 + lean;
+  pixelRect(g, shaft, 1, 1, seatY - 3, C.rank);
+  pixelRect(g, shaft - 1, 0, 3, 2, C.metalHi);
+  pixelRect(g, shaft + 1, 3, 3, 3, C.livery);
+  pixelRect(g, shaft + 1, 3, 3, 1, C.liveryHi);
+  for (let r = 0; r < rank; r++) pixelRect(g, seatX - 6 + lean, seatY - 6 + r * 2, 2, 1, C.rank);
+}
+
+/** A heavy warhorse: deep barrel, short cannon bones, crested neck. */
+function buildDestrierGrid(frame: StrideFrame, rank: number): PixelGrid {
+  const C = GUARD_PALETTES.knight;
+  const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
+  const s = swingOf(frame, 2);
+  mountLegs(g, C, s, 22, 9, 19);
+  pixelEllipse(g, 15, 16, 10, 4.2, C.horse);
+  pixelRect(g, 6, 13, 19, 4, C.horse);
+  pixelRect(g, 7, 13, 17, 1, C.horseHi);
+  pixelEllipse(g, 8, 15, 4.5, 4, C.horse);
+  mountForehand(g, C, 24, 14, false);
+  pixelCurve(g, [5, 13], [2, 17], [2, 22], C.horseDark, 4);
+  mountRider(g, C, 15, 12, 0, rank);
+  return pixelOutline(g, C.edge);
+}
+
+/** A lighter horse: longer in the leg, head carried lower and further forward. */
+function buildCourserGrid(frame: StrideFrame, rank: number): PixelGrid {
+  const C = GUARD_PALETTES.knight;
+  const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
+  const s = swingOf(frame, 3);
+  mountLegs(g, C, s, 23, 8, 18);
+  pixelEllipse(g, 15, 16, 10, 3.4, C.horse);
+  pixelRect(g, 6, 14, 20, 3, C.horse);
+  pixelRect(g, 7, 14, 18, 1, C.horseHi);
+  pixelEllipse(g, 7, 15, 4, 3.4, C.horse);
+  mountForehand(g, C, 24, 15, false);
+  pixelCurve(g, [4, 14], [1, 16], [0, 20], C.horseDark, 3);
+  mountRider(g, C, 15, 13, 1, rank);
+  return pixelOutline(g, C.edge);
+}
+
+/** The horse armoured: chanfron, crinet, and a caparison in the retinue's violet. */
+function buildBardedGrid(frame: StrideFrame, rank: number): PixelGrid {
+  const C = GUARD_PALETTES.knight;
+  const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
+  const s = swingOf(frame, 2);
+  mountLegs(g, C, s, 22, 9, 20);
+  pixelEllipse(g, 15, 16, 10, 4.2, C.horse);
+  pixelRect(g, 6, 13, 19, 4, C.horse);
+  pixelRect(g, 6, 15, 13, 6, C.livery);
+  pixelRect(g, 6, 15, 13, 1, C.liveryHi);
+  for (let x = 7; x < 19; x += 3) pixelRect(g, x, 20, 1, 2, C.livery);
+  pixelRect(g, 21, 14, 4, 4, C.metal);
+  pixelRect(g, 21, 14, 4, 1, C.metalHi);
+  mountForehand(g, C, 24, 14, true);
+  pixelRect(g, 29, 6, 1, 3, C.rank);
+  pixelCurve(g, [5, 13], [2, 17], [2, 22], C.horseDark, 4);
+  mountRider(g, C, 15, 12, 0, rank);
+  return pixelOutline(g, C.edge);
+}
+
+/**
+ * The candidates, by name. `current` is the sprite in the build, kept only so
+ * the comparison happens against the real thing rather than against a memory.
+ */
+export const KNIGHT_VARIANTS: Record<KnightVariant, (frame: StrideFrame, rank: number) => PixelGrid> = {
+  current: buildKnightGuardGrid,
+  destrier: buildDestrierGrid,
+  courser: buildCourserGrid,
+  barded: buildBardedGrid,
+};
+
+export const KNIGHT_VARIANT_NAMES = ['current', 'destrier', 'courser', 'barded'] as const satisfies readonly KnightVariant[];
+
 export const GUARD_GRID_BUILDERS: Record<GuardKind, (frame: StrideFrame, rank: number) => PixelGrid> = {
   archer: buildArcherGuardGrid,
   foot_soldier: buildFootSoldierGuardGrid,
