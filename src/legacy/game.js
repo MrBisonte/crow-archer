@@ -1895,14 +1895,33 @@ function mirrorAngle(a, facing) {
   return Math.atan2(Math.sin(a), facing * Math.cos(a));
 }
 
+/**
+ * The wedge a charge sweeps, as plain data: which way it points, how far
+ * either side of that it reaches, and how far out.
+ *
+ * The one home for that geometry. inKnightArc() tests points against it, the
+ * dash sweep draws it, and the windup telegraph draws it before it is
+ * committed — so what a player is shown is the wedge that will actually hit.
+ * Written out three times, the three drift apart the first time either number
+ * is tuned; written once, they cannot.
+ *
+ * Only the centre angle differs by caller, so it is the parameter: the dash's
+ * is committed (knightDash.angle), the telegraph's is still live
+ * (player.aimAngle).
+ */
+function knightChargeWedge(angle) {
+  return { angle, half: CONFIG.knightChargeArcRadians / 2, radius: CONFIG.knightChargeRadius };
+}
+
 /** Is (x,y) inside the wedge the dash is currently sweeping? The spear's own
  * hit test fakes a cone with two circle probes; this is a real one. */
 function inKnightArc(x, y) {
-  if (dist2(player.x, player.y, x, y) > CONFIG.knightChargeRadius ** 2) return false;
-  let d = Math.atan2(y - player.y, x - player.x) - knightDash.angle;
+  const wedge = knightChargeWedge(knightDash.angle);
+  if (dist2(player.x, player.y, x, y) > wedge.radius ** 2) return false;
+  let d = Math.atan2(y - player.y, x - player.x) - wedge.angle;
   while (d >  Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
-  return Math.abs(d) <= CONFIG.knightChargeArcRadians / 2;
+  return Math.abs(d) <= wedge.half;
 }
 
 function startCharge() {
@@ -6831,12 +6850,13 @@ function drawKnight() {
 
   // ── Charge windup: the arc he is about to sweep, filling as he holds ────
   if (knightCharge.on) {
-    const cf   = knightChargeFrac();
-    const full = cf >= 1;
-    const ang  = mirrorAngle(player.aimAngle, f);
-    const half = CONFIG.knightChargeArcRadians / 2;
-    const col  = knightChargeColor(cf);
-    const r    = CONFIG.knightChargeRadius * (0.35 + 0.5 * cf);
+    const cf    = knightChargeFrac();
+    const full  = cf >= 1;
+    const wedge = knightChargeWedge(player.aimAngle);
+    const ang   = mirrorAngle(wedge.angle, f);
+    const half  = wedge.half;
+    const col   = knightChargeColor(cf);
+    const r     = wedge.radius * (0.35 + 0.5 * cf);
     ctx.save();
     ctx.strokeStyle = col; ctx.shadowColor = col;
     ctx.shadowBlur  = 6 + 14 * cf + (full ? 6 * Math.sin(loopT * 18) : 0);
@@ -6861,10 +6881,14 @@ function drawKnight() {
   if (knightDash.timer > 0) {
     const prog  = 1 - knightDash.timer / CONFIG.knightChargeDashDuration;
     const heavy = knightDash.frac;
-    const ang   = mirrorAngle(knightDash.angle, f);
-    const half  = CONFIG.knightChargeArcRadians / 2;
+    // The wedge inKnightArc() is hitting with this instant, drawn at its own
+    // size. It used to be scaled down by how hard the charge was held, which
+    // drew a shorter blade than the one landing the hits.
+    const wedge = knightChargeWedge(knightDash.angle);
+    const ang   = mirrorAngle(wedge.angle, f);
+    const half  = wedge.half;
     const col   = knightChargeColor(heavy);
-    const r     = CONFIG.knightChargeRadius * (0.7 + 0.3 * heavy);
+    const r     = wedge.radius;
     // Three passes across the arc over the dash, so it reads as repeated swings.
     const sweep = (prog * 3) % 1;
     const edge  = ang - half + sweep * half * 2;
@@ -10479,6 +10503,11 @@ export const devHooks = {
     angle: knightDash.angle, cooldown: knightChargeCD,
     chained: !!knightDash.chained, chainWindow: knightChainTimer,
   }),
+  // The wedge the dash sweeps, and the hit test that reads it. Both exposed
+  // because the only thing worth asserting about a telegraph is that it
+  // agrees with what actually lands, and that takes reading both.
+  knightChargeWedge: angle => knightChargeWedge(angle),
+  inKnightArc: (x, y) => inKnightArc(x, y),
   // Charge/release run off keydown/keyup edges rather than the held `keys`
   // map, so headless tests drive them directly the same way devHooks.blink
   // drives the wizard's edge-triggered ability.

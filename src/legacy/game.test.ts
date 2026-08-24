@@ -58,6 +58,14 @@ const angle = (fromX: number, fromY: number, toX: number, toY: number): number =
 const angleGap = (a: number, b: number): number =>
   Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
 
+/** The knight charge's wedge, as knightChargeWedge() hands it over: the one
+ * geometry its hit test and every drawing of it are read from. */
+interface Wedge {
+  angle: number;
+  half: number;
+  radius: number;
+}
+
 describe('legacy game module', () => {
   it('exports a boot seam and runs nothing on import', () => {
     expect(typeof boot).toBe('function');
@@ -1579,6 +1587,61 @@ describe('the knight charge', () => {
     g.stepSim(15);
     keys['ArrowRight'] = false;
     expect(p.x).toBeGreaterThan(from);
+  });
+
+  // knightChargeWedge() is the one home for the wedge's geometry, and its
+  // whole reason to exist is that three call sites used to hold their own
+  // copy of the same two numbers: the hit test, the dash sweep, and the
+  // windup. These check the wedge really is what inKnightArc() hits with, so
+  // that a wedge drawn from it is the wedge that lands.
+  describe('and the wedge every reading of it shares', () => {
+    /** Puts a knight mid-dash due east from a known tile, and reports the
+     * wedge that dash is sweeping. */
+    function dashingEast(): Wedge {
+      const c = g.config();
+      g.pick('knight');
+      g.go('playing');
+      clearArena();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 16.5 * c.tileSize;
+      p.y = 10.5 * c.tileSize;
+      p.aimAngle = 0;
+      g.startKnightCharge();
+      g.stepSim(1);
+      g.releaseKnightCharge();
+      return g.knightChargeWedge(g.knightCharge().angle) as Wedge;
+    }
+
+    it('reaches exactly as far as the hit test does', () => {
+      const w = dashingEast();
+      const p = g.player() as { x: number; y: number };
+      const on = (d: number): boolean =>
+        g.inKnightArc(p.x + Math.cos(w.angle) * d, p.y + Math.sin(w.angle) * d) as boolean;
+      expect(on(w.radius - 1)).toBe(true);
+      expect(on(w.radius + 1)).toBe(false);
+    });
+
+    it('opens exactly as wide either side as the hit test does', () => {
+      const w = dashingEast();
+      const p = g.player() as { x: number; y: number };
+      const at = (offset: number): boolean => {
+        const a = w.angle + offset;
+        return g.inKnightArc(p.x + Math.cos(a) * 40, p.y + Math.sin(a) * 40) as boolean;
+      };
+      for (const side of [1, -1]) {
+        expect(at(side * (w.half - 0.01))).toBe(true);
+        expect(at(side * (w.half + 0.01))).toBe(false);
+      }
+    });
+
+    it('points where the dash committed, not where the mouse went afterwards', () => {
+      const w = dashingEast();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.aimAngle = Math.PI;   // swing the aim right round mid-dash
+      const behind = { x: p.x - 40, y: p.y };
+      expect(g.inKnightArc(behind.x, behind.y)).toBe(false);
+      expect(g.knightChargeWedge(g.knightCharge().angle).angle).toBe(w.angle);
+    });
   });
 });
 
