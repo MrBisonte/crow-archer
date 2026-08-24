@@ -148,6 +148,22 @@ const CONFIG = {
   // The retinue. Reach and interval are the cavern garrison's numbers, so an
   // allied foot soldier and an enemy shieldman trade blows at the same rhythm.
   guardSpeed: 74, guardMeleeReach: 26, guardArcherReach: 260,
+  // Far enough that a boss does not land on top of the hero, near enough
+  // that it is on screen and reachable the moment its wave begins.
+  siegeBossSpawnDistance: 260,
+  // The retinue is a bodyguard, not a hunting pack. postRadius is how far out
+  // they ring the hero at rest, postDrift the slow rotation that keeps a
+  // standing retinue milling rather than frozen into a diagram, and leash how
+  // far from the hero something has to be before it stops being their problem.
+  //
+  // The leash is the whole behaviour. Without it every guard walked at the
+  // nearest enemy on the map, which on an open bastion meant the retinue
+  // scattered across the field in the first ten seconds and the hero fought
+  // the wave alone — the opposite of what a bodyguard is for.
+  guardPostRadius: 58, guardPostDrift: 0.25, guardLeash: 210,
+  // How often a guard re-solves its route home. Staggered per guard at
+  // spawn so a retinue does not all solve on the same frame.
+  guardRouteInterval: 0.5,
   guardShotInterval: 1.6, guardSwingInterval: 0.9, guardArrowSpeed: 420,
   // The priest's numbers. The heal interval is well over twice a sword swing
   // on purpose: a retinue whose mending outpaces the damage coming in is a
@@ -4833,6 +4849,11 @@ const BOSS_HUNTS_WHILE_EXPLORING = {
 function bossInPlay() {
   if (!boss || boss.bstate === 'dead') return false;
   if (appState === 'boss_fight') return true;
+  // A siege boss is on the field during ordinary play with no entrance and no
+  // boss_fight state around it, so it has to be a live target the same way the
+  // warden is. Without this it walks about being immune, which is the same
+  // no-counterplay bug the warden's own row was added to fix.
+  if (appState === 'playing' && siegeRun) return true;
   return appState === 'playing' && BOSS_HUNTS_WHILE_EXPLORING[boss.kind];
 }
 
@@ -5751,7 +5772,24 @@ function startSiegeRun() {
   guards = [];
   siegeExtraBosses = [];
   siegeSpawned = false;
-  for (const guard of siegeRun.guards) placeGuard(guard);
+  // Bodies are NOT seated here. generateMap runs before the hero is positioned
+  // — in initGame and in the brawl chain's hand-off alike — so a retinue placed
+  // now rings wherever the hero stood on the previous map. seatRetinue is
+  // called from the tick instead, by which time the hero is where it belongs.
+}
+
+/**
+ * Puts a body on the field for every record that has not got one yet.
+ *
+ * Called every tick rather than at one moment, so it covers both the opening
+ * retinue and the recruit each cleared wave adds, and so neither depends on
+ * being run at exactly the right point in a start-up sequence.
+ */
+function seatRetinue() {
+  if (!siegeRun) return;
+  while (guards.length < siegeRun.guards.length) {
+    placeGuard(siegeRun.guards[guards.length]);
+  }
 }
 
 /** Clears everything siege, for a map that is not one. */
@@ -5766,16 +5804,28 @@ function endSiegeRun() {
  * would be arriving through the siege it is defending against.
  */
 function placeGuard(guard) {
-  const site = towers.length > 0
-    ? towers[guards.length % towers.length]
-    : { row: Math.floor(CONFIG.rows / 2), col: 3 };
+  // Seated beside the hero, not at the towers.
+  //
+  // The towers were the obvious place — a garrison comes out of its keep — and
+  // playing it showed why they are the wrong one: every wave seated its new
+  // recruit five hundred pixels from the fight and it spent the next ten
+  // seconds walking, so a bodyguard arrived as a straggler. Where a recruit
+  // comes from is flavour; where it is needed is beside the person it guards.
+  const ring = (guards.length * 2 * Math.PI) / Math.max(3, guards.length + 1);
   const at = nearestOpenTile(
-    (site.col + 1.5) * CONFIG.tileSize,
-    (site.row + 0.5) * CONFIG.tileSize,
+    player.x + Math.cos(ring) * CONFIG.guardPostRadius,
+    player.y + Math.sin(ring) * CONFIG.guardPostRadius,
   );
   guards.push({
     // The sim's record is the source of truth for hp and rank; this is its body.
     guard,
+    // Its station in the ring around the hero. Spread by index rather than
+    // rolled, so a retinue of four stands at four points of the compass
+    // instead of clumping wherever the rng happened to send them.
+    post: (guards.length * 2 * Math.PI) / Math.max(3, guards.length + 1),
+    // Its own cached route home. Guards do not share the crows' path
+    // scheduler — see walkGuardTo.
+    route: null, routeTimer: Math.random() * CONFIG.guardRouteInterval,
     x: at.x, y: at.y,
     facing: 0, walkPhase: Math.random() * Math.PI * 2, hitFlash: 0,
     shotCD: GUARD_STATS[guard.kind].ranged ? CONFIG.guardShotInterval * Math.random() : 0,
@@ -5787,6 +5837,36 @@ function placeGuard(guard) {
     healCD: guard.kind === 'priest' ? CONFIG.guardHealInterval : 0,
     team: Team.A,
   });
+}
+
+/**
+ * Where a guard should be standing when there is nothing worth leaving for.
+ *
+ * A slow orbit of the hero rather than a fixed offset: a retinue holding
+ * station in perfect formation reads as furniture, and the drift costs one
+ * cosine per guard per frame.
+ */
+function guardStation(g) {
+  const ang = g.post + gameTime * CONFIG.guardPostDrift;
+  return {
+    x: player.x + Math.cos(ang) * CONFIG.guardPostRadius,
+    y: player.y + Math.sin(ang) * CONFIG.guardPostRadius,
+  };
+}
+
+/**
+ * The nearest hostile near enough to the *hero* to be this guard's business.
+ *
+ * Measured from the hero and not from the guard, which is the difference
+ * between a bodyguard and a skirmisher: a guard already drawn out to the edge
+ * of its leash must not find something further out and keep going. The leash is
+ * therefore a property of the hero's surroundings, not of the guard's.
+ */
+function guardQuarry(g, hostiles) {
+  const reach = CONFIG.guardLeash * CONFIG.guardLeash;
+  const near = [];
+  for (const h of hostiles) if (dist2(player.x, player.y, h.x, h.y) <= reach) near.push(h);
+  return nearestHostile(g, near);
 }
 
 /** Every hostile body on the field, as things nearestHostile can weigh up. */
@@ -5851,11 +5931,38 @@ function spawnSiegeBoss(kind) {
   const keep = boss;
   bossStage = stage;
   spawnBoss();
+  landSiegeBoss(boss);
   if (keep && boss !== keep) {
     // The newcomer joins the extras and the original keeps the health bar.
     siegeExtraBosses.push(boss);
     boss = keep;
   }
+}
+
+/**
+ * Puts a freshly spawned boss on the field, in a state that fights.
+ *
+ * spawnBoss leaves most kinds at `canvasW + 40` in `bstate: 'entering'`, which
+ * is correct for the brawl chain: the entrance is its own appState, and
+ * updateBossEntrance walks them in. A siege has no entrance — the wave simply
+ * arrives — so without this a boss sat off the right edge, out of reach and out
+ * of the frame, and `siegeWaveCleared` waited on it for ever. That is a run
+ * that cannot be finished, and it is what a playtest found.
+ *
+ * The minotaur and the commander already place themselves inside the map for
+ * their own reasons, so they are left exactly as they are.
+ */
+function landSiegeBoss(b) {
+  if (!b || b.bstate !== 'entering') return;
+  const at = openTileAwayFrom(player.x, player.y, CONFIG.siegeBossSpawnDistance)
+    ?? nearestOpenTile(CONFIG.canvasW - 3 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+  b.x = at.x; b.y = at.y;
+  b.bstate = 'orbit';
+  b.stateTimer = 0;
+  b.orbitAngle = Math.atan2(b.y - player.y, b.x - player.x);
+  b.orbitRadius = Math.max(CONFIG.bossOrbitRadius, Math.hypot(b.x - player.x, b.y - player.y));
+  // What pathScheduler.serve() requires, for the kinds that walk.
+  b.state = 'aggro';
 }
 
 /** Is every enemy of the current wave off the field? */
@@ -5870,7 +5977,9 @@ function siegeWaveCleared() {
  */
 function updateSiege(dt) {
   if (!siegeRun || siegeRun.outcome !== 'running') return;
+  seatRetinue();
   if (!siegeSpawned) { spawnSiegeWave(); return; }
+  tickSiegeBosses(dt);
   siegeExtraBosses = siegeExtraBosses.filter((b) => b && b.bstate !== 'dead');
   if (!siegeWaveCleared()) return;
 
@@ -5883,10 +5992,42 @@ function updateSiege(dt) {
   // than mutating, so the bodies must be re-seated onto the new records or they
   // would keep drawing yesterday's rank.
   reseatGuards();
-  const fresh = siegeRun.guards[siegeRun.guards.length - 1];
-  if (fresh && guards.length < siegeRun.guards.length) placeGuard(fresh);
+  seatRetinue();
   wave = siegeRun.wave;
   siegeSpawned = false;
+}
+
+/**
+ * Runs the boss AI for every boss a siege has on the field.
+ *
+ * Two things were broken here and a playtest found both. `updateBoss` only runs
+ * during 'playing' for kinds BOSS_HUNTS_WHILE_EXPLORING marks as hunters —
+ * which is the minotaur alone, and the table has no row for the commander at
+ * all — so a siege boss never ticked. And the extras of wave 10 were never
+ * ticked by anything, despite a comment of mine claiming they were. Both left
+ * a wave that could not be cleared.
+ *
+ * The extras are ticked by swapping each into the `boss` slot and back.
+ * updateBoss reads and writes the global throughout — it is hundreds of lines
+ * built on there being exactly one — and threading a parameter through all of
+ * it to field a second boss on one wave of one map would be a large change to
+ * a lot of code that works. The swap is honest about what it is: the engine
+ * has one boss, and this lends it out.
+ */
+function tickSiegeBosses(dt) {
+  if (bossDeathSeq) return;
+  if (boss && boss.bstate !== 'dead' && !BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
+  if (siegeExtraBosses.length === 0) return;
+  const held = boss;
+  for (const extra of siegeExtraBosses) {
+    if (!extra || extra.bstate === 'dead') continue;
+    boss = extra;
+    updateBoss(dt);
+    // updateBoss can start a death sequence, which the outer tick owns. Leave
+    // the slot on whoever just died so updateBossDeath finds the right body.
+    if (bossDeathSeq) return;
+  }
+  boss = held;
 }
 
 /** Re-points each body at its promoted record, dropping bodies whose record went. */
@@ -5941,8 +6082,19 @@ function updateGuards(dt) {
     // reason — a healer is not a fighter with `if (canFight)` around it.
     if (isPriest(g.guard)) { updatePriest(g, dt); continue; }
     const stats = GUARD_STATS[g.guard.kind];
-    const target = nearestHostile(g, hostiles);
-    if (!target) continue;
+    // A guard that has drifted past its leash goes home before it does anything
+    // else, and takes no target on the way.
+    //
+    // Without this the leash leaked. moveGuard has to allow any step once a
+    // guard is outside — a body coming home round a barrier must move away from
+    // the hero for part of the route, and forbidding that pinned it to the wall.
+    // But 'outside, so anything goes' is also permission to keep walking
+    // outward, so a guard that stepped over the line while fighting something
+    // that then moved was free to follow it across the map. Deciding it here,
+    // where the intent is known, is what closes that.
+    const home = dist2(player.x, player.y, g.x, g.y) <= CONFIG.guardLeash * CONFIG.guardLeash;
+    const target = home ? guardQuarry(g, hostiles) : null;
+    if (!target) { holdStation(g, dt); continue; }
 
     const dx = target.x - g.x, dy = target.y - g.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -5950,8 +6102,12 @@ function updateGuards(dt) {
 
     if (stats.ranged) {
       g.shotCD -= dt;
+      // An archer shoots from where it stands and only closes if it cannot
+      // reach: its reach is nearly its leash, so in practice it stays on the
+      // hero's shoulder and fires past him, which is what an escort archer is.
       if (dist > CONFIG.guardArcherReach) moveGuard(g, dx / dist, dy / dist, dt);
       else if (g.shotCD <= 0) { g.shotCD = CONFIG.guardShotInterval; fireGuardArrow(g, target); }
+      else holdStation(g, dt);
       continue;
     }
     if (dist <= CONFIG.guardMeleeReach) {
@@ -6015,18 +6171,77 @@ function updatePriest(g, dt) {
     const need = missingHp(b.guard);
     if (need > worst) { worst = need; target = b; }
   }
-  // Nobody is hurt. The priest holds its position rather than following the
-  // line forward: walking into the fight is how the one unit that never
-  // respawns is lost, and it has nothing to do up there.
-  if (!target) return;
+  // Nobody is hurt, so it falls in with the rest of the retinue and keeps
+  // station on the hero. It still never advances on an enemy — holdStation
+  // walks toward the ring around the hero and nothing else, so the one unit
+  // that never respawns is never the one walking at the wave. But standing
+  // where it spawned while the hero moves off is how a healer ends the wave
+  // out of range of everyone it exists to heal.
+  if (!target) { holdStation(g, dt); return; }
 
   const dx = target.x - g.x, dy = target.y - g.y;
   const dist = Math.hypot(dx, dy);
   if (dist > 0) g.facing = Math.atan2(dy, dx);
-  if (dist > CONFIG.guardHealReach) { moveGuard(g, dx / dist, dy / dist, dt); return; }
+  if (dist > CONFIG.guardHealReach) { walkGuardTo(g, target.x, target.y, dt); return; }
   if (g.healCD > 0) return;
   g.healCD = CONFIG.guardHealInterval;
   healGuard(target.guard, guardHeal(g.guard));
+}
+
+/**
+ * Walks a guard toward an arbitrary point, around terrain rather than into it.
+ *
+ * Guards used to move in a straight line, and a comment here said that cost
+ * nothing because the bastion's middle is open. That was true only while a
+ * guard never had to go anywhere: it fought whatever was already beside it. The
+ * moment the retinue had to follow the hero, the barrier it is standing behind
+ * became a wall it walked into and stayed at — a playtest found the retinue
+ * left behind at the towers while the hero was across the map.
+ *
+ * It solves its own A* rather than joining pathScheduler, because the scheduler
+ * serves one destination for the whole frame and the crows own it — every agent
+ * on that queue is going to the player. A guard is going to a moving point near
+ * the player, and each guard's is different. The cost is bounded by the
+ * recompute interval, not by the frame.
+ */
+function walkGuardTo(g, tx, ty, dt) {
+  g.routeTimer -= dt;
+  if (!g.route || g.route.length === 0 || g.routeTimer <= 0) {
+    g.route = computeAStarPath(g.x, g.y, tx, ty);
+    g.routeTimer = CONFIG.guardRouteInterval;
+  }
+  let aimX = tx, aimY = ty;
+  if (g.route && g.route.length > 0) {
+    const wp = g.route[0];
+    if (Math.hypot(wp.x - g.x, wp.y - g.y) < 8) g.route.shift();
+    else { aimX = wp.x; aimY = wp.y; }
+  }
+  const dx = aimX - g.x, dy = aimY - g.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  g.facing = Math.atan2(dy, dx);
+  moveGuard(g, dx / dist, dy / dist, dt);
+}
+
+/**
+ * Walks a guard back toward its station, and stops when it is close enough.
+ *
+ * The dead zone matters: without it a guard oscillates around its own post
+ * every frame, which at this sprite size is a visible jitter rather than a
+ * subtle one.
+ */
+function holdStation(g, dt) {
+  const at = guardStation(g);
+  const dist = Math.hypot(at.x - g.x, at.y - g.y);
+  if (dist < 6) { g.route = null; return; }
+  // Close to home it beelines, which keeps the ring smooth; far from home it
+  // routes, which is what gets it round the barrier at all.
+  if (dist < CONFIG.guardPostRadius * 2) {
+    g.facing = Math.atan2(at.y - g.y, at.x - g.x);
+    moveGuard(g, (at.x - g.x) / dist, (at.y - g.y) / dist, dt);
+    return;
+  }
+  walkGuardTo(g, at.x, at.y, dt);
 }
 
 /** One step, refused by terrain the way every other ground body's is. */
@@ -6034,8 +6249,20 @@ function moveGuard(g, ux, uy, dt) {
   const spd = CONFIG.guardSpeed;
   const nx = g.x + ux * spd * dt;
   const ny = g.y + uy * spd * dt;
-  if (tilePassable(tileAt(nx, g.y))) g.x = nx;
-  if (tilePassable(tileAt(g.x, ny))) g.y = ny;
+  // The leash is enforced on the step, not only on target selection. Choosing a
+  // near target keeps a guard home in the ordinary case; this stops it being
+  // dragged further out by one that walks away while being fought.
+  //
+  // Beyond the leash the rule inverts into "any step is allowed", not "only
+  // steps that shorten the straight-line distance". A guard coming home round a
+  // barrier has to move away from the hero for part of the way, and the
+  // stricter rule pinned it against the wall it was trying to walk around —
+  // which is exactly how the retinue got stranded at the towers.
+  const cap = CONFIG.guardLeash * CONFIG.guardLeash;
+  const inside = dist2(player.x, player.y, g.x, g.y) <= cap;
+  const allowed = (x, y) => !inside || dist2(player.x, player.y, x, y) <= cap;
+  if (tilePassable(tileAt(nx, g.y)) && allowed(nx, g.y)) g.x = nx;
+  if (tilePassable(tileAt(g.x, ny)) && allowed(g.x, ny)) g.y = ny;
   g.walkPhase += dt * 8;
 }
 

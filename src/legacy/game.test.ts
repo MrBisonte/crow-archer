@@ -3129,3 +3129,179 @@ describe('the bastion as the end of the brawl chain', () => {
     expect(g.state()).toBe('win');
   });
 });
+
+// ── SIEGE BOSSES REACH THE FIELD ──────────────────────────────────────────────
+//
+// A playtest found a run that could not be finished: the wave-7 boss sat off
+// the right edge, partly out of frame, immune and unkillable, and the wave
+// waited on it for ever. Two causes, and the suite was green through both.
+//
+// spawnBoss leaves most kinds at `canvasW + 40` in `bstate: 'entering'`, which
+// updateBossEntrance resolves — but only in the 'boss_entrance' appState, which
+// a siege never enters. And updateBoss only runs during 'playing' for the kinds
+// BOSS_HUNTS_WHILE_EXPLORING marks as hunters: the minotaur alone, with no row
+// at all for the commander.
+describe('a siege boss is on the field and can be fought', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  const atWave = (n: number): void => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.jumpToSiegeWave(n);
+  };
+
+  /** Inside the arena, not parked past its right edge where nothing can reach. */
+  const onField = (b: { x: number; y: number }): boolean => {
+    const c = g.config();
+    return b.x > 0 && b.x < c.cols * c.tileSize && b.y > 0 && b.y < c.rows * c.tileSize;
+  };
+
+  it('lands inside the arena rather than off the right edge', () => {
+    atWave(7);
+    const boss = g.boss();
+    expect(boss, 'wave 7 should field a boss').toBeTruthy();
+    expect(boss.bstate, 'a siege has no entrance to resolve an entering boss').not.toBe('entering');
+    expect(onField(boss), `boss parked at x=${boss.x}`).toBe(true);
+  });
+
+  it('actually moves, because something ticks it', () => {
+    atWave(7);
+    const boss = g.boss();
+    const before = { x: boss.x, y: boss.y };
+    g.stepSim(90);
+    const moved = Math.hypot(g.boss().x - before.x, g.boss().y - before.y);
+    expect(moved, 'the boss never moved, so nothing is running its AI').toBeGreaterThan(1);
+  });
+
+  it('can be killed, and killing it lets the wave advance', () => {
+    atWave(7);
+    g.clearSiegeWave();
+    // Put the boss back and kill it through the real death path.
+    g.stepSim(1);
+    const wave = siegeState().wave;
+    g.killBoss();
+    g.stepSim(240);
+    g.clearSiegeWave();
+    g.stepSim(2);
+    expect(siegeState().wave, 'the wave never advanced past its boss').toBeGreaterThan(wave);
+  });
+
+  it('fields two on wave ten, and both of them move', () => {
+    atWave(10);
+    const first = g.boss();
+    const extras = g.siegeBosses();
+    expect(first).toBeTruthy();
+    expect(extras.length, 'wave 10 should field a second boss').toBe(1);
+    const second = extras[0];
+    expect(onField(first), 'first boss off field').toBe(true);
+    expect(onField(second), 'second boss off field').toBe(true);
+
+    const a = { x: first.x, y: first.y };
+    const b = { x: second.x, y: second.y };
+    g.stepSim(90);
+    expect(Math.hypot(first.x - a.x, first.y - a.y), 'first boss is frozen').toBeGreaterThan(1);
+    // The one that caught a comment of mine claiming the extras were ticked.
+    expect(Math.hypot(second.x - b.x, second.y - b.y), 'second boss is frozen').toBeGreaterThan(1);
+  });
+});
+
+// ── THE RETINUE IS A BODYGUARD ────────────────────────────────────────────────
+//
+// A playtest: "the guards should wander around our hero, as body guards, the
+// archers too." Before this they took the nearest enemy anywhere on the map,
+// so on an open bastion the retinue scattered in the first ten seconds and the
+// hero fought the wave alone.
+describe('the retinue keeps station on the hero', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
+  const strayed = (): number => {
+    const p = g.player() as { x: number; y: number };
+    let worst = 0;
+    for (const b of g.guards()) worst = Math.max(worst, Math.hypot(b.x - p.x, b.y - p.y));
+    return worst;
+  };
+
+  it('is seated beside the hero from the very first tick', () => {
+    // Not merely 'gets there eventually'. generateMap runs before the hero is
+    // positioned, in initGame and in the brawl hand-off alike, so a retinue
+    // seated during map generation rings wherever the hero stood on the
+    // previous map. It walked home within a few seconds, which is why every
+    // other test in this describe passed while it was wrong.
+    g.pickMap('cavern');
+    g.setMode('waves');
+    g.go('playing');
+    const p = g.player() as { x: number; y: number };
+    p.x = (g.config().cols - 4) * g.config().tileSize;
+    p.y = 2 * g.config().tileSize;
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    expect(g.guards().length).toBeGreaterThan(0);
+    expect(strayed(), 'the retinue was seated at a stale hero position')
+      .toBeLessThan(g.config().guardPostRadius * 3);
+  });
+
+  it('stays near the hero while a wave crosses the map', () => {
+    openSiege();
+    g.stepSim(600);
+    // The leash plus one guard's own reach: a guard may stand at the edge of
+    // its leash and swing, and nothing may be further out than that.
+    const cap = g.config().guardLeash + g.config().guardMeleeReach;
+    expect(strayed(), `a guard strayed ${Math.round(strayed())}px from the hero`).toBeLessThan(cap);
+  });
+
+  it('follows when the hero walks away', () => {
+    openSiege();
+    g.clearSiegeWave();
+    const p = g.player() as { x: number; y: number };
+    // Put the hero across the map from where the retinue was seated.
+    p.x = (g.config().cols - 6) * g.config().tileSize;
+    p.y = (g.config().rows / 2) * g.config().tileSize;
+    // Long enough to walk the width of the arena and round the barrier: the
+    // retinue moves at guardSpeed and the trip is most of 33 tiles.
+    g.stepSim(1200);
+    expect(strayed(), 'the retinue never followed').toBeLessThan(
+      g.config().guardLeash + g.config().guardMeleeReach,
+    );
+  });
+
+  it('ignores an enemy that is nowhere near the hero', () => {
+    openSiege();
+    g.clearSiegeWave();
+    const p = g.player() as { x: number; y: number };
+    p.x = 3 * g.config().tileSize;
+    p.y = (g.config().rows / 2) * g.config().tileSize;
+    g.stepSim(30);
+    const before = g.guards().map((b: { x: number; y: number }) => ({ x: b.x, y: b.y }));
+    // A skeleton parked in the far corner, well outside the leash.
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons()[g.skeletons().length - 1];
+    sk.x = (g.config().cols - 3) * g.config().tileSize;
+    sk.y = 2 * g.config().tileSize;
+    sk.hp = 99; sk.maxHp = 99;
+    g.stepSim(180);
+    // Nothing should have marched off toward it.
+    expect(strayed()).toBeLessThan(g.config().guardLeash);
+    expect(before.length).toBeGreaterThan(0);
+  });
+
+  it('spreads the retinue around the hero rather than stacking it', () => {
+    openSiege();
+    g.clearSiegeWave();
+    g.stepSim(240);
+    const bodies = g.guards() as { x: number; y: number }[];
+    expect(bodies.length).toBeGreaterThan(1);
+    // No two guards standing on the same pixel. A stack is what a shared post
+    // angle would produce, and it reads as one guard.
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i]!, b = bodies[j]!;
+        expect(Math.hypot(a.x - b.x, a.y - b.y), `guards ${i} and ${j} are stacked`).toBeGreaterThan(2);
+      }
+    }
+  });
+});
