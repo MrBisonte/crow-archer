@@ -6183,6 +6183,23 @@ function updateSiege(dt) {
  * a lot of code that works. The swap is honest about what it is: the engine
  * has one boss, and this lends it out.
  */
+/**
+ * Hands the boss slot to `extra` and puts `held` back among the extras.
+ *
+ * Called when an extra dies while occupying the slot: the one that just died
+ * keeps it, so updateBossDeath clears the right body, and the one that was
+ * holding it rejoins the list rather than being dropped on the floor -- which
+ * would leave a live boss on the field that nothing ticks and no wave-clear
+ * check can see.
+ *
+ * Shared with the harness hook that kills an extra, so a test cannot exercise
+ * a handover the game does not perform.
+ */
+function seatSiegeBoss(extra, held) {
+  siegeExtraBosses = siegeExtraBosses.filter((b) => b !== extra);
+  if (held && held !== extra) siegeExtraBosses.push(held);
+}
+
 function tickSiegeBosses(dt) {
   if (bossDeathSeq) return;
   if (boss && boss.bstate !== 'dead' && !BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
@@ -6192,15 +6209,7 @@ function tickSiegeBosses(dt) {
     if (!extra || extra.bstate === 'dead') continue;
     boss = extra;
     updateBoss(dt);
-    if (bossDeathSeq) {
-      // The one that just died keeps the slot, so updateBossDeath clears the
-      // right body — and the one that was holding the slot rejoins the extras
-      // rather than being dropped on the floor, which would leave a live boss
-      // on the field that nothing ticks and no wave-clear check can see.
-      siegeExtraBosses = siegeExtraBosses.filter((b) => b !== extra);
-      if (held && held !== extra) siegeExtraBosses.push(held);
-      return;
-    }
+    if (bossDeathSeq) { seatSiegeBoss(extra, held); return; }
   }
   boss = held;
 }
@@ -11425,10 +11434,32 @@ export const devHooks = {
    * be walked onto, so what the door does is still exercised for real.
    */
   giveMazeKeys() { if (mazeRun) { mazeRun.held.silver = true; mazeRun.held.golden = true; } },
+  /**
+   * Kills one boss on the field the way play does, extras included.
+   *
+   * The primary slot first; if that is empty or already dead, an extra is
+   * moved into the slot through the same handover the tick uses, and dies
+   * there. Returns which one died, or null when there is no boss left.
+   *
+   * This exists because clearSiegeWave() nulls `boss` and `siegeExtraBosses`
+   * outright. Every ladder test in the suite advanced that way, so ten waves
+   * were walked without a single boss ever dying -- which is how a boss death
+   * could freeze the field with the suite fully green.
+   */
+  killSiegeBoss() {
+    if (boss && boss.bstate !== 'dead') { startBossDeath(); return 'primary'; }
+    const extra = siegeExtraBosses.find((b) => b && b.bstate !== 'dead');
+    if (!extra) return null;
+    const held = boss;
+    boss = extra;
+    startBossDeath();
+    seatSiegeBoss(extra, held);
+    return 'extra';
+  },
   /** Wipes the field so a test can reach the next wave without fighting one. */
   clearSiegeWave() { crows = []; skeletons = []; soldiers = []; boss = null; siegeExtraBosses = []; },
   /**
-   * Fast-forwards a siege to the start of wave , promoting and recruiting on
+   * Fast-forwards a siege to the start of wave `n`, promoting and recruiting on
    * the way exactly as clearing each wave would.
    *
    * It walks the real completeWave rather than assigning the number, so the

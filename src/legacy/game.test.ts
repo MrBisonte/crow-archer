@@ -2748,6 +2748,49 @@ describe('the siege loop', () => {
     expect(bossesAt(10)).toBe(2);
   });
 
+  /**
+   * The whole ladder, fought rather than deleted.
+   *
+   * Every other ladder test here advances with clearSiegeWave(), which nulls
+   * `boss` and `siegeExtraBosses` outright. That walks ten waves without a
+   * single boss ever dying, so none of them ever entered the death sequence --
+   * which is precisely how a siege boss death could freeze the field for good
+   * while 1455 tests stayed green.
+   *
+   * This one kills every boss through startBossDeath and waits for each
+   * sequence to finish before going on, so the four boss waves exercise the
+   * real path four times: the death tail's siege guard (without it, killing
+   * the wave-7 crow king loads the castle and the run is over), the handover
+   * when wave ten's second boss dies while the first holds the slot, and the
+   * field still moving afterwards.
+   */
+  it('plays all ten waves through to a win, killing every boss for real', () => {
+    openSiege();
+    const killed: string[] = [];
+    for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
+      g.stepSim(1);
+      // Every boss this wave fielded, one at a time: a death sequence is
+      // exclusive, so the next kill waits for the current one to clear.
+      for (let guardStop = 0; guardStop < 4; guardStop++) {
+        const which = g.killSiegeBoss();
+        if (!which) break;
+        killed.push(`wave ${siegeState().wave}: ${which}`);
+        g.stepSim(240);
+        expect(g.bossDeathSeq(), `wave ${siegeState().wave}: the field froze`).toBeNull();
+        expect(g.state(), `wave ${siegeState().wave}: the run left the bastion`).toBe('playing');
+      }
+      g.clearSiegeWave();
+      g.stepSim(2);
+    }
+    expect(g.state()).toBe('win');
+    expect(siegeState().outcome).toBe('won');
+    // Waves 7, 8 and 9 field one boss each and wave 10 fields two, so a run
+    // that kills every one of them kills five. A count that drifts means the
+    // ladder changed shape and this test stopped covering what it claims to.
+    expect(killed).toHaveLength(5);
+    expect(killed.filter((k) => k.endsWith('extra'))).toHaveLength(1);
+  });
+
   it('loses only when the hero dies, never when a tower falls', () => {
     openSiege();
     // Flatten both towers outright. The run must not notice.
