@@ -103,10 +103,12 @@ at two settings; the maze is carved and the cavern is grown. See
 One table is not keyed on `MapKind` and is worth knowing about:
 `MAP_PANEL_INFO` in `src/legacy/game.js` holds only the presentation of the
 Waves map-select panels, and *membership* of that screen is derived from
-`MAP_RULES[kind].crows` rather than listed. A map earns a panel by having
-crows. `MAP_PANELS` throws at load if a map earns one and has no
-presentation row, so the half that cannot be derived fails early instead of
-drawing blank.
+`runsWaves(kind)` rather than listed. A map earns a panel by fielding a
+population that escalates on the wave timer, which is not the same thing as
+having crows: `MAP_RULES[kind].population` is one of `crows`, `soldiers` or
+`scripted`, and only the first two run waves. `MAP_PANELS` throws at load if
+a map earns one and has no presentation row, so the half that cannot be
+derived fails early instead of drawing blank.
 
 ### Map selection: where the free choice actually lives
 
@@ -116,7 +118,7 @@ two places. Everywhere else it is fixed. Logged as ROADMAP.md decision 9.
 | Context | Map choice | Mechanism |
 |---|---|---|
 | Multiplayer lobby | **Free**, host-selected | `SET_MAP` → `Room.setMap()` → `MATCH_START` |
-| Single-player, Waves mode | **Free**, player-selected | mapselect screen (`MAP_PANELS`, filtered from `MAP_RULES.crows`) → `selectedMapKind` → `initGame()` |
+| Single-player, Waves mode | **Free**, player-selected | mapselect screen (`MAP_PANELS`, filtered by `runsWaves`) → `selectedMapKind` → `initGame()` |
 | Single-player, Brawl mode | **Fixed** | `generateMap('castle')` fires once, hardcoded inside `updateBossDeath()` when the Crow King dies: a story beat, not a menu |
 
 ```mermaid

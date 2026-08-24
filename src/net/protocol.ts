@@ -408,7 +408,7 @@ const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
  * Widening it to the literals lets `Exhaustive` below turn a forgotten map
  * into a build failure instead.
  */
-const MAPS = ['forest', 'castle', 'maze', 'cavern'] as const satisfies readonly MapKind[];
+const MAPS = ['forest', 'castle', 'maze', 'cavern', 'bastion'] as const satisfies readonly MapKind[];
 
 /** Resolves only when `T` is `never`, so naming a non-never type fails to compile. */
 type Exhaustive<T extends never> = T;

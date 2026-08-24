@@ -8,6 +8,10 @@ import { TILE, type TileId, type TileMap } from '../sim/tilemap';
 import {
   makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelTriangleUp, blitPixelGrid, type PixelGrid,
 } from './pixel-grid';
+import {
+  paintBastionAsh, paintBastionGround, paintBastionSapling, paintBastionStone,
+  paintBastionTower, paintBastionTree, paintBastionWater,
+} from './bastion-tiles';
 
 /** Logical resolution every tile paints at, blown up to fill the real tile
  * size — chunkier than a character sprite on purpose: tiles repeat across
@@ -415,12 +419,49 @@ export const CAVERN_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
   },
 };
 
+/**
+ * The siege ground. Thin by comparison with the others because the art itself
+ * lives in `bastion-tiles.ts`: painters that take a PixelGrid and a seed and
+ * nothing else, so a test can look at what they drew without a canvas. This
+ * table is only the mapping from tile id to painter.
+ *
+ * TILE.HUT is the defence tower. The bastion has exactly two of them, stamped
+ * by BastionTerrain at `towerSites`, and they are the reason the hut slot is
+ * used rather than a new tile id: a tower is already what a hut is to the
+ * renderer — one solid tile with a roof — and a new id would have meant a row
+ * in every theme that has no tower in it.
+ */
+const BASTION_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
+  [TILE.EMPTY](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionGround(grid, seed));
+  },
+  [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionStone(grid, seed));
+  },
+  [TILE.HUT](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionTower(grid, seed));
+  },
+  [TILE.TREE](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionTree(grid, seed));
+  },
+  [TILE.ASH](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionAsh(grid, seed));
+  },
+  [TILE.SAPLING](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionSapling(grid, seed));
+  },
+  [TILE.WATER](g, x, y, seed, { tileSize: ts }) {
+    paintGrid(g, x, y, ts, (grid) => paintBastionWater(grid, seed));
+  },
+};
+
 /** Which painter table draws each map's tiles. One row per MapKind. */
 export const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>> = {
   forest: TILE_PAINTERS,
   castle: CASTLE_TILE_PAINTERS,
   maze: MAZE_TILE_PAINTERS,
   cavern: CAVERN_TILE_PAINTERS,
+  bastion: BASTION_TILE_PAINTERS,
 };
 
 /**
@@ -551,11 +592,24 @@ const CAVERN_PALETTE: AnimatedPalette = {
   treeFlicker: (a) => `rgba(90,220,170,${a.toFixed(2)})`,
 };
 
+/**
+ * The bastion generates no water at all, so the water entries here can never
+ * be reached. They are filled with the earth's own dark rather than left as a
+ * copy of another map's blue: if a pool ever does appear on this map it should
+ * look like a mistake in the right palette, not like a window onto the forest.
+ */
+const BASTION_PALETTE_ANIM: AnimatedPalette = {
+  waterBase: ['#3c3020', '#4a3b28'],
+  waterRipple: ['#5a4832', '#2e2418'],
+  treeFlicker: (a) => `rgba(150,120,70,${a.toFixed(2)})`,
+};
+
 export const ANIMATED_THEMES: Record<MapKind, AnimatedPalette> = {
   forest: FOREST_PALETTE,
   castle: CASTLE_PALETTE,
   maze: MAZE_PALETTE,
   cavern: CAVERN_PALETTE,
+  bastion: BASTION_PALETTE_ANIM,
 };
 
 /**

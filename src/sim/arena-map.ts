@@ -15,6 +15,7 @@
 import {
   CavernTerrain, MazeTerrain, NoiseTerrain, type MapGenerator,
 } from './map-generators';
+import { BastionTerrain } from './bastion-terrain';
 import { type Noise2D } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
@@ -25,7 +26,7 @@ import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
  * render/tiles.ts) — the same reason CharacterKind became a table instead of
  * a branch, not the reason GameMode stayed one.
  */
-export type MapKind = 'forest' | 'castle' | 'maze' | 'cavern';
+export type MapKind = 'forest' | 'castle' | 'maze' | 'cavern' | 'bastion';
 
 /**
  * How each map builds its grid, one row per MapKind so a fifth map fails to
@@ -50,6 +51,9 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
   castle: new NoiseTerrain({ density: 0.5 }),
   maze: new MazeTerrain({ braid: 0.15 }),
   cavern: new CavernTerrain({ fill: 0.44, smoothing: 4, pools: 0.1, fungus: 0.1 }),
+  // Sparse on purpose. The fortification is the map; scatter is only enough
+  // cover that crossing the open ground is a choice rather than a walk.
+  bastion: new BastionTerrain({ scatter: 0.08 }),
 };
 
 /**
@@ -71,8 +75,16 @@ export const MAP_GEN: Record<MapKind, MapGenerator> = {
  * and the distinction is load-bearing: a scripted map must not appear on the
  * Waves map-select screen, because a run there would have two win conditions
  * and mean neither.
+ *
+ * `siege` is the bastion's: a finite ten-wave ladder drawn from the whole
+ * bestiary by sim/siege-run.ts, ending in a win rather than running forever.
+ * It is its own value rather than another `scripted` because the two answer
+ * differently to the only question that matters downstream today — both stay
+ * off the Waves screen, but a scripted map has no wave count at all while a
+ * siege has exactly ten — and folding them together would be the same mistake
+ * `crows: boolean` made when it answered two questions with one flag.
  */
-export type MapPopulation = 'crows' | 'soldiers' | 'scripted';
+export type MapPopulation = 'crows' | 'soldiers' | 'scripted' | 'siege';
 
 /**
  * Which populations escalate on the wave timer, and therefore which maps earn
@@ -86,6 +98,7 @@ const WAVE_POPULATION: Record<MapPopulation, boolean> = {
   crows: true,
   soldiers: true,
   scripted: false,
+  siege: false,
 };
 
 /** Does this map field an escalating population of its own in Waves mode? */
@@ -124,6 +137,7 @@ export const MAP_RULES: Record<MapKind, {
   castle: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
   maze: { destructibleTerrain: false, fogOfWar: true, population: 'scripted' },
   cavern: { destructibleTerrain: true, fogOfWar: false, population: 'soldiers' },
+  bastion: { destructibleTerrain: true, fogOfWar: false, population: 'siege' },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
