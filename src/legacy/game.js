@@ -664,6 +664,13 @@ const MENU_ENTRIES = [
     run: () => { gameMode = 'waves'; transitionTo('charselect'); } },
   { key: 'S', label: 'SIEGE', section: 'mode',
     sub: 'hold the bastion  ·  ten waves  ·  a retinue that grows',
+    // Off the screen until the ladder and the retinue are wired into the loop.
+    // MODE_RULES.siege and the bastion map are finished and tested; what is
+    // missing is anything driving the spawners, so a run today lands on the
+    // bastion and stays empty with nothing to fight and no way to end. Its
+    // rules stay here rather than being deleted and rebuilt: delete this one
+    // line to put the mode back.
+    hidden: true,
     run: () => { gameMode = 'siege'; transitionTo('charselect'); } },
   { key: 'M', label: 'MULTIPLAYER', section: 'mode',
     sub: 'up to 4 players  ·  co-op or 2v2  ·  needs a server',
@@ -671,6 +678,15 @@ const MENU_ENTRIES = [
   { key: 'C', label: 'CONTROLS', section: 'util',
     run: () => transitionTo('controls') },
 ];
+/**
+ * The entries a player can actually reach: everything MENU_ENTRIES holds that
+ * is not hidden. Derived rather than hand-kept, and read by the draw, the
+ * arrow-key walk and the hotkeys alike, so a hidden row cannot be off the
+ * screen but still selectable — which is how a mode nobody can see would
+ * otherwise stay one Enter away.
+ */
+const MENU_SHOWN = MENU_ENTRIES.filter((e) => !e.hidden);
+
 let controlsSelection = 0, remapTarget = null;
 
 /**
@@ -9679,8 +9695,8 @@ function drawMenu(t) {
   // Both lists come from MENU_ENTRIES, so an added row lands on screen and in
   // the key handler at once. Index i is menuSelection, which is why the util
   // loop offsets by the number of modes rather than by a written-in constant.
-  const modes = MENU_ENTRIES.filter((e) => e.section === 'mode');
-  const utils = MENU_ENTRIES.filter((e) => e.section === 'util');
+  const modes = MENU_SHOWN.filter((e) => e.section === 'mode');
+  const utils = MENU_SHOWN.filter((e) => e.section === 'util');
 
   const MODE_TOP = 303, MODE_STEP = 60;
   modes.forEach(({ key, label, sub }, i) => {
@@ -10162,16 +10178,16 @@ function handleMultiplayerInput() {
 let matchStarted = null;
 
 function handleMenuInput() {
-  const n = MENU_ENTRIES.length;
+  const n = MENU_SHOWN.length;
   if (keys['ArrowUp'])   { menuSelection = (menuSelection - 1 + n) % n; keys['ArrowUp']   = false; }
   if (keys['ArrowDown']) { menuSelection = (menuSelection + 1) % n;     keys['ArrowDown'] = false; }
   if (keys['Enter']) {
     keys['Enter'] = false;
-    MENU_ENTRIES[menuSelection].run();
+    MENU_SHOWN[menuSelection].run();
     return;                       // the entry may have changed appState
   }
   // Hotkeys, the bracketed letter beside each label
-  for (const entry of MENU_ENTRIES) {
+  for (const entry of MENU_SHOWN) {
     const lower = entry.key.toLowerCase();
     if (keys[lower] || keys[entry.key]) {
       keys[lower] = keys[entry.key] = false;
@@ -10542,6 +10558,7 @@ export const devHooks = {
   // because a mode or a map whose rules are complete but whose entry is
   // missing is unreachable, and nothing else in the suite would notice.
   menuEntries: () => MENU_ENTRIES,
+  menuShown: () => MENU_SHOWN,
   mapPanels: () => MAP_PANELS,
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
   // hold onto after the call; setLogLevel changes what future calls record,

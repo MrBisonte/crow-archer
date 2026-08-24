@@ -2624,13 +2624,29 @@ describe('single player mode rules', () => {
 describe('siege mode', () => {
   afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
 
-  it('is a mode the menu can reach', () => {
-    // MENU_ENTRIES is the only writer of gameMode in the real game, so a mode
-    // with no entry is a mode no player can pick however complete its rules.
+  // Was 'is a mode the menu can reach'. It is deliberately not reachable yet:
+  // the rules and the map are finished, but nothing drives the spawners, so a
+  // run lands on the bastion and stays empty. The entry keeps its row and
+  // carries `hidden` instead, so putting the mode back is one line rather than
+  // a rebuild — and so this test says which it is rather than going quiet.
+  it('keeps its menu row, held back until the ladder is wired', () => {
     const siege = g.menuEntries()
-      .find((e: { label: string; section: string }) => e.label === 'SIEGE');
-    expect(siege, 'no SIEGE entry on the title screen').toBeDefined();
+      .find((e: { label: string; section: string; hidden?: boolean }) => e.label === 'SIEGE');
+    expect(siege, 'the SIEGE row should still exist, just hidden').toBeDefined();
     expect(siege?.section).toBe('mode');
+    expect(siege?.hidden, 'unhide this once the retinue and ladder are wired').toBe(true);
+  });
+
+  // The half that actually protects the player: off the screen has to mean out
+  // of reach. A hidden row still walked by the arrow keys or still answering
+  // its hotkey would be a mode nobody can see and anybody can start.
+  it('is not reachable while it is hidden', () => {
+    const shown = g.menuShown() as Array<{ label: string; key: string }>;
+    expect(shown.map((e) => e.label)).not.toContain('SIEGE');
+    // And no hidden row's hotkey survives in the list the input reads.
+    const hiddenKeys = (g.menuEntries() as Array<{ key: string; hidden?: boolean }>)
+      .filter((e) => e.hidden).map((e) => e.key);
+    for (const key of hiddenKeys) expect(shown.map((e) => e.key)).not.toContain(key);
   });
 
   it('always starts on the bastion, whatever the map screen last held', () => {
