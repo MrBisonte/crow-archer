@@ -148,8 +148,9 @@ describe('guard grids', () => {
    * the boot row is a bug on any frame. The garrison legitimately closes its
    * feet mid-stride and is allowed its one run there.
    *
-   * All three kinds, because the shared body is not shared by fiat — a kind
-   * that grew its own legs would be caught here and nowhere else.
+   * Every kind, because the shared body is not shared by fiat — a kind that
+   * grew its own legs, or hung a robe or a staff across the boot row, would be
+   * caught here and nowhere else.
    */
   it.each(KINDS)('keeps %s\'s two legs apart on every frame of the stride', (kind) => {
     const outline = GUARD_PALETTES[kind]['edge']!;
@@ -168,9 +169,59 @@ describe('guard grids', () => {
     expect(new Set(shapes).size, `${kind} repeats a frame`).toBe(FRAMES.length);
   });
 
-  it('draws the three kinds differently, so they are told apart on sight', () => {
+  it('draws every kind differently, so they are told apart on sight', () => {
     const shapes = KINDS.map((kind) => shapeOf(buildGuardGrid(kind, 'mid', 0)));
     expect(new Set(shapes).size).toBe(KINDS.length);
+  });
+
+  /**
+   * "Different" is not enough for the priest, so this measures how different.
+   *
+   * The check above passes on a one-pixel difference, which is the whole
+   * distance between two sprites that are the same body with a recoloured hood.
+   * The priest is the one guard the player has exactly one of and cannot get
+   * back, so picking it out of a scrum is a thing the art has to do rather than
+   * a thing the player has to remember — and the pairwise minimum below is the
+   * floor for that being true.
+   *
+   * A third of the sprite is the threshold and the measured figures are 97%,
+   * 117% and 103% of its filled cells (a share can exceed 100% because a cell
+   * the priest leaves empty and another kind fills counts as a difference). So
+   * this fails long before the silhouettes converge, and it does not fail for a
+   * palette tweak.
+   */
+  it('keeps the priest plainly apart from every other kind', () => {
+    const priest = buildGuardGrid('priest', 'mid', 0);
+    const body = countFilled(priest);
+    for (const kind of KINDS) {
+      if (kind === 'priest') continue;
+      const share = differingCells(priest, buildGuardGrid(kind, 'mid', 0)) / body;
+      expect(share, `the priest differs from the ${kind} by only ${(share * 100).toFixed(0)}%`)
+        .toBeGreaterThan(0.33);
+    }
+  });
+
+  /**
+   * The priest's own version of the leg check, on the rows a robe would cover.
+   *
+   * A floor-length cassock is the obvious way to dress this kind and it is
+   * exactly the fusion recorded in guard-grids.ts: a hem is one band of cloth
+   * across the boot row, which merges the legs on *every* frame rather than
+   * only at full swing. The shared check above reads BOOT_ROW; this one reads
+   * the three rows a hem would reach, so a robe that stopped one pixel short of
+   * the floor is caught too.
+   *
+   * BOOT_ROW - 3 is deliberately not included: the staff's shaft ends there and
+   * is a legitimate third run, being neither a leg nor anywhere near one.
+   */
+  it('keeps the priest\'s robe clear of its legs on every frame and rank', () => {
+    const outline = GUARD_PALETTES.priest['edge']!;
+    for (const frame of FRAMES)
+      for (const rank of RANKS)
+        for (const row of [BOOT_ROW - 2, BOOT_ROW - 1, BOOT_ROW]) {
+          const g = buildGuardGrid('priest', frame, rank);
+          expect(bodyRuns(g, row, outline), `priest ${frame} r${rank} row ${row}`).toBe(2);
+        }
   });
 
   // Pairwise, not "the top differs from the bottom". A ladder that draws one
@@ -284,10 +335,10 @@ describe('guard grids', () => {
   });
 
   // The other half of the "reads as friendly" argument: the three enemies share
-  // nothing, the three guards share a livery. If a kind drifted onto its own
+  // nothing, the whole retinue shares a livery. If a kind drifted onto its own
   // violet the retinue would stop reading as one body, and nothing on screen
   // would say so — the sprites would each still look fine alone.
-  it('paints all three guards in one livery and one promotion gold', () => {
+  it('paints the whole retinue in one livery and one promotion gold', () => {
     for (const slot of ['livery', 'liveryHi', 'rank'])
       expect(new Set(KINDS.map((kind) => GUARD_PALETTES[kind][slot])).size, `${slot} drifted`)
         .toBe(1);

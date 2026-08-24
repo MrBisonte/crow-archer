@@ -126,19 +126,45 @@ that can never be cleared.
 Two guards at the start, one recruit after every wave survived, rolled on a
 weighted table.
 
-| Guard | HP | Damage | Roll |
-|---|---|---|---|
-| Archer | 1 | 1x | 40% |
-| Foot soldier | 3 | 1x | 40% |
-| Knight | 2 | 2x | 20% |
+| Guard | HP | Damage | Heal | Roll | Promotion track |
+|---|---|---|---|---|---|
+| Archer | 1 | 1 | — | 40% | `combat` |
+| Foot soldier | 3 | 1 | — | 40% | `combat` |
+| Knight | 2 | 2 | — | 20% | `none` |
+| **Priest** | 2 | **0** | 1 | **never** | `ministry` |
 
-Survive a wave and gain a rank, to a maximum of three: +1 hp, +1 hp, then +1
-damage. A senior foot soldier is 5 hp and 2 damage, which is a knight's damage
-on more than twice a knight's body, and is meant to be worth protecting.
+Survive a wave and gain a rank, to a maximum of three. The `combat` ladder is
++1 hp, +1 hp, then +1 damage; a senior foot soldier ends at 5 hp and 2 damage,
+which is a knight's damage on more than twice a knight's body, and is meant to
+be worth protecting.
 
-The knight is `promotable: false`. It is the rare roll and already doubled on
-both axes, so it does not also climb. That is a design call kept as a table row
-precisely so that reversing it is one word rather than a code change.
+The knight's track is `none`. It is the rare roll and already doubled on both
+axes, so it does not also climb — a design call kept as a table row precisely so
+reversing it is one word rather than a code change.
+
+### The priest, and the two rules it forced
+
+One priest, seated when the siege opens, and **never replaced**. If it dies the
+run continues without it. Its primary is a +1 heal on the hurt ally nearest it;
+its ward is a +3 sweep, once per wave, recharged only by clearing one — which is
+what makes it once per *wave* rather than once per some number of seconds.
+
+**It cannot be recruited, and that is enforced by the compiler rather than by a
+zero.** `weight: 0` would have been the obvious shape and the wrong one: it
+leaves a priest sitting in a weighted table as a row that must never be rolled,
+one careless edit away from being rolled. Instead the roster is two unions —
+`RecruitableGuardKind` and `UniqueGuardKind` — `GuardKind` is their union with
+no members of its own, and `RECRUIT_WEIGHTS` is keyed on the recruitable half.
+Giving the priest a weight does not compile; nor does returning one from
+`rollGuardKind`. A fifth guard has to be added to one union or the other, which
+is where the author is made to say which group it is in.
+
+**A rank that granted nothing would be a badge that lies**, and the combat
+ladder's last step is +1 damage the priest has none of. So `promotable: boolean`
+became `promotion: PromotionTrack`, and the `ministry` ladder keeps the two hp
+steps and pays the third in +1 heal. A senior priest is 4 hp, 0 damage, heals 2.
+`none` is a `null` ladder rather than a ladder of empty steps, because "does not
+promote" and "promotes into nothing" are different statements.
 
 Guards read apart from the cavern's enemy garrison by palette — pale bodies
 against its three dark ones, in a violet livery, violet being the one hue the

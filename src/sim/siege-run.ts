@@ -37,9 +37,12 @@
  */
 
 import {
-  STARTING_GUARDS,
+  STARTING_RECRUITS,
+  UNIQUE_GUARD_KINDS,
+  copyGuard,
   makeGuard,
   promote,
+  rechargeWard,
   rollGuardKind,
   type Guard,
 } from './guards';
@@ -110,15 +113,27 @@ export interface SiegeState {
 }
 
 /**
- * Opens a run: wave 1, `STARTING_GUARDS` recruits rolled from the weighted
- * table, nobody promoted.
+ * Opens a run: wave 1, `STARTING_RECRUITS` recruits rolled from the weighted
+ * table, then one of each unique kind seated behind them, nobody promoted.
  *
- * The starting retinue is rolled rather than fixed so that no two bastion runs
- * open identically — a guaranteed archer and foot soldier would make the first
- * three waves the same three waves forever. It is drawn from the same
- * `rollGuardKind` the later recruits use, rather than a separate opening table,
- * so the knight's rarity means one thing across the whole run and there is only
- * one set of weights to retune.
+ * The rolled part of the retinue is rolled rather than fixed so that no two
+ * bastion runs open identically — a guaranteed archer and foot soldier would
+ * make the first three waves the same three waves forever. It is drawn from the
+ * same `rollGuardKind` the later recruits use, rather than a separate opening
+ * table, so the knight's rarity means one thing across the whole run and there
+ * is only one set of weights to retune.
+ *
+ * The unique kinds are seated after the roll and not through it, which is the
+ * whole of "the priest turns up once and is never recruited". It is the only
+ * place in the module that puts a unique kind on the field, `completeWave`
+ * recruits solely through `rollGuardKind`, and `rollGuardKind` cannot return
+ * one — so a second priest has nowhere to come from. Seating them *after* the
+ * loop also means the rng is consumed exactly as it was before they existed, so
+ * a seed that opened a run with two archers still does.
+ *
+ * They go at the back of the retinue rather than the front so that the newest
+ * recruit is still the last entry, which is what `completeWave` appends to and
+ * what the loop reads to find the body it has not placed yet.
  *
  * `rng` is `Rng` from `rng.ts`, which is precisely `() => number` returning
  * `[0, 1)` — the alias rather than the literal type so that the contract on the
@@ -126,9 +141,10 @@ export interface SiegeState {
  */
 export function startSiege(rng: Rng): SiegeState {
   const guards: Guard[] = [];
-  for (let recruited = 0; recruited < STARTING_GUARDS; recruited++) {
+  for (let recruited = 0; recruited < STARTING_RECRUITS; recruited++) {
     guards.push(makeGuard(rollGuardKind(rng)));
   }
+  for (const kind of UNIQUE_GUARD_KINDS) guards.push(makeGuard(kind));
   return { wave: 1, outcome: 'running', guards };
 }
 
@@ -157,9 +173,15 @@ export function waveRoster(state: SiegeState): SiegeWave {
 /**
  * Called when every enemy of the current wave is dead.
  *
- * Promotes each surviving promotable guard by one rank, then adds one new
- * recruit rolled from the weighted table, then advances the wave — or wins the
- * run if that was the last one.
+ * Promotes each survivor by one rank of whatever ladder its kind climbs, hands
+ * the priest its ward back, then adds one new recruit rolled from the weighted
+ * table, then advances the wave — or wins the run if that was the last one.
+ *
+ * The recharge is here and nowhere else, which is what makes the priest's area
+ * heal once per *wave*: the only event that restores it is a wave being
+ * cleared, so it cannot be regained by waiting, by retreating, or by a frame
+ * count. `rechargeWard` is a no-op on every other kind, so the sweep does not
+ * have to ask what each body is.
  *
  * The order is the rule. Promotion runs before recruitment so the fresh recruit
  * is rank 0: it did not fight the wave that was just held, and a retinue where
@@ -195,8 +217,9 @@ export function completeWave(state: SiegeState, rng: Rng): SiegeState {
   if (state.outcome !== 'running') return state;
 
   const survivors = state.guards.map((guard) => {
-    const veteran = { ...guard };
+    const veteran = copyGuard(guard);
     promote(veteran);
+    rechargeWard(veteran);
     return veteran;
   });
 

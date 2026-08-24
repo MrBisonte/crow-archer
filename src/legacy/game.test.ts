@@ -13,7 +13,10 @@ import { CHARACTER_STATS } from '../sim/arena';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { MODE_RULES } from '../sim/game-mode';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
-import { GUARD_STATS, STARTING_GUARDS, type GuardKind } from '../sim/guards';
+import {
+  GUARD_STATS, OPENING_RETINUE, STARTING_RECRUITS, WARD_HEAL, WARD_TRIGGER_HURT,
+  type GuardKind,
+} from '../sim/guards';
 import { TOWER_MAX_HP } from '../sim/towers';
 import { mulberry32 } from '../sim/rng';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
@@ -2595,12 +2598,34 @@ describe('siege mode', () => {
  * assertions. A test that reaches for it on the wrong map should say so once,
  * here, rather than fail forty lines later on a property of null.
  */
-const siegeState = (): { wave: number; outcome: string; guards: { kind: GuardKind; rank: number; hp: number }[] } => {
+const siegeState = (): {
+  wave: number;
+  outcome: string;
+  guards: { kind: GuardKind; rank: number; hp: number; maxHp: number; ward?: string }[];
+} => {
   const run = g.siege();
   // Narrowed with a bang, which is a test-only liberty: the expect above is
   // what actually establishes it, and tsc cannot see through an assertion.
   expect(run, 'no siege run: the loaded map is not a bastion').not.toBeNull();
   return run!;
+};
+
+/** One body on the field, as the loop keeps it: a position and a sim record. */
+interface GuardBody {
+  x: number;
+  y: number;
+  healCD: number;
+  guard: { kind: GuardKind; rank: number; hp: number; maxHp: number; ward?: string };
+}
+
+/** Every guard body currently on the field. */
+const bodies = (): GuardBody[] => g.guards() as GuardBody[];
+
+/** The priest's body, insisted upon: the tests below are about the one there is. */
+const priestBody = (): GuardBody => {
+  const found = bodies().filter((body) => body.guard.kind === 'priest');
+  expect(found, `expected one priest on the field, found ${found.length}`).toHaveLength(1);
+  return found[0]!;
 };
 
 describe('the siege loop', () => {
@@ -2612,12 +2637,45 @@ describe('the siege loop', () => {
 
   const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
 
-  it('opens with two guards and two towers', () => {
+  it('opens with the whole retinue on the field and two towers', () => {
     openSiege();
-    expect(siegeState().guards).toHaveLength(STARTING_GUARDS);
-    expect(g.guards()).toHaveLength(STARTING_GUARDS);
+    expect(siegeState().guards).toHaveLength(OPENING_RETINUE);
+    expect(g.guards()).toHaveLength(OPENING_RETINUE);
     expect(g.towers()).toHaveLength(2);
     expect(g.towers().every((t: { hp: number }) => t.hp === TOWER_MAX_HP)).toBe(true);
+  });
+
+  /**
+   * The opening retinue is two rolled guards and one priest, and the priest is
+   * the addition rather than a substitution.
+   *
+   * Both halves are asserted because either one alone would pass on the wrong
+   * roster: a priest that replaced a recruit still gives "exactly one priest",
+   * and two recruits still gives "two recruits" on a run with no priest at all.
+   */
+  it('seats exactly one priest, and still rolls the other openers', () => {
+    openSiege();
+    const kinds = siegeState().guards.map((guard) => guard.kind);
+
+    expect(kinds.filter((kind) => kind === 'priest')).toHaveLength(1);
+    expect(kinds.filter((kind) => kind !== 'priest')).toHaveLength(STARTING_RECRUITS);
+    // The rolled ones are what the weighted table can produce, and nothing else.
+    for (const kind of kinds.filter((k) => k !== 'priest')) {
+      expect(['archer', 'foot_soldier', 'knight'], 'a recruit of an unrollable kind').toContain(kind);
+    }
+    // And it is on the field, not merely in the run's bookkeeping.
+    expect(priestBody().guard.kind).toBe('priest');
+  });
+
+  it('never recruits a second priest, over a full ten-wave run', () => {
+    openSiege();
+    for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
+      g.clearSiegeWave();
+      g.stepSim(2);
+      const priests = siegeState().guards.filter((guard) => guard.kind === 'priest');
+      expect(priests, `after clearing ${n + 1} waves`).toHaveLength(1);
+    }
+    expect(siegeState().outcome).toBe('won');
   });
 
   it('every guard on the field starts at its kind\u2019s hp, and rank zero', () => {
@@ -2650,7 +2708,10 @@ describe('the siege loop', () => {
     // and the newest guard has not, because it arrived after the promoting.
     const veterans = after.slice(0, after.length - 1);
     for (const v of veterans) {
-      expect(v.rank, v.kind).toBe(GUARD_STATS[v.kind].promotable ? 1 : 0);
+      // Whether a kind climbs is its `promotion` track, not a boolean: the
+      // knight's is 'none' and the priest's is a ladder of its own, so "did it
+      // gain a rank" is "does it have a ladder at all".
+      expect(v.rank, v.kind).toBe(GUARD_STATS[v.kind].promotion === 'none' ? 0 : 1);
     }
     const recruit = after[after.length - 1];
     expect(recruit?.rank, 'the recruit fought nothing and should be rank 0').toBe(0);
@@ -2733,6 +2794,279 @@ describe('the retinue in the field', () => {
     // The body and the record leave together. A retinue that disagreed with
     // the field would promote a guard nobody can see.
     expect(siegeState().guards.length).toBe(g.guards().length);
+  });
+});
+
+// ── THE PRIEST ────────────────────────────────────────────────────────────────
+//
+// The retinue's healer, and the one guard that is seated rather than recruited.
+// The sim's own rules are covered in guards.test.ts and siege-run.test.ts; what
+// is checked here is the wiring, which is where the two rules that matter most
+// could still be broken without anything else noticing: that the loop never
+// gives it a swing, and that nothing on the field puts a second one on it.
+describe('the priest in the field', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
+
+  /**
+   * Parks a body off the map, where terrain refuses every step it tries to take
+   * and nothing near the middle is within its reach.
+   *
+   * The bastion's retinue is placed by tower, and with two towers the third
+   * body lands on the first tower's tile — so the priest and a foot soldier
+   * open the siege standing on the same pixel. Any test about what the priest
+   * did to something next to it has to move somebody first, or it is really a
+   * test of which body `nearestHostile` mentions first on a tie.
+   */
+  const parkFarAway = (body: GuardBody): void => { body.x = -800; body.y = -800; };
+
+  /** An enemy body, as much of one as these tests touch. */
+  interface Enemy { x: number; y: number; hp: number; maxHp: number }
+
+  /** A fresh enemy at `x, y`, tough enough to outlive the test that parks it. */
+  const executioner = (x: number, y: number, hp: number): Enemy => {
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons()[g.skeletons().length - 1];
+    sk.x = x; sk.y = y;
+    sk.hp = hp; sk.maxHp = hp;
+    return sk;
+  };
+
+  /**
+   * Steps the sim while holding `enemy` against `body`, `offset` pixels away.
+   *
+   * Parking an enemy next to a guard and then stepping three seconds does not
+   * do what it looks like: the garrison's AI walks at the hero and nothing
+   * else, so a skeleton dropped on a guard has strolled a hundred and fifty
+   * pixels away by the end of the window and the contact pass stops finding it.
+   * That is by design — updateSiegeContact exists precisely because enemies do
+   * not know the bastion is there — so a test about what happens *while* two
+   * bodies are in contact has to hold them in contact.
+   */
+  const stepInContact = (enemy: Enemy, body: GuardBody, frames: number, offset = 0): void => {
+    for (let n = 0; n < frames; n++) {
+      enemy.x = body.x + offset;
+      enemy.y = body.y;
+      g.stepSim(1);
+    }
+  };
+
+  /**
+   * The rule the kind is defined by, measured against a live loop.
+   *
+   * An enemy standing on the priest, for three seconds, with the rest of the
+   * retinue parked where it cannot interfere. `updateGuards` turns the priest
+   * off before it looks for a target at all, so there is no path to a swing, no
+   * arrow, and — because `GUARD_STATS.priest.baseDamage` is 0 — nothing behind
+   * it if there were.
+   *
+   * The control at the end is not decoration. Without it this test passes just
+   * as well when the setup is broken and the enemy was never in anyone's reach,
+   * which is the way a test like this usually rots.
+   */
+  it('deals no damage at all, even with an enemy standing on it', () => {
+    openSiege();
+    const priest = priestBody();
+    const fighters = bodies().filter((body) => body !== priest);
+    for (const body of fighters) parkFarAway(body);
+    // Tough enough to outlive the window, so a priest that could swing would
+    // have every chance to prove it rather than dying first.
+    priest.guard.maxHp = 50;
+    priest.guard.hp = 50;
+
+    const sk = executioner(priest.x, priest.y, 200);
+    stepInContact(sk, priest, 180);
+
+    expect(sk.hp, 'the priest damaged something').toBe(200);
+    // It was in contact the whole time, which is what makes the zero above mean
+    // "did not attack" rather than "was never near anything".
+    expect(priest.guard.hp, 'nothing was actually fighting the priest').toBeLessThan(50);
+
+    // Control: the same enemy, the same treatment, with a guard that does fight.
+    const fighter = fighters[0]!;
+    fighter.x = priest.x; fighter.y = priest.y;
+    fighter.guard.maxHp = 50; fighter.guard.hp = 50;
+    stepInContact(sk, fighter, 120);
+
+    expect(sk.hp, 'the setup cannot detect damage at all').toBeLessThan(200);
+  });
+
+  /**
+   * The other half of "never recruited": once it is gone, it is gone.
+   *
+   * A weighted table could not give this. Even at a weight of zero the priest
+   * would be one edit away from walking back in on the next wave — it is out of
+   * the roll's type entirely, so there is nowhere for a replacement to come
+   * from. The run carries on regardless, because losing a guard is not how a
+   * bastion run ends.
+   */
+  it('is not replaced when it dies, and the run goes on without it', () => {
+    openSiege();
+    const priest = priestBody();
+    const before = bodies().length;
+    // Clear of the body it shares a tower tile with; see parkFarAway.
+    priest.x += 200;
+    priest.guard.hp = 1;
+
+    const sk = executioner(priest.x + 6, priest.y, 50);
+    stepInContact(sk, priest, 120, 6);
+
+    expect(bodies().filter((body) => body.guard.kind === 'priest')).toHaveLength(0);
+    expect(bodies()).toHaveLength(before - 1);
+    // The body and the record leave together, the way any guard's do.
+    expect(siegeState().guards.filter((guard) => guard.kind === 'priest')).toHaveLength(0);
+    expect(siegeState().guards).toHaveLength(before - 1);
+
+    // Three more waves held, and nobody walks in wearing a stole.
+    for (let n = 0; n < 3; n++) { g.clearSiegeWave(); g.stepSim(2); }
+
+    expect(siegeState().guards.filter((guard) => guard.kind === 'priest')).toHaveLength(0);
+    expect(siegeState().wave).toBe(4);
+    expect(siegeState().outcome).toBe('running');
+    expect(g.state()).toBe('playing');
+  });
+
+  /**
+   * The cooldown heal, one point at a time and never past the maximum.
+   *
+   * Driven a frame at a time with the cooldown forced, rather than left to run
+   * for ten seconds: at 60 Hz a four-frame window is 66 milliseconds, which is
+   * too short for the wave on the field to wound anybody and turn this into a
+   * test of who happened to be neediest.
+   */
+  it('mends one point of a hurt ally at a time, and stops at its maximum', () => {
+    openSiege();
+    const priest = priestBody();
+    const target = bodies().find((body) => body !== priest)!;
+    // A body with room to be hurt in, whichever kind the roll produced: an
+    // archer's single hit point cannot be four short of anything.
+    target.guard.maxHp = 5;
+    target.guard.hp = 1;
+    target.x = priest.x + 10; target.y = priest.y;
+
+    priest.healCD = 0;
+    g.stepSim(1);
+    expect(target.guard.hp, 'one heal is worth one point at rank 0').toBe(2);
+
+    // The cooldown is what stops it being a full heal in one frame.
+    g.stepSim(1);
+    expect(target.guard.hp).toBe(2);
+
+    target.guard.hp = 4;
+    priest.healCD = 0;
+    g.stepSim(1);
+    expect(target.guard.hp).toBe(5);
+
+    priest.healCD = 0;
+    g.stepSim(1);
+    expect(target.guard.hp, 'a heal took a guard above its maximum').toBe(5);
+  });
+
+  /**
+   * The ward: one sweep, once per wave, handed back when the wave is held.
+   *
+   * The charge is read straight off the guard record rather than inferred from
+   * health, because health is also moved by the cooldown heal and by whatever
+   * the wave is doing — inferring would make this a test of arithmetic on three
+   * moving numbers instead of a test of the rule.
+   */
+  it('sweeps once when the retinue is coming apart, and not twice in one wave', () => {
+    openSiege();
+    const priest = priestBody();
+    const allies = bodies().filter((body) => body !== priest);
+    expect(allies.length, 'the trigger needs two hurt allies to be reachable')
+      .toBeGreaterThanOrEqual(WARD_TRIGGER_HURT);
+    for (const body of allies) {
+      body.guard.maxHp = 9;
+      body.guard.hp = 1;
+      body.x = priest.x + 20; body.y = priest.y;
+    }
+    expect(priest.guard.ward).toBe('ready');
+
+    g.stepSim(1);
+
+    expect(priest.guard.ward, 'the ward did not fire on two hurt allies').toBe('spent');
+    for (const body of allies) {
+      expect(body.guard.hp, `${body.guard.kind} was not swept`).toBe(1 + WARD_HEAL);
+    }
+
+    // Hurt again, in the same wave. There is no second sweep to be had, and the
+    // cooldown heal has not come round either, so nothing moves at all.
+    for (const body of allies) body.guard.hp = 1;
+    g.stepSim(1);
+
+    expect(priest.guard.ward).toBe('spent');
+    for (const body of allies) expect(body.guard.hp, 'the ward fired twice in one wave').toBe(1);
+  });
+
+  /**
+   * The sweep has an edge, and this is where it is.
+   *
+   * Without this the radius is an untested number: every other ward test puts
+   * the whole retinue on top of the priest, and a `guardWardRadius` of infinity
+   * would pass all of them. The far guard is hurt and stays hurt, which also
+   * pins the trigger — the count that fires the ward is taken over the allies
+   * the sweep would actually reach, not over everyone still standing.
+   */
+  it('sweeps only as far as its radius reaches', () => {
+    openSiege();
+    const priest = priestBody();
+    const allies = bodies().filter((body) => body !== priest);
+    const near = allies[0]!;
+    const far = allies[1]!;
+
+    // The priest is one of the two hurt allies here, which is what lets the
+    // trigger fire with only one other body in range.
+    priest.guard.maxHp = 9; priest.guard.hp = 1;
+    near.guard.maxHp = 9; near.guard.hp = 1;
+    near.x = priest.x + 20; near.y = priest.y;
+    far.guard.maxHp = 9; far.guard.hp = 1;
+    far.x = priest.x + 600; far.y = priest.y;
+
+    g.stepSim(1);
+
+    expect(priest.guard.ward).toBe('spent');
+    expect(priest.guard.hp).toBe(1 + WARD_HEAL);
+    expect(near.guard.hp).toBe(1 + WARD_HEAL);
+    expect(far.guard.hp, 'the ward reached a guard on the far side of the map').toBe(1);
+  });
+
+  it('has its ward back once a wave is cleared, and spends it again', () => {
+    openSiege();
+    const opening = priestBody();
+    const allies = bodies().filter((body) => body !== opening);
+    for (const body of allies) {
+      body.guard.maxHp = 9; body.guard.hp = 1;
+      body.x = opening.x + 20; body.y = opening.y;
+    }
+    g.stepSim(1);
+    expect(opening.guard.ward).toBe('spent');
+
+    // Everybody back to full before the wave is held. A recharged ward over a
+    // retinue that is still bleeding fires again on the very next frame, which
+    // is correct behaviour and would hide the state this test is about.
+    for (const body of allies) body.guard.hp = body.guard.maxHp;
+
+    g.clearSiegeWave();
+    g.stepSim(2);
+    expect(siegeState().wave).toBe(2);
+
+    // completeWave hands back copies, so the body is now pointing at a new
+    // record — reading the old one would be reading last wave's priest.
+    const promoted = priestBody();
+    expect(promoted.guard.ward, 'clearing a wave did not recharge the ward').toBe('ready');
+    expect(promoted.guard.rank, 'the priest climbed nothing for holding a wave').toBe(1);
+
+    const wave2 = bodies().filter((body) => body !== promoted);
+    for (const body of wave2) {
+      body.guard.maxHp = 9; body.guard.hp = 1;
+      body.x = promoted.x + 20; body.y = promoted.y;
+    }
+    g.stepSim(1);
+
+    expect(promoted.guard.ward).toBe('spent');
   });
 });
 

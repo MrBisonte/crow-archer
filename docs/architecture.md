@@ -37,7 +37,7 @@ character.
 | Map | `MapKind` | `forest \| castle \| maze \| cavern \| bastion` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
 | Skeleton (single-player) | plain string | `normal \| fire \| ice \| rat` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
-| Guard (single-player) | `GuardKind` | `archer \| foot_soldier \| knight` | `GUARD_STATS`, `GUARD_PALETTES`, `GUARD_GRID_BUILDERS` | sim, render |
+| Guard (single-player) | `GuardKind` = `RecruitableGuardKind \| UniqueGuardKind` | `archer \| foot_soldier \| knight` + `priest` | `GUARD_STATS`, `GUARD_PALETTES`, `GUARD_GRID_BUILDERS`; `RECRUIT_WEIGHTS` keyed on the recruitable half only | sim, render |
 | Boss | plain string, **not tabled** | `crowking \| dark_archer \| dark_knight \| minotaur \| commander` | `BOSS_STAGES`, `BOSS_ON_HIT` (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
 | Weapon | implicit, via `PRIMARY` | `Bow \| Staff \| Spear \| Crossbow` | each implements the `Weapon` interface | sim, net |
 
@@ -224,7 +224,10 @@ const MODE_RULES: Record<SinglePlayerMode, ModeRule>
 
 // src/sim/siege-run.ts, siege-waves.ts, guards.ts, towers.ts, bestiary.ts
 type SiegeOutcome = 'running' | 'won' | 'lost'
-type GuardKind = 'archer' | 'foot_soldier' | 'knight'
+type RecruitableGuardKind = 'archer' | 'foot_soldier' | 'knight'
+type UniqueGuardKind = 'priest'
+type GuardKind = RecruitableGuardKind | UniqueGuardKind
+const RECRUIT_WEIGHTS: Record<RecruitableGuardKind, number>  // a priest cannot have one
 const GUARD_STATS: Record<GuardKind, GuardStats>
 const SIEGE_WAVE_COUNT = 10
 const BESTIARY: Record<EnemyKind, EnemyEntry>  // 9 critters, 5 bosses

@@ -19,9 +19,9 @@
  *
  * These are the player's side. sim/guards.ts decides who is recruited and who
  * is promoted; this file decides nothing and draws what it is told. In
- * particular it draws a rank on a knight, which `GUARD_STATS.knight.promotable`
- * says can never happen: the rule has one home, and a second copy of it here
- * would be a second thing to edit the day that row changes.
+ * particular it draws a rank on a knight, which `GUARD_STATS.knight.promotion`
+ * being `'none'` says can never happen: the rule has one home, and a second
+ * copy of it here would be a second thing to edit the day that row changes.
  */
 
 import type { GuardKind } from '../sim/guards';
@@ -56,9 +56,9 @@ export const GUARD_SPRITE = { w: 16, h: 24 };
  * What every guard wears whatever kind it is: the house livery, the gold a
  * promotion is painted in, and one skin tone.
  *
- * Spread into all three palettes rather than repeated in each, because "the
- * retinue shares a livery" is the whole visual argument below and a copy in
- * each row is three places for it to stop being true.
+ * Spread into every palette rather than repeated in each, because "the retinue
+ * shares a livery" is the whole visual argument below and a copy in each row is
+ * one more place for it to stop being true.
  */
 const SHARED_GUARD_COLOURS = {
   livery: '#6A4FB0',
@@ -72,8 +72,8 @@ const SHARED_GUARD_COLOURS = {
  *
  * Two things make an allied guard read as friendly, and neither of them is the
  * silhouette. The first is value: the cavern's three enemies are all dark and
- * desaturated — bronze, cold steel-blue, forest green — and all three guards
- * are pale, so on a busy screen the light bodies are yours and the dark ones
+ * desaturated — bronze, cold steel-blue, forest green — and every guard is
+ * pale, so on a busy screen the light bodies are yours and the dark ones
  * are not. That read survives at a distance where a bow and a spear are the
  * same handful of pixels.
  *
@@ -113,6 +113,19 @@ export const GUARD_PALETTES: Record<GuardKind, Record<string, string>> = {
     cloth: '#DBE5F1', clothHi: '#F8FBFF', shade: '#6C7789',
     metal: '#C5D1E1', metalHi: '#FDFEFF',
     boot: '#5A5870', edge: '#1C2233',
+  },
+  // Undyed linen with a green cast, which is the one direction the other three
+  // do not go: the archer's cloth is warm, the foot soldier's and the knight's
+  // are cold blue. It keeps the priest inside the retinue's pale range while
+  // making it the only body on the field with that cast, so it is findable in a
+  // crowd without a second silhouette read — which matters more here than for
+  // any other kind, because the player has exactly one of them and losing track
+  // of it is losing it.
+  priest: {
+    ...SHARED_GUARD_COLOURS,
+    cloth: '#DCE3DA', clothHi: '#F4F8F2', shade: '#78827A',
+    metal: '#C9CFD8', metalHi: '#F2F6FF',
+    boot: '#5F4E63', edge: '#221A30',
   },
 };
 
@@ -327,16 +340,73 @@ export function buildKnightGuardGrid(frame: StrideFrame, rank: number): PixelGri
 }
 
 /**
- * One row per kind, so a fourth guard is a builder and a row, not a branch.
+ * Priest: a flat-crowned cowl, a shoulder cape, the livery worn as a stole down
+ * the chest, and a staff held out on the leading side.
  *
- * A `Record` keyed by GuardKind, so the compiler refuses the fourth kind in
+ * It carries the one thing no other guard does — something in the hand that is
+ * plainly not a weapon. The bow, the sword and the lance all read as reach; the
+ * staff is short, vertical and topped with a pale orb, so at a tile size of 32
+ * the silhouette says "not fighting" before any colour is read. The stole is
+ * the second half of that: violet worn as two vertical bands rather than as a
+ * surcoat or a plume, which is a shape none of the other three uses.
+ *
+ * THE ROBE STOPS AT THE BELT, AND THAT IS NOT A STYLE CHOICE.
+ *
+ * A floor-length cassock is the obvious way to draw this and it is exactly the
+ * fusion bug recorded in buildGuardBody: a hem is a single band of cloth across
+ * the boot row, so the two legs the stance is at pains to keep apart come back
+ * as one run on every frame — worse than the original bug, which only merged
+ * them at full swing. The priest therefore wears a hip-length tunic over the
+ * same legs everybody else walks on, and the leg check reads two runs here for
+ * the same reason it does on the other three.
+ *
+ * The staff stops two rows above the boots for the same family of reason: a
+ * shaft planted on the ground beside the feet is a third vertical run at the
+ * row that decides whether the legs fused, and one that the eye also reads as a
+ * third leg at speed. Held clear of the ground it reads as carried.
+ */
+export function buildPriestGuardGrid(frame: StrideFrame, rank: number): PixelGrid {
+  const C = GUARD_PALETTES.priest;
+  const g = buildGuardBody(C, frame);
+  // Cowl: flat-crowned rather than the archer's round hood, so the two are not
+  // the same head at distance.
+  pixelRect(g, 6, 1, 5, 3, C['cloth']!);
+  pixelEllipse(g, 8, 5, 3.5, 3.2, C['cloth']!);
+  pixelEllipse(g, 8.7, 5.5, 2.2, 2, C['skin']!);
+  // Shoulder cape, wide and pale: the priest's answer to the knight's plate,
+  // and what gives the badge column something to sit on at the top rank.
+  pixelRect(g, 4, 8, 8, 2, C['clothHi']!);
+  // The stole. Two bands with the torso showing between them, because a solid
+  // violet front would be the foot soldier's surcoat in another palette.
+  pixelRect(g, 6, 10, 1, 6, C['livery']!);
+  pixelRect(g, 9, 10, 1, 6, C['livery']!);
+  pixelRect(g, 6, 10, 4, 1, C['liveryHi']!);
+  // Staff: shaft, then a pale orb at the head. An orb rather than a ring —
+  // a ring at this size needs a hole one pixel across, and one pixel of
+  // background inside a two-pixel rim is not a hole, it is a smudge.
+  pixelRect(g, 13, 5, 1, 15, C['boot']!);
+  pixelEllipse(g, 13, 3, 2, 2.2, C['metal']!);
+  pixelEllipse(g, 13, 2.6, 1, 1, C['metalHi']!);
+  // The hand that holds it, bridging torso and shaft so the staff is carried
+  // rather than floating alongside.
+  pixelRect(g, 10, 12, 3, 1, C['skin']!);
+  drawRankPips(g, C, rank);
+  return pixelOutline(g, C['edge']!);
+}
+
+/**
+ * One row per kind, so a fifth guard is a builder and a row, not a branch.
+ *
+ * A `Record` keyed by GuardKind, so the compiler refuses a new kind in
  * sim/guards.ts until it has a picture — the same guarantee GUARD_STATS gives
- * its numbers.
+ * its numbers, and it holds for a kind that is never recruited exactly as it
+ * does for one that is: `GuardKind` is the whole roster, not the roll.
  */
 export const GUARD_GRID_BUILDERS: Record<GuardKind, (frame: StrideFrame, rank: number) => PixelGrid> = {
   archer: buildArcherGuardGrid,
   foot_soldier: buildFootSoldierGuardGrid,
   knight: buildKnightGuardGrid,
+  priest: buildPriestGuardGrid,
 };
 
 /**

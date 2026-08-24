@@ -306,6 +306,7 @@ survive**. Which kind arrives is rolled:
 | Archer | 1 | 1x | 40% | Shooting, from a long way off |
 | Foot soldier | 3 | 1x | 40% | Shield and sword, up close |
 | Knight | 2 | 2x | 20% | Charging what it can reach |
+| Priest | 2 | none | never rolled | Healing, and never fighting |
 
 **A guard that survives a wave is promoted**, up to three times, and wears its
 rank as gold pips: `*`, then `**`, then `***`. The first two ranks are +1 hp
@@ -313,7 +314,16 @@ each and the third is +1 damage. A senior foot soldier ends up at 5 hp and 2
 damage — a knight's damage on more than twice a knight's body, and the reason
 keeping one alive is worth doing.
 
-Knights do not promote. They are rare and already doubled on both counts.
+**One priest joins at the opening and is never replaced.** It heals the hurt
+ally nearest it, and once per wave it can sweep a +3 heal over everyone around
+it, recharging only when a wave is cleared. It carries no weapon at all. If it
+dies, you finish the siege without one — it is the only guard the recruit roll
+will never hand you.
+
+Knights do not promote: they are rare and already doubled on both counts. The
+priest does, on its own ladder — the same two +1 hp steps, and a third that
+adds +1 to its healing where a fighter would get damage. A senior priest is 4
+hp and heals 2.
 
 Guards do not heal between waves. Promotion is the only way one gets stronger,
 which is what makes the difference between a retinue you protected and one you

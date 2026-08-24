@@ -10,7 +10,10 @@ import { MAP_GEN, MAP_RULES, runsWaves } from '../sim/arena-map';
 import { modeRule, picksItsMap } from '../sim/game-mode';
 import { BESTIARY } from '../sim/bestiary';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
-import { GUARD_STATS, RANK_MARK, guardDamage } from '../sim/guards';
+import {
+  GUARD_STATS, RANK_MARK, guardDamage, guardHeal, healGuard, invokeWard,
+  isPriest, missingHp, shouldWard,
+} from '../sim/guards';
 import {
   completeWave as siegeCompleteWave, guardLost as siegeGuardLost,
   heroDied as siegeHeroDied, startSiege, waveRoster,
@@ -146,6 +149,14 @@ const CONFIG = {
   // allied foot soldier and an enemy shieldman trade blows at the same rhythm.
   guardSpeed: 74, guardMeleeReach: 26, guardArcherReach: 260,
   guardShotInterval: 1.6, guardSwingInterval: 0.9, guardArrowSpeed: 420,
+  // The priest's numbers. The heal interval is well over twice a sword swing
+  // on purpose: a retinue whose mending outpaces the damage coming in is a
+  // retinue that cannot be spent, and the whole bastion is built on spending
+  // it. Reach is long enough to work from behind the line and short enough
+  // that the priest has to walk somewhere to be useful. The ward's radius is
+  // wider than that again, because a once-per-wave sweep that reached fewer
+  // allies than the cooldown heal could visit would never be worth casting.
+  guardHealInterval: 2.4, guardHealReach: 130, guardWardRadius: 190,
 
   // Castle stage (brawl mode's second act). Persistently hostile, so no
   // passive-speed figure the way a crow has one; slower than an aggro'd
@@ -5673,6 +5684,13 @@ function updateBossDeath(dt) {
 // the retinue, towers.ts the cover. This is only the wiring that puts them on
 // the field.
 //
+// The retinue grows by recruitment and by exactly one exception. The priest is
+// seated once by startSiege and never rolled for, which is enforced in the
+// types rather than here — rollGuardKind cannot return one. Nothing in this
+// section needs to defend against a second priest arriving, and nothing here
+// should start trying to: the day this file grows a check for it is the day
+// the guarantee has moved to the wrong place.
+//
 // EVERYTHING HERE KEYS ON THE MAP, NOT THE MODE.
 //
 // `mapPopulation() === 'siege'` is the gate, never `gameMode === 'siege'`. The
@@ -5762,6 +5780,11 @@ function placeGuard(guard) {
     facing: 0, walkPhase: Math.random() * Math.PI * 2, hitFlash: 0,
     shotCD: GUARD_STATS[guard.kind].ranged ? CONFIG.guardShotInterval * Math.random() : 0,
     swingCD: 0,
+    // A priest arrives having just prayed, so its first heal is a full interval
+    // away. Starting at zero would let it mend somebody on the frame it walked
+    // in, which reads as the ability firing at nothing in particular and makes
+    // the opening of a wave depend on which frame the body was placed on.
+    healCD: guard.kind === 'priest' ? CONFIG.guardHealInterval : 0,
     team: Team.A,
   });
 }
@@ -5910,6 +5933,13 @@ function updateGuards(dt) {
     const g = guards[i];
     if (g.hitFlash > 0) g.hitFlash = Math.max(0, g.hitFlash - dt);
     if (g.swingCD > 0) g.swingCD = Math.max(0, g.swingCD - dt);
+    // The priest turns off here, before a target is ever looked for. Every path
+    // below this line ends in damage, and the one guarantee the kind is built
+    // on is that none of them can run for it: there is no branch further down
+    // that has to remember to check, and no arm of one that could be added
+    // later without noticing. Its own turn is a separate function for the same
+    // reason — a healer is not a fighter with `if (canFight)` around it.
+    if (isPriest(g.guard)) { updatePriest(g, dt); continue; }
     const stats = GUARD_STATS[g.guard.kind];
     const target = nearestHostile(g, hostiles);
     if (!target) continue;
@@ -5934,6 +5964,69 @@ function updateGuards(dt) {
     }
     moveGuard(g, dx / dist, dy / dist, dt);
   }
+}
+
+/**
+ * The priest's turn: the ward if the retinue is coming apart, otherwise one
+ * ally mended, otherwise stand fast.
+ *
+ * It never asks `siegeHostiles()` anything. Not because enemies do not matter
+ * to it — they are what is putting the holes in the retinue — but because
+ * every question it could ask about a hostile would be the first half of an
+ * attack, and the kind is defined by not having one. What it looks at is the
+ * retinue's health, and where the health it needs to reach is standing.
+ *
+ * The ward comes first, before the cooldown heal is even considered. The one
+ * moment it exists for is a wave breaking through, and a priest that had just
+ * spent its turn mending one archer for 1 while three allies were down would
+ * be holding the ability for a better moment that has already gone past.
+ *
+ * NO EVENT IS EMITTED FOR A HEAL, and that is a scope boundary rather than an
+ * oversight. `GameEvent` in src/sim/events.ts is a closed union and the effects
+ * layer switches over it exhaustively; a `GUARD_HEALED` variant belongs there,
+ * in a change that owns that file. Reusing GUARD_SWING or GUARD_SHOT to get a
+ * burst on screen was the alternative and is worse than nothing — events.ts is
+ * explicit that an event which lies about what happened costs more than one
+ * that duplicates another. The heal is legible from the health it restores
+ * until that variant exists.
+ */
+function updatePriest(g, dt) {
+  if (g.healCD > 0) g.healCD = Math.max(0, g.healCD - dt);
+
+  // Who the ward would land on. The priest itself is deliberately not in this
+  // list: guards.ts puts it into its own congregation, so "the priest is always
+  // blessed by its own ward" is a rule of the ability rather than a thing this
+  // call site has to remember to include.
+  const inRadius = [];
+  for (const b of guards) {
+    if (b === g) continue;
+    if (Math.hypot(b.x - g.x, b.y - g.y) <= CONFIG.guardWardRadius) inRadius.push(b.guard);
+  }
+  if (shouldWard(g.guard, inRadius)) { invokeWard(g.guard, inRadius); return; }
+
+  // Otherwise the ally furthest from its own maximum, the priest included, so
+  // the heal goes where it is worth the most rather than to whoever is nearest.
+  // `missingHp` is the sim's answer to "how hurt is this one", so the choice
+  // made here and the clamp applied in `healGuard` cannot come to disagree
+  // about what full health means.
+  let target = null;
+  let worst = 0;
+  for (const b of guards) {
+    const need = missingHp(b.guard);
+    if (need > worst) { worst = need; target = b; }
+  }
+  // Nobody is hurt. The priest holds its position rather than following the
+  // line forward: walking into the fight is how the one unit that never
+  // respawns is lost, and it has nothing to do up there.
+  if (!target) return;
+
+  const dx = target.x - g.x, dy = target.y - g.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > 0) g.facing = Math.atan2(dy, dx);
+  if (dist > CONFIG.guardHealReach) { moveGuard(g, dx / dist, dy / dist, dt); return; }
+  if (g.healCD > 0) return;
+  g.healCD = CONFIG.guardHealInterval;
+  healGuard(target.guard, guardHeal(g.guard));
 }
 
 /** One step, refused by terrain the way every other ground body's is. */
