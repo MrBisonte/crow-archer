@@ -21,6 +21,20 @@
  * different picture, and TILE.WATER stops a body: a pool dropped across a flank
  * lane would narrow or close one of the two ways round the barrier, which is
  * the one thing this map may never do. It buys nothing a rock does not.
+ *
+ * The barrier is echeloned, which came out of a playtest: one straight wall in
+ * front of the hero read as a single flat obstacle, so it is now three sections
+ * at two column offsets — the middle one covering the towers head-on, the two
+ * flanking ones standing forward of it towards the corridor. At 21x33, with the
+ * hero's spawn on the left and the siege arriving from the right:
+ *
+ *     ..........##.....   rows 4-6,   cols 11-12
+ *     ..............
+ *     .......##........   rows 9-11,  cols 8-9   <- nearest the towers
+ *     ..............
+ *     ..........##.....   rows 14-16, cols 11-12
+ *
+ * Four ways through it: round either end, or through either stepped gap.
  */
 
 import type { MapGenerator } from './map-generators';
@@ -114,7 +128,24 @@ const towerFits = (site: TowerSite, rows: number, cols: number): boolean =>
   !isSpawnZone(site.row, site.col, rows);
 
 /**
- * The two columns the barrier stands in.
+ * One section of the barrier: two courses of rock standing across a run of
+ * rows.
+ *
+ * Two columns rather than one because a single course reads as a fence at 32 px
+ * a tile, and because cover a body can stand *inside* is what lets the defence
+ * hold a line rather than just stand behind one.
+ */
+export interface BarrierSegment {
+  /** The two adjacent columns this section stands in, west first. */
+  readonly cols: readonly [number, number];
+  /** The topmost row it occupies. */
+  readonly firstRow: number;
+  /** The bottommost row it occupies, inclusive. */
+  readonly lastRow: number;
+}
+
+/**
+ * The two columns the middle section stands in.
  *
  * A quarter of the way across, which on the shipped 33 columns is 8 and 9:
  * close enough to the towers to be their cover and not a second arena wall,
@@ -123,23 +154,24 @@ const towerFits = (site: TowerSite, rows: number, cols: number): boolean =>
  *
  * Always at least two columns right of the towers, at every grid size, so the
  * promise this map makes — cover *between* the towers and the corridor — holds
- * even where the barrier turns out not to fit. On a grid that narrow the pair
- * lands on or past the corridor, `barrierFits` says no, and nothing is built.
+ * even where the barrier turns out not to fit. On a grid that narrow the
+ * sections land on or past the corridor and nothing is built.
  */
-export function barrierCols(cols: number): readonly [number, number] {
+const centreCols = (cols: number): readonly [number, number] => {
   const first = Math.max(TOWER_COL + 2, Math.min(Math.floor(cols / 4), cols - 4));
   return [first, first + 1];
-}
+};
 
 /**
- * Is there room for the barrier: two courses, with open ground still left
- * between them and the corridor mouth?
+ * How far forward of the middle section the two flanking sections stand.
  *
- * The spare column matters. A barrier flush against the corridor would have the
- * siege arriving already in contact with it, which is a wall to be broken
- * rather than cover to be walked around.
+ * Forward means towards the corridor, so the barrier reads as a shallow chevron
+ * opening at the siege: nearest the defence in the centre, stepping away from
+ * it above and below. Three columns on the shipped 33 — enough that a column of
+ * open ground separates the two courses, so the eye reads depth rather than one
+ * wall with a kink in it.
  */
-const barrierFits = (cols: number): boolean => barrierCols(cols)[1] <= cols - 4;
+const echelon = (cols: number): number => Math.max(3, Math.floor(cols / 10));
 
 /**
  * How many rows of open ground the barrier leaves at each end.
@@ -153,10 +185,97 @@ const barrierFits = (cols: number): boolean => barrierCols(cols)[1] <= cols - 4;
  */
 const barrierGap = (rows: number): number => Math.max(2, Math.floor(rows / 7));
 
-/** The rows the barrier occupies: everything between the two flank gaps. */
+/** The rows the barrier as a whole occupies: everything between the two flank gaps. */
 const barrierRows = (rows: number): { first: number; last: number } => {
   const gap = barrierGap(rows);
   return { first: gap + 1, last: rows - 2 - gap };
+};
+
+/**
+ * How many rows of open ground separate one section from the next.
+ *
+ * The same argument as `barrierGap`, one size down: these gaps are stepped
+ * rather than straight — a body leaving one goes on to a section standing three
+ * columns away — so they do not have to be as wide as the run round the end to
+ * be walked without threading a needle. Two rows at 21.
+ */
+const segmentGap = (rows: number): number => Math.max(1, Math.floor(rows / 10));
+
+/**
+ * The row spans of the three sections, top to bottom, or nothing when the grid
+ * is too short to hold three sections and two gaps between them.
+ *
+ * The band is split in thirds with the odd rows going to the middle section, so
+ * the layout stays a mirror about the centre line — neither flank is the softer
+ * one, which is the same reason `laneRows` mirrors.
+ */
+const segmentRows = (rows: number): readonly { first: number; last: number }[] => {
+  const { first, last } = barrierRows(rows);
+  const gap = segmentGap(rows);
+  const spare = last - first + 1 - 2 * gap;
+  if (spare < 3) return [];
+  const flank = Math.floor(spare / 3);
+  const centre = spare - 2 * flank;
+  const centreFirst = first + flank + gap;
+  return [
+    { first, last: first + flank - 1 },
+    { first: centreFirst, last: centreFirst + centre - 1 },
+    { first: last - flank + 1, last },
+  ];
+};
+
+/**
+ * The barrier, section by section, top to bottom. Empty when the grid has no
+ * room for one.
+ *
+ * Three sections at two column offsets rather than one straight wall: the
+ * middle section covers the towers head-on and the two flanking sections stand
+ * `echelon` columns forward of it, so what the siege meets is layered depth
+ * with four ways through it — round either end, or through either of the two
+ * stepped gaps between sections.
+ *
+ * All or nothing on a grid too small for it. A barrier that dropped its flanks
+ * where they would not fit would be a different shape wearing the same name,
+ * and the one thing every consumer may assume is that what it is told about is
+ * what was built. `raiseBarrier` iterates this list and nothing else, so the
+ * generator cannot disagree with it.
+ *
+ * Exported because the layout is inspected from outside — the same reason
+ * `towerSites` is, and the reason neither is a private detail of `generate`.
+ */
+export function barrierCols(rows: number, cols: number): readonly BarrierSegment[] {
+  const centre = centreCols(cols);
+  const step = echelon(cols);
+  const flank: readonly [number, number] = [centre[0] + step, centre[1] + step];
+  // The spare column matters. A barrier flush against the corridor would have
+  // the siege arriving already in contact with it, which is a wall to be broken
+  // rather than cover to be walked around. The forward sections are the ones
+  // that decide it, being the ones nearest the mouth.
+  if (flank[1] > cols - 4) return [];
+  const spans = segmentRows(rows);
+  if (spans.length !== 3) return [];
+  const [top, middle, bottom] = spans as [
+    { first: number; last: number },
+    { first: number; last: number },
+    { first: number; last: number },
+  ];
+  return [
+    { cols: flank, firstRow: top.first, lastRow: top.last },
+    { cols: centre, firstRow: middle.first, lastRow: middle.last },
+    { cols: flank, firstRow: bottom.first, lastRow: bottom.last },
+  ];
+}
+
+/** The rows of open ground between one section and the next, top to bottom. */
+const segmentGapRows = (segments: readonly BarrierSegment[]): readonly number[] => {
+  const gaps: number[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    const above = segments[i - 1];
+    const below = segments[i];
+    if (!above || !below) continue;
+    for (let r = above.lastRow + 1; r < below.firstRow; r++) gaps.push(r);
+  }
+  return gaps;
 };
 
 /**
@@ -224,20 +343,19 @@ function frameArena(grid: TileGrid, rows: number, cols: number): void {
 }
 
 /**
- * Raises the barrier: two courses of rock across the middle of the map, open at
- * both ends.
+ * Raises the barrier: three sections of rock across the middle of the map, open
+ * at both ends and between every pair of sections.
  *
- * Two columns rather than one because a single course reads as a fence at 32 px
- * a tile, and because cover a body can stand *inside* is what lets the defence
- * hold a line rather than just stand behind one.
+ * Stamps `barrierCols` and consults nothing else, so the shape the map is built
+ * from and the shape it reports are the same list.
  */
 function raiseBarrier(grid: TileGrid, rows: number, cols: number): void {
-  if (!barrierFits(cols)) return;
-  const { first, last } = barrierRows(rows);
-  for (let r = first; r <= last; r++) {
-    const row = grid[r];
-    if (!row) continue;
-    for (const c of barrierCols(cols)) row[c] = TILE.ROCK;
+  for (const segment of barrierCols(rows, cols)) {
+    for (let r = segment.firstRow; r <= segment.lastRow; r++) {
+      const row = grid[r];
+      if (!row) continue;
+      for (const c of segment.cols) row[c] = TILE.ROCK;
+    }
   }
 }
 
@@ -258,27 +376,48 @@ function raiseTowers(grid: TileGrid, rows: number, cols: number): void {
 }
 
 /**
- * The tiles the scatter pass may never take: the walkway behind the towers,
- * the two flank lanes, and the ring of tiles around each tower.
+ * The tiles the scatter pass may never take: the walkway behind the towers, the
+ * two flank lanes, the gaps between the barrier's sections, and the ring of
+ * tiles around each tower.
  *
- * Together these are a skeleton joining the corridor to both towers that no
+ * The first three are a skeleton joining the corridor to both towers that no
  * seed can cut — a lane runs from the corridor to the walkway through a flank
  * gap, the walkway runs the height of the map, and every tower has its west
  * neighbour on it. That is why this generator needs no connectivity repair:
  * the path is reserved before anything is scattered rather than rebuilt after
  * something ate it.
  *
- * Cheap, too. Two rows and one column out of a 21x33 grid is under 8% of the
- * ground, and both lanes read as the ways round the barrier, which is what they
- * are.
+ * The section gaps are the same argument applied to the new geometry, and are
+ * reserved across the barrier's own width only — from a column short of the
+ * middle section to a column past the flanking ones. A gap is what makes three
+ * sections three sections; rubble bridging one would quietly re-fuse the wall
+ * the playtest asked us to break up. Beyond that width the gap rows are open
+ * ground like any other, and the scatter is welcome to them: the guarantee that
+ * a body gets from the corridor to a tower still rests on the two lanes, which
+ * is where it rested before.
+ *
+ * Cheap, too. Two rows, one column, and a couple of dozen tiles between the
+ * sections is a tenth of a 21x33 grid, and the lanes read as the ways round the
+ * barrier, which is what they are.
+ *
+ * Built once per generate rather than asked per tile: the skeleton is a
+ * function of the grid size, and recomputing the barrier and the towers 693
+ * times to answer the same question is work the caller can hoist.
  */
-function isReserved(r: number, c: number, rows: number, cols: number): boolean {
-  if (c === SPINE_COL && r > 0 && r < rows - 1) return true;
-  const [top, bottom] = laneRows(rows);
-  if ((r === top || r === bottom) && c > 0) return true;
-  return towerSites(rows, cols).some(
-    (site) => Math.abs(site.row - r) + Math.abs(site.col - c) === 1,
-  );
+function reservedTiles(rows: number, cols: number): (r: number, c: number) => boolean {
+  const [topLane, bottomLane] = laneRows(rows);
+  const towers = towerSites(rows, cols);
+  const segments = barrierCols(rows, cols);
+  const gapRows = new Set(segmentGapRows(segments));
+  const barrierWest = Math.min(...segments.map((s) => s.cols[0]));
+  const barrierEast = Math.max(...segments.map((s) => s.cols[1]));
+
+  return (r: number, c: number): boolean => {
+    if (c === SPINE_COL && r > 0 && r < rows - 1) return true;
+    if ((r === topLane || r === bottomLane) && c > 0) return true;
+    if (gapRows.has(r) && c >= barrierWest - 1 && c <= barrierEast + 1) return true;
+    return towers.some((site) => Math.abs(site.row - r) + Math.abs(site.col - c) === 1);
+  };
 }
 
 /**
@@ -310,6 +449,7 @@ function scatterCover(
         (noise(c * scale + ox + sx, r * scale + oy + sy) + 1) / 2
     : (): number => rng();
   const coverAt = 1 - Math.max(0, scatter) / 2;
+  const isReserved = reservedTiles(rows, cols);
 
   for (let r = 0; r < rows; r++) {
     const row = grid[r];
@@ -319,7 +459,7 @@ function scatterCover(
       // guarantees frameArena made are not this pass's to undo.
       if (row[c] !== TILE.EMPTY) continue;
       if (isSpawnZone(r, c, rows) || isCrowCorridor(c, cols)) continue;
-      if (isReserved(r, c, rows, cols)) continue;
+      if (isReserved(r, c)) continue;
       const nRock = n2d(c, r, 0.18, 47, 19);
       const nTree = n2d(c, r, 0.15, 83, 61);
       if (nRock > coverAt) row[c] = TILE.ROCK;
