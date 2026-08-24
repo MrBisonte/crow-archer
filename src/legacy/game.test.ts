@@ -21,6 +21,7 @@ import { TOWER_MAX_HP } from '../sim/towers';
 import { barrierGates } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
+import { KNIGHT_VARIANT_NAMES } from '../render/guard-grids';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable } from '../sim/tilemap';
@@ -3470,5 +3471,120 @@ describe('allies are visibly the hero\u2019s', () => {
     // must not be the hero's, and this is where that would be caught.
     for (const sk of g.skeletons()) expect(sk.team ?? Team.ENEMY).not.toBe(hero.team);
     for (const so of g.soldiers()) expect(so.team ?? Team.ENEMY).not.toBe(hero.team);
+  });
+});
+
+// ── KILLING A SIEGE BOSS DOES NOT STOP THE WORLD ──────────────────────────────
+//
+// Playtest: "the bats and the soldiers were all stopped/freeze after I killed
+// the boss." The suite was entirely green while that was true.
+//
+// updateBossDeath only ran during 'boss_fight', and a siege runs in 'playing'.
+// So a siege boss death set bossDeathSeq and nothing ever cleared it — while
+// five update functions bail on that flag. The field stopped for good and the
+// run could not be finished.
+describe('a siege boss dying leaves the wave running', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  const atBossWave = (): void => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.jumpToSiegeWave(7);
+    g.stepSim(1);
+  };
+
+  it('clears the death sequence, so nothing is left frozen', () => {
+    atBossWave();
+    expect(g.boss(), 'wave 7 should field a boss').toBeTruthy();
+    g.killBoss();
+    g.stepSim(180);
+    // The flag five update functions bail on. Still set means the field is
+    // stopped and the run is unfinishable.
+    expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
+  });
+
+  it('leaves the rest of the wave moving', () => {
+    atBossWave();
+    // Something on the field that should still be walking afterwards.
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons()[g.skeletons().length - 1];
+    sk.hp = 99; sk.maxHp = 99;
+    g.killBoss();
+    g.stepSim(180);
+    const before = { x: sk.x, y: sk.y };
+    g.stepSim(120);
+    const moved = Math.hypot(sk.x - before.x, sk.y - before.y);
+    expect(moved, 'the wave froze after the boss died').toBeGreaterThan(1);
+  });
+
+  it('does not hand off to another stage the way a brawl boss does', () => {
+    // Every branch of updateBossDeath's tail loads a map or ends the run —
+    // crowking opens the castle. On a siege the boss is one enemy inside a
+    // wave, so none of that may fire.
+    atBossWave();
+    g.killBoss();
+    g.stepSim(240);
+    expect(g.mapKind(), 'killing a siege boss changed the map').toBe('bastion');
+    expect(g.state()).toBe('playing');
+    expect(g.siege()).not.toBeNull();
+  });
+
+  it('keeps the second boss of wave ten alive when the first one dies', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.jumpToSiegeWave(10);
+    g.stepSim(1);
+    expect((g.boss() ? 1 : 0) + g.siegeBosses().length).toBe(2);
+    g.killBoss();
+    g.stepSim(180);
+    // One left, and it is still on the field rather than dropped on the floor
+    // where nothing ticks it and no wave-clear check can see it.
+    const alive = (g.boss() && g.boss().bstate !== 'dead' ? 1 : 0)
+      + g.siegeBosses().filter((b: { bstate: string }) => b && b.bstate !== 'dead').length;
+    expect(alive, 'the surviving boss was lost with the dead one').toBe(1);
+  });
+});
+
+// ── THE MOUNT REVIEW LINE ─────────────────────────────────────────────────────
+//
+// showKnights threw ReferenceError on its first real call: makeGuard was never
+// imported. An edit that was meant to add it silently matched nothing, and
+// game.js is not type-checked, so neither tsc nor the suite noticed — nothing
+// called the hook. This is that call.
+describe('showKnights stands the candidate mounts out', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  it('runs, and puts one of every variant on the map', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    const before = g.guards().length;
+    const placed = g.showKnights();
+    expect(placed, 'showKnights returned nothing').toBeTruthy();
+    expect(placed).toHaveLength(KNIGHT_VARIANT_NAMES.length);
+    expect(g.guards().length).toBe(before + KNIGHT_VARIANT_NAMES.length);
+    const variants = g.guards()
+      .filter((b: { variant?: string }) => b.variant)
+      .map((b: { variant?: string }) => b.variant);
+    expect(new Set(variants).size, 'two review lines share a variant')
+      .toBe(KNIGHT_VARIANT_NAMES.length);
+  });
+
+  it('holds them where they were put, and out of the fight', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.showKnights();
+    const held = g.guards().filter((b: { held?: boolean }) => b.held);
+    const at = held.map((b: { x: number; y: number }) => ({ x: b.x, y: b.y }));
+    g.stepSim(300);
+    held.forEach((b: { x: number; y: number }, i: number) => {
+      expect(Math.hypot(b.x - at[i]!.x, b.y - at[i]!.y), 'a review line wandered off')
+        .toBeLessThan(1);
+    });
   });
 });

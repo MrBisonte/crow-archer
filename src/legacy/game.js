@@ -12,7 +12,7 @@ import { BESTIARY } from '../sim/bestiary';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
 import {
   GUARD_STATS, RANK_MARK, guardDamage, guardHeal, healGuard, invokeWard,
-  isPriest, missingHp, shouldWard,
+  isPriest, makeGuard, missingHp, shouldWard,
 } from '../sim/guards';
 import {
   completeWave as siegeCompleteWave, guardLost as siegeGuardLost,
@@ -5684,6 +5684,12 @@ function updateBossDeath(dt) {
     bossDeathSeq = null;
     const deadKind = boss.kind;
     boss = null; hostileBolts = [];
+    // On a siege the boss is one enemy inside a wave, not the end of a stage.
+    // Every branch below hands off to another map or to a win screen, so
+    // running any of them here would load the castle in the middle of wave 7.
+    // The wave-clear check is what advances a siege, and it needs nothing from
+    // this function beyond the slot being empty.
+    if (siegeRun) return;
     if (deadKind === 'crowking') {
       // Stage 1 done. The run continues into the castle stage: reload the
       // map, reposition on the same corner initGame() always starts from
@@ -6116,9 +6122,15 @@ function tickSiegeBosses(dt) {
     if (!extra || extra.bstate === 'dead') continue;
     boss = extra;
     updateBoss(dt);
-    // updateBoss can start a death sequence, which the outer tick owns. Leave
-    // the slot on whoever just died so updateBossDeath finds the right body.
-    if (bossDeathSeq) return;
+    if (bossDeathSeq) {
+      // The one that just died keeps the slot, so updateBossDeath clears the
+      // right body — and the one that was holding the slot rejoins the extras
+      // rather than being dropped on the floor, which would leave a live boss
+      // on the field that nothing ticks and no wave-clear check can see.
+      siegeExtraBosses = siegeExtraBosses.filter((b) => b !== extra);
+      if (held && held !== extra) siegeExtraBosses.push(held);
+      return;
+    }
   }
   boss = held;
 }
@@ -10977,6 +10989,13 @@ function stepGame(dt) {
       // as in a boss fight. See BOSS_HUNTS_WHILE_EXPLORING for why this is a
       // table lookup and not a kind check.
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
+      // A boss can now die outside a boss fight — a siege kills one in the
+      // middle of a wave — and the death sequence is what clears bossDeathSeq.
+      // Without this it is set and never cleared, and the five update
+      // functions that bail on it (crows, skeletons, soldiers, guards, the
+      // siege contact pass) stop for good: the whole field freezes and the run
+      // cannot be finished. Found by playing it.
+      if (bossDeathSeq) updateBossDeath(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt);
@@ -11295,6 +11314,10 @@ export const devHooks = {
   guards: () => guards,
   towers: () => towers,
   siegeBosses: () => siegeExtraBosses,
+  // The flag five update functions bail on. Exposed because a death sequence
+  // that never finishes freezes the whole field, and that is invisible from
+  // outside unless something can look at it.
+  bossDeathSeq: () => bossDeathSeq,
   /** Pins the retinue rolls. Pass null to hand it back to Math.random. */
   setSiegeRng(fn) { siegeRng = fn ?? Math.random; },
   /**
