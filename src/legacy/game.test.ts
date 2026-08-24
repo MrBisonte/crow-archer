@@ -18,6 +18,7 @@ import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers'
 import { TILE, tilePassable } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
+import { variationProfile, type VariationProfile } from '../render/sound-variation';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
@@ -3211,5 +3212,86 @@ describe('hitstop', () => {
     const before = g.gameTime();
     g.stepSim(1);
     expect(g.gameTime()).toBeGreaterThan(before);
+  });
+});
+
+describe('the sound a repeated shot makes', () => {
+  /** The positional parameters variation is allowed to move. */
+  const VOLUME = 0, FREQUENCY = 2, RELEASE = 5;
+  const VARIED = [VOLUME, FREQUENCY, RELEASE];
+
+  /** Every sound the player's own attacks play: what a run hears most. */
+  const weaponSounds = (): number[][] =>
+    Object.values(g.weaponFx() as Record<string, { sound: () => number[] }>)
+      .map((fx) => fx.sound());
+
+  /** The sounds that opted out, keyed by the array the call sites pass. */
+  const optedOut = (): Map<number[], string> => g.soundPlayback() as Map<number[], string>;
+
+  const play = (sound: number[]): number[] => g.soundPlan(sound) as number[];
+
+  afterEach(() => { g.config().audio = true; });
+
+  it('ships a profile subtle enough to survive its own clamp', () => {
+    // If a tunable ever drifts past MAX_VARIATION the clamp keeps the game
+    // playable, and this says so out loud instead of letting it pass silently.
+    const shipped = g.config().soundVariation as VariationProfile;
+    expect(variationProfile(shipped)).toEqual(shipped);
+  });
+
+  it('moves a weapon sound within the bounds CONFIG allows, and nothing else', () => {
+    const profile = g.config().soundVariation as VariationProfile;
+    const amount: Record<number, number> =
+      { [VOLUME]: profile.gain, [FREQUENCY]: profile.pitch, [RELEASE]: profile.tail };
+    for (const tuned of weaponSounds()) {
+      for (let i = 0; i < 40; i++) {
+        const heard = play(tuned);
+        expect(heard.length).toBe(tuned.length);
+        for (let p = 0; p < tuned.length; p++) {
+          if (!VARIED.includes(p)) {
+            expect(heard[p], `parameter ${p}`).toBe(tuned[p]);
+            continue;
+          }
+          expect(heard[p]!).toBeGreaterThanOrEqual(tuned[p]! * (1 - amount[p]!));
+          expect(heard[p]!).toBeLessThanOrEqual(tuned[p]! * (1 + amount[p]!));
+        }
+      }
+    }
+  });
+
+  it('does not fire the same sample twice: forty plays are forty sounds', () => {
+    for (const tuned of weaponSounds()) {
+      const volumes = new Set(Array.from({ length: 40 }, () => play(tuned)[VOLUME]));
+      expect(volumes.size).toBeGreaterThan(35);
+    }
+  });
+
+  it('plays a sound that opted out exactly as tuned, however often it fires', () => {
+    expect(optedOut().size).toBeGreaterThan(0);
+    for (const [sound, kind] of optedOut()) {
+      expect(kind).toBe('fixed');
+      const tuned = [...sound];
+      for (let i = 0; i < 20; i++) expect(play(sound), `${tuned}`).toEqual(tuned);
+    }
+  });
+
+  it('lets no weapon sound opt out, since those are the ones that repeat', () => {
+    for (const sound of weaponSounds()) expect(optedOut().has(sound)).toBe(false);
+  });
+
+  it('plays nothing at all, of any kind, while audio is off', () => {
+    g.config().audio = false;
+    const multiVoice = (): void => {};
+    for (const sound of weaponSounds()) expect(g.soundPlan(sound)).toBeNull();
+    for (const [sound] of optedOut()) expect(g.soundPlan(sound)).toBeNull();
+    expect(g.soundPlan(multiVoice)).toBeNull();
+  });
+
+  it('leaves a multi-voice sound to play its own voices', () => {
+    // A function calls the synth itself, once per voice, so there is no single
+    // parameter array to vary — which is also why the announce beep stays the
+    // same beep without needing a row of its own.
+    const multiVoice = (): void => {};
+    expect(g.soundPlan(multiVoice)).toBe(multiVoice);
   });
 });

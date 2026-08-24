@@ -29,6 +29,7 @@ import {
   perkHeld, purchase, statValue,
 } from '../sim/upgrades';
 import { ScreenShake } from '../render/shake';
+import { PLAYBACK, variationProfile } from '../render/sound-variation';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
@@ -68,6 +69,12 @@ import { MultiplayerSession } from '../ui/multiplayer-session';
 //   pitchJumpTime, repeatTime, noise, modulation, bitCrush, delay,
 //   sustainVolume, decay, tremolo, filter
 // shape: 0=sine 1=triangle 2=sawtooth 3=tangent 4=bit-noise 5=white-noise
+//
+// Shapes 4 and 5 never read the oscillator phase, so on a noise sound the
+// whole pitch half of the layout — frequency, randomness, slide, deltaSlide,
+// pitchJump — is computed and thrown away. Ten of the twenty-two sounds below
+// are noise, the arrow among them, so `randomness` is not what makes a
+// repeated sound vary; see playSound() and src/render/sound-variation.ts.
 var zzfxX;
 try { zzfxX = new (window.AudioContext || window.webkitAudioContext); } catch(_) {}
 
@@ -496,6 +503,19 @@ const CONFIG = {
   },
 
   audio: true,
+
+  // How far one play of a sound may drift from the tuned array, as a fraction
+  // of each parameter. One profile for every sound rather than a column per
+  // sound: nothing here has earned its own figure, and a sound that must not
+  // drift at all opts out by kind instead (SOUND_PLAYBACK, below the sound
+  // definitions). Amounts are clamped to MAX_VARIATION on the way in, so this
+  // cannot be tuned into a different sound every play.
+  //
+  // gain is the only one the noise-shaped sounds hear at full strength, which
+  // is why it is the largest; tail is second because the length of a burst
+  // reads even on noise; pitch is small and, on shapes 4 and 5, inaudible.
+  soundVariation: { gain: 0.1, pitch: 0.04, tail: 0.12 },
+
   keys: {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
@@ -5947,9 +5967,32 @@ function updateBossDeath(dt) {
 // which documents the layout and where it departs from upstream ZzFX.
 // playSound() accepts either an array or a function (for multi-voice sounds).
 
+/**
+ * What one play of `s` amounts to, and the one home of the rule that audio can
+ * be off. Three answers: null plays nothing, a function is a multi-voice sound
+ * that calls the synth itself once per voice, and an array is what the synth
+ * is handed — the tuned parameters, varied unless the sound opted out
+ * (SOUND_PLAYBACK).
+ *
+ * Split out of playSound() because a headless test has no AudioContext: this
+ * is the half that can be checked, zzfx() is the half that cannot.
+ *
+ * The profile is rebuilt per play so that editing CONFIG.soundVariation from
+ * the console takes effect, which costs one small object against the whole
+ * sample buffer zzfx() allocates immediately after.
+ */
+function soundPlan(s) {
+  if (!CONFIG.audio) return null;
+  if (typeof s === 'function') return s;
+  return PLAYBACK[playbackOf(s)](s, variationProfile(CONFIG.soundVariation));
+}
+
 function playSound(s) {
-  if (!CONFIG.audio) return;
-  try { typeof s === 'function' ? s() : zzfx(...s); } catch (_) {}
+  try {
+    const plan = soundPlan(s);
+    if (typeof plan === 'function') plan();
+    else if (plan) zzfx(...plan);
+  } catch (_) {}
 }
 
 // ── ZzFX sound definitions ────────────────────────────────────────────────────
@@ -5978,6 +6021,37 @@ const sndKeyDrop       = [.3,  .02, 1400, 0, .02, .12, 1, 1, 0, 0, 300, .05]; //
 const sndChestOpen     = [.4,  .05, 160, 0, .1,  .22, 2, 1, 120];       // sawtooth rising — a lid coming up
 const sndDoorOpen      = [.6,  .1,   70, 0, .3,  .5,  4, 1, 40];        // low bit noise grinding up — stone giving way
 const sndTorchLight    = [.3,  .3,  420, 0, .06, .18, 4, 1, 90];        // bit noise, rising — a strike catching
+
+/**
+ * How a sound behaves when it plays again. Everything above varies — see
+ * CONFIG.soundVariation for how far, and src/render/sound-variation.ts for
+ * which parameters this synth actually hears — except the rows below.
+ *
+ * A 'fixed' sound is one the player learns by ear and has to keep recognising:
+ * the UI's own answers, and a boss's signature. The kind belongs to the sound
+ * and not to the call site, so the screech is the Crow King's whether
+ * FORESHADOW, the minotaur's roar or the fight itself plays it.
+ *
+ * The multi-voice sounds below are fixed by construction, and so have no row:
+ * they call the synth themselves, one call per voice, and playSound() hands
+ * them nothing to vary.
+ *
+ * Rows carry a kind rather than the table being a set of exceptions, because
+ * the kind is what is being modelled: a third way for a sound to repeat lands
+ * as a row here and a row in PLAYBACK, not as a second flag.
+ *
+ * Keyed on the array itself, so a call site has to pass the const. A copy of
+ * sndEmpty is a different sound as far as this table is concerned, and would
+ * quietly start varying.
+ */
+const SOUND_PLAYBACK = new Map([
+  [sndEmpty,       'fixed'],  // the dry click for "that did nothing" — a UI answer
+  [sndArm,         'fixed'],  // the arm confirm blip — the same
+  [sndBossScreech, 'fixed'],  // the Crow King's signature, and the minotaur's roar
+]);
+
+/** The playback kind of one sound. A sound with no row of its own varies. */
+const playbackOf = (s) => SOUND_PLAYBACK.get(s) ?? 'varied';
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
 function sndGameover() {
@@ -10817,6 +10891,13 @@ export const devHooks = {
   menuEntries: () => MENU_ENTRIES,
   menuShown: () => MENU_SHOWN,
   mapPanels: () => MAP_PANELS,
+  // Audio. A headless test has no AudioContext, so zzfx() is a no-op there and
+  // the only observable half is the decision: what one play of a sound comes
+  // to (null when audio is off), which sounds opted out of per-play variation,
+  // and the render-side table the weapons play through.
+  soundPlan: (s) => soundPlan(s),
+  soundPlayback: () => SOUND_PLAYBACK,
+  weaponFx: () => WEAPON_FX,
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
   // hold onto after the call; setLogLevel changes what future calls record,
   // it does not retroactively add or remove anything already in the ring.
