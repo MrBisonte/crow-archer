@@ -11,21 +11,33 @@ Full mechanics reference. See the [README](../README.md) for the quick start.
 
 ## Characters
 
+Five heroes, and five different bodies: they no longer share one health bar and
+one walking speed. Each entry opens with what that body is worth, and with how
+hard the character hits a boss next to the rest of the roster. Those two figures
+are the base the FEATHERS upgrades stack on rather than the final number, so a
+knight who has bought the health axis stays a point ahead of an archer who has
+bought the same levels. [Balance](balance.md) carries the full table and the
+reasoning behind every figure in it.
+
 ### Archer
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
-- **Primary:** Arrows, quiver of 10, refilled by pickups
+- **Body:** 9 health, 200 px/s. The middle of the roster on both counts, and the row the other four are read against
+- **Against a boss:** the smallest hit per press on the roster. Roughly seven arrows take the Crow King down, the longest count of anyone, paid for by never once needing to be near him
+- **Primary:** Arrows, quiver of 16, refilled by pickups
 - **Special:** Dynamite, hold to charge, release to throw, blast clears tiles and damages the boss
 - **Power shot (hold Shift):** Draws the bow, rooted while he holds it, for up to 1 s. Releasing looses one arrow that pierces up to 3 bodies, flies at up to twice the usual 500 px/s, and hits a boss for up to 3x a plain arrow. A tap gets the bottom of every one of those ranges, so the question the key asks is how long to stand still. 5 s cooldown. It spends one unit of whatever ammo is queued, so a fully drawn fire arrow still burns, and it ignores the in-flight cap
 - **Pickups:** Ricochet arrows (bounce off walls with a speed boost), fire arrows (leave burning patches)
 
 ### Wizard
 Teleguided magic with area control.
-- **Primary:** Magic bolts, 3 s cooldown, home toward the nearest enemy, disappear on contact
+- **Body:** 7 health, 175 px/s. The least health on the roster and slower than everyone but the knight, so there is nothing to absorb a mistake and nothing to outrun one either
+- **Against a boss:** the hardest hit in the game by a wide margin. Four bolts take the Crow King down, fewer than anyone else needs. Hitting hardest and dying fastest is the whole of the character
+- **Primary:** Magic bolts, 1.2 s cooldown, home toward the nearest enemy, disappear on contact
 - **Blink (tap Shift):** Steps 160 px down the aim line, instantly, and ignores damage for 0.3 s on arrival. 6 s cooldown. It never crosses a wall: it walks the aim in short steps and stops at the last point the body fits, so it closes on cover rather than passing through it. A blink with nowhere to go is refused outright and costs no cooldown
 - **Blink chain:** Tap Shift again within 1.1 s of the first hop and the second one is free, ignoring the cooldown the first started. Two hops is the cap. The window is the only thing that carries it: let it lapse and you are back to waiting out the 6 s. A hop with nowhere to go is refused without spending the chain, so a wall in front of you costs nothing but the press
 - **Arrival pulse:** Every hop lets off a 56 px pulse where it lands, killing what is in it and taking 1 off a boss. A ring is drawn at exactly the radius the damage used, so what you see is a report of what was hit rather than a decoration
 - **Special:** Lightning Storm, 450 px AoE around the player, destroys ROCK, TREE and HUT tiles, damages all enemies
-- **Pickups:** Fire bolt (2x damage), laser stream (passes through walls, stops on the first enemy)
+- **Pickups:** Fire bolt (3 damage against a plain bolt's 1), laser stream (same 3 damage, passes through walls, stops on the first enemy)
 
 The wizard has no sniper mode. Bolts steer themselves onto a target after they
 are cast, so a tighter angle at the moment of casting buys almost nothing while
@@ -34,16 +46,20 @@ knight his charge on the same key.
 
 ### Knight
 Frontline melee with a long spear.
-- **Primary:** Spear thrust, 80 px reach along the aim line, 1.5 s cooldown, 1 damage to boss
-- **Charge (hold Shift):** Winds up in place for up to 3 s, taking no damage while he holds it. Releasing sends him forward at half speed for 1.5 s, sweeping a 45 degree arc 90 px in front. Anything caught in the arc dies outright; the boss takes 1.3x the spear's damage on an instant release, up to 2x at a full hold, once per charge. The invulnerability ends the moment he starts moving. 4 s cooldown
+- **Body:** 12 health, 150 px/s. The most health and the least speed on the roster, and the two go together: he is the only hero who has to be in contact to do anything at all, so he is the only one who cannot answer a bad position by leaving it
+- **Against a boss:** the hardest single action in the game. The thrust lands twice and he hits well above the baseline, so one swing is worth three and the Crow King goes down in three and a bit of them. That is the shortest fight on paper and the longest in practice, because every swing needs him inside 80 px of something that orbits and charges
+- **Primary:** Spear thrust, 80 px reach along the aim line, 1.0 s cooldown, 1 damage to a boss and it lands twice per swing
+- **Charge (hold Shift):** Winds up in place for up to 3 s, taking no damage while he holds it. Releasing sends him forward at half speed for 1.5 s, sweeping a 45 degree arc 90 px in front. Anything caught in the arc dies outright; the boss takes 2.6 on an instant release, up to 4 at a full hold, once per charge. That is the charge's own damage figure and it does not scale off the spear's. The invulnerability ends the moment he starts moving. 4 s cooldown
 - **Charge chain (tap Shift again):** Within 1.1 s of releasing, and with room left ahead, a second tap commits him harder: the dash goes from half speed to a little over walking pace for the rest of its run, and he lands one whirlwind swing, 60 px, where he is standing. Once per dash. He cannot steer with it — the angle was fixed at release and stays fixed — so the chain buys speed along a line already chosen, not a new one
 - **Special:** Block, passive with no keybind. Banks one absorbed hit, then recharges 10 s after that hit is spent
-- **Tool:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 8 s cooldown
+- **Tool:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 6 s cooldown
 - **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup), Fire Sword (2x damage and range for 8 s, leaves burning patches)
 
 ### Ranger
 Skirmisher with a rapid-fire crossbow.
-- **Primary:** Crossbow, same quiver of 10 as the archer's. One press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
+- **Body:** 8 health, 250 px/s. The fastest body in the game and the second-thinnest, so distance is the only defence he has and he is very good at keeping it
+- **Against a boss:** the only hero who lands for less than a plain weapon's worth, bolt for bolt. The volley is his unit of damage rather than the bolt, and six volleys take the Crow King down
+- **Primary:** Crossbow, same quiver as the archer's. One press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
 - **Net (hold Shift):** Draws and throws a weighted net. Drawing longer throws it further (120 to 320 px), opens it wider (34 to 70 px radius) and holds longer (0.8 to 2 s), all off the one draw, so a full one is a committed choice. He is not rooted while he draws it. 10 s cooldown
   - It deals 0.9 damage, and that number is the point: a fresh crow, skeleton or rat has exactly 1 hit point, so the net never kills what it catches. It leaves them on a sliver and holds them still. Anything already netted dies to the next scratch
   - Everything under it is caught, not just the first thing. A caught enemy stops moving and deciding entirely; it still bleeds and still burns
@@ -54,7 +70,9 @@ Skirmisher with a rapid-fire crossbow.
 
 ### Sapper
 Demolition. The only hero whose opening move is thrown at a place rather than at a person.
-- **Primary:** Powder charge, 1.1 s cooldown. The archer's own throw, uncharged: it bounces off cover, runs a 1.5 s fuse, and blows up where it stops. The blast damages everything in radius and clears ROCK, TREE and HUT tiles
+- **Body:** 9 health, 200 px/s. The archer's body exactly, health and speed both. The two of them differ only in what they throw, which is what makes them the pair the rest of the roster is measured against
+- **Against a boss:** a charge is worth twice what an arrow is before anything scales it, so about four of them take the Crow King down. Only the knight and the wizard finish him faster, and the sapper pays for that place with a reach that ends where the blast does
+- **Primary:** Powder charge, 1.1 s cooldown. The archer's own throw, uncharged: it bounces off cover, runs a 1.8 s fuse, and blows up where it stops. The blast damages everything in radius and clears ROCK, TREE and HUT tiles
 - **Ammo:** none. Charges are made on the spot, so the cooldown is the whole limit and there is no quiver to run dry, no pickup to chase, and no pitchfork fallback
 - **Special:** none, deliberately. The primary is already the explosive
 - **Reticle:** the only one that shows an area — a dashed ring at the blast radius, so you can see what the charge will reach and how near that is to your own feet
@@ -185,12 +203,17 @@ flowchart LR
 
 ## Bosses
 
-| | Movement | Attack | Shield |
-|---|---|---|---|
-| **Crow King** | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
-| **Dark Archer** | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
-| **Dark Knight** | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
-| **Minotaur** | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None, and no HP: hits stun him instead of hurting him |
+| | Health | Movement | Attack | Shield |
+|---|---|---|---|---|
+| **Crow King** | 10 | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
+| **Dark Archer** | 12 | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
+| **Dark Knight** | 16 | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
+| **Minotaur** | none | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None, and no HP: hits stun him instead of hurting him |
+
+Each of those is one pool, the same number whoever walks in. A boss no longer
+carries a separate health bar for the wizard, another for the knight and a
+third for everyone else: what differs between characters is how hard they hit,
+not how much boss there is to get through. See [Balance](balance.md#boss-health).
 
 The two dark bosses are corrupted echoes of the Archer and the Knight: the
 archer's silhouette keeps a bow drawn on you, the knight's keeps a spear that

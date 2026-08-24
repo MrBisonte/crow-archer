@@ -3,7 +3,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { EntityKind, type PlayerStart } from '../net/protocol';
 import { unpackPlayerState, unpackShotState } from '../net/entity-state';
 import { MAP_COLS, MAP_ROWS, TILE_SIZE, Terrain } from './arena-map';
-import { PLAYER_MAX_HP } from './arena';
+import { CHARACTER_STATS } from './arena';
+
+/**
+ * Full health for the character every duel below is fought with.
+ *
+ * Not `FULL_HP`: that is the flat default MovementWorld and ArenaWorld
+ * use, and BattleWorld stopped agreeing with it when the roster gained its own
+ * bodies. An archer is 9 now, and reading the shared constant here would test
+ * a number this world never uses.
+ */
+const FULL_HP = CHARACTER_STATS.archer.maxHp;
 import { BattleWorld, RESPAWN_TICKS } from './battle-world';
 import { CROW_INTERVAL_TICKS } from './crows';
 import { Button, type InputCommand } from './input';
@@ -115,7 +125,7 @@ describe('BattleWorld', () => {
     });
 
     it('starts everyone at full health', () => {
-      for (const p of players(battle())) expect(p.hp).toBe(PLAYER_MAX_HP);
+      for (const p of players(battle())) expect(p.hp).toBe(FULL_HP);
     });
 
     it('starts everyone behind a shield', () => {
@@ -191,20 +201,20 @@ describe('BattleWorld', () => {
       for (let i = 0; i < 600; i++) {
         w.step(DT, inputs);
         const hit = player(w, 1);
-        if (hit.hp < PLAYER_MAX_HP) {
+        if (hit.hp < FULL_HP) {
           shieldWentFirst = !unpackPlayerState(hit.state).shielded;
           break;
         }
       }
       expect(shieldWentFirst).toBe(true);
-      expect(player(w, 1).hp).toBeLessThan(PLAYER_MAX_HP);
+      expect(player(w, 1).hp).toBeLessThan(FULL_HP);
     });
 
     it('never lets an arrow through to a teammate', () => {
       const w = battle({ characters: ['archer', 'archer'], teams: [Team.A, Team.A] });
       const { angle } = face(w, 0);
       hold(w, 400, 0, cmd(Button.FIRE, angle));
-      expect(player(w, 1).hp).toBe(PLAYER_MAX_HP);
+      expect(player(w, 1).hp).toBe(FULL_HP);
       expect(unpackPlayerState(player(w, 1).state).shielded).toBe(true);
     });
 
@@ -237,7 +247,7 @@ describe('BattleWorld', () => {
       kill(w, angle);
       hold(w, RESPAWN_TICKS + 2, 1, null);
       const back = player(w, 1);
-      expect(back.hp).toBe(PLAYER_MAX_HP);
+      expect(back.hp).toBe(FULL_HP);
       expect(unpackPlayerState(back.state).shielded).toBe(true);
       expect(unpackPlayerState(back.state).dead).toBe(false);
     });
@@ -363,7 +373,7 @@ describe('BattleWorld', () => {
       for (let i = 0; i < 400 && !hurt; i++) {
         w.step(DT, new Map());
         const target = player(w, 1);
-        hurt = target.hp < PLAYER_MAX_HP || !unpackPlayerState(target.state).shielded;
+        hurt = target.hp < FULL_HP || !unpackPlayerState(target.state).shielded;
       }
       expect(hurt).toBe(true);
     });
@@ -372,7 +382,7 @@ describe('BattleWorld', () => {
       const w = battle({ characters: ['archer', 'archer'], teams: [Team.A, Team.A] });
       const { angle } = face(w, 0);
       hold(w, 400, 0, cmd(Button.SPECIAL, angle));
-      expect(player(w, 1).hp).toBe(PLAYER_MAX_HP);
+      expect(player(w, 1).hp).toBe(FULL_HP);
       expect(unpackPlayerState(player(w, 1).state).shielded).toBe(true);
     });
 
@@ -652,7 +662,7 @@ describe('BattleWorld', () => {
       const w = duo(1000); // far past STORM_BLAST_RADIUS
       cast(w, 0, 0);
       const after = player(w, 1);
-      expect(after.hp).toBe(PLAYER_MAX_HP);
+      expect(after.hp).toBe(FULL_HP);
       expect(unpackPlayerState(after.state).shielded).toBe(true); // shield never even spent
     });
   });

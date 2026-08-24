@@ -274,23 +274,37 @@
 
   <!-- ============ CHARACTERS ============ -->
   <section id="characters">
-    <h2><span class="n">02 ·</span> THE FOUR</h2>
-    <p>Pick one before a run. They do not play alike — the difficulty on each is the
-    game's own rating, printed on the character-select screen.</p>
+    <h2><span class="n">02 ·</span> THE FIVE</h2>
+    <p>Pick one before a run. They do not play alike, and they are not built alike
+    either: health and walking speed are different on every one of them, and so is
+    how hard each one hits a boss. The health and speed below are what your
+    <em>feathers</em> stack on rather than the final figure, so a knight who has bought
+    the health axis stays a point ahead of an archer who bought the same levels. The
+    difficulty printed beside each name is the game's own rating, off the
+    character-select screen. The full table, and the reasoning behind every number in
+    it, is in
+    <a href="https://github.com/MrBisonte/crow-archer/blob/master/docs/balance.md">BALANCE</a>.</p>
 
     <h3><span class="grn">ARCHER</span> &mdash; <span class="ylw">MEDIUM</span></h3>
-    <p>The classic. Fastest shots, weakest hit; about five to kill an equal fight.</p>
+    <p>The classic. Fastest shots, smallest hit; about seven arrows to put the Crow
+    King down, the longest count of anyone, and he never has to stand near him to
+    do it.</p>
     <ul>
-      <li><strong>Bow</strong> — quiver of 10, up to <em>3 arrows in flight</em> at once.</li>
+      <li><strong>Body</strong> — <em>9 health</em>, <em>200 px/s</em>. The middle of the roster on both, and the one the other four are read against.</li>
+      <li><strong>Bow</strong> — quiver of 16, up to <em>5 arrows in flight</em> at once.</li>
       <li><strong>Power shot</strong> — hold <span class="key">SHIFT</span> to draw, up to 1s, rooted while you do. Release and the arrow <em>pierces up to 3 bodies</em>, flies at double speed and hits a boss for 3x. A tap gets the weakest version of all three. 5s cooldown, and it keeps whatever ammo was queued.</li>
       <li><strong>Dynamite</strong> — hold to charge, release to throw. Clears tiles and hurts bosses.</li>
       <li><strong>Pickups</strong> — fire arrows (leave burning patches), ricochet arrows (bounce off walls, faster each bounce).</li>
     </ul>
 
     <h3><span class="cyn">WIZARD</span> &mdash; <span class="red">EXTRA HARD</span></h3>
-    <p>Teleguided damage and area control, with nothing to hide behind up close.</p>
+    <p>Teleguided damage and area control, with nothing to hide behind up close. He
+    hits harder than anyone and dies faster than anyone: four bolts put the Crow King
+    down, fewer than anyone else needs, and he carries the smallest health bar in the
+    game to pay for it.</p>
     <ul>
-      <li><strong>Magic bolts</strong> — 2s cooldown, they <em>steer toward the nearest enemy</em> on their own.</li>
+      <li><strong>Body</strong> — <em>7 health</em>, <em>175 px/s</em>. The thinnest on the roster, and slower than everyone but the knight, so there is nothing to soak a mistake and nothing to outrun one.</li>
+      <li><strong>Magic bolts</strong> — 1.2s cooldown, they <em>steer toward the nearest enemy</em> on their own.</li>
       <li><strong>Blink</strong> — tap <span class="key">SHIFT</span> to step 160px down your aim, <em>taking no damage</em> for a moment on arrival. 6s cooldown. It stops at walls rather than passing through them, and a blink with nowhere to go costs you nothing.</li>
       <li><strong>Blink chain</strong> — tap again <em>within 1.1s</em> and the second hop is free. Two is the cap; let the window lapse and you wait out the full cooldown.</li>
       <li><strong>Arrival pulse</strong> — every hop lets off a 56px pulse where it lands, killing what is in it and taking 1 off a boss. The ring you see is drawn at the radius the damage actually used.</li>
@@ -299,9 +313,13 @@
     </ul>
 
     <h3><span class="wht">KNIGHT</span> &mdash; <span class="ylw">HARD</span></h3>
-    <p>Frontline. No answer at range at all, and the only one who does not need one.</p>
+    <p>Frontline. No answer at range at all, and the only one who does not need one.
+    One swing is the hardest single action in the game and the Crow King falls in
+    three and a bit of them, which is the shortest fight on paper and the longest one
+    in practice: every swing needs him inside 80px of something that orbits and charges.</p>
     <ul>
-      <li><strong>Long spear</strong> — melee reach, and the thrust <em>lands twice per swing</em>.</li>
+      <li><strong>Body</strong> — <em>12 health</em>, <em>150 px/s</em>. The most health and the least speed, and the two go together: he is the only hero who has to be in contact to do anything, so he is the only one who cannot answer a bad position by walking out of it.</li>
+      <li><strong>Long spear</strong> — <em>80px</em> reach, one thrust a second, and it <em>lands twice per swing</em>.</li>
       <li><strong>Charge</strong> — hold <span class="key">SHIFT</span> to wind up, rooted and <em>taking no damage</em>, then sweep forward through a wide arc. Anything caught in it dies outright.</li>
       <li><strong>Charge chain</strong> — tap <span class="key">SHIFT</span> again <em>within 1.1s</em> of releasing, with room still ahead, and he commits: the dash speeds up for the rest of its run and he lands one 60px whirlwind swing where he stands. Once per dash, and it cannot steer — the direction was fixed when you let go.</li>
       <li><strong>Block</strong> — passive, no key. Banks one absorbed hit every 10 seconds, by itself.</li>
@@ -310,8 +328,11 @@
     </ul>
 
     <h3><span class="ylw">RANGER</span> &mdash; <span class="grn">EASY</span></h3>
-    <p>Skirmisher. Three chances to land a hit instead of one.</p>
+    <p>Skirmisher. Three chances to land a hit instead of one, and the only hero who
+    lands for less than a plain weapon's worth, bolt for bolt. The volley is his unit
+    of damage rather than the bolt: six of them put the Crow King down.</p>
     <ul>
+      <li><strong>Body</strong> — <em>8 health</em>, <em>250 px/s</em>. The fastest body in the game and the second-thinnest, so distance is the only defence he has, and he is very good at keeping it.</li>
       <li><strong>Crossbow</strong> — one press fires <em>3 independent bolts</em> in a narrow spread, each 30% weaker than an arrow.</li>
       <li><strong>Net</strong> — hold <span class="key">SHIFT</span> to draw, then throw. A longer draw means a longer throw, a wider net and a longer hold, <em>0.8s up to 2s</em>. 10s cooldown, and you can keep moving while you draw it.</li>
       <li><strong>The net does not kill</strong> — 0.9 damage against a creep's 1 hit point, on purpose. It catches <em>everything under it</em>, pins it completely, and leaves it on a sliver. Bosses are held too, briefly, the Minotaur included.</li>
@@ -320,9 +341,13 @@
     </ul>
 
     <h3><span class="red">SAPPER</span> &mdash; <span class="ylw">HARD</span></h3>
-    <p>Demolition. The only opening move in the game thrown at a <em>place</em> rather than at a person.</p>
+    <p>Demolition. The only opening move in the game thrown at a <em>place</em> rather
+    than at a person. A charge is worth two of anyone's arrows before anything scales
+    it, so about four of them put the Crow King down: only the knight and the wizard
+    finish him faster, and the sapper buys that with a reach that ends where the blast does.</p>
     <ul>
-      <li><strong>Powder charge</strong> — one press lobs it, every 1.1s. It bounces off cover, runs a 1.5s fuse, and goes off where it stops: <em>everything in the blast takes it</em>, and rock, trees and huts come down.</li>
+      <li><strong>Body</strong> — <em>9 health</em>, <em>200 px/s</em>. The archer's body exactly, health and speed both. The two differ only in what they throw.</li>
+      <li><strong>Powder charge</strong> — one press lobs it, every 1.1s. It bounces off cover, runs a 1.8s fuse, and goes off where it stops: <em>everything in the blast takes it</em>, and rock, trees and huts come down.</li>
       <li><strong>No ammo</strong> — charges are made on the spot. The cooldown is the only limit, so there is no quiver, no refill to chase, and no pitchfork to fall back on.</li>
       <li><strong>No second weapon</strong> — on purpose. The primary is already the explosive.</li>
     </ul>
@@ -434,6 +459,11 @@
     <h3><span class="red">THE CROW KING</span></h3>
     <p>Orbits you, charges in, screeches — and the screech turns every white crow on the
     map hostile at once. He summons bats on a timer while he does it.</p>
+    <p><strong>10 health</strong>, and it is 10 for everybody. Every boss carries one
+    pool now, the same number whoever walks in: what differs between characters is how
+    hard they hit, not how much boss there is to get through. The figures, and why they
+    are what they are, are in
+    <a href="https://github.com/MrBisonte/crow-archer/blob/master/docs/balance.md">BALANCE</a>.</p>
     <p>His <strong>shield</strong> is the whole fight, and it runs on a loop:</p>
     <ul>
       <li><strong>10 seconds</strong> behind a rotating <span class="cyn">blue</span> shield — fully immune, nothing you do lands.</li>
@@ -448,15 +478,17 @@
     — <strong>every hit lands</strong>, from the first frame.</p>
     <table>
       <caption>CASTLE BOSSES</caption>
-      <thead><tr><th></th><th>MOVEMENT</th><th>ATTACKS</th></tr></thead>
+      <thead><tr><th></th><th>HEALTH</th><th>MOVEMENT</th><th>ATTACKS</th></tr></thead>
       <tbody>
         <tr>
           <td class="hero">DARK ARCHER</td>
+          <td class="act">12</td>
           <td class="act">Orbits at range. Never closes in.</td>
           <td class="act">Three-bolt volley &middot; an occasional <strong>lobbed bomb</strong> that goes off in a radius &middot; summons an <span class="cyn">ice</span> skeleton now and then</td>
         </tr>
         <tr>
           <td class="hero">DARK KNIGHT</td>
+          <td class="act">16</td>
           <td class="act">Short lead-in, then charges — often. Sometimes halts mid-fight into a <strong>whirlwind</strong>.</td>
           <td class="act">A harder contact hit than the Crow King's charge &middot; summons a <span class="red">fire</span> skeleton now and then</td>
         </tr>

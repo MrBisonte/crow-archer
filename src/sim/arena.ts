@@ -15,42 +15,55 @@ export const ARENA_W = 33 * 32;
 export const ARENA_H = 21 * 32;
 
 /**
- * Matches the legacy CONFIG, so movement feels the same once the sims merge.
- *
  * The default for a world with no character of its own: MovementWorld and
  * ArenaWorld move one kind of body and know nothing of `CharacterKind`, so
- * they keep reading these flat constants unchanged. BattleWorld reads
- * `CHARACTER_STATS` instead, below.
+ * they read these flat constants. BattleWorld and the single-player game read
+ * `CHARACTER_STATS` instead, below, where no hero is 200/10 any more.
  */
 export const PLAYER_SPEED = 200;
 export const PLAYER_RADIUS = 8;
 export const PLAYER_MAX_HP = 10;
 
-/** A character's speed and health. Everything else about them is a weapon. */
+/**
+ * What a character is, as three numbers. Everything else about them is a
+ * weapon.
+ *
+ * `bossDamageMult` is the whole of how hard one character hits, and its name
+ * is its scope. It is applied once, where single-player lowers boss health,
+ * and it is deliberately the only damage figure that is per-character: crows,
+ * skeletons and rats have exactly one hit point and die to one hit of
+ * anything, so scaling a hit that already kills would change nothing and
+ * scaling the ranger's below 1 would stop his bolts killing crows at all.
+ * `BattleWorld` never reads it, because multiplayer has no bosses and tunes
+ * its damage per weapon in `weapons.ts`. See docs/balance.md.
+ */
 export interface CharacterStats {
   speed: number;
   maxHp: number;
+  bossDamageMult: number;
 }
 
 /**
- * Per-character speed and max health, one row per `CharacterKind`.
+ * Per-character speed, max health and damage, one row per `CharacterKind`.
  *
- * Every row matches the shared defaults above today: nothing has asked a
- * character to move faster or survive more hits than another yet. The table
- * exists anyway, because the day one does, this is the one place that
- * changes, and the compiler refuses to build a `ranger` row short of both
- * fields.
+ * Read down a column rather than across a row: the knight is the only hero
+ * who has to be in contact to do anything, so he carries the most health and
+ * the least speed; the wizard hits hardest and dies fastest, which is what
+ * "glass cannon" has to mean numerically; the ranger fires three bolts at
+ * once, so the volley rather than the bolt is his unit of damage and his is
+ * the only multiplier below 1. Archer and sapper share a body on purpose, and
+ * are what the rest of the roster is read against.
+ *
+ * Speed and health are the base the FEATHERS upgrade tree stacks on, not the
+ * final figure. The reasoning per row, and the boss health these multipliers
+ * are tuned against, are in docs/balance.md.
  */
 export const CHARACTER_STATS: Record<CharacterKind, CharacterStats> = {
-  archer: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
-  wizard: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
-  knight: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
-  ranger: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
-  // Shared defaults like every row above it. A sapper hauling powder is a
-  // tempting first row to slow down, but the single-player game reads its
-  // speed from CONFIG.playerSpeed through FEATHERS, so a slower sapper here
-  // would mean one hero moving at two different speeds in the two engines.
-  sapper: { speed: PLAYER_SPEED, maxHp: PLAYER_MAX_HP },
+  archer: { speed: 200, maxHp:  9, bossDamageMult: 1.4 },
+  wizard: { speed: 175, maxHp:  7, bossDamageMult: 2.5 },
+  knight: { speed: 150, maxHp: 12, bossDamageMult: 1.5 },
+  ranger: { speed: 250, maxHp:  8, bossDamageMult: 0.8 },
+  sapper: { speed: 200, maxHp:  9, bossDamageMult: 1.2 },
 };
 
 /**

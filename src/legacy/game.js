@@ -121,8 +121,11 @@ const CONFIG = {
   tileSize: 32, cols: 33, rows: 21, hudHeight: 48,
   canvasW: 1056, canvasH: 720,
 
-  playerSpeed: 200, playerRadius: 8,
-  playerMaxHP: 10, playerHitFlashSecs: 0.3,
+  // No playerSpeed or playerMaxHP here on purpose. Both are per character,
+  // in CHARACTER_STATS (src/sim/arena.ts), and FEATHERS stacks purchased
+  // levels on the selected row. A shared figure kept here would be a second
+  // home for a number nobody reads, free to be tuned to no effect.
+  playerRadius: 8, playerHitFlashSecs: 0.3,
   // Enemy hit feedback. The sprite goes flat white for hitFlashWhiteSecs and
   // the knock offset decays across the whole hitFlashSecs, so the recoil
   // outlasts the flash instead of ending with it.
@@ -142,7 +145,7 @@ const CONFIG = {
   // while something you cannot kill comes down it. Spawns in packs on open
   // floor rather than walking in from the right, since a maze has no corridor
   // to walk in from.
-  // Faster than playerSpeed (200) on purpose. Slower and a rat can never land
+  // Faster than every hero on purpose. Slower and a rat can never land
   // the first bite on anyone walking away, which makes the whole pack décor.
   // The margin is small, so you outrun them briefly; once poisoned you are at
   // 100 and they are on you. The slow is the trap, the speed just sets it.
@@ -254,7 +257,10 @@ const CONFIG = {
   maxPickupsOnMap: 3,
   waterShimmerMs: 800,
 
-  bossHP: 5, bossHPWizard: 14, bossOrbitRadius: 180, bossOrbitSpeed: 80, bossOrbitDuration: 3,
+  // One pool, the same whoever is fighting him. Who is holding the weapon is
+  // answered by CHARACTER_STATS[kind].bossDamageMult, once, in
+  // applyBossDamage. See docs/balance.md.
+  bossHP: 10, bossOrbitRadius: 180, bossOrbitSpeed: 80, bossOrbitDuration: 3,
   // Time constant for orbitRadius easing back to bossOrbitRadius after any
   // interrupt (charge, screech, whirlwind) — see enterOrbit(). Keeps the
   // boss gliding back out instead of popping straight onto the circle.
@@ -285,7 +291,7 @@ const CONFIG = {
   // Dark bosses (castle stage 2/3). They reuse the crow king's orbit/charge
   // engine and burn/knockback handling; the shield-window mechanic is
   // dropped on purpose, so neither fight is another parry-timing puzzle.
-  darkArcherHP: 6, darkArcherHPWizard: 16, darkArcherHPKnight: 14,
+  darkArcherHP: 12,
   darkArcherContactDamage: 1,     // weak up close — an archer that got caught
   darkArcherVolleyInterval: 2.2, darkArcherVolleyCount: 3,
   darkArcherVolleySpread: Math.PI / 14, darkArcherBoltSpeed: 380, darkArcherBoltDamage: 1,
@@ -296,7 +302,7 @@ const CONFIG = {
   darkArcherBombDamage: 2, darkArcherBombRadius: 55,
   darkArcherSkeletonInterval: 7,  // summons one ice skeleton on this cadence
 
-  darkKnightHP: 8, darkKnightHPWizard: 20, darkKnightHPKnight: 18,
+  darkKnightHP: 16,
   darkKnightOrbitDuration: 1.2,   // short lead-in, spends most of its time charging
   darkKnightChargeSpeed: 460, darkKnightContactDamage: 3,
   // Secondary, on its own cooldown: a whirlwind halt between charges, the
@@ -311,7 +317,7 @@ const CONFIG = {
   // resembles — more health than either dark boss, and a charge that hurts
   // less than the knight's. Tanky rather than punishing, so the fight is long
   // enough to be about reading his charges rather than about surviving one.
-  commanderHP: 10, commanderHPWizard: 24, commanderHPKnight: 22,
+  commanderHP: 20,
   commanderContactDamage: 2, commanderContactReach: 30,
   // Rides the player down between charges, slower than he charges by a wide
   // margin so the wind-up is legible.
@@ -378,13 +384,16 @@ const CONFIG = {
 
   // Knight
   knightSpearRange: 80, knightSpearCooldown: 1.0,
-  knightSpearBossDamage: 2, knightSpearSwingDuration: 0.35,
+  // One per hit, landing twice, so a swing is worth 2. It was 2 per hit, and
+  // a 4-point swing against a baseline 1-point arrow is four times the
+  // roster's unit of damage — which is precisely what the deleted
+  // bossHPKnight column existed to absorb.
+  knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
   knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 6,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
   knightJavelinsPerPickup: 3, knightJavelinSpeed: 580, knightJavelinPierce: 2,
   knightJavelinBossDamage: 1,
-  bossHPKnight: 12,               // knight has high DPS so boss needs more HP
   // Block: a self-charging directional guard, no pickup needed. Reuses
   // playerShield/damagePlayer's existing absorb-one-hit handling wholesale;
   // this cooldown just decides how often it's re-granted while down.
@@ -435,7 +444,12 @@ const CONFIG = {
   // punishes whoever was chasing, rather than a repositioning nuke: it clears
   // the ring of crows that closed in, and takes one point off a boss.
   wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
-  wizBoltCooldown: 2.0, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
+  // A rate, not a damage. What a bolt is worth is wizBoltDamage times the
+  // wizard's multiplier; this is how long he spends unable to answer
+  // anything, and two full seconds of it was most of why the fight was
+  // unwinnable. Bolts share maxArrowsInFlight with arrows, 5 on the default
+  // pace and 3 on calm, so a calm wizard whose bolts all miss can cap out.
+  wizBoltCooldown: 1.2, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
   // Wizard-only pickup batch size (archer/ranger/knight keep their own
@@ -705,33 +719,39 @@ const statPips = (value, peak) =>
 /**
  * `range` and `damage` are a judgement call per row, deliberately. Neither
  * summarises one number the way HP and speed do — an archer's range is its
- * bow, its pickups and a sniper root together, and the sapper's damage is a
- * bomb, a barrage and a detonation with falloff. There is nothing to derive
+ * bow, its pickups and a power-shot root together, and the sapper's damage is
+ * a bomb, a barrage and a detonation with falloff. There is nothing to derive
  * them from, so they are authored, and they are the only two that are.
  *
  * HP and SPEED are not here: they come from CHARACTER_STATS below, because a
  * number typed here would be free to drift away from the one the simulation
  * actually runs on.
+ *
+ * `damage` is the one authored bar with something to check it against. It is
+ * still not derived from bossDamageMult — a pip is a coarse impression of a
+ * whole kit and the multiplier is one number the sim runs on, so neither
+ * produces the other — but they are not allowed to disagree about the
+ * ordering, and assertPanelDamageOrder below refuses to load if they do.
  */
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
     preview: () => ({ grid: buildArcherGrid(SP_TRIM.archer), sprite: ARCHER_SPRITE, key: 'archer' }),
-    hook: 'Longbow and quiver', range: 4, damage: 3,
+    hook: 'Longbow and quiver', range: 5, damage: 3,
     skills: { main: 'Longbow, three arrows in flight',
               secondary: 'Dynamite, thrown further the longer held',
               shift: 'Draw a power shot that pierces' } },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     preview: () => ({ grid: buildWizardGrid(SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: 'wizard' }),
-    hook: 'Homing glass cannon', range: 4, damage: 4,
+    hook: 'Homing glass cannon', range: 4, damage: 5,
     skills: { main: 'Homing bolts that seek the nearest target',
               secondary: 'Lightning storm across a wide area',
               shift: 'Blink, tap again to chain a second hop' } },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     preview: () => ({ grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' }),
-    hook: 'Armoured brawler', range: 1, damage: 4,
+    hook: 'Armoured brawler', range: 1, damage: 3,
     skills: { main: 'Long spear at melee reach, hits twice',
               secondary: 'Whirlwind that breaks the tiles around you',
               shift: 'Charge a dash, tap again to chain it' } },
@@ -747,7 +767,7 @@ const CHAR_PANELS = [
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
     preview: () => ({ grid: buildSapperGrid(SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: 'sapper' }),
-    hook: 'Bombs and pitchfork', range: 2, damage: 5,
+    hook: 'Bombs and pitchfork', range: 2, damage: 3,
     skills: { main: 'Ten bombs, pitchfork when the pouch empties',
               secondary: 'Five-bomb barrage in a wide fan',
               shift: 'Piercing triple shot, sets off your bombs' } },
@@ -764,6 +784,33 @@ const CHAR_PANELS = [
     { label: 'SPEED',  pips: statPips(stats.speed, STAT_PEAKS.speed) },
   ] };
 });
+
+/**
+ * Refuses to load a roster whose DAMAGE bars contradict the multipliers the
+ * simulation runs on. Rank the heroes by bossDamageMult and the bars must not
+ * climb: a character who hits softer than another may tie its bar, never beat
+ * it. Ties are allowed because five pips cannot separate 1.5 from 1.4.
+ *
+ * Loud at load, like the missing-stats throw above it and MAP_PANELS' own
+ * check, because the failure this catches is a panel that lies about a
+ * character rather than one that draws wrong — nothing crashes, the player is
+ * just told something untrue and has no way to find out.
+ */
+function assertPanelDamageOrder(panels) {
+  const ranked = [...panels].sort((a, b) =>
+    CHARACTER_STATS[b.char].bossDamageMult - CHARACTER_STATS[a.char].bossDamageMult);
+  for (let i = 1; i < ranked.length; i++) {
+    const harder = ranked[i - 1], softer = ranked[i];
+    if (softer.damage > harder.damage) {
+      throw new Error(
+        `CHAR_PANELS: '${softer.char}' shows DAMAGE ${softer.damage} but hits softer than ` +
+        `'${harder.char}' at ${harder.damage} ` +
+        `(bossDamageMult ${CHARACTER_STATS[softer.char].bossDamageMult} vs ` +
+        `${CHARACTER_STATS[harder.char].bossDamageMult})`);
+    }
+  }
+}
+assertPanelDamageOrder(CHAR_PANELS);
 
 /**
  * The three ability slots a selected panel lists, as [heading, row key], in
@@ -843,7 +890,12 @@ function cyclePanelSelection(panels, current, field) {
   return current;
 }
 
-let playerHP = CONFIG.playerMaxHP, playerHitFlash = 0;
+// Character selection — persists for the session, reset only on new run.
+// Declared here rather than with the other menu state below because the
+// health a run opens on is the selected character's, and playerHP is the
+// next line.
+let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper'
+let playerHP = CHARACTER_STATS[selectedChar].maxHp, playerHitFlash = 0;
 // Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
 let blockedFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
@@ -873,9 +925,6 @@ let castleWave = 0;
 let bossStage = 1;
 let boss = null, bossDeathSeq = null, entrance = null;
 let winScore = 0, winKills = 0, winSkeletons = 0, winHP = 0;
-
-// Character selection — persists for the session, reset only on new run
-let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
 
 // Map selection for Waves mode — persists for the session. Brawl ignores this
 // and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
@@ -4842,6 +4891,10 @@ function ratRespawnSecs() {
 
 const BOSS_HUNTS_WHILE_EXPLORING = {
   crowking: false, dark_archer: false, dark_knight: false, minotaur: true,
+  // He arrives behind an entrance like the three above him, so exploration
+  // never has him walking around in it. The row exists because a missing one
+  // reads as false rather than as a mistake, which is how it shipped.
+  commander: false,
 };
 
 /**
@@ -4867,16 +4920,20 @@ const BOSS_ON_HIT = {
   // No HP to lower and no death path to reach. A hit buys time instead:
   // it stuns him, which interrupts a charge and lets you get down the corridor.
   minotaur:    ()       => stunMinotaur(),
+  // Nothing special, like the two dark bosses: no shield to time and no daze.
+  commander:   (amount) => applyBossDamage(amount),
 };
 
-// Which CONFIG keys hold a kind's HP for each character, so bossHpFor has one
-// home instead of a third near-identical ternary chain pasted next to the
-// two dark bosses already need.
-const BOSS_HP_KEYS = {
-  crowking:    ['bossHP', 'bossHPWizard', 'bossHPKnight'],
-  dark_archer: ['darkArcherHP', 'darkArcherHPWizard', 'darkArcherHPKnight'],
-  dark_knight: ['darkKnightHP', 'darkKnightHPWizard', 'darkKnightHPKnight'],
-  commander:   ['commanderHP', 'commanderHPWizard', 'commanderHPKnight'],
+// Which CONFIG key holds a kind's health. One key, not one per character:
+// each of these rows used to be a [normal, wizard, knight] tuple read by a
+// ternary on two named heroes, which meant twelve hand-tuned numbers, no
+// compiler check that a hero had a column, and a sapper silently taking the
+// base pool because he is neither of the two the ternary names.
+const BOSS_HP_KEY = {
+  crowking:    'bossHP',
+  dark_archer: 'darkArcherHP',
+  dark_knight: 'darkKnightHP',
+  commander:   'commanderHP',
 };
 
 function bossHpFor(kind) {
@@ -4884,9 +4941,31 @@ function bossHpFor(kind) {
   // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without
   // any of them learning that an unkillable boss exists.
   if (kind === 'minotaur') return Infinity;
-  const [normal, wizard, knight] = BOSS_HP_KEYS[kind];
-  const key = selectedChar === 'wizard' ? wizard : selectedChar === 'knight' ? knight : normal;
-  return CONFIG[key];
+  return CONFIG[BOSS_HP_KEY[kind]];
+}
+
+/**
+ * Refuses to load with a boss the tables above do not cover.
+ *
+ * They are Records in shape and plain objects in fact, so a stage added
+ * without a row in each is not a compile error, it is `undefined` at the call
+ * site — and the three call sites fail three different ways. A missing
+ * BOSS_ON_HIT row throws TypeError on the first hit that lands. A missing
+ * BOSS_HUNTS_WHILE_EXPLORING row reads as false, which is a decision nobody
+ * took. A missing BOSS_HP_KEY row spawns a boss on `undefined` health.
+ *
+ * The commander shipped missing two of the three, which made the cavern's
+ * ending crash on the first arrow rather than fail to build.
+ */
+for (const kind of BOSS_STAGES) {
+  if (typeof BOSS_ON_HIT[kind] !== 'function')
+    throw new Error(`BOSS_ON_HIT has no row for '${kind}', which BOSS_STAGES lists`);
+  if (typeof BOSS_HUNTS_WHILE_EXPLORING[kind] !== 'boolean')
+    throw new Error(`BOSS_HUNTS_WHILE_EXPLORING has no row for '${kind}', which BOSS_STAGES lists`);
+  // The minotaur is the one deliberate absence: bossHpFor answers Infinity for
+  // him rather than reading a key, so a row here would be a number nobody uses.
+  if (kind !== 'minotaur' && !BOSS_HP_KEY[kind])
+    throw new Error(`BOSS_HP_KEY has no row for '${kind}', which BOSS_STAGES lists`);
 }
 
 function spawnBoss() {
@@ -4973,12 +5052,18 @@ function spawnBoss() {
 }
 
 /**
- * The one place boss HP is lowered, so the death trigger has a single home.
- * Burn damage takes this path directly: it has no impact point, so it gets no
- * flash, no shove, and no hit sound.
+ * The one place boss HP is lowered, so the death trigger has a single home,
+ * and therefore the one place a character's damage multiplier is applied.
+ * Every weapon reaches here through damageBoss; burn reaches it directly,
+ * having no impact point and so no flash, no shove and no hit sound.
+ *
+ * Scaling here rather than at each weapon is what makes a new weapon scaled
+ * by having damage at all. It is also why the burn is not counted twice:
+ * igniteBoss derives burnDps from the raw damage of the hit that lit it, and
+ * that raw figure passes through here once per tick like any other.
  */
 function applyBossDamage(amount) {
-  boss.hp -= amount;
+  boss.hp -= amount * CHARACTER_STATS[selectedChar].bossDamageMult;
   if (boss.hp <= 0) startBossDeath();
 }
 
@@ -5941,9 +6026,12 @@ const FEATHERS = (() => {
     return earned;
   }
 
-  function maxHP()   { return statValue(_levels, 'hp',      CONFIG.playerMaxHP); }
+  // Health and speed start from the selected character's row and take
+  // purchased levels on top, so a knight who has bought the health axis is
+  // still one point ahead of an archer who has bought the same levels.
+  function maxHP()   { return statValue(_levels, 'hp',      CHARACTER_STATS[selectedChar].maxHp); }
   function pfRange() { return statValue(_levels, 'pfRange', CONFIG.pitchforkRange); }
-  function speed()   { return statValue(_levels, 'speed',   CONFIG.playerSpeed); }
+  function speed()   { return statValue(_levels, 'speed',   CHARACTER_STATS[selectedChar].speed); }
   function wallet()  { return _feathers; }
   // Whether a run opens with the shield already up, through the same
   // playerShield a pickup and the knight's block already raise.
@@ -9758,7 +9846,8 @@ function drawWin(t) {
   ctx.fillText(`CROWS KILLED:  ${winKills}`, CONFIG.canvasW/2, 294);
   ctx.fillText(`SKELETONS SLAIN: ${winSkeletons}`, CONFIG.canvasW/2, 322);
   let hp = '';
-  for (let i = 0; i < CONFIG.playerMaxHP; i++) hp += i < winHP ? '♥' : '♡';
+  const winMaxHP = FEATHERS.maxHP();
+  for (let i = 0; i < winMaxHP; i++) hp += i < winHP ? '♥' : '♡';
   ctx.fillText(`HP REMAINING:  ${hp}`, CONFIG.canvasW/2, 350);
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#0a3a06'; ctx.font = '13px "Courier New", monospace';
@@ -10277,6 +10366,9 @@ export const devHooks = {
   blast(x, y, element = 'none') {
     explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0, element }, 'dynamite');
   },
+  // Lights the boss the way a fire weapon's hit does, so the burn's own
+  // arithmetic can be checked without staging an arrow's whole flight.
+  igniteBoss(amount) { if (boss) igniteBoss(amount); },
   // The pouch and the burning ground, for the sapper's ammo and fire tests.
   inv: () => inv,
   fires: () => fires,
@@ -10317,6 +10409,10 @@ export const devHooks = {
         stateTimer: boss.stateTimer, cooldown: boss.cooldown,
         daze: boss.dazeTimer, phase: bossDazePhase(), sees: minotaurSeesPlayer() }
     : null),
+  // Puts a stage's boss on the map outright, past the entrance cinematic,
+  // because transitionTo('boss_entrance') does not clear the previous one: a
+  // harness that walks the entrance twice weighs the same boss twice.
+  spawnBossNow(stage) { bossStage = stage; spawnBoss(); return boss.kind; },
   spawnMinotaur() { bossStage = 4; spawnBoss(); boss.bstate = 'prowl'; return boss.kind; },
   // The whole objective chain in one read: which keys are held, which locks
   // are open, whether the warden has been met yet, and where the furniture is.
