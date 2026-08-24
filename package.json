@@ -11,7 +11,8 @@
     "start": "node dist-server/index.js",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.legacy.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.legacy.json",
+    "hooks:install": "node scripts/install-hooks.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

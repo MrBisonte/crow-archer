@@ -2767,7 +2767,19 @@ describe('the siege loop', () => {
   it('plays all ten waves through to a win, killing every boss for real', () => {
     openSiege();
     const killed: string[] = [];
+    // The hero is not the subject and nobody is holding the keys, so one left
+    // standing in a wave dies and this would be measuring that instead. The
+    // first run of this test failed on wave ten for exactly that reason.
+    //
+    // Waiting on the flag rather than on a frame count matters: a blind
+    // stepSim(240) would pass whether or not the sequence ever finished, and
+    // the sequence finishing is half of what is being tested.
+    const settle = (): void => {
+      for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
+      g.healHero();
+    };
     for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
+      g.healHero();
       g.stepSim(1);
       // Every boss this wave fielded, one at a time: a death sequence is
       // exclusive, so the next kill waits for the current one to clear.
@@ -2775,11 +2787,12 @@ describe('the siege loop', () => {
         const which = g.killSiegeBoss();
         if (!which) break;
         killed.push(`wave ${siegeState().wave}: ${which}`);
-        g.stepSim(240);
+        settle();
         expect(g.bossDeathSeq(), `wave ${siegeState().wave}: the field froze`).toBeNull();
         expect(g.state(), `wave ${siegeState().wave}: the run left the bastion`).toBe('playing');
       }
       g.clearSiegeWave();
+      g.healHero();
       g.stepSim(2);
     }
     expect(g.state()).toBe('win');
@@ -2789,6 +2802,36 @@ describe('the siege loop', () => {
     // ladder changed shape and this test stopped covering what it claims to.
     expect(killed).toHaveLength(5);
     expect(killed.filter((k) => k.endsWith('extra'))).toHaveLength(1);
+  });
+
+  /**
+   * The handover's second half, which the ten-wave run above does NOT cover.
+   *
+   * That test kills the primary first, so by the time an extra dies the
+   * displaced boss is already dead and dropping it changes nothing: deleting
+   * `seatSiegeBoss`'s `push(held)` leaves it passing. This kills the extra
+   * while the primary is alive, which is the order tickSiegeBosses produces,
+   * and is the only order in which losing the displaced boss is visible.
+   */
+  it('hands the slot back when wave ten loses its second boss first', () => {
+    openSiege();
+    g.jumpToSiegeWave(SIEGE_WAVE_COUNT);
+    g.stepSim(1);
+    const onField = (): { bstate: string }[] =>
+      [g.boss(), ...g.siegeBosses()].filter(Boolean) as { bstate: string }[];
+    expect(onField(), 'wave ten should field two bosses').toHaveLength(2);
+
+    expect(g.killSiegeBoss('extra')).toBe('extra');
+    for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
+    g.healHero();
+    expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
+
+    // The one that was holding the slot has to still be on the field. Without
+    // the handover it is dropped on the floor: alive, unticked, invisible to
+    // the wave-clear check, and the wave can never end.
+    const left = onField();
+    expect(left, 'the displaced boss was dropped on the floor').toHaveLength(1);
+    expect(left[0]?.bstate, 'the survivor should not be the one that died').not.toBe('dead');
   });
 
   it('loses only when the hero dies, never when a tower falls', () => {

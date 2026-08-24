@@ -1,0 +1,58 @@
+#!/bin/sh
+# Refuses a commit while the build gate is red.
+#
+# This exists because a commit already landed on a failing typecheck. The gate
+# at the time was a shell one-liner ending in `... | grep -q "error" && git
+# commit`, and a pipeline's exit status is its LAST command's -- so grep
+# succeeded, the && fired, and the commit went in while tsc was failing. A hook
+# cannot be talked past by a pipeline, which is the whole point of moving the
+# rule out of the prompt and into the repository.
+#
+# Install with `npm run hooks:install`. That copies this file to where the
+# global hook in ~/.claude-git-hooks already delegates. Run it once per clone
+# AND once per worktree: the delegator resolves `git rev-parse --git-dir`,
+# which differs per worktree, so a fresh worktree starts without it.
+#
+# Known limit, stated rather than hidden: this checks the WORKING TREE, not the
+# staged snapshot. Committing a subset of your changes is therefore gated on
+# what is on disk, which is the common case but is not the same claim. Getting
+# the exact staged state means stashing inside a hook, which is a good way to
+# lose work, so it is deliberately not done.
+
+if [ "$SKIP_GATE" = "1" ]; then
+  echo "pre-commit: gate skipped (SKIP_GATE=1)"
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+
+# Not every checkout of every repo has one; a hook that assumes it does would
+# block commits in a docs-only clone with no node_modules.
+[ -f package.json ] || exit 0
+
+gate () {
+  label=$1
+  shift
+  printf 'pre-commit: %s... ' "$label"
+  log=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/precommit.$$")
+  if "$@" > "$log" 2>&1; then
+    echo "ok"
+    rm -f "$log"
+    return 0
+  fi
+  echo "FAILED"
+  echo "" >&2
+  echo "BLOCKED: $label failed, so the commit was refused." >&2
+  echo "  repo: $root" >&2
+  echo "" >&2
+  tail -n 40 "$log" >&2
+  echo "" >&2
+  echo "  Fix it, or override once: SKIP_GATE=1 git commit ..." >&2
+  echo "" >&2
+  rm -f "$log"
+  exit 1
+}
+
+gate typecheck npm run --silent typecheck
+gate tests npm test --silent

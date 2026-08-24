@@ -11437,24 +11437,33 @@ export const devHooks = {
   /**
    * Kills one boss on the field the way play does, extras included.
    *
-   * The primary slot first; if that is empty or already dead, an extra is
-   * moved into the slot through the same handover the tick uses, and dies
-   * there. Returns which one died, or null when there is no boss left.
+   * `which` picks the slot. 'primary' takes whoever holds it; 'extra' takes
+   * one from the extras list even while a live boss holds the slot, which is
+   * the order the field actually produces and the only one that reaches the
+   * handover's second half: tickSiegeBosses displaces the primary to tick an
+   * extra, so a LIVE boss is out of the slot when that extra dies and has to
+   * be given back. Killing the primary first never tests that -- the displaced
+   * boss is already dead by then, and dropping it changes nothing observable.
+   *
+   * Returns which one died, or null when there is no live boss left.
    *
    * This exists because clearSiegeWave() nulls `boss` and `siegeExtraBosses`
    * outright. Every ladder test in the suite advanced that way, so ten waves
    * were walked without a single boss ever dying -- which is how a boss death
    * could freeze the field with the suite fully green.
    */
-  killSiegeBoss() {
-    if (boss && boss.bstate !== 'dead') { startBossDeath(); return 'primary'; }
+  killSiegeBoss(which = 'primary') {
+    const primaryLive = boss && boss.bstate !== 'dead';
     const extra = siegeExtraBosses.find((b) => b && b.bstate !== 'dead');
-    if (!extra) return null;
-    const held = boss;
-    boss = extra;
-    startBossDeath();
-    seatSiegeBoss(extra, held);
-    return 'extra';
+    if (extra && (which === 'extra' || !primaryLive)) {
+      const held = boss;
+      boss = extra;
+      startBossDeath();
+      seatSiegeBoss(extra, held);
+      return 'extra';
+    }
+    if (primaryLive) { startBossDeath(); return 'primary'; }
+    return null;
   },
   /** Wipes the field so a test can reach the next wave without fighting one. */
   clearSiegeWave() { crows = []; skeletons = []; soldiers = []; boss = null; siegeExtraBosses = []; },
@@ -11516,6 +11525,15 @@ export const devHooks = {
     });
     return out;
   },
+  /**
+   * Tops the hero back up.
+   *
+   * For a harness driving a long run in which the hero is not the subject.
+   * Nobody is holding the keys, so a hero left standing in a wave dies, and a
+   * test about whether the ladder completes would be measuring that instead --
+   * which is exactly how the ten-wave play-through first failed, on wave ten.
+   */
+  healHero() { playerHP = FEATHERS.maxHP(); return playerHP; },
   /** Wounds every guard by n, never below 1, so the priest has work to do. */
   hurtGuards(n = 1) {
     for (const body of guards) body.guard.hp = Math.max(1, body.guard.hp - n);
