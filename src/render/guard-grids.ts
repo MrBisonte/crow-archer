@@ -744,15 +744,22 @@ export function buildPriestGuardGrid(frame: StrideFrame, rank: number): PixelGri
  * does for one that is: `GuardKind` is the whole roster, not the roll.
  */
 
-// ── MOUNT VARIANTS, UNDER REVIEW ─────────────────────────────────────────────
+// ── MOUNT VARIANTS ───────────────────────────────────────────────────────────
 //
-// Three candidate mounts plus the one that shipped, so they can be looked at
-// side by side ON THE MAP rather than in a preview: a sprite that reads at 10x
-// in a review image is not the same claim as one that reads at 32px in a fight.
+// The review is over and the destrier is the knight: GUARD_GRID_BUILDERS points
+// at it, and one mount is what the retinue fields.
 //
-// This is scaffolding with a end date. When a direction is chosen the other
-// three go, `KNIGHT_VARIANTS` goes with them, and `buildKnightGuardGrid` keeps
-// only the winner's body. Nothing outside this file should learn these names.
+// The other three are kept deliberately rather than deleted. `current` is the
+// mount that shipped first and is the record of what was wrong with it; the
+// courser and the barded horse are finished art with nothing using them yet,
+// and a second mounted kind -- a captain, an enemy rider, a faction that is not
+// yours -- is a row in a table away rather than a redraw. Swapping which one
+// the retinue rides is one line, the `knight` row above.
+//
+// Kept honest rather than kept around: the art tests build every name in
+// KNIGHT_VARIANT_NAMES and hold it to the same rules as the sprites in play, so
+// an unused mount cannot quietly rot into something that no longer compiles or
+// no longer fits its box.
 //
 // What went wrong in the original, recorded because it is the trap: the neck
 // was drawn as a column and the head set near the top of it, which is a camel.
@@ -764,9 +771,28 @@ export type KnightVariant = 'current' | 'destrier' | 'courser' | 'barded';
 
 const HOOF_Y = 25;
 
-/** Four hooves in two pairs, each pair opening about a shared centre. */
+/**
+ * Half the gap between the two legs of a pair, before the stride opens them.
+ *
+ * Three, and the number is load-bearing twice over. A leg is two columns wide,
+ * so two of them fuse into one wide hoof unless their centres are at least
+ * three apart -- and the stride subtracts up to one from this on the closing
+ * frame, so anything under three leaves the pair fused for exactly one frame of
+ * the gait. Invisible in a still, unmissable in motion, and the suite fails it
+ * by name.
+ *
+ * The first version of this opened each pair about a SHARED centre at +/-1,
+ * which was wrong in both directions at once: at mid-stride the two legs were
+ * touching, and on the closing frame the arithmetic swapped them into exactly
+ * the positions they held at mid, so two of the three frames were the same
+ * picture. Distinct bases moved together, the way drawWarhorse does it.
+ */
+const LEG_SPREAD = 3;
+
+/** Four hooves in two pairs, each pair opening about its own centre. */
 function mountLegs(g: PixelGrid, C: GuardPalette & MountPalette, swing: number, fore: number, hind: number, top: number): void {
-  for (const x of [fore - 1 - swing, fore + 1 + swing, hind - 1 - swing, hind + 1 + swing]) {
+  const out = LEG_SPREAD + swing;
+  for (const x of [fore - out, fore + out, hind - out, hind + out]) {
     pixelRect(g, x, top, 2, HOOF_Y - top, C.horse);
     pixelRect(g, x, top, 1, HOOF_Y - top, C.horseDark);
     pixelRect(g, x, HOOF_Y, 2, 2, C.horseDark);
@@ -825,18 +851,28 @@ function mountRider(g: PixelGrid, C: GuardPalette, seatX: number, seatY: number,
   pixelRect(g, seatX - 1 + lean, seatY - 14, 2, 3, C.livery);
   pixelRect(g, seatX - 1 + lean, seatY - 14, 1, 3, C.liveryHi);
   const shaft = seatX + 4 + lean;
-  pixelRect(g, shaft, 1, 1, seatY - 3, C.rank);
+  // Steel, not C.rank. The rank colour is reserved for the marks below: painted
+  // in it, a lance gave every recruit eight rank-coloured pixels and the
+  // "no marks on a rank-0 body" test failed on a knight that had earned nothing.
+  // C.boot was the first replacement and was worse than the bug -- a dark shaft
+  // on the bastion's dark ground vanished, leaving the pennon floating in mid
+  // air with nothing holding it up.
+  pixelRect(g, shaft, 1, 1, seatY - 3, C.metal);
   pixelRect(g, shaft - 1, 0, 3, 2, C.metalHi);
   pixelRect(g, shaft + 1, 3, 3, 3, C.livery);
   pixelRect(g, shaft + 1, 3, 3, 1, C.liveryHi);
-  for (let r = 0; r < rank; r++) pixelRect(g, seatX - 6 + lean, seatY - 6 + r * 2, 2, 1, C.rank);
+  // Clamped, for the reason clampRank exists: a rank above the top of the
+  // ladder means "top of the ladder", and a renderer that draws a fourth pip
+  // for it disagrees with every other guard in the game about what rank 4 is.
+  const pips = clampRank(rank);
+  for (let r = 0; r < pips; r++) pixelRect(g, seatX - 6 + lean, seatY - 6 + r * 2, 2, 1, C.rank);
 }
 
 /** A heavy warhorse: deep barrel, short cannon bones, crested neck. */
 function buildDestrierGrid(frame: StrideFrame, rank: number): PixelGrid {
   const C = GUARD_PALETTES.knight;
   const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
-  const s = swingOf(frame, 2);
+  const s = swingOf(frame, 1);
   mountLegs(g, C, s, 22, 9, 19);
   pixelEllipse(g, 15, 16, 10, 4.2, C.horse);
   pixelRect(g, 6, 13, 19, 4, C.horse);
@@ -852,7 +888,7 @@ function buildDestrierGrid(frame: StrideFrame, rank: number): PixelGrid {
 function buildCourserGrid(frame: StrideFrame, rank: number): PixelGrid {
   const C = GUARD_PALETTES.knight;
   const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
-  const s = swingOf(frame, 3);
+  const s = swingOf(frame, 1);
   mountLegs(g, C, s, 23, 8, 18);
   pixelEllipse(g, 15, 16, 10, 3.4, C.horse);
   pixelRect(g, 6, 14, 20, 3, C.horse);
@@ -868,7 +904,7 @@ function buildCourserGrid(frame: StrideFrame, rank: number): PixelGrid {
 function buildBardedGrid(frame: StrideFrame, rank: number): PixelGrid {
   const C = GUARD_PALETTES.knight;
   const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
-  const s = swingOf(frame, 2);
+  const s = swingOf(frame, 1);
   mountLegs(g, C, s, 22, 9, 20);
   pixelEllipse(g, 15, 16, 10, 4.2, C.horse);
   pixelRect(g, 6, 13, 19, 4, C.horse);
@@ -885,8 +921,9 @@ function buildBardedGrid(frame: StrideFrame, rank: number): PixelGrid {
 }
 
 /**
- * The candidates, by name. `current` is the sprite in the build, kept only so
- * the comparison happens against the real thing rather than against a memory.
+ * Every mount, by name. `destrier` is the one the retinue rides; `current` is
+ * the mount that shipped before the redraw, kept because the trap it fell into
+ * is worth being able to look at.
  */
 export const KNIGHT_VARIANTS: Record<KnightVariant, (frame: StrideFrame, rank: number) => PixelGrid> = {
   current: buildKnightGuardGrid,
@@ -900,7 +937,7 @@ export const KNIGHT_VARIANT_NAMES = ['current', 'destrier', 'courser', 'barded']
 export const GUARD_GRID_BUILDERS: Record<GuardKind, (frame: StrideFrame, rank: number) => PixelGrid> = {
   archer: buildArcherGuardGrid,
   foot_soldier: buildFootSoldierGuardGrid,
-  knight: buildKnightGuardGrid,
+  knight: buildDestrierGrid,
   priest: buildPriestGuardGrid,
 };
 

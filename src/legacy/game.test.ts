@@ -21,7 +21,6 @@ import { TOWER_DAMAGE, TOWER_MAX_HP, TOWER_SPAN, towerCentre, type Tower } from 
 import { barrierGates } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
-import { KNIGHT_VARIANT_NAMES } from '../render/guard-grids';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable } from '../sim/tilemap';
@@ -3791,43 +3790,3 @@ describe('a siege boss dying leaves the wave running', () => {
   });
 });
 
-// ── THE MOUNT REVIEW LINE ─────────────────────────────────────────────────────
-//
-// showKnights threw ReferenceError on its first real call: makeGuard was never
-// imported. An edit that was meant to add it silently matched nothing, and
-// game.js is not type-checked, so neither tsc nor the suite noticed — nothing
-// called the hook. This is that call.
-describe('showKnights stands the candidate mounts out', () => {
-  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
-  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
-
-  it('runs, and puts one of every variant on the map', () => {
-    g.setMode('siege');
-    g.go('playing');
-    g.stepSim(1);
-    const before = g.guards().length;
-    const placed = g.showKnights();
-    expect(placed, 'showKnights returned nothing').toBeTruthy();
-    expect(placed).toHaveLength(KNIGHT_VARIANT_NAMES.length);
-    expect(g.guards().length).toBe(before + KNIGHT_VARIANT_NAMES.length);
-    const variants = g.guards()
-      .filter((b: { variant?: string }) => b.variant)
-      .map((b: { variant?: string }) => b.variant);
-    expect(new Set(variants).size, 'two review lines share a variant')
-      .toBe(KNIGHT_VARIANT_NAMES.length);
-  });
-
-  it('holds them where they were put, and out of the fight', () => {
-    g.setMode('siege');
-    g.go('playing');
-    g.stepSim(1);
-    g.showKnights();
-    const held = g.guards().filter((b: { held?: boolean }) => b.held);
-    const at = held.map((b: { x: number; y: number }) => ({ x: b.x, y: b.y }));
-    g.stepSim(300);
-    held.forEach((b: { x: number; y: number }, i: number) => {
-      expect(Math.hypot(b.x - at[i]!.x, b.y - at[i]!.y), 'a review line wandered off')
-        .toBeLessThan(1);
-    });
-  });
-});

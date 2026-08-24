@@ -26,7 +26,6 @@ import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { nearestHostile, nearestHostileWithin } from '../sim/targeting';
 import {
   GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITES,
-  KNIGHT_VARIANTS, KNIGHT_VARIANT_NAMES,
 } from '../render/guard-grids';
 import { Regrowth } from '../sim/regrowth';
 import {
@@ -6093,12 +6092,7 @@ function siegeHostiles() {
 /** Everything on the hero's side, hero included. Read by the contact pass. */
 function siegeFriendlies() {
   const out = [{ x: player.x, y: player.y, team: Team.A, ref: player, kind: 'hero' }];
-  // Held bodies are left out: a review line that gets eaten while being looked
-  // at is not a review line.
-  for (const g of guards) {
-    if (g.held) continue;
-    out.push({ x: g.x, y: g.y, team: Team.A, ref: g, kind: 'guard' });
-  }
+  for (const g of guards) out.push({ x: g.x, y: g.y, team: Team.A, ref: g, kind: 'guard' });
   return out;
 }
 
@@ -6315,9 +6309,6 @@ function updateGuards(dt) {
     // a gate to hold like everyone else and moveGuard measures its leash from
     // there. Set after the branch, the priest spent its first frame anchored to
     // nothing and fell back to the hero.
-    // A held body is a review line: it stands where it was put and does
-    // nothing, so the thing being looked at stays where it can be looked at.
-    if (g.held) { g.facing = 0; continue; }
     const home = guardHome(g, i);
     g.anchor = home;
     g.ground = guardGround(home);
@@ -8612,16 +8603,13 @@ function soldierGrid(kind, frame) {
  * 122 us — 0.73% of a 16.7 ms frame, or 7.3 ms of work per second of play, all
  * of it discarded. Small, but it was bought for nothing.
  *
- * The table is bounded and tiny: four kinds by three frames by four ranks, plus
- * the knight variants while they are under review.
+ * The table is bounded and tiny: four kinds by three frames by four ranks.
  */
 const _guardGrids = {};
-function guardGrid(kind, frame, rank, variant, key) {
+function guardGrid(kind, frame, rank, key) {
   const hit = _guardGrids[key];
   if (hit) return hit;
-  const built = variant
-    ? KNIGHT_VARIANTS[variant](frame, rank)
-    : GUARD_GRID_BUILDERS[kind](frame, rank);
+  const built = GUARD_GRID_BUILDERS[kind](frame, rank);
   _guardGrids[key] = built;
   return built;
 }
@@ -8657,14 +8645,8 @@ function drawGuard(gd) {
   const rank = gd.guard.rank;
   const kind = gd.guard.kind;
   const size = GUARD_SPRITES[kind];
-  // `variant` only ever rides a knight, and only while the mount is under
-  // review — see KNIGHT_VARIANTS. It is part of the cache key because two
-  // variants are two different pictures of the same kind at the same rank,
-  // and a key that could not tell them apart would show whichever was drawn
-  // first for both.
-  const variant = kind === 'knight' && gd.variant ? gd.variant : null;
-  const key = 'guard|' + kind + '|' + frame + '|' + rank + (variant ? '|' + variant : '');
-  const grid = guardGrid(kind, frame, rank, variant, key);
+  const key = 'guard|' + kind + '|' + frame + '|' + rank;
+  const grid = guardGrid(kind, frame, rank, key);
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -11609,41 +11591,6 @@ export const devHooks = {
     return { wave: siegeRun.wave, outcome: siegeRun.outcome, guards: siegeRun.guards.length };
   },
   /**
-   * Stands one knight of every mount variant across the bastion, spaced out.
-   *
-   * On the map at real scale, which is the only comparison that counts: a
-   * sprite that reads at 10x in a review image is a different claim from one
-   * that reads at 32px with a wave coming at it. They are posted well apart so
-   * none is judged next to its neighbour's silhouette.
-   *
-   * Review scaffolding. It goes when a mount is chosen, along with the losing
-   * variants and KNIGHT_VARIANTS itself.
-   */
-  showKnights() {
-    if (!siegeRun) return null;
-    const ts = CONFIG.tileSize;
-    const lane = Math.floor(CONFIG.rows / (KNIGHT_VARIANT_NAMES.length + 1));
-    const out = [];
-    KNIGHT_VARIANT_NAMES.forEach((variant, i) => {
-      const at = nearestOpenTile(Math.floor(CONFIG.cols * 0.42) * ts, (lane * (i + 1) + 0.5) * ts);
-      const guard = makeGuard('knight');
-      siegeRun = { ...siegeRun, guards: [...siegeRun.guards, guard] };
-      guards.push({
-        guard, variant,
-        x: at.x, y: at.y,
-        facing: 0, walkPhase: 0, hitFlash: 0,
-        shotCD: 0, swingCD: 0, team: Team.A,
-        post: 0, route: null, routeTimer: 0,
-        // Pinned where they are put: the point is to look at them, and a
-        // review line that walks off to its post is not a review line.
-        anchor: { x: at.x, y: at.y },
-        held: true,
-      });
-      out.push(variant + ' at ' + Math.round(at.x) + ',' + Math.round(at.y));
-    });
-    return out;
-  },
-  /**
    * Tops the hero back up.
    *
    * For a harness driving a long run in which the hero is not the subject.
@@ -11760,11 +11707,6 @@ export function boot() {
   // Deliberately globals rather than more devHooks entries: a devHook is for a
   // test, which can afford to be explicit, and these are for a person at a
   // console who cannot.
-  /** Stands one of every candidate mount across the map, spaced out. */
-  window.knights = () => {
-    if (!devHooks.siege()) window.siege(1);
-    return devHooks.showKnights();
-  };
   window.siege = (wave = 1) => {
     devHooks.setMode('siege');
     devHooks.go('playing');
@@ -11777,7 +11719,7 @@ export function boot() {
   );
   // Printed once so the verbs are discoverable from the console itself rather
   // than only from a document the player would have to already be reading.
-  log.info('boot', 'console: siege(n) knights() hurt(n) crack(hp) retinue()');
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue()');
 
   FEATHERS.init();
   requestAnimationFrame(loop);

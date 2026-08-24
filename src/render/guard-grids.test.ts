@@ -12,6 +12,8 @@ import {
   GUARD_PALETTES,
   GUARD_SPRITE,
   GUARD_SPRITES,
+  KNIGHT_VARIANTS,
+  KNIGHT_VARIANT_NAMES,
   buildGuardGrid,
   type StrideFrame,
 } from './guard-grids';
@@ -478,5 +480,43 @@ describe('guard grids', () => {
 
     expect(offenders, `structure painted in the seam colour: ${JSON.stringify(offenders)}`)
       .toEqual([]);
+  });
+});
+
+/**
+ * The mounts nothing is riding yet.
+ *
+ * One of these four is the knight; the other three are finished art kept for a
+ * second mounted kind rather than deleted. Art with no caller is art nobody
+ * notices breaking, so every name in KNIGHT_VARIANT_NAMES is held to the same
+ * rules as the sprites in play: the right box, real colours, a full grid, and
+ * every frame and rank buildable. An unused mount that stops meeting them is a
+ * bug now rather than a surprise on the day something starts riding it.
+ */
+describe('every mount, ridden or not', () => {
+  it('builds at the mounted sprite size for every frame and rank', () => {
+    for (const name of KNIGHT_VARIANT_NAMES) {
+      for (const frame of FRAMES) {
+        for (const rank of RANKS) {
+          const grid = KNIGHT_VARIANTS[name](frame, rank);
+          expect(gridSize(grid), `${name} ${frame} rank ${rank}`)
+            .toEqual({ w: GUARD_SPRITES.knight.w, h: GUARD_SPRITES.knight.h });
+          expect(raggedRows(grid), `${name} has rows of different lengths`).toEqual([]);
+          expect(invalidColours(grid), `${name} painted something that is not a hex colour`)
+            .toEqual([]);
+          expect(countFilled(grid), `${name} ${frame} rank ${rank} drew almost nothing`)
+            .toBeGreaterThan(40);
+        }
+      }
+    }
+  });
+
+  it('has the knight the retinue rides among them', () => {
+    // The `knight` row of GUARD_GRID_BUILDERS has to BE one of these, not a
+    // fifth mount that drifted from all four.
+    const ridden = JSON.stringify(GUARD_GRID_BUILDERS.knight('mid', 0));
+    const matches = KNIGHT_VARIANT_NAMES
+      .filter((name) => JSON.stringify(KNIGHT_VARIANTS[name]('mid', 0)) === ridden);
+    expect(matches, 'the retinue rides a mount that is in no variant row').not.toEqual([]);
   });
 });
