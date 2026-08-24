@@ -1924,6 +1924,38 @@ function inKnightArc(x, y) {
   return Math.abs(d) <= wedge.half;
 }
 
+/** How far the dash carries him on open ground: the same speed, multiplier and
+ * duration updatePlayer() integrates one step at a time. The chain multiplier
+ * is deliberately not in it — chaining is a decision taken during the dash,
+ * and this is what letting go of the key commits to. */
+function knightDashTravel() {
+  return FEATHERS.speed() * CONFIG.knightChargeDashSpeedMult * CONFIG.knightChargeDashDuration;
+}
+
+/**
+ * What the windup telegraph shows this frame, or null when nothing is winding
+ * up.
+ *
+ * A reading of the simulation, not a part of it: nothing here is stored and
+ * nothing downstream of it changes what the dash does. The angle is still
+ * live — releaseKnightCharge() freezes whatever it is at that instant — which
+ * is the whole reason it is worth drawing. Committing to a heading and a
+ * second and a half without steering, while looking at a fill bar, is a
+ * decision taken blind.
+ *
+ * The wedge comes from knightChargeWedge(), so the shape drawn during the
+ * windup is the shape inKnightArc() will hit with.
+ */
+function knightChargeTelegraph() {
+  if (!knightCharge.on || selectedChar !== 'knight') return null;
+  const wedge = knightChargeWedge(player.aimAngle);
+  // Stopped where terrain would stop the dash, reusing the probe the chained
+  // charge already asks "is there room ahead" with, so the mark lands
+  // somewhere he can actually reach rather than through the wall in front.
+  const end = probeAhead(player.x, player.y, wedge.angle, knightDashTravel());
+  return { ...wedge, frac: knightChargeFrac(), endX: end.x, endY: end.y, travel: end.moved };
+}
+
 function startCharge() {
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
@@ -6814,6 +6846,81 @@ function drawSapper() {
   ctx.restore();
 }
 
+/**
+ * The windup telegraph: the wedge the dash will sweep, and the mark it will
+ * end on, drawn behind the knight in the mirrored space his body is drawn in.
+ *
+ * Takes the context it paints into rather than reaching for the module's, the
+ * way stamps.ts's painters already do, so what it asks the canvas for can be
+ * read back with no canvas at all.
+ */
+function drawKnightChargeTelegraph(g, tele, facing) {
+  g.save();
+  drawKnightChargeReach(g, tele, mirrorAngle(tele.angle, facing));
+  drawKnightChargeTravel(g, tele, facing);
+  g.restore();
+}
+
+/**
+ * The wedge itself: a dashed outline at its true reach, filled with streaks
+ * converging on the blade.
+ *
+ * Every distance and angle is read off the telegraph, which carries the wedge
+ * inKnightArc() hits with, so the drawn edge is the real edge. How hard the
+ * charge is held shows in colour, alpha, glow and streak count, never in the
+ * radius: reach does not grow with the hold, and a wedge that grew with it
+ * would promise a range the dash never has.
+ */
+function drawKnightChargeReach(g, tele, ang) {
+  const col = knightChargeColor(tele.frac);
+  const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
+  g.strokeStyle = col; g.shadowColor = col;
+  g.shadowBlur = 6 + 10 * tele.frac + (tele.frac >= 1 ? 6 * Math.sin(loopT * 18) : 0);
+  // Dashed pie outline — the sapper reticle's blast-ring read, narrowed from
+  // a circle to the wedge this actually reaches.
+  g.globalAlpha = (0.3 + 0.5 * tele.frac) * pulse;
+  g.lineWidth = 1.2 + 1.3 * tele.frac;
+  g.setLineDash([4, 5]);
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.arc(0, 0, tele.radius, ang - tele.half, ang + tele.half);
+  g.closePath();
+  g.stroke();
+  g.setLineDash([]);
+  // Streaks converging on the blade: more of them, and livelier, near full.
+  const streaks = 3 + Math.round(4 * tele.frac);
+  for (let i = 0; i < streaks; i++) {
+    const a = ang - tele.half + ((i + 0.5) / streaks) * tele.half * 2;
+    const inner = tele.radius * (0.4 + 0.3 * Math.sin(loopT * (8 + 10 * tele.frac) + i * 1.7));
+    const ca = Math.cos(a), sa = Math.sin(a);
+    g.beginPath();
+    g.moveTo(ca * inner, sa * inner);
+    g.lineTo(ca * tele.radius, sa * tele.radius);
+    g.stroke();
+  }
+}
+
+/**
+ * Where that wedge is carried to: a dashed line along the heading to the point
+ * the dash stops at, ringed. Reuses drawAimLine's read — dashes fading out to
+ * a mark — for the half of the commitment a fill bar cannot state, since the
+ * dash drags the knight the length of this line whatever he does after
+ * letting go.
+ */
+function drawKnightChargeTravel(g, tele, facing) {
+  const col = knightChargeColor(tele.frac);
+  // The endpoint is a world position; the knight is drawn mirrored about his
+  // own x. facing is ±1, so scaling the offset by it maps either way round.
+  const lx = (tele.endX - player.x) * facing, ly = tele.endY - player.y;
+  g.strokeStyle = col; g.shadowColor = col; g.shadowBlur = 4;
+  g.globalAlpha = 0.3 + 0.4 * tele.frac;
+  g.lineWidth = 1;
+  g.setLineDash([3, 4]);
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(lx, ly); g.stroke();
+  g.setLineDash([]);
+  g.beginPath(); g.arc(lx, ly, 3.5, 0, Math.PI * 2); g.stroke();
+}
+
 // Same body shape, two palettes — the fire sword's "powered up" recolor of
 // the whole knight, not just the blade. Mirrors SKELETON_PALETTES: one grid
 // builder parameterized by kind rather than two near-duplicate functions.
@@ -6848,34 +6955,9 @@ function drawKnight() {
     }
   }
 
-  // ── Charge windup: the arc he is about to sweep, filling as he holds ────
-  if (knightCharge.on) {
-    const cf    = knightChargeFrac();
-    const full  = cf >= 1;
-    const wedge = knightChargeWedge(player.aimAngle);
-    const ang   = mirrorAngle(wedge.angle, f);
-    const half  = wedge.half;
-    const col   = knightChargeColor(cf);
-    const r     = wedge.radius * (0.35 + 0.5 * cf);
-    ctx.save();
-    ctx.strokeStyle = col; ctx.shadowColor = col;
-    ctx.shadowBlur  = 6 + 14 * cf + (full ? 6 * Math.sin(loopT * 18) : 0);
-    ctx.lineWidth   = 2 + 2 * cf;
-    ctx.globalAlpha = 0.25 + 0.55 * cf;
-    ctx.beginPath(); ctx.arc(0, 0, r, ang - half, ang + half); ctx.stroke();
-    // Streaks converging on the blade: more of them, and livelier, near full.
-    const streaks = 3 + Math.round(4 * cf);
-    for (let i = 0; i < streaks; i++) {
-      const a     = ang - half + ((i + 0.5) / streaks) * half * 2;
-      const inner = r * (0.45 + 0.3 * Math.sin(loopT * (8 + 10 * cf) + i * 1.7));
-      const ca = Math.cos(a), sa = Math.sin(a);
-      ctx.beginPath();
-      ctx.moveTo(ca * inner, sa * inner);
-      ctx.lineTo(ca * r,     sa * r);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
+  // ── Charge windup: the wedge he is about to sweep, and where it lands him ─
+  const telegraph = knightChargeTelegraph();
+  if (telegraph) drawKnightChargeTelegraph(ctx, telegraph, f);
 
   // ── Dash sweep: the blade crossing the arc, left to right, while advancing
   if (knightDash.timer > 0) {
@@ -10508,6 +10590,16 @@ export const devHooks = {
   // agrees with what actually lands, and that takes reading both.
   knightChargeWedge: angle => knightChargeWedge(angle),
   inKnightArc: (x, y) => inKnightArc(x, y),
+  // The render side's own reading of the windup, and the painter that draws
+  // it. paintKnightTelegraph takes the context to paint into, so the drawing
+  // is checkable with no canvas — the same idea as spriteGrid() handing over
+  // the pixel art as the data it is, applied to a painter instead of a grid.
+  knightTelegraph: () => knightChargeTelegraph(),
+  paintKnightTelegraph(target) {
+    const tele = knightChargeTelegraph();
+    if (tele) drawKnightChargeTelegraph(target, tele, player.facing);
+    return tele;
+  },
   // Charge/release run off keydown/keyup edges rather than the held `keys`
   // map, so headless tests drive them directly the same way devHooks.blink
   // drives the wizard's edge-triggered ability.
