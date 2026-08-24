@@ -583,6 +583,14 @@ const STAGE_INTROS = {
     accent: '#B040E0', dim: '#8A40A8', frame: '#4a1a5c',
     sweep: 'rgba(176,64,224,0.045)',
   },
+  bastion: {
+    text: 'HOLD THE BASTION',
+    // Limestone and gold rather than the maze's torchlight: the run comes up
+    // out of the dark into daylight for its last stand, and the title is the
+    // first thing that should say so.
+    accent: '#D8B048', dim: '#8f8265', frame: '#4a3b28',
+    sweep: 'rgba(216,176,72,0.05)',
+  },
   maze: {
     text: "YOU HAVE ENTERED THE MINOTAUR'S LAIR",
     // Torchlight amber rather than the castle's purple: the maze is lit by
@@ -4382,7 +4390,12 @@ const MAZE_LOCKS = {
     needs: 'golden',
     open: (x, y) => {
       events.emit({ type: 'DOOR_OPENED', x, y });
-      transitionTo('win');
+      // The door is the way out of the maze, and out of the maze is the
+      // bastion. It used to end the run; the siege is the campaign's last
+      // stage now, so walking through here is a hand-off rather than a
+      // curtain — the same shape the crow king's and the dark knight's
+      // deaths already use.
+      startBastionStage();
     },
   },
 };
@@ -5680,6 +5693,28 @@ function updateBossDeath(dt) {
  * testable rather than merely observable.
  */
 let siegeRng = Math.random;
+
+/**
+ * Hands the run over to the bastion: the campaign's last stage.
+ *
+ * Built the way the castle and the maze hand-offs are — generate, reposition,
+ * then hold the new map behind a title — and for the same reason each of them
+ * gives: transitionTo('playing') runs initGame(), which would wipe the run
+ * that just earned its way here. generateMap opens the siege by itself, since
+ * the siege belongs to the map.
+ *
+ * The mode is left alone. A brawl that reaches the bastion is still a brawl,
+ * and the siege runs because the map says so, not because the mode does.
+ */
+function startBastionStage() {
+  boss = null; bossDeathSeq = null; hostileBolts = [];
+  skeletons = []; crows = []; soldiers = [];
+  mazeRun = null;
+  generateMap('bastion');
+  const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+  player.x = spawn.x; player.y = spawn.y;
+  showStageIntro('bastion');
+}
 
 /** Is the map currently loaded a siege ground? */
 function mapIsSiege() {
@@ -7911,6 +7946,39 @@ function soldierGrid(kind, frame) {
  * looking, so the side its shield is drawn on is the side that stops arrows,
  * and a player works out to go round it by looking at it.
  */
+/**
+ * One guard, drawn the way a soldier is, with its rank on it.
+ *
+ * The rank is not drawn here — it is baked into the grid by buildGuardGrid,
+ * because the pips have to sit on the body and mirror with it when the guard
+ * turns round. Drawing them on top afterwards would leave them on the wrong
+ * shoulder half the time, and the sprite cache key carries the rank so a
+ * promotion is a new cached canvas rather than a stale one.
+ */
+function drawGuard(gd) {
+  const cx = gd.x, cy = gd.y + CONFIG.hudHeight;
+  const flashOn = gd.hitFlash > 0;
+  const frame = animFrame3(gd.walkPhase);
+  const rank = gd.guard.rank;
+  const kind = gd.guard.kind;
+  const key = 'guard|' + kind + '|' + frame + '|' + rank;
+  const grid = GUARD_GRID_BUILDERS[kind](frame, rank);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI * 2); ctx.fill();
+  if (Math.cos(gd.facing) < 0) ctx.scale(-1, 1);
+  const sprite = flashOn
+    ? spriteFlashCanvas(key, grid, GUARD_SPRITE.w, GUARD_SPRITE.h, '#ffffff')
+    : spriteCanvas(key, grid, GUARD_SPRITE.w, GUARD_SPRITE.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
+  ctx.drawImage(sprite, -GUARD_SPRITE.w / 2, -16);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
 function drawSoldier(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
   const flashOn = s.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
@@ -9510,7 +9578,33 @@ function drawLaneContext(t, isBoss) {
   if (mazeRun) drawMazeKeys(cx);
 
   ctx.textAlign = 'right'; ctx.fillStyle = '#196407';
-  ctx.fillText(modeRule(gameMode).label, 792, 42);
+  ctx.fillText(mapIsSiege() ? 'BASTION' : modeRule(gameMode).label, 792, 42);
+  if (siegeRun) drawSiegeHud(cx);
+}
+
+/**
+ * The siege's own line: how far through the ladder, what is left of the
+ * retinue, and how the towers are holding.
+ *
+ * Keyed on siegeRun rather than on the mode, like everything else here, so the
+ * brawl chain's last stage reads the same as the standalone one.
+ */
+function drawSiegeHud(cx) {
+  const standing = standingTowers(towers);
+  const hp = standing.reduce((n, t) => n + t.hp, 0);
+  const full = towers.length * TOWER_MAX_HP;
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.shadowColor = '#D8B048'; ctx.shadowBlur = 4; ctx.fillStyle = '#D8B048';
+  ctx.fillText('WAVE ' + siegeRun.wave + '/' + SIEGE_WAVE_COUNT, cx, 18);
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.fillStyle = standing.length === towers.length ? '#8f8265' : '#8c3a24';
+  // Rank marks rather than a count: a retinue of three seniors is not the same
+  // asset as three recruits, and the HUD should say which one you have.
+  const retinue = guards.map((gd) => (RANK_MARK[gd.guard.rank] || '') + gd.guard.kind.charAt(0).toUpperCase()).join(' ');
+  ctx.fillText('TOWERS ' + standing.length + '/' + towers.length
+    + '  ' + hp + '/' + full + '   ' + (retinue || 'ALONE'), cx, 34);
 }
 
 function drawBossBar(t, cx) {
@@ -10231,6 +10325,7 @@ function render(t) {
     for (const c of crows) if (litAt(c.x, c.y)) { drawCrow(c); drawFrozenOverlay(c); }
     for (const s of skeletons) if (litAt(s.x, s.y)) { drawSkeleton(s); drawFrozenOverlay(s); }
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
+    for (const gd of guards) if (litAt(gd.x, gd.y)) drawGuard(gd);
     drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts(); drawNets(); drawHeldMarkers();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
@@ -10738,6 +10833,12 @@ export const devHooks = {
   siegeBosses: () => siegeExtraBosses,
   /** Pins the retinue rolls. Pass null to hand it back to Math.random. */
   setSiegeRng(fn) { siegeRng = fn ?? Math.random; },
+  /**
+   * Puts both maze keys in hand, so a harness can reach the door without
+   * playing the whole level. It grants the keys only — the locks still have to
+   * be walked onto, so what the door does is still exercised for real.
+   */
+  giveMazeKeys() { if (mazeRun) { mazeRun.held.silver = true; mazeRun.held.golden = true; } },
   /** Wipes the field so a test can reach the next wave without fighting one. */
   clearSiegeWave() { crows = []; skeletons = []; soldiers = []; boss = null; siegeExtraBosses = []; },
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to

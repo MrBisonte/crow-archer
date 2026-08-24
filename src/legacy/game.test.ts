@@ -2735,3 +2735,63 @@ describe('the retinue in the field', () => {
     expect(siegeState().guards.length).toBe(g.guards().length);
   });
 });
+
+// ── THE CAMPAIGN'S LAST STAGE ─────────────────────────────────────────────────
+//
+// The brawl chain used to end at the maze door. It ends at the bastion now, so
+// the door is a hand-off rather than a curtain, and the siege has to run there
+// without the mode having changed — a brawl that reaches the bastion is still a
+// brawl. That is the whole reason the siege gates on the map.
+describe('the bastion as the end of the brawl chain', () => {
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  /** Walks the run to the maze and opens its door, the way a player would. */
+  const openTheMazeDoor = (): void => {
+    g.setMode('brawl');
+    g.go('playing');
+    g.generateMap('maze');
+    const run = g.maze();
+    expect(run, 'the maze should have an objective').not.toBeNull();
+    const door = run!.door as { x: number; y: number };
+    const player = g.player() as { x: number; y: number };
+    // Both keys in hand, then stand on the door. The keys are granted but the
+    // lock is still walked onto, so what the door does is exercised for real.
+    g.giveMazeKeys();
+    player.x = door.x; player.y = door.y;
+    g.stepSim(4);
+  };
+
+  it('opens onto the bastion rather than the win screen', () => {
+    openTheMazeDoor();
+    expect(g.state()).not.toBe('win');
+    expect(g.mapKind()).toBe('bastion');
+  });
+
+  it('runs the siege there even though the mode is still brawl', () => {
+    openTheMazeDoor();
+    expect(g.mode()).toBe('brawl');
+    expect(g.siege()).not.toBeNull();
+    expect(g.guards().length).toBeGreaterThan(0);
+    expect(g.towers()).toHaveLength(2);
+  });
+
+  it('holds the new stage behind a title, without wiping the run', () => {
+    // The hand-off assigns appState directly for the reason every other one in
+    // this chain does: transitionTo('playing') calls initGame, which would
+    // throw away the run that just earned its way here.
+    openTheMazeDoor();
+    expect(g.state()).toBe('stage_intro');
+    expect(g.intro()).toBe('bastion');
+    expect(g.dismissIntro()).toBe(true);
+    expect(g.state()).toBe('playing');
+  });
+
+  it('ends the campaign when the siege is won', () => {
+    openTheMazeDoor();
+    g.dismissIntro();
+    g.setSiegeRng(mulberry32(20260824));
+    g.stepSim(1);
+    for (let n = 0; n < SIEGE_WAVE_COUNT; n++) { g.clearSiegeWave(); g.stepSim(2); }
+    expect(g.state()).toBe('win');
+  });
+});
