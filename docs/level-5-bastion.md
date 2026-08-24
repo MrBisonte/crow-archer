@@ -123,8 +123,14 @@ that can never be cleared.
 `src/sim/guards.ts` for the rules, `src/render/guard-grids.ts` for the art,
 `src/sim/siege-run.ts` for who is in it.
 
-Two guards at the start, one recruit after every wave survived, rolled on a
-weighted table.
+Three bodies on the field at wave 1: two recruits rolled from a weighted table,
+plus the priest, which is seated rather than rolled. One more recruit walks in
+after every wave held.
+
+Those are two separate constants — `STARTING_RECRUITS` for what the roll draws,
+`OPENING_RETINUE` derived from it plus `UNIQUE_GUARD_KINDS.length` for how many
+turn up. `STARTING_GUARDS` was the old name and answered both questions at once,
+which stopped being true the moment the priest was seated on top of the roll.
 
 | Guard | HP | Damage | Heal | Roll | Promotion track |
 |---|---|---|---|---|---|
@@ -145,9 +151,20 @@ reversing it is one word rather than a code change.
 ### The priest, and the two rules it forced
 
 One priest, seated when the siege opens, and **never replaced**. If it dies the
-run continues without it. Its primary is a +1 heal on the hurt ally nearest it;
-its ward is a +3 sweep, once per wave, recharged only by clearing one — which is
-what makes it once per *wave* rather than once per some number of seconds.
+run continues without it. It has no attack at any rank — `baseDamage: 0` is the
+row, not an omission — so an enemy that walks onto it takes nothing. Its primary
+is a +1 heal on the hurt ally nearest it; its ward is a +3 sweep over everyone
+it reaches, itself included, once per wave, recharged only by `completeWave` —
+which is what makes it once per *wave* rather than once per some number of
+seconds. A cooldown would have been worth more on a wave that took longer to
+clear.
+
+The ward fires at two hurt allies within reach, counted over who the sweep would
+actually land on rather than over the whole retinue — otherwise it goes off
+because two guards are bleeding on the far side of the bastion where it cannot
+help them. Two is also where the sweep first beats the primary outright: 6
+health against 1. Waiting for a third is how a priest dies with the charge
+unspent.
 
 **It cannot be recruited, and that is enforced by the compiler rather than by a
 zero.** `weight: 0` would have been the obvious shape and the wrong one: it

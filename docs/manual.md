@@ -298,8 +298,9 @@ waves come down the corridor at the other end. You are not alone.
 
 ### The retinue
 
-You start with **two guards** and gain **one more after every wave you
-survive**. Which kind arrives is rolled:
+You start with **three**: two guards rolled at random, and the priest, who is
+always there. You gain **one more guard after every wave you survive**, and
+which kind arrives is rolled:
 
 | Guard | HP | Damage | How often | Fights by |
 |---|---|---|---|---|
@@ -315,10 +316,11 @@ damage — a knight's damage on more than twice a knight's body, and the reason
 keeping one alive is worth doing.
 
 **One priest joins at the opening and is never replaced.** It heals the hurt
-ally nearest it, and once per wave it can sweep a +3 heal over everyone around
-it, recharging only when a wave is cleared. It carries no weapon at all. If it
-dies, you finish the siege without one — it is the only guard the recruit roll
-will never hand you.
+ally nearest it, and once per wave — when two of the allies around it are hurt —
+it sweeps a +3 heal over all of them, itself included. That charge comes back
+only when you clear a wave, never on a timer. It carries no weapon at all and
+deals no damage at any rank. If it dies, you finish the siege without one — it
+is the only guard the recruit roll will never hand you.
 
 Knights do not promote: they are rare and already doubled on both counts. The
 priest does, on its own ladder — the same two +1 hp steps, and a third that
