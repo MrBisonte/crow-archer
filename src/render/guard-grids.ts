@@ -22,6 +22,24 @@
  * particular it draws a rank on a knight, which `GUARD_STATS.knight.promotion`
  * being `'none'` says can never happen: the rule has one home, and a second
  * copy of it here would be a second thing to edit the day that row changes.
+ *
+ * SILHOUETTE FIRST, PALETTE SECOND — AND THAT IS A CORRECTION.
+ *
+ * The first pass leaned on colour: one violet livery on four pale bodies, with
+ * a hood, a buckler, a lance and a staff to separate them. Playtest said the
+ * guards, the knight and the priest all look the same. It was right, and the
+ * reason is that all four were the same 16x24 body with a different few pixels
+ * bolted on — at a tile size of 32 the differences were smaller than the thing
+ * they were differences to. What separates the four now is the outline:
+ *
+ *   archer       a narrow body and a bow bent out past the leading edge
+ *   foot_soldier a tall spear on one side, a shield filling the other
+ *   knight       a horse, which is twice the width of anything else on the map
+ *   priest       a wide robe with a red cross across the whole chest
+ *
+ * The knight is why `GUARD_SPRITES` exists. A mounted body does not fit a cell
+ * sized for a man on foot, and squeezing it in would have given back exactly
+ * the silhouette the playtest rejected.
  */
 
 import type { GuardKind } from '../sim/guards';
@@ -49,8 +67,85 @@ export type StrideFrame = AnimFrame;
  * Its own constant rather than an import of SOLDIER_SPRITE: that they agree is
  * a fact about this map, not a dependency. Re-sizing the retinue should not
  * re-size the garrison it is fighting.
+ *
+ * Kept for the three kinds that still use it, and as the default. `GUARD_SPRITES`
+ * below is what a caller sizing a canvas should read; this is what a builder
+ * drawing a body on foot lays its coordinates out in.
  */
 export const GUARD_SPRITE = { w: 16, h: 24 };
+
+/**
+ * The mounted cell: wider, because a horse is longer than a man, and taller,
+ * because a rider sits above a barrel that is itself standing on legs.
+ *
+ * Twice the width of a body on foot and not one column less. The whole argument
+ * for drawing the knight mounted is that "is that a horse" is answerable from
+ * across the bastion, and a horse that fits inside a man's cell is a pony seen
+ * from a distance at which it is a smudge.
+ */
+const MOUNTED_SPRITE = { w: 32, h: 28 };
+
+/**
+ * Per-kind sprite bounds. The mounted knight is wider than the rest.
+ *
+ * A table rather than a branch in the caller, for the reason GUARD_GRID_BUILDERS
+ * is a table: a fifth kind is a row here and a row there, and the compiler
+ * refuses it until both exist. `buildGuardGrid(kind, ...)` returns a grid of
+ * exactly `GUARD_SPRITES[kind]` dimensions and the test drives that off the kind
+ * list, so a builder whose size drifts from its row fails on its own terms.
+ *
+ * The caller reads `w` to centre the sprite and `h` to sit it on its feet — the
+ * two are not the same offset for a 24-tall man and a 28-tall horse, which is
+ * the whole reason a single constant could not stay.
+ */
+export const GUARD_SPRITES: Record<GuardKind, { readonly w: number; readonly h: number }> = {
+  archer: GUARD_SPRITE,
+  foot_soldier: GUARD_SPRITE,
+  knight: MOUNTED_SPRITE,
+  priest: GUARD_SPRITE,
+};
+
+/**
+ * The slots every guard palette carries, named rather than left as a
+ * `Record<string, string>`.
+ *
+ * The bare record was the first version and it cost a `!` on every single
+ * colour read — `noUncheckedIndexedAccess` is on, an index signature yields
+ * `string | undefined`, and forty non-null assertions is forty places where a
+ * misspelled slot compiles and paints `undefined` into a cell. Named slots make
+ * the typo a compile error instead of an invisible guard.
+ *
+ * Kinds may carry more than this. The knight has a horse to paint and the
+ * priest has a cross, and `satisfies` below keeps those extra slots visible on
+ * the kind that owns them without obliging the other three to declare a colour
+ * they must never use.
+ */
+export interface GuardPalette {
+  readonly livery: string;
+  readonly liveryHi: string;
+  readonly rank: string;
+  readonly skin: string;
+  readonly cloth: string;
+  readonly clothHi: string;
+  readonly shade: string;
+  readonly metal: string;
+  readonly metalHi: string;
+  readonly boot: string;
+  readonly edge: string;
+  /**
+   * The mount, on the one kind that has one.
+   *
+   * Optional here and required by MountPalette, which is the pair that lets
+   * drawWarhorse refuse a palette with no horse in it while GUARD_PALETTES
+   * stays one table. Making them required on every kind would have meant three
+   * palettes carrying a horse colour they never paint.
+   */
+  readonly horse?: string;
+  readonly horseHi?: string;
+  readonly horseDark?: string;
+  /** The priest's cross, on the one kind that wears one. */
+  readonly cross?: string;
+}
 
 /**
  * What every guard wears whatever kind it is: the house livery, the gold a
@@ -89,8 +184,13 @@ const SHARED_GUARD_COLOURS = {
  * by colour alone. Gold was rejected for the livery for the opposite reason —
  * the shieldman's accent is `#C8A030` — and kept for the rank pips, where it is
  * the only gold on the field and never competes with a body colour.
+ *
+ * `satisfies` rather than an annotation, so the knight's horse slots and the
+ * priest's cross stay on the type of the kind that owns them while the compiler
+ * still refuses a kind that is missing a shared slot or a kind that is missing
+ * altogether.
  */
-export const GUARD_PALETTES: Record<GuardKind, Record<string, string>> = {
+export const GUARD_PALETTES = {
   // Linen and leather. No plate at all, because 1 hp should look like 1 hp.
   archer: {
     ...SHARED_GUARD_COLOURS,
@@ -108,26 +208,39 @@ export const GUARD_PALETTES: Record<GuardKind, Record<string, string>> = {
   },
   // The brightest thing on the map, on purpose: the rare draw should be
   // recognisable across the bastion the moment it walks in.
+  //
+  // The horse is pale for the same reason the rider is. A dark warhorse is the
+  // better-looking animal and it would have handed two thirds of the sprite's
+  // area to the value the cavern's enemies are drawn in, which is the one rule
+  // the whole retinue palette exists to keep. The enemy commander's mount is
+  // near-black (`COMMANDER_PALETTE.horse`), so pale-versus-dark is also what
+  // separates the two mounted bodies now that both are mounted.
   knight: {
     ...SHARED_GUARD_COLOURS,
     cloth: '#DBE5F1', clothHi: '#F8FBFF', shade: '#6C7789',
     metal: '#C5D1E1', metalHi: '#FDFEFF',
     boot: '#5A5870', edge: '#1C2233',
+    horse: '#C0B6A6', horseHi: '#E2DACB', horseDark: '#8A8172',
   },
   // Undyed linen with a green cast, which is the one direction the other three
   // do not go: the archer's cloth is warm, the foot soldier's and the knight's
   // are cold blue. It keeps the priest inside the retinue's pale range while
-  // making it the only body on the field with that cast, so it is findable in a
-  // crowd without a second silhouette read — which matters more here than for
-  // any other kind, because the player has exactly one of them and losing track
-  // of it is losing it.
+  // making it the only body on the field with that cast.
+  //
+  // `cross` is the one colour in this file that is a symbol rather than a
+  // material, and it lives in the palette anyway so the enemy-disjointness
+  // check reaches it without being told to. It is deliberately hotter than the
+  // spearman's `#B03028` accent: the two are the only reds in the game, that
+  // one is a stripe down a shaft and this one is a plain cross on a chest, and
+  // the value gap is what stops a glance confusing them.
   priest: {
     ...SHARED_GUARD_COLOURS,
     cloth: '#DCE3DA', clothHi: '#F4F8F2', shade: '#78827A',
     metal: '#C9CFD8', metalHi: '#F2F6FF',
     boot: '#5F4E63', edge: '#221A30',
+    cross: '#D62828',
   },
-};
+} satisfies Record<GuardKind, GuardPalette>;
 
 /** How far a limb swings on each frame of the stride. */
 const swingOf = (frame: StrideFrame, amount: number): number =>
@@ -155,11 +268,15 @@ const STRIDE_SWING = 1;
 const BOOT_ROW = 22;
 
 /**
- * The body all three guards share: legs on the stride, a tunic, a belt and a
- * head. What each kind carries goes on top in its own builder, so the walk
- * cycle is written once rather than three times.
+ * The body the three guards on foot share: legs on the stride, a tunic, a belt
+ * and a head. What each kind carries goes on top in its own builder, so the
+ * walk cycle is written once rather than three times.
+ *
+ * The knight does not call this. A rider's legs are on a horse's flank, not on
+ * the ground, and giving the mounted body a set of walking boots under the
+ * barrel was the first thing tried and the first thing thrown away.
  */
-function buildGuardBody(C: Record<string, string>, frame: StrideFrame): PixelGrid {
+function buildGuardBody(C: GuardPalette, frame: StrideFrame): PixelGrid {
   const g = makePixelGrid(GUARD_SPRITE.w, GUARD_SPRITE.h);
   const swing = swingOf(frame, STRIDE_SWING);
 
@@ -178,34 +295,67 @@ function buildGuardBody(C: Record<string, string>, frame: StrideFrame): PixelGri
   // means the narrow frame is still two columns of daylight.
   const footL = STANCE_L - swing;
   const footR = STANCE_R + swing;
-  pixelCurve(g, [6, 16], [(6 + footL) / 2, 19], [footL, BOOT_ROW], C['cloth']!, 10);
-  pixelCurve(g, [9, 16], [(9 + footR) / 2, 19], [footR, BOOT_ROW], C['cloth']!, 10);
+  pixelCurve(g, [6, 16], [(6 + footL) / 2, 19], [footL, BOOT_ROW], C.cloth, 10);
+  pixelCurve(g, [9, 16], [(9 + footR) / 2, 19], [footR, BOOT_ROW], C.cloth, 10);
   // Two wide, and hung on the outside of each ankle rather than centred on it.
   // Centred boots eat a column of the gap from each side, which at the narrow
   // frame is the whole gap: the collapse comes back at the feet only, on the
   // one frame nobody checks. Pointing them outward also reads as braced.
-  pixelRect(g, footL - 1, BOOT_ROW - 1, 2, 2, C['boot']!);
-  pixelRect(g, footR, BOOT_ROW - 1, 2, 2, C['boot']!);
+  pixelRect(g, footL - 1, BOOT_ROW - 1, 2, 2, C.boot);
+  pixelRect(g, footR, BOOT_ROW - 1, 2, 2, C.boot);
 
-  pixelRect(g, 5, 9, 6, 8, C['cloth']!);
-  pixelRect(g, 5, 9, 6, 2, C['clothHi']!);
-  pixelRect(g, 5, 15, 6, 1, C['shade']!);
+  pixelRect(g, 5, 9, 6, 8, C.cloth);
+  pixelRect(g, 5, 9, 6, 2, C.clothHi);
+  pixelRect(g, 5, 15, 6, 1, C.shade);
 
-  pixelEllipse(g, 8, 5, 3, 3.2, C['skin']!);
+  pixelEllipse(g, 8, 5, 3, 3.2, C.skin);
   return g;
 }
 
 /**
- * Where the rank pips sit and how they stack.
+ * Where a kind's pip ladder starts.
  *
- * The trailing shoulder, because everything a kind is identified by is on the
- * leading side — the bow, the buckler, the lance — and a badge that shared a
- * side with those would be read as part of the weapon. Growing upward from a
- * fixed lowest pip gives the eye an anchor: the bottom mark is in the same
- * three cells at every rank, so the count is the only thing that changed.
+ * An anchor per kind rather than one pair of module constants, because the
+ * mounted knight has no torso where a man on foot has one: the shoulder the
+ * badge belongs on is eight columns to the right and four rows up. The ladder's
+ * *shape* — 2x1 pips, one blank row between, growing upward — is still written
+ * once, which is the half that has to stay identical for the count to be
+ * readable across kinds.
  */
-const RANK_X = 4;
-const RANK_BASE_Y = 13;
+interface RankAnchor {
+  /** Left column of the 2x1 pips. */
+  readonly x: number;
+  /** Row of the lowest pip. The ladder grows upward from here. */
+  readonly baseY: number;
+}
+
+/**
+ * The trailing shoulder of a body on foot.
+ *
+ * Everything a kind is identified by is on the leading side — the bow, the
+ * shield, the staff — and a badge that shared a side with those would be read
+ * as part of the weapon. Growing upward from a fixed lowest pip gives the eye
+ * an anchor: the bottom mark is in the same three cells at every rank, so the
+ * count is the only thing that changed.
+ */
+const ON_FOOT_RANK: RankAnchor = { x: 4, baseY: 13 };
+
+/**
+ * The priest's trailing shoulder, one column further out because its robe is.
+ *
+ * The ladder has to sit on the body it is worn on, and this body is nine
+ * columns wide where the others are six. Leaving it at column 4 would have put
+ * a gold pip one column from the red cross with nothing between them, which is
+ * the collision the cross's own geometry is laid out to avoid.
+ */
+const ROBED_RANK: RankAnchor = { x: 3, baseY: 13 };
+
+/**
+ * The rider's trailing shoulder, which is the same badge in the same relation
+ * to the same body — it is the body that moved, not the convention.
+ */
+const MOUNTED_RANK: RankAnchor = { x: 13, baseY: 13 };
+
 const RANK_PITCH = 2;
 
 /**
@@ -248,107 +398,289 @@ const clampRank = (rank: number): number =>
  * Painted last, over whatever the kind put there, so the badge cannot be half
  * hidden behind a pauldron or a sword hand at one rank and not another.
  */
-function drawRankPips(g: PixelGrid, C: Record<string, string>, rank: number): void {
+function drawRankPips(g: PixelGrid, gold: string, rank: number, at: RankAnchor): void {
   const pips = clampRank(rank);
   for (let i = 0; i < pips; i++)
-    pixelRect(g, RANK_X, RANK_BASE_Y - i * RANK_PITCH, 2, 1, C['rank']!);
+    pixelRect(g, at.x, at.baseY - i * RANK_PITCH, 2, 1, gold);
 }
 
 /** Archer: a hood, a livery collar, and the bow drawn down the leading side. */
 export function buildArcherGuardGrid(frame: StrideFrame, rank: number): PixelGrid {
   const C = GUARD_PALETTES.archer;
   const g = buildGuardBody(C, frame);
-  pixelEllipse(g, 8, 4, 3.6, 3.4, C['cloth']!);
-  pixelEllipse(g, 8.5, 5, 2.4, 2.2, C['skin']!);
+  pixelEllipse(g, 8, 4, 3.6, 3.4, C.cloth);
+  pixelEllipse(g, 8.5, 5, 2.4, 2.2, C.skin);
   // The collar is the only livery on this one: a hood in violet would read as a
   // dark head at distance and undo the pale-body rule the palette is built on.
-  pixelRect(g, 5, 8, 6, 1, C['livery']!);
+  pixelRect(g, 5, 8, 6, 1, C.livery);
   // Stave and string, bent away from the body so the draw is visible in
   // silhouette rather than only in colour.
-  pixelCurve(g, [12, 7], [15, 12], [12, 17], C['boot']!, 12);
-  pixelRect(g, 12, 8, 1, 9, C['metalHi']!);
-  pixelRect(g, 9, 11, 3, 1, C['skin']!);
-  drawRankPips(g, C, rank);
-  return pixelOutline(g, C['edge']!);
+  //
+  // Left exactly as it was through the silhouette pass. It is the one kind the
+  // playtest did not name, and the reason is visible in the numbers: it is the
+  // only guard whose leading side is a thin bent line rather than a slab, which
+  // is precisely the contrast the foot soldier's new shield is measured
+  // against. Widening it to match the others would have cost that contrast.
+  pixelCurve(g, [12, 7], [15, 12], [12, 17], C.boot, 12);
+  pixelRect(g, 12, 8, 1, 9, C.metalHi);
+  pixelRect(g, 9, 11, 3, 1, C.skin);
+  drawRankPips(g, C.rank, rank, ON_FOOT_RANK);
+  return pixelOutline(g, C.edge);
 }
 
 /**
- * Foot soldier: kettle helm, livery surcoat, a round buckler on the leading
- * side and the sword up behind the trailing shoulder.
+ * Foot soldier: kettle helm, livery surcoat, a spear stood upright on the
+ * trailing side and a shield filling the leading one.
  *
- * The buckler is small on purpose. The cavern's shieldman carries a slab from
- * edge to edge because sim/soldiers.ts gives it a 60-degree block and that
- * picture is where a player reads the rule off; this guard has no such rule, so
- * a shield that large would promise one. What it has is 3 hp, and the brimmed
- * helm and the wide surcoat are what that is drawn as.
+ * Both, and both large, which is the correction. The first pass gave this kind
+ * a small buckler and argued the size down from the rules: the cavern's
+ * shieldman carries a slab edge to edge because sim/soldiers.ts gives it a
+ * 60-degree block and that picture is where the player reads the rule off, and
+ * this guard has no such rule, so a large shield would promise one. That
+ * argument is sound about *mechanics* and it lost this kind its silhouette. A
+ * 3x4 buckler and a shouldered sword are, at a tile size of 32, a body with
+ * two smudges on it — the same body the archer and the priest are.
+ *
+ * So the shield is a shield now, and what stops it promising a block is that it
+ * is a different shape from the shieldman's: a rounded heater, not a rectangle
+ * from edge to edge, and carried by a body that is pale and violet rather than
+ * steel and blue.
+ *
+ * The spear stands upright rather than levelled, and the two reasons are
+ * different from each other. It has to clear the shield, and a levelled shaft
+ * on the leading side would run straight through it. And a levelled spear is
+ * the enemy spearman's silhouette exactly — `buildSpearmanGrid` puts a shaft
+ * across the chest and out past the leading hand — so a guard drawn that way
+ * would be legible right up until it stood next to the thing it is fighting.
+ *
+ * The shaft stops at row 19, three rows above the boot row, for the reason the
+ * priest's staff does: a shaft planted on the ground beside the feet is a third
+ * vertical run at the row that decides whether the legs fused, and one the eye
+ * reads as a third leg at speed.
  */
 export function buildFootSoldierGuardGrid(frame: StrideFrame, rank: number): PixelGrid {
   const C = GUARD_PALETTES.foot_soldier;
   const g = buildGuardBody(C, frame);
-  pixelEllipse(g, 8, 4, 3.4, 2.8, C['metal']!);
-  pixelEllipse(g, 8, 3, 3, 2, C['metalHi']!);
+  pixelEllipse(g, 8, 4, 3.4, 2.8, C.metal);
+  pixelEllipse(g, 8, 3, 3, 2, C.metalHi);
   // Brim wider than the head: the one line that separates this silhouette from
   // the garrison's flat-topped helm at a glance.
-  pixelRect(g, 4, 6, 9, 1, C['metal']!);
-  pixelRect(g, 6, 9, 4, 6, C['livery']!);
-  pixelRect(g, 6, 9, 4, 1, C['liveryHi']!);
-  // Sword shouldered, clear of the badge column: blade, guard, grip, hand.
-  pixelRect(g, 2, 3, 1, 9, C['metalHi']!);
-  pixelRect(g, 1, 12, 3, 1, C['metal']!);
-  pixelRect(g, 2, 13, 1, 2, C['boot']!);
-  pixelRect(g, 3, 14, 2, 1, C['skin']!);
-  // Buckler: rim, face, boss.
-  pixelEllipse(g, 12, 13, 3, 4, C['metal']!);
-  pixelEllipse(g, 12, 13, 2, 3, C['livery']!);
-  pixelEllipse(g, 12, 13, 0.9, 1, C['metalHi']!);
-  drawRankPips(g, C, rank);
-  return pixelOutline(g, C['edge']!);
+  pixelRect(g, 4, 6, 9, 1, C.metal);
+  pixelRect(g, 6, 9, 4, 6, C.livery);
+  pixelRect(g, 6, 9, 4, 1, C.liveryHi);
+  // Spear: shaft, then the head over its top cell, then the hand low on the
+  // grip. Column 2 rather than 3, so the badge at column 4 keeps a clear column
+  // of its own between the two — gold against wood with no gap is one blur at
+  // distance, and the badge is the half that loses.
+  //
+  // The head's base sits on the shaft's own top row for the reason the enemy
+  // spearman's does one row down from its shaft: a head based clear of the
+  // shaft leaves a row of daylight, and at this size a detached tip reads as a
+  // speck of debris rather than as a spear.
+  pixelRect(g, 2, 4, 1, 16, C.boot);
+  pixelTriangleUp(g, 2, 4, 1, 4, C.metalHi);
+  pixelRect(g, 3, 15, 2, 1, C.skin);
+  // Shield: a rounded heater, rim, livery field and boss. Rect plus ellipse
+  // rather than one ellipse, because an ellipse tall enough to cover rows 7-18
+  // is pointed at the top too, and a shield that tapers at both ends is a leaf.
+  pixelRect(g, 10, 7, 5, 9, C.metal);
+  pixelEllipse(g, 12, 15, 2.6, 3.2, C.metal);
+  pixelRect(g, 10, 7, 5, 1, C.metalHi);
+  pixelRect(g, 11, 9, 3, 6, C.livery);
+  pixelEllipse(g, 12, 12, 1.3, 1.5, C.metalHi);
+  drawRankPips(g, C.rank, rank, ON_FOOT_RANK);
+  return pixelOutline(g, C.edge);
 }
 
 /**
- * Knight: closed helm with a livery plume, plate across the shoulders and the
- * lance couched under the leading arm.
+ * The mount's palette: the three horse colours plus the livery its caparison is
+ * cut from and the dark the hooves take.
  *
- * The lance sits level and runs off the leading edge of the cell, which is the
- * same shape the enemy commander's charge is drawn with — deliberately, because
- * it is the shape "this one hits twice as hard" is already read from on this
- * map. Everything else about the two is opposite: he is mounted, dark and
- * crimson, this one is on foot, pale and violet.
+ * A structural type rather than `GuardPalette`, because drawWarhorse must not
+ * be callable with a palette that has no horse in it. Today exactly one kind
+ * satisfies it, and that is the point: the compiler is what stops the priest
+ * being handed to it by a copy-paste.
+ */
+interface MountPalette {
+  readonly horse: string;
+  readonly horseHi: string;
+  readonly horseDark: string;
+  readonly livery: string;
+  readonly liveryHi: string;
+  readonly boot: string;
+}
+
+/**
+ * Where the four legs stand, and how far the gait opens them.
+ *
+ * Pair centres six columns apart, each pair opening opposite ways, swinging one
+ * column per leg. The gap inside a pair therefore runs 2 -> 4 -> 6 columns
+ * across the cycle and the two pairs are never closer than three columns to
+ * each other, which is the arithmetic the four-run check depends on.
+ *
+ * Two shapes that look right written down and are not, both recorded in
+ * buildCommanderGrid and both re-derived here at this sprite's size. Centres
+ * two columns apart give a separation of |2 + 2*swing|, which is two columns at
+ * one extreme: pixelOutline paints a two-column gap solid, and the pair reads
+ * as one wide hoof on exactly one frame of the gait. A shared centre fixes the
+ * gap and makes the two extremes identical, because negating the swing maps a
+ * symmetric pair onto itself — a four-legged horse with a two-frame walk and a
+ * duplicate in it.
+ *
+ * Six is this sprite's version of the commander's one-column-apart answer. It
+ * is larger here because these legs are anchored to a *stance* rather than to a
+ * hip, the same trick buildGuardBody uses: a horse braced on a wall never
+ * passes through legs-together, so all three frames can be checked for four
+ * legs instead of only the two extremes. The commander's test checks two.
+ */
+const HIND_L = 5;
+const HIND_R = 11;
+const FORE_L = 18;
+const FORE_R = 24;
+const HORSE_SWING = 1;
+
+/** The rows the legs occupy, and the row four hooves have to read as four. */
+const HORSE_LEG_TOP = 19;
+const HOOF_ROW = 25;
+
+/**
+ * Horse and rider as one grid, drawn facing +x.
+ *
+ * One sprite rather than two stacked draws for the reason buildCommanderGrid
+ * gives: the two never move independently. This knight is mounted for the whole
+ * siege, and a rider who could come off the horse would need a second
+ * silhouette that nothing ever shows.
+ *
+ * Not shared with buildCommanderGrid, and that is a judgment call rather than
+ * an oversight. The two horses agree on the *lesson* — pairs anchored to a
+ * stance, opening opposite ways — and on nothing else: different grid, different
+ * proportions, opposite value, one wearing a caparison in this file's livery.
+ * Extracting the shape would mean a third module owning a parameterised horse
+ * with a palette, a size and four leg centres passed in, which is most of the
+ * function's body as arguments. The rule of three says wait for a third mount;
+ * what is shared today is a comment, and the comment is in both places.
+ */
+function drawWarhorse(g: PixelGrid, C: MountPalette, frame: StrideFrame): void {
+  const swing = swingOf(frame, HORSE_SWING);
+
+  // Legs first, so the barrel covers where they meet the body.
+  for (const x of [HIND_L - swing, HIND_R + swing, FORE_L - swing, FORE_R + swing]) {
+    pixelRect(g, x, HORSE_LEG_TOP, 2, 8, C.horseDark);
+    pixelRect(g, x, HOOF_ROW, 2, 2, C.boot);
+  }
+
+  // Tail before the barrel, so its root is buried rather than stuck on.
+  pixelCurve(g, [5, 13], [1, 15], [1, 21], C.horseDark, 8);
+
+  // Barrel, its lit top, and the chest the fore legs hang from.
+  pixelEllipse(g, 15, 16, 12, 4.6, C.horse);
+  pixelEllipse(g, 15, 14, 10.5, 2.8, C.horseHi);
+  pixelEllipse(g, 23, 16, 4.5, 4.8, C.horse);
+
+  // Neck as two stacked blocks rather than as a curve. pixelCurve lays down a
+  // single cell per step, and a one-cell neck is entirely eaten by its own
+  // outline: the horse ends up with its head floating clear of its shoulders.
+  pixelRect(g, 24, 12, 5, 6, C.horse);
+  pixelRect(g, 26, 8, 4, 5, C.horse);
+  pixelRect(g, 25, 8, 2, 5, C.horseDark);
+
+  // Head, muzzle, ear. The muzzle is dark so the head has a front at a size
+  // where an eye would be one cell and read as damage.
+  //
+  // Centred on column 28 rather than 29, which puts the muzzle's last column at
+  // 30 and leaves 31 for the outline. A nose flush with the edge of the grid
+  // gets no outline on the side it most needs one, and the horse ends up
+  // looking sawn off at the front — the one silhouette this sprite exists for.
+  pixelEllipse(g, 28, 6, 2.8, 2.4, C.horse);
+  pixelRect(g, 28, 5, 3, 2, C.horseDark);
+  pixelTriangleUp(g, 27, 4, 1, 2, C.horseDark);
+
+  // Caparison, so the horse reads as the retinue's rather than as a horse. It
+  // stops at row 20, on the barrel: hung any lower it is one band of cloth
+  // across the tops of all four legs, which is the fusion the priest's robe was
+  // shortened to avoid, in the one place it would be four legs instead of two.
+  pixelRect(g, 8, 17, 12, 4, C.livery);
+  pixelRect(g, 8, 17, 12, 1, C.liveryHi);
+}
+
+/**
+ * Knight: mounted, in plate, with the lance carried upright and a livery pennon
+ * on it.
+ *
+ * Mounted is the whole point. The first pass drew this kind on foot with a
+ * couched lance and argued that the lance was enough, because it is the shape
+ * the enemy commander's charge is read from and therefore already means "this
+ * one hits twice as hard". The playtest asked for the horse by name, and it was
+ * right twice over: on foot the knight was the same 16x24 body as the other
+ * three, and borrowing the charge silhouette to say so meant borrowing it from
+ * something that is trying to kill you.
+ *
+ * So the lance stands up. A couched lance is now the enemy commander's alone —
+ * two mounted bodies on one map need something other than a mount to tell them
+ * apart, and a horizontal shaft versus a vertical one with a flag on it is a
+ * difference that survives at any distance the sprites are visible at. Value
+ * carries the rest: this horse is pale dun, his is near-black.
  */
 export function buildKnightGuardGrid(frame: StrideFrame, rank: number): PixelGrid {
   const C = GUARD_PALETTES.knight;
-  const g = buildGuardBody(C, frame);
-  pixelEllipse(g, 8, 4, 3.2, 3.4, C['metal']!);
-  pixelRect(g, 5, 3, 6, 1, C['metalHi']!);
+  const g = makePixelGrid(MOUNTED_SPRITE.w, MOUNTED_SPRITE.h);
+  drawWarhorse(g, C, frame);
+
+  // Rider's leg down the flank, before the torso, so the torso overlaps it.
+  pixelRect(g, 14, 13, 3, 5, C.metal);
+  pixelRect(g, 14, 17, 3, 2, C.boot);
+
+  // Lance: shaft, tip on its top row, pennon, and the hand that holds it.
+  // Column 8 keeps the whole thing clear of the helm, which starts at column
+  // 13 — a pennon that overlapped the helm would have to be drawn under it,
+  // and a flag behind a head is not a flag.
+  pixelRect(g, 8, 2, 1, 11, C.boot);
+  pixelTriangleUp(g, 8, 2, 1, 3, C.metalHi);
+  pixelRect(g, 9, 3, 4, 3, C.livery);
+  pixelRect(g, 9, 3, 4, 1, C.liveryHi);
+
+  // Breastplate, pauldrons wider than the torso, helm, crest and visor slit.
+  pixelRect(g, 13, 7, 7, 7, C.metal);
+  pixelRect(g, 13, 7, 7, 2, C.metalHi);
+  pixelRect(g, 11, 8, 2, 3, C.metal);
+  pixelRect(g, 20, 8, 2, 3, C.metal);
+  pixelEllipse(g, 16, 4, 3.2, 3.4, C.metal);
+  pixelRect(g, 13, 3, 7, 1, C.metalHi);
   // Visor slit in `shade` rather than the seam colour: structure painted in the
   // outline's colour is indistinguishable from a seam once pixelOutline has
   // run, and the leg check downstream masks that colour out.
-  pixelRect(g, 6, 5, 5, 1, C['shade']!);
-  pixelRect(g, 7, 0, 2, 3, C['livery']!);
-  pixelRect(g, 7, 0, 2, 1, C['liveryHi']!);
-  // Pauldrons wider than the torso, which is the whole read of "heavier plate".
-  pixelRect(g, 4, 9, 8, 4, C['metal']!);
-  pixelRect(g, 4, 9, 8, 1, C['metalHi']!);
-  // Shaft level and out past the leading edge of the cell, head at the tip.
-  // The head's base sits on the shaft's own row, not below it: a triangle based
-  // one row down leaves the point floating a row clear of the shaft, and at
-  // this size a detached tip reads as a speck of debris rather than as a spear.
-  pixelRect(g, 5, 12, 11, 1, C['livery']!);
-  pixelTriangleUp(g, 15, 12, 2, 3, C['metalHi']!);
-  drawRankPips(g, C, rank);
-  return pixelOutline(g, C['edge']!);
+  pixelRect(g, 14, 5, 5, 1, C.shade);
+
+  // The hand on the lance, bridging shaft to breastplate, and the rein arm
+  // reaching down the neck on the leading side.
+  pixelRect(g, 8, 11, 5, 1, C.skin);
+  pixelRect(g, 19, 11, 3, 2, C.metal);
+  pixelCurve(g, [21, 12], [24, 11], [27, 9], C.boot, 7);
+
+  drawRankPips(g, C.rank, rank, MOUNTED_RANK);
+  return pixelOutline(g, C.edge);
 }
 
 /**
- * Priest: a flat-crowned cowl, a shoulder cape, the livery worn as a stole down
- * the chest, and a staff held out on the leading side.
+ * Priest: a flat-crowned cowl, a shoulder cape, a robe wider than anybody
+ * else's body, and a plain red cross across the whole chest.
  *
- * It carries the one thing no other guard does — something in the hand that is
- * plainly not a weapon. The bow, the sword and the lance all read as reach; the
- * staff is short, vertical and topped with a pale orb, so at a tile size of 32
- * the silhouette says "not fighting" before any colour is read. The stole is
- * the second half of that: violet worn as two vertical bands rather than as a
- * surcoat or a plume, which is a shape none of the other three uses.
+ * THE CROSS IS THE POINT AND IT IS DELIBERATELY OVERSIZED.
+ *
+ * The player asked for it in order to know who to protect, which makes
+ * legibility the requirement rather than taste: it is 22 cells on a body of
+ * about 150, a full seven rows tall and six wide, and it is the only red in the
+ * retinue. A tasteful two-pixel cross on the shoulder would be the same failure
+ * the buckler was — correct in the reference and invisible in the game.
+ *
+ * It replaces the stole. The first pass wore the livery as two vertical violet
+ * bands down the chest, which was this kind's only chest device; two violet
+ * bands and a red cross on a six-column torso is three stripes and a smear, so
+ * the bands went and the livery moved to the hem, where it still says
+ * "retinue" without competing. The robe was widened from six columns to nine at
+ * the same time and for the same reason: a cross wide enough to read needs a
+ * chest wide enough to carry it, and the wider robe is a second silhouette cue
+ * for free — this is now the broadest body on foot in the game.
  *
  * THE ROBE STOPS AT THE BELT, AND THAT IS NOT A STYLE CHOICE.
  *
@@ -356,11 +688,11 @@ export function buildKnightGuardGrid(frame: StrideFrame, rank: number): PixelGri
  * fusion bug recorded in buildGuardBody: a hem is a single band of cloth across
  * the boot row, so the two legs the stance is at pains to keep apart come back
  * as one run on every frame — worse than the original bug, which only merged
- * them at full swing. The priest therefore wears a hip-length tunic over the
+ * them at full swing. The priest therefore wears a hip-length robe over the
  * same legs everybody else walks on, and the leg check reads two runs here for
  * the same reason it does on the other three.
  *
- * The staff stops two rows above the boots for the same family of reason: a
+ * The staff stops four rows above the boot row for the same family of reason: a
  * shaft planted on the ground beside the feet is a third vertical run at the
  * row that decides whether the legs fused, and one that the eye also reads as a
  * third leg at speed. Held clear of the ground it reads as carried.
@@ -370,28 +702,37 @@ export function buildPriestGuardGrid(frame: StrideFrame, rank: number): PixelGri
   const g = buildGuardBody(C, frame);
   // Cowl: flat-crowned rather than the archer's round hood, so the two are not
   // the same head at distance.
-  pixelRect(g, 6, 1, 5, 3, C['cloth']!);
-  pixelEllipse(g, 8, 5, 3.5, 3.2, C['cloth']!);
-  pixelEllipse(g, 8.7, 5.5, 2.2, 2, C['skin']!);
-  // Shoulder cape, wide and pale: the priest's answer to the knight's plate,
-  // and what gives the badge column something to sit on at the top rank.
-  pixelRect(g, 4, 8, 8, 2, C['clothHi']!);
-  // The stole. Two bands with the torso showing between them, because a solid
-  // violet front would be the foot soldier's surcoat in another palette.
-  pixelRect(g, 6, 10, 1, 6, C['livery']!);
-  pixelRect(g, 9, 10, 1, 6, C['livery']!);
-  pixelRect(g, 6, 10, 4, 1, C['liveryHi']!);
+  pixelRect(g, 6, 1, 5, 3, C.cloth);
+  pixelEllipse(g, 8, 5, 3.5, 3.2, C.cloth);
+  pixelEllipse(g, 8.7, 5.5, 2.2, 2, C.skin);
+  // Robe and shoulder cape, both wider than the shared tunic underneath. They
+  // sit one column to the trailing side of centre, which is what buys the staff
+  // a clear column at 12 and its orb an outline inside the grid: a robe centred
+  // on the body pushes the staff to column 14, and an orb centred on 14 is two
+  // rows of flat edge against the right bound however small it is drawn.
+  pixelRect(g, 3, 9, 9, 7, C.cloth);
+  pixelRect(g, 2, 8, 10, 2, C.clothHi);
+  // Livery at the hem, which is the whole of this kind's violet now.
+  pixelRect(g, 3, 15, 9, 1, C.livery);
+  // The cross: upright first, then the arms across it. Columns 8-9 and 6-11,
+  // centred on each other, and starting at column 6 so that column 5 stays
+  // clear between the arms and the rank ladder at 3-4 — a gold pip and a red
+  // arm with no gap between them are one smear at the distance this is read at.
+  pixelRect(g, 8, 10, 2, 7, C.cross);
+  pixelRect(g, 6, 12, 6, 2, C.cross);
   // Staff: shaft, then a pale orb at the head. An orb rather than a ring —
   // a ring at this size needs a hole one pixel across, and one pixel of
   // background inside a two-pixel rim is not a hole, it is a smudge.
-  pixelRect(g, 13, 5, 1, 15, C['boot']!);
-  pixelEllipse(g, 13, 3, 2, 2.2, C['metal']!);
-  pixelEllipse(g, 13, 2.6, 1, 1, C['metalHi']!);
-  // The hand that holds it, bridging torso and shaft so the staff is carried
-  // rather than floating alongside.
-  pixelRect(g, 10, 12, 3, 1, C['skin']!);
-  drawRankPips(g, C, rank);
-  return pixelOutline(g, C['edge']!);
+  pixelRect(g, 13, 5, 1, 14, C.boot);
+  pixelEllipse(g, 13, 3, 1.9, 2.1, C.metal);
+  pixelEllipse(g, 13, 2.6, 0.9, 1, C.metalHi);
+  // The hand that holds it, bridging robe and shaft so the staff is carried
+  // rather than floating alongside. On row 15, below the cross's arms: a hand
+  // laid across them would take a bite out of the one thing this sprite exists
+  // to show.
+  pixelRect(g, 11, 15, 3, 1, C.skin);
+  drawRankPips(g, C.rank, rank, ROBED_RANK);
+  return pixelOutline(g, C.edge);
 }
 
 /**
@@ -417,6 +758,10 @@ export const GUARD_GRID_BUILDERS: Record<GuardKind, (frame: StrideFrame, rank: n
  * builders are a table. Kept as a function over the table rather than as the
  * table alone because the caller has a `Guard` in hand, and `kind` is the field
  * on it — not an index it should be looking anything up by.
+ *
+ * The grid it returns is `GUARD_SPRITES[kind]` and not necessarily
+ * `GUARD_SPRITE`. A caller that sizes its canvas from the old constant will
+ * clip the knight's horse in half and never throw.
  */
 export function buildGuardGrid(kind: GuardKind, frame: StrideFrame, rank: number): PixelGrid {
   return GUARD_GRID_BUILDERS[kind](frame, rank);

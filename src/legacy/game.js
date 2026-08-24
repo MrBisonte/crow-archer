@@ -21,7 +21,7 @@ import {
 import { TOWER_MAX_HP, damageTower, makeTowers, standingTowers, towerAt } from '../sim/towers';
 import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { nearestHostile } from '../sim/targeting';
-import { GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITE } from '../render/guard-grids';
+import { GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITES } from '../render/guard-grids';
 import { Regrowth } from '../sim/regrowth';
 import {
   COMMANDER_WAVE, SOLDIER_STATS, shieldFacing, shieldStops, waveComposition,
@@ -56,6 +56,27 @@ import {
   KNIGHT_SPRITE, buildKnightGrid,
   SAPPER_SPRITE, buildSapperGrid,
 } from '../render/character-grids';
+
+/**
+ * The ground disc that says whose side a body is on.
+ *
+ * Keyed by Team, which is the model multiplayer already uses, so adding team
+ * colours there is a row here rather than a second mechanism. Single player
+ * only ever fields Team.A and Team.ENEMY, and the enemy's is deliberately the
+ * plain shadow every body drew before any of this: the question a player asks
+ * in a crowd is "which of these is mine", so the answer is carried by the
+ * allies rather than paid for by everything on screen.
+ */
+const TEAM_DISC = {
+  [Team.A]: 'rgba(120,190,255,0.55)',
+  [Team.B]: 'rgba(255,150,90,0.55)',
+  [Team.ENEMY]: 'rgba(0,0,0,0.35)',
+};
+const TEAM_RIM = {
+  [Team.A]: 'rgba(190,230,255,0.9)',
+  [Team.B]: 'rgba(255,205,160,0.9)',
+  [Team.ENEMY]: 'rgba(0,0,0,0)',
+};
 
 // Single-player has no team concept, so each hero gets one fixed trim
 // colour instead of the multiplayer per-team one. Archer's was already its
@@ -8354,26 +8375,51 @@ function soldierGrid(kind, frame) {
  * shoulder half the time, and the sprite cache key carries the rank so a
  * promotion is a new cached canvas rather than a stale one.
  */
+/**
+ * The disc under an ally, in its team's colour.
+ *
+ * Every body in this game already draws a flat black ellipse for a shadow, so
+ * this costs a fill colour rather than a new draw. It is the readable half of
+ * "whose side is that": a livery on a 16px sprite is a handful of pixels and
+ * disappears in the twelve-body crowd of wave 10, while a coloured disc under
+ * the feet survives being half-hidden behind another body and never competes
+ * with the silhouette that says *what* the unit is — the spear, the shield,
+ * the horse, the cross.
+ *
+ * Keyed on team rather than on being a guard, so multiplayer's teams drop into
+ * the same call unchanged.
+ */
+function drawTeamDisc(team, rx = 7) {
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = TEAM_DISC[team] ?? 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 9, rx, rx * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+  // A hard rim, because a translucent disc over dark ground reads as a smudge.
+  ctx.strokeStyle = TEAM_RIM[team] ?? 'rgba(0,0,0,0)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
 function drawGuard(gd) {
   const cx = gd.x, cy = gd.y + CONFIG.hudHeight;
   const flashOn = gd.hitFlash > 0;
   const frame = animFrame3(gd.walkPhase);
   const rank = gd.guard.rank;
   const kind = gd.guard.kind;
+  const size = GUARD_SPRITES[kind];
   const key = 'guard|' + kind + '|' + frame + '|' + rank;
   const grid = GUARD_GRID_BUILDERS[kind](frame, rank);
 
   ctx.save();
   ctx.translate(cx, cy);
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.beginPath(); ctx.ellipse(0, 9, 7, 2, 0, 0, Math.PI * 2); ctx.fill();
+  // Wider body, wider disc: a mounted knight on a foot soldier's disc looks
+  // like it is standing beside its own marker.
+  drawTeamDisc(gd.team, size.w > GUARD_SPRITES.archer.w ? 12 : 7);
   if (Math.cos(gd.facing) < 0) ctx.scale(-1, 1);
   const sprite = flashOn
-    ? spriteFlashCanvas(key, grid, GUARD_SPRITE.w, GUARD_SPRITE.h, '#ffffff')
-    : spriteCanvas(key, grid, GUARD_SPRITE.w, GUARD_SPRITE.h);
+    ? spriteFlashCanvas(key, grid, size.w, size.h, '#ffffff')
+    : spriteCanvas(key, grid, size.w, size.h);
   if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
-  ctx.drawImage(sprite, -GUARD_SPRITE.w / 2, -16);
+  ctx.drawImage(sprite, -size.w / 2, -16);
   ctx.shadowBlur = 0;
   ctx.restore();
 }

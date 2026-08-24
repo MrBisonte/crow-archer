@@ -20,6 +20,7 @@ import {
 import { TOWER_MAX_HP } from '../sim/towers';
 import { barrierGates } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
+import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable } from '../sim/tilemap';
@@ -3427,5 +3428,47 @@ describe("the bastion's terrain rules", () => {
     expect(onForest, 'the control crow did not move').toBeGreaterThan(0);
     expect(onBastion, 'a crow was not slowed on the bastion').toBeLessThan(onForest);
     expect(onBastion / onForest).toBeCloseTo(0.8, 1);
+  });
+});
+
+// ── WHOSE SIDE IS THAT ────────────────────────────────────────────────────────
+//
+// A playtest, on top of the sprite work: "in Multiplayer im going to add colors
+// to the teams... in the same fashion, it should be visible to the player that
+// the soldiers etc are on his team."
+//
+// The mechanism is the ground disc under every body, keyed on Team — the model
+// multiplayer already uses — so teams there become a row in one table rather
+// than a second way of saying the same thing. The sprite's own livery is the
+// other half, but a livery on a 16px body disappears in the twelve-body crowd
+// of wave 10, and a disc under the feet survives being half-hidden.
+describe('allies are visibly the hero\u2019s', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  it('puts every guard on the hero\u2019s team, which is what the disc keys on', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    const hero = g.player() as { team: number };
+    expect(g.guards().length).toBeGreaterThan(0);
+    for (const body of g.guards()) {
+      expect(body.team, `${body.guard.kind} is not on the hero's team`).toBe(hero.team);
+    }
+  });
+
+  it('keeps every hostile off it, so the disc means something', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    const hero = g.player() as { team: number };
+    g.spawnSkeleton('normal');
+    g.spawnSoldier('spearman');
+    for (const c of g.crows()) expect(c.team).not.toBe(hero.team);
+    // Skeletons and soldiers carry no team field at all — they are hostile by
+    // construction, which siegeHostiles relies on. If one ever gains a team it
+    // must not be the hero's, and this is where that would be caught.
+    for (const sk of g.skeletons()) expect(sk.team ?? Team.ENEMY).not.toBe(hero.team);
+    for (const so of g.soldiers()) expect(so.team ?? Team.ENEMY).not.toBe(hero.team);
   });
 });

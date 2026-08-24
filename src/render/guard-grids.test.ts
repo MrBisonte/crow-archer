@@ -11,6 +11,7 @@ import {
   GUARD_GRID_BUILDERS,
   GUARD_PALETTES,
   GUARD_SPRITE,
+  GUARD_SPRITES,
   buildGuardGrid,
   type StrideFrame,
 } from './guard-grids';
@@ -30,6 +31,16 @@ const RANKS: number[] = Array.from({ length: MAX_RANK + 1 }, (_, r) => r);
 
 /** The row a guard's boots land on, where two legs have to read as two. */
 const BOOT_ROW = 22;
+/** Where the mount's hooves land. Mirrors HOOF_ROW in guard-grids.ts. */
+const HOOF_ROW = 25;
+
+/** Which row each kind's feet are on, and how many runs should be there. */
+const LEG_ROW: Record<GuardKind, number> = {
+  archer: BOOT_ROW, foot_soldier: BOOT_ROW, knight: HOOF_ROW, priest: BOOT_ROW,
+};
+const LEG_RUNS: Record<GuardKind, number> = {
+  archer: 2, foot_soldier: 2, knight: 4, priest: 2,
+};
 
 /**
  * What a rank badge is allowed to cost, as a share of the sprite it is worn on.
@@ -120,7 +131,7 @@ describe('guard grids', () => {
     for (const frame of FRAMES)
       for (const rank of RANKS) {
         const g = buildGuardGrid(kind, frame, rank);
-        expect(gridSize(g), `${kind} ${frame} r${rank}`).toEqual(GUARD_SPRITE);
+        expect(gridSize(g), `${kind} ${frame} r${rank}`).toEqual(GUARD_SPRITES[kind]);
         expect(raggedRows(g), `${kind} ${frame} r${rank}`).toEqual([]);
       }
   });
@@ -152,13 +163,22 @@ describe('guard grids', () => {
    * grew its own legs, or hung a robe or a staff across the boot row, would be
    * caught here and nowhere else.
    */
-  it.each(KINDS)('keeps %s\'s two legs apart on every frame of the stride', (kind) => {
-    const outline = GUARD_PALETTES[kind]['edge']!;
+  it.each(KINDS)('keeps %s standing on all its legs, on every frame', (kind) => {
+    // How many runs a kind shows at its own boot row. Two for a body on its own
+    // feet; four for the mounted knight, whose fore and hind pairs are two legs
+    // each. A table rather than a ternary, so a fifth kind has to say what it
+    // stands on instead of inheriting an answer meant for something else.
+    //
+    // buildCommanderGrid records the failure that matters on a horse — centres
+    // two columns apart fuse under pixelOutline, and a shared centre makes two
+    // frames identical — so the mount gets the same scrutiny the walkers get
+    // rather than a pass for being complicated.
+    const outline = GUARD_PALETTES[kind].edge;
     for (const frame of FRAMES)
       for (const rank of RANKS) {
         const g = buildGuardGrid(kind, frame, rank);
-        expect(bodyRuns(g, BOOT_ROW, outline), `${kind} ${frame} r${rank} fused its legs into one`)
-          .toBe(2);
+        expect(bodyRuns(g, LEG_ROW[kind], outline), `${kind} ${frame} r${rank} lost a leg`)
+          .toBe(LEG_RUNS[kind]);
       }
   });
 
@@ -167,6 +187,67 @@ describe('guard grids', () => {
   it.each(KINDS)('moves %s between the two extremes of its stride', (kind) => {
     const shapes = FRAMES.map((frame) => shapeOf(buildGuardGrid(kind, frame, 0)));
     expect(new Set(shapes).size, `${kind} repeats a frame`).toBe(FRAMES.length);
+  });
+
+
+  // ── THE THREE THINGS A PLAYTEST ASKED FOR ──────────────────────────────────
+  //
+  // "the guards, knights and priest all look the same, show they differ
+  // clearly, give a spear and shield to the foot soldiers, horse should be
+  // visible for the knight and the priest should have a red cross sign on his
+  // robes, so we know who he is and can protect him."
+  //
+  // Distinctness alone does not cover this. Four sprites can be pairwise
+  // different and still be four men in tunics; what was asked for is three
+  // named, recognisable things, so each is pinned by name.
+
+  it('gives the priest a red cross, worn by nothing else', () => {
+    const cross = GUARD_PALETTES.priest.cross;
+    expect(cross, 'the priest has no cross colour').toBeDefined();
+    const cells = (kind: GuardKind): number => {
+      const g = buildGuardGrid(kind, 'mid', 0);
+      let n = 0;
+      for (const row of g) for (const cell of row) if (cell === cross) n++;
+      return n;
+    };
+    // Big enough to find at a glance across a battlefield, which is the stated
+    // reason it exists: the player has to know who to protect.
+    expect(cells('priest'), 'the cross is too small to pick out').toBeGreaterThanOrEqual(8);
+    for (const kind of KINDS) {
+      if (kind === 'priest') continue;
+      expect(cells(kind), `${kind} is wearing the priest's cross`).toBe(0);
+    }
+  });
+
+  it('puts the knight on a horse that is actually visible', () => {
+    // Wider than a tile is the silhouette test: a mounted body cannot be
+    // mistaken for a man on foot at any distance, whatever its palette.
+    expect(GUARD_SPRITES.knight.w).toBeGreaterThan(GUARD_SPRITES.archer.w);
+    const horse = GUARD_PALETTES.knight.horse;
+    expect(horse, 'the knight has no horse colour').toBeDefined();
+    const g = buildGuardGrid('knight', 'mid', 0);
+    let n = 0;
+    for (const row of g) for (const cell of row) if (cell === horse) n++;
+    expect(n, 'the horse is barely painted').toBeGreaterThan(20);
+    // And four legs under it, which the stride test above pins per frame.
+    expect(LEG_RUNS.knight).toBe(4);
+  });
+
+  it('gives the foot soldier a shield, which is bulk on its leading side', () => {
+    // Everything is drawn facing +x, so the shield is filled cells on the right
+    // half. Measured against the archer, whose leading side carries a bow: a
+    // shield is a solid slab and a bow is a line, so the difference is real
+    // rather than a matter of a pixel or two.
+    const leadingCells = (kind: GuardKind): number => {
+      const g = buildGuardGrid(kind, 'mid', 0);
+      const width = GUARD_SPRITES[kind].w;
+      let n = 0;
+      for (const row of g)
+        for (let x = Math.floor(width / 2); x < width; x++) if (row[x]) n++;
+      return n;
+    };
+    expect(leadingCells('foot_soldier'), 'no shield on the foot soldier')
+      .toBeGreaterThan(leadingCells('archer'));
   });
 
   it('draws every kind differently, so they are told apart on sight', () => {
@@ -339,9 +420,12 @@ describe('guard grids', () => {
   // violet the retinue would stop reading as one body, and nothing on screen
   // would say so — the sprites would each still look fine alone.
   it('paints the whole retinue in one livery and one promotion gold', () => {
-    for (const slot of ['livery', 'liveryHi', 'rank'])
-      expect(new Set(KINDS.map((kind) => GUARD_PALETTES[kind][slot])).size, `${slot} drifted`)
-        .toBe(1);
+    // Named explicitly rather than looped over a key list: the three shared
+    // slots are the argument, and a loop keyed on strings needs an index
+    // signature the palette deliberately does not have.
+    expect(new Set(KINDS.map((k) => GUARD_PALETTES[k].livery)).size, 'livery drifted').toBe(1);
+    expect(new Set(KINDS.map((k) => GUARD_PALETTES[k].liveryHi)).size, 'liveryHi drifted').toBe(1);
+    expect(new Set(KINDS.map((k) => GUARD_PALETTES[k].rank)).size, 'rank drifted').toBe(1);
   });
 
   /**
