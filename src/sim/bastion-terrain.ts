@@ -266,6 +266,45 @@ export function barrierCols(rows: number, cols: number): readonly BarrierSegment
   ];
 }
 
+/**
+ * The gates: one point per way through the barrier, top to bottom.
+ *
+ * A 'way through' is a run of rows on which the whole barrier band is open —
+ * the flank gaps at either end and the stepped gaps between the sections. These
+ * are the places a siege can actually cross, which makes them the places a
+ * retinue should be standing, so this is exported for the guards to post on
+ * rather than being left as a fact only the generator knows.
+ *
+ * Returned in grid coordinates, at the barrier's own column so a guard posted
+ * here stands in the gap rather than behind it. An empty barrier has no gates,
+ * which is the honest answer for a grid too small to fortify: there is nothing
+ * to hold.
+ */
+export function barrierGates(rows: number, cols: number): readonly TowerSite[] {
+  const segments = barrierCols(rows, cols);
+  if (segments.length === 0) return [];
+  const band = { west: cols, east: 0 };
+  for (const seg of segments) {
+    band.west = Math.min(band.west, seg.cols[0]);
+    band.east = Math.max(band.east, seg.cols[1]);
+  }
+  const blocked = new Set<number>();
+  for (const seg of segments) {
+    for (let r = seg.firstRow; r <= seg.lastRow; r++) blocked.add(r);
+  }
+  const gates: TowerSite[] = [];
+  let runStart = -1;
+  for (let r = 1; r <= rows - 1; r++) {
+    const open = r < rows - 1 && !blocked.has(r);
+    if (open && runStart < 0) runStart = r;
+    if (!open && runStart >= 0) {
+      gates.push({ row: Math.floor((runStart + r - 1) / 2), col: band.west });
+      runStart = -1;
+    }
+  }
+  return gates;
+}
+
 /** The rows of open ground between one section and the next, top to bottom. */
 const segmentGapRows = (segments: readonly BarrierSegment[]): readonly number[] => {
   const gaps: number[] = [];

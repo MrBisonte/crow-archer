@@ -19,7 +19,7 @@ import {
   heroDied as siegeHeroDied, startSiege, waveRoster,
 } from '../sim/siege-run';
 import { TOWER_MAX_HP, damageTower, makeTowers, standingTowers, towerAt } from '../sim/towers';
-import { towerSites } from '../sim/bastion-terrain';
+import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { nearestHostile } from '../sim/targeting';
 import { GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITE } from '../render/guard-grids';
 import { Regrowth } from '../sim/regrowth';
@@ -161,6 +161,10 @@ const CONFIG = {
   // scattered across the field in the first ten seconds and the hero fought
   // the wave alone — the opposite of what a bodyguard is for.
   guardPostRadius: 58, guardPostDrift: 0.25, guardLeash: 210,
+  // How far a guard will leave its gate to fight, and how near it has to get
+  // before it counts as standing there again. The leash is generous enough to
+  // meet something walking into the gap and mean enough that it comes back.
+  guardPostLeash: 170, guardPostSlack: 14,
   // How often a guard re-solves its route home. Staggered per guard at
   // spawn so a retinue does not all solve on the same frame.
   guardRouteInterval: 0.5,
@@ -1160,6 +1164,19 @@ function tileAt(wx, wy) {
 /** Can anything on this map break terrain at all? One home for the rule. */
 function terrainDestructible() {
   return MAP_RULES[mapKind].destructibleTerrain;
+}
+
+/**
+ * How fast everything hostile moves here, as a multiplier. One home again.
+ *
+ * The bastion runs at 0.8 because a siege is fought from a fixed position: you
+ * are holding a line rather than kiting round an arena, and at full speed a
+ * wave crosses the open ground faster than a retinue can be repositioned to
+ * meet it. It is a per-map fact rather than a per-mode one for the usual
+ * reason — the bastion is reachable from two modes and both want it.
+ */
+function mapEnemySpeed() {
+  return MAP_RULES[mapKind].enemySpeed;
 }
 
 /** Does this map hide what the player cannot see? One home for that rule too. */
@@ -3807,7 +3824,7 @@ function updateSkeletons(dt) {
       if (s.kind === 'rat') poisonPlayer();
       continue;
     }
-    if (chaseAlongPath(s, SKELETON_SPEED[s.kind](), dt)) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, SKELETON_SPEED[s.kind]() * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
 
     if (s.kind === 'ice') {
       s.shotCD -= dt;
@@ -3959,8 +3976,8 @@ function updateSoldiers(dt) {
       // than sliding along the wall, so a charge broken on rock is a real
       // opening rather than a soldier grinding into stone.
       s.charge -= dt;
-      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * dt;
-      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * dt;
+      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * mapEnemySpeed() * dt;
+      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * mapEnemySpeed() * dt;
       if (tilePassable(tileAt(nx, ny))) { s.x = nx; s.y = ny; s.walkPhase += dt * 14; }
       else s.charge = 0;
       continue;
@@ -3969,7 +3986,7 @@ function updateSoldiers(dt) {
     if (s.kind === 'archer') {
       s.shotCD -= dt;
       if (dist > stats.reach) {
-        if (chaseAlongPath(s, stats.speed, dt)) s.walkPhase += dt * 8;
+        if (chaseAlongPath(s, stats.speed * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
       } else if (s.shotCD <= 0) {
         s.shotCD = CONFIG.soldierArcherShotInterval;
         fireSoldierArrow(s);
@@ -3985,7 +4002,7 @@ function updateSoldiers(dt) {
       continue;
     }
 
-    if (chaseAlongPath(s, stats.speed, dt)) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, stats.speed * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
   }
 }
 
@@ -4228,7 +4245,7 @@ function updateCrows(dt) {
     if (c.heldTimer > 0) { c.heldTimer = Math.max(0, c.heldTimer - dt); continue; }
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
-      const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod();
+      const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod() * mapEnemySpeed();
       c.x -= spd * dt;
       c.y  = c.baseY + Math.sin(gameTime / 3 + c.phaseOff) * 40;
       c.y  = Math.max(CONFIG.tileSize, Math.min((CONFIG.rows-1)*CONFIG.tileSize, c.y));
@@ -4241,7 +4258,7 @@ function updateCrows(dt) {
       c.aggroTimer -= dt;
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
-      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult();
+      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult() * mapEnemySpeed();
       chaseAlongPath(c, spd, dt);
       if (c.aggroTimer <= 0) { c.state = 'passive'; c.baseY = c.y; c.path = null; }
     }
@@ -5803,19 +5820,54 @@ function endSiegeRun() {
  * Placed rather than walked in: a retinue that marched in from the corridor
  * would be arriving through the siege it is defending against.
  */
+/**
+ * The gates a retinue holds, in world pixels, or the hero's own ring on a map
+ * with no barrier to hold.
+ *
+ * Recomputed rather than cached because a tower or a section can come down mid
+ * run; the generator's answer is about the grid it built, and this is about the
+ * grid as it stands.
+ */
+function guardPosts() {
+  const gates = barrierGates(CONFIG.rows, CONFIG.cols);
+  return gates.map((gate) => ({
+    x: (gate.col + 0.5) * CONFIG.tileSize,
+    y: (gate.row + 0.5) * CONFIG.tileSize,
+  }));
+}
+
+/**
+ * Which gate this guard holds.
+ *
+ * Assigned by index around the list, so four guards on four gates take one
+ * each and the fifth doubles up on the first. A guard with no gate to hold —
+ * a grid too small to fortify — falls back to the ring around the hero, which
+ * is what the retinue did before it had posts at all.
+ */
+function postOf(g, index) {
+  const posts = guardPosts();
+  if (posts.length === 0) return guardStation(g);
+  return posts[index % posts.length];
+}
+
 function placeGuard(guard) {
-  // Seated beside the hero, not at the towers.
+  // Seated on a gate in the barrier, one guard to each, between the hero and
+  // the corridor the waves come down.
   //
-  // The towers were the obvious place — a garrison comes out of its keep — and
-  // playing it showed why they are the wrong one: every wave seated its new
-  // recruit five hundred pixels from the fight and it spent the next ten
-  // seconds walking, so a bodyguard arrived as a straggler. Where a recruit
-  // comes from is flavour; where it is needed is beside the person it guards.
-  const ring = (guards.length * 2 * Math.PI) / Math.max(3, guards.length + 1);
-  const at = nearestOpenTile(
-    player.x + Math.cos(ring) * CONFIG.guardPostRadius,
-    player.y + Math.sin(ring) * CONFIG.guardPostRadius,
-  );
+  // Two earlier answers were wrong for opposite reasons. At the towers, a
+  // recruit arrived five hundred pixels behind the fight and spent ten seconds
+  // walking. Ringing the hero put the whole retinue behind the wall it was
+  // supposed to be holding, so a wave came through a gap unopposed and reached
+  // him before anyone met it. A gate is where a defender stands: forward of the
+  // person guarded, on the ground the attack has to cross.
+  const posts = guardPosts();
+  const seat = posts.length > 0
+    ? posts[guards.length % posts.length]
+    : {
+        x: player.x + Math.cos((guards.length * 2 * Math.PI) / 4) * CONFIG.guardPostRadius,
+        y: player.y + Math.sin((guards.length * 2 * Math.PI) / 4) * CONFIG.guardPostRadius,
+      };
+  const at = nearestOpenTile(seat.x, seat.y);
   guards.push({
     // The sim's record is the source of truth for hp and rank; this is its body.
     guard,
@@ -5855,6 +5907,18 @@ function guardStation(g) {
 }
 
 /**
+ * Where this guard should be when there is nothing to do: its gate.
+ *
+ * Falls back to the hero's ring when the map has no barrier, which keeps the
+ * retinue meaningful on a grid too small to fortify rather than leaving it
+ * standing on a post that does not exist.
+ */
+function guardHome(g, index) {
+  const post = postOf(g, index);
+  return post;
+}
+
+/**
  * The nearest hostile near enough to the *hero* to be this guard's business.
  *
  * Measured from the hero and not from the guard, which is the difference
@@ -5862,10 +5926,10 @@ function guardStation(g) {
  * of its leash must not find something further out and keep going. The leash is
  * therefore a property of the hero's surroundings, not of the guard's.
  */
-function guardQuarry(g, hostiles) {
-  const reach = CONFIG.guardLeash * CONFIG.guardLeash;
+function guardQuarry(g, hostiles, home) {
+  const reach = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
   const near = [];
-  for (const h of hostiles) if (dist2(player.x, player.y, h.x, h.y) <= reach) near.push(h);
+  for (const h of hostiles) if (dist2(home.x, home.y, h.x, h.y) <= reach) near.push(h);
   return nearestHostile(g, near);
 }
 
@@ -6080,6 +6144,12 @@ function updateGuards(dt) {
     // that has to remember to check, and no arm of one that could be added
     // later without noticing. Its own turn is a separate function for the same
     // reason — a healer is not a fighter with `if (canFight)` around it.
+    // The anchor is set before the priest branches away, because the priest has
+    // a gate to hold like everyone else and moveGuard measures its leash from
+    // there. Set after the branch, the priest spent its first frame anchored to
+    // nothing and fell back to the hero.
+    const home = guardHome(g, i);
+    g.anchor = home;
     if (isPriest(g.guard)) { updatePriest(g, dt); continue; }
     const stats = GUARD_STATS[g.guard.kind];
     // A guard that has drifted past its leash goes home before it does anything
@@ -6092,9 +6162,9 @@ function updateGuards(dt) {
     // outward, so a guard that stepped over the line while fighting something
     // that then moved was free to follow it across the map. Deciding it here,
     // where the intent is known, is what closes that.
-    const home = dist2(player.x, player.y, g.x, g.y) <= CONFIG.guardLeash * CONFIG.guardLeash;
-    const target = home ? guardQuarry(g, hostiles) : null;
-    if (!target) { holdStation(g, dt); continue; }
+    const atPost = dist2(home.x, home.y, g.x, g.y) <= CONFIG.guardPostLeash * CONFIG.guardPostLeash;
+    const target = atPost ? guardQuarry(g, hostiles, home) : null;
+    if (!target) { returnToPost(g, home, dt); continue; }
 
     const dx = target.x - g.x, dy = target.y - g.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -6107,7 +6177,7 @@ function updateGuards(dt) {
       // hero's shoulder and fires past him, which is what an escort archer is.
       if (dist > CONFIG.guardArcherReach) moveGuard(g, dx / dist, dy / dist, dt);
       else if (g.shotCD <= 0) { g.shotCD = CONFIG.guardShotInterval; fireGuardArrow(g, target); }
-      else holdStation(g, dt);
+      else returnToPost(g, home, dt);
       continue;
     }
     if (dist <= CONFIG.guardMeleeReach) {
@@ -6177,7 +6247,7 @@ function updatePriest(g, dt) {
   // that never respawns is never the one walking at the wave. But standing
   // where it spawned while the hero moves off is how a healer ends the wave
   // out of range of everyone it exists to heal.
-  if (!target) { holdStation(g, dt); return; }
+  if (!target) { returnToPost(g, g.anchor ?? guardStation(g), dt); return; }
 
   const dx = target.x - g.x, dy = target.y - g.y;
   const dist = Math.hypot(dx, dy);
@@ -6224,24 +6294,29 @@ function walkGuardTo(g, tx, ty, dt) {
 }
 
 /**
- * Walks a guard back toward its station, and stops when it is close enough.
+ * Walks a guard back to its gate, and stands it down when it is there.
  *
- * The dead zone matters: without it a guard oscillates around its own post
+ * The slack matters: without a dead zone a guard oscillates across its own post
  * every frame, which at this sprite size is a visible jitter rather than a
- * subtle one.
+ * subtle one. Facing is turned toward the corridor once it arrives, so a
+ * retinue at rest is looking at the ground the wave will come over rather than
+ * at whatever it last walked past.
  */
-function holdStation(g, dt) {
-  const at = guardStation(g);
-  const dist = Math.hypot(at.x - g.x, at.y - g.y);
-  if (dist < 6) { g.route = null; return; }
-  // Close to home it beelines, which keeps the ring smooth; far from home it
-  // routes, which is what gets it round the barrier at all.
-  if (dist < CONFIG.guardPostRadius * 2) {
-    g.facing = Math.atan2(at.y - g.y, at.x - g.x);
-    moveGuard(g, (at.x - g.x) / dist, (at.y - g.y) / dist, dt);
+function returnToPost(g, home, dt) {
+  const dist = Math.hypot(home.x - g.x, home.y - g.y);
+  if (dist < CONFIG.guardPostSlack) {
+    g.route = null;
+    g.facing = 0;
     return;
   }
-  walkGuardTo(g, at.x, at.y, dt);
+  // Close in it beelines, which keeps the last step smooth; further out it
+  // routes, which is what gets it round the barrier at all.
+  if (dist < CONFIG.guardPostRadius * 2) {
+    g.facing = Math.atan2(home.y - g.y, home.x - g.x);
+    moveGuard(g, (home.x - g.x) / dist, (home.y - g.y) / dist, dt);
+    return;
+  }
+  walkGuardTo(g, home.x, home.y, dt);
 }
 
 /** One step, refused by terrain the way every other ground body's is. */
@@ -6258,9 +6333,10 @@ function moveGuard(g, ux, uy, dt) {
   // barrier has to move away from the hero for part of the way, and the
   // stricter rule pinned it against the wall it was trying to walk around —
   // which is exactly how the retinue got stranded at the towers.
-  const cap = CONFIG.guardLeash * CONFIG.guardLeash;
-  const inside = dist2(player.x, player.y, g.x, g.y) <= cap;
-  const allowed = (x, y) => !inside || dist2(player.x, player.y, x, y) <= cap;
+  const anchor = g.anchor ?? { x: player.x, y: player.y };
+  const cap = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
+  const inside = dist2(anchor.x, anchor.y, g.x, g.y) <= cap;
+  const allowed = (x, y) => !inside || dist2(anchor.x, anchor.y, x, y) <= cap;
   if (tilePassable(tileAt(nx, g.y)) && allowed(nx, g.y)) g.x = nx;
   if (tilePassable(tileAt(g.x, ny)) && allowed(g.x, ny)) g.y = ny;
   g.walkPhase += dt * 8;
@@ -6332,8 +6408,11 @@ function updateSiegeContact(dt) {
       if (damageTower(t, 1)) {
         // It came down: the tile stops being cover, which is the whole point of
         // giving a tower hit points at all.
+        // The layer redraws itself: StaticTileLayer subscribes to TileMap's
+        // onChange in its constructor. An explicit rebuild call here was both
+        // unnecessary and undefined, so the first tower ever to actually fall
+        // threw — no test had driven one to zero until one was written for it.
         tileMap.set(t.row, t.col, TILE.EMPTY);
-        rebuildTileLayer();
         events.emit({ type: 'TOWER_FELL', x: (t.col + 0.5) * ts, y: (t.row + 0.5) * ts });
       }
     }

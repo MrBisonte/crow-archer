@@ -132,12 +132,13 @@ export const runsWaves = (kind: MapKind): boolean =>
  */
 export const MAP_RULES: Record<MapKind, {
   destructibleTerrain: boolean; fogOfWar: boolean; population: MapPopulation;
+  enemySpeed: number;
 }> = {
-  forest: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
-  castle: { destructibleTerrain: true, fogOfWar: false, population: 'crows' },
-  maze: { destructibleTerrain: false, fogOfWar: true, population: 'scripted' },
-  cavern: { destructibleTerrain: true, fogOfWar: false, population: 'soldiers' },
-  bastion: { destructibleTerrain: true, fogOfWar: false, population: 'siege' },
+  forest: { destructibleTerrain: true, fogOfWar: false, population: 'crows', enemySpeed: 1 },
+  castle: { destructibleTerrain: true, fogOfWar: false, population: 'crows', enemySpeed: 1 },
+  maze: { destructibleTerrain: false, fogOfWar: true, population: 'scripted', enemySpeed: 1 },
+  cavern: { destructibleTerrain: true, fogOfWar: false, population: 'soldiers', enemySpeed: 1 },
+  bastion: { destructibleTerrain: false, fogOfWar: false, population: 'siege', enemySpeed: 0.8 },
 };
 
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */

@@ -18,6 +18,7 @@ import {
   type GuardKind,
 } from '../sim/guards';
 import { TOWER_MAX_HP } from '../sim/towers';
+import { barrierGates } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
@@ -2615,6 +2616,8 @@ interface GuardBody {
   x: number;
   y: number;
   healCD: number;
+  /** The post it is holding, written by updateGuards each frame. */
+  anchor?: { x: number; y: number };
   guard: { kind: GuardKind; rank: number; hp: number; maxHp: number; ward?: string };
 }
 
@@ -2885,8 +2888,17 @@ describe('the priest in the field', () => {
     expect(priest.guard.hp, 'nothing was actually fighting the priest').toBeLessThan(50);
 
     // Control: the same enemy, the same treatment, with a guard that does fight.
+    //
+    // The fighter is put back on its own post first. Guards hold the barrier
+    // gates now and take no target while they are away from one, so a fighter
+    // left where parkFarAway dropped it walks home instead of swinging — and
+    // the control would report 'no damage' for the wrong reason, which is
+    // exactly the rot this control exists to catch.
     const fighter = fighters[0]!;
-    fighter.x = priest.x; fighter.y = priest.y;
+    g.stepSim(1);
+    const post = fighter.anchor;
+    expect(post, 'a guard should have been anchored to a post by now').toBeDefined();
+    fighter.x = post!.x; fighter.y = post!.y;
     fighter.guard.maxHp = 50; fighter.guard.hp = 50;
     stepInContact(sk, fighter, 120);
 
@@ -3207,101 +3219,213 @@ describe('a siege boss is on the field and can be fought', () => {
   });
 });
 
-// ── THE RETINUE IS A BODYGUARD ────────────────────────────────────────────────
+// ── THE RETINUE HOLDS THE GATES ───────────────────────────────────────────────
 //
-// A playtest: "the guards should wander around our hero, as body guards, the
-// archers too." Before this they took the nearest enemy anywhere on the map,
-// so on an open bastion the retinue scattered in the first ten seconds and the
-// hero fought the wave alone.
-describe('the retinue keeps station on the hero', () => {
+// A playtest, in order. First: "the guards should wander around our hero, as
+// body guards" — so they stopped hunting across the map and ringed him. Then,
+// having watched that: "put the army in the entrances, they should be between
+// the player and the waves at the start. they can move to attack or to be
+// healed but then they should move to their posts. one on each entrance of the
+// wall."
+//
+// Ringing the hero put the whole retinue *behind* the wall it was meant to be
+// holding, so a wave came through a gap unopposed. A gate is where a defender
+// stands: forward of the person guarded, on the ground the attack has to cross.
+describe('the retinue holds the barrier gates', () => {
   beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
   afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
 
   const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
-  const strayed = (): number => {
-    const p = g.player() as { x: number; y: number };
+
+  /** Every gate the barrier leaves open, in world pixels. */
+  const gates = (): { x: number; y: number }[] => {
+    const c = g.config();
+    return barrierGates(c.rows, c.cols).map((gate) => ({
+      x: (gate.col + 0.5) * c.tileSize,
+      y: (gate.row + 0.5) * c.tileSize,
+    }));
+  };
+
+  const farthestFromAnyGate = (): number => {
+    const posts = gates();
     let worst = 0;
-    for (const b of g.guards()) worst = Math.max(worst, Math.hypot(b.x - p.x, b.y - p.y));
+    for (const b of g.guards()) {
+      let best = Infinity;
+      for (const post of posts) best = Math.min(best, Math.hypot(b.x - post.x, b.y - post.y));
+      worst = Math.max(worst, best);
+    }
     return worst;
   };
 
-  it('is seated beside the hero from the very first tick', () => {
-    // Not merely 'gets there eventually'. generateMap runs before the hero is
-    // positioned, in initGame and in the brawl hand-off alike, so a retinue
-    // seated during map generation rings wherever the hero stood on the
-    // previous map. It walked home within a few seconds, which is why every
-    // other test in this describe passed while it was wrong.
-    g.pickMap('cavern');
-    g.setMode('waves');
-    g.go('playing');
-    const p = g.player() as { x: number; y: number };
-    p.x = (g.config().cols - 4) * g.config().tileSize;
-    p.y = 2 * g.config().tileSize;
-    g.setMode('siege');
-    g.go('playing');
-    g.stepSim(1);
-    expect(g.guards().length).toBeGreaterThan(0);
-    expect(strayed(), 'the retinue was seated at a stale hero position')
-      .toBeLessThan(g.config().guardPostRadius * 3);
+  it('leaves the barrier more than one way through, so there are gates to hold', () => {
+    openSiege();
+    expect(gates().length).toBeGreaterThan(2);
   });
 
-  it('stays near the hero while a wave crosses the map', () => {
+  it('stands the retinue on the gates within a few seconds of opening', () => {
     openSiege();
+    g.clearSiegeWave();
     g.stepSim(600);
-    // The leash plus one guard's own reach: a guard may stand at the edge of
-    // its leash and swing, and nothing may be further out than that.
-    const cap = g.config().guardLeash + g.config().guardMeleeReach;
-    expect(strayed(), `a guard strayed ${Math.round(strayed())}px from the hero`).toBeLessThan(cap);
+    expect(farthestFromAnyGate(), 'a guard is not on any gate')
+      .toBeLessThan(g.config().guardPostLeash);
   });
 
-  it('follows when the hero walks away', () => {
+  it('puts the retinue between the hero and the corridor', () => {
     openSiege();
     g.clearSiegeWave();
-    const p = g.player() as { x: number; y: number };
-    // Put the hero across the map from where the retinue was seated.
-    p.x = (g.config().cols - 6) * g.config().tileSize;
-    p.y = (g.config().rows / 2) * g.config().tileSize;
-    // Long enough to walk the width of the arena and round the barrier: the
-    // retinue moves at guardSpeed and the trip is most of 33 tiles.
-    g.stepSim(1200);
-    expect(strayed(), 'the retinue never followed').toBeLessThan(
-      g.config().guardLeash + g.config().guardMeleeReach,
-    );
+    g.stepSim(600);
+    const p = g.player() as { x: number };
+    // Every guard east of the hero: the waves come down the right-hand
+    // corridor, so a defender belongs on that side of the person defended.
+    for (const b of g.guards()) {
+      expect(b.x, `${b.guard.kind} is behind the hero`).toBeGreaterThan(p.x);
+    }
   });
 
-  it('ignores an enemy that is nowhere near the hero', () => {
+  it('spreads across different gates rather than stacking on one', () => {
     openSiege();
     g.clearSiegeWave();
-    const p = g.player() as { x: number; y: number };
-    p.x = 3 * g.config().tileSize;
-    p.y = (g.config().rows / 2) * g.config().tileSize;
-    g.stepSim(30);
-    const before = g.guards().map((b: { x: number; y: number }) => ({ x: b.x, y: b.y }));
-    // A skeleton parked in the far corner, well outside the leash.
+    g.stepSim(600);
+    const posts = gates();
+    const held = new Set<number>();
+    for (const b of g.guards()) {
+      let best = 0, bestD = Infinity;
+      posts.forEach((post, i) => {
+        const d = Math.hypot(b.x - post.x, b.y - post.y);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      held.add(best);
+    }
+    // Three opening guards should be holding three different ways in.
+    expect(held.size, 'the retinue piled onto one gate').toBeGreaterThan(1);
+  });
+
+  it('returns to its post after leaving it to fight', () => {
+    openSiege();
+    g.clearSiegeWave();
+    g.stepSim(600);
+    const body = g.guards()[0];
+    // Drag it off, the way chasing something would.
+    body.x += 120; body.y += 60;
+    g.clearSiegeWave();
+    g.stepSim(600);
+    let best = Infinity;
+    for (const post of gates()) best = Math.min(best, Math.hypot(body.x - post.x, body.y - post.y));
+    expect(best, 'the guard never went back to a gate').toBeLessThan(g.config().guardPostLeash);
+  });
+
+  it('ignores an enemy that is nowhere near any gate', () => {
+    openSiege();
+    g.clearSiegeWave();
+    g.stepSim(600);
+    // A tough skeleton parked in the far top corner, well outside every post.
     g.spawnSkeleton('normal');
     const sk = g.skeletons()[g.skeletons().length - 1];
     sk.x = (g.config().cols - 3) * g.config().tileSize;
     sk.y = 2 * g.config().tileSize;
     sk.hp = 99; sk.maxHp = 99;
-    g.stepSim(180);
-    // Nothing should have marched off toward it.
-    expect(strayed()).toBeLessThan(g.config().guardLeash);
-    expect(before.length).toBeGreaterThan(0);
+    g.stepSim(300);
+    expect(farthestFromAnyGate(), 'a guard marched off to something far from its post')
+      .toBeLessThan(g.config().guardPostLeash);
   });
+});
 
-  it('spreads the retinue around the hero rather than stacking it', () => {
-    openSiege();
-    g.clearSiegeWave();
-    g.stepSim(240);
-    const bodies = g.guards() as { x: number; y: number }[];
-    expect(bodies.length).toBeGreaterThan(1);
-    // No two guards standing on the same pixel. A stack is what a shared post
-    // angle would produce, and it reads as one guard.
-    for (let i = 0; i < bodies.length; i++) {
-      for (let j = i + 1; j < bodies.length; j++) {
-        const a = bodies[i]!, b = bodies[j]!;
-        expect(Math.hypot(a.x - b.x, a.y - b.y), `guards ${i} and ${j} are stacked`).toBeGreaterThan(2);
+// ── THE BASTION'S OWN TERRAIN RULES ───────────────────────────────────────────
+//
+// A playtest, verbatim: "the player shouldnt destroy the walls on this map,
+// otherwise we have no wall to defend" and "make the critters a bit slower
+// here, 80% only on this map."
+//
+// Both are per-map facts and both live in MAP_RULES, for the reason the whole
+// feature gates on the map: the bastion is reachable from two modes and neither
+// should have to know about it.
+describe("the bastion's terrain rules", () => {
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  it('cannot be broken by the player, so there is always a wall to defend', () => {
+    expect(MAP_RULES.bastion.destructibleTerrain).toBe(false);
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    const tiles = g.tiles();
+    const c = g.config();
+    // Find a barrier tile and try to level it, twice over: the tile smasher
+    // every melee weapon routes through, and a blast at point-blank range.
+    let target: { row: number; col: number } | null = null;
+    for (let row = 1; row < c.rows - 1 && !target; row++) {
+      for (let col = 1; col < c.cols - 1; col++) {
+        if (tiles.get(row, col) === TILE.ROCK) { target = { row, col }; break; }
       }
     }
+    expect(target, 'the bastion should have a stone barrier').not.toBeNull();
+    const { row, col } = target!;
+    g.smashTile(row, col);
+    expect(tiles.get(row, col), 'a melee hit levelled the barrier').toBe(TILE.ROCK);
+    g.blast((col + 0.5) * c.tileSize, (row + 0.5) * c.tileSize);
+    g.stepSim(4);
+    expect(tiles.get(row, col), 'a blast levelled the barrier').toBe(TILE.ROCK);
+  });
+
+  it('still lets an enemy bring a tower down, which is a different rule', () => {
+    // destructibleTerrain is about what the *player's weapons* may level.
+    // A tower falling is the siege's own attrition and goes through
+    // damageTower, so making the map indestructible must not have frozen it.
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    const standing = g.towers().length;
+    g.hurtTowers(1);
+    const tiles = g.tiles();
+    const t = g.towers()[0];
+    expect(tiles.get(t.row, t.col)).toBe(TILE.HUT);
+    // One more hit from an enemy pressed against it.
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons()[g.skeletons().length - 1];
+    sk.hp = 99; sk.maxHp = 99;
+    for (let n = 0; n < 200; n++) {
+      sk.x = (t.col + 0.5) * g.config().tileSize;
+      sk.y = (t.row + 0.5) * g.config().tileSize;
+      g.stepSim(1);
+      if (tiles.get(t.row, t.col) !== TILE.HUT) break;
+    }
+    expect(tiles.get(t.row, t.col), 'a tower could no longer be brought down').toBe(TILE.EMPTY);
+    expect(standing).toBe(2);
+  });
+
+  it('slows everything hostile to 80%, and only here', () => {
+    expect(MAP_RULES.bastion.enemySpeed).toBe(0.8);
+    for (const kind of Object.keys(MAP_RULES) as MapKind[]) {
+      if (kind === 'bastion') continue;
+      expect(MAP_RULES[kind].enemySpeed, `${kind} should run at full speed`).toBe(1);
+    }
+  });
+
+  it('actually moves a crow more slowly here than on the forest', () => {
+    // A PASSIVE crow, deliberately. An aggro'd one walks an A* path, so on the
+    // bastion it routes around the barrier and its x-displacement measures the
+    // detour as well as the speed — that read 0.56 and looked like a bug in the
+    // multiplier. A passive crow drifts left in a straight line with no pathing
+    // in it at all, which is the only thing here that measures speed alone.
+    //
+    // Both in the same mode, switching only the map: waves scales crow speed
+    // with the wave number and siege does not, and comparing across modes
+    // measured two rules at once.
+    const drift = (map: MapKind): number => {
+      g.setMode('brawl');
+      g.go('playing');
+      g.generateMap(map);
+      g.crows().length = 0;
+      g.spawnCrow();
+      const c = g.crows()[0];
+      c.state = 'passive';
+      const from = c.x;
+      g.stepSim(30);
+      return from - c.x;
+    };
+    const onForest = drift('forest');
+    const onBastion = drift('bastion');
+    expect(onForest, 'the control crow did not move').toBeGreaterThan(0);
+    expect(onBastion, 'a crow was not slowed on the bastion').toBeLessThan(onForest);
+    expect(onBastion / onForest).toBeCloseTo(0.8, 1);
   });
 });
