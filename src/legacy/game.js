@@ -10474,12 +10474,15 @@ export const devHooks = {
     for (let i = 0; i < n; i++) { __devTs += FIXED_DT * 1000; loop(__devTs); }
   },
   /**
-   * Advances the simulation only, one fixed step per count, with no frame and
-   * no render. Needs no canvas, so this is what the headless tests drive;
-   * step() and frame() above go through the real loop and need a booted page.
+   * Advances the frame clock, one fixed step per count, with no render. Needs
+   * no canvas, so this is what the headless tests drive; step() and frame()
+   * above go through the real loop and need a booted page.
    *
    * It runs fixedStep(), the same body the real loop's accumulator runs, so a
-   * hitstop freeze holds a scripted run exactly as it holds a played one.
+   * hitstop freeze holds a scripted run exactly as it holds a played one. That
+   * makes n steps n *frames*, which is n sim steps only while nothing is
+   * frozen: a test waiting out a cooldown across an impact has to count sim
+   * steps itself. See stepPast() in game.test.ts.
    */
   stepSim(n = 1) { for (let i = 0; i < n; i++) fixedStep(); },
   gameTime: () => gameTime,
