@@ -11,6 +11,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CHARACTERS, type CharacterKind } from '../net/protocol';
 import { CHARACTER_STATS } from '../sim/arena';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
+import { MODE_RULES } from '../sim/game-mode';
+import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable } from '../sim/tilemap';
@@ -2488,5 +2490,78 @@ describe('single player mode rules', () => {
       g.stepSim(30);
       expect(g.state()).toBe('playing');
     });
+  });
+});
+
+// ── THE BASTION SIEGE ─────────────────────────────────────────────────────────
+//
+// Siege is a third single-player mode: a finite ten-wave defence of two towers,
+// on one fixed map, with a retinue that grows. These cover the parts already
+// wired; the ones still to come are the retinue on the field and the ladder
+// driving the spawners.
+describe('siege mode', () => {
+  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+
+  it('is a mode the menu can reach', () => {
+    // MENU_ENTRIES is the only writer of gameMode in the real game, so a mode
+    // with no entry is a mode no player can pick however complete its rules.
+    const siege = g.menuEntries()
+      .find((e: { label: string; section: string }) => e.label === 'SIEGE');
+    expect(siege, 'no SIEGE entry on the title screen').toBeDefined();
+    expect(siege?.section).toBe('mode');
+  });
+
+  it('always starts on the bastion, whatever the map screen last held', () => {
+    g.setMode('siege');
+    g.pickMap('cavern');
+    g.go('playing');
+    expect(g.mapKind()).toBe('bastion');
+  });
+
+  it('skips the map screen, because a fixed map has nothing to ask', () => {
+    g.setMode('siege');
+    g.go('charselect');
+    (g.keys() as Record<string, boolean>)['Enter'] = true;
+    g.stepSim(1);
+    expect(g.state()).toBe('playing');
+  });
+
+  it('leaves the bastion off the Waves map screen', () => {
+    // Its population is 'siege', not 'crows' or 'soldiers', so runsWaves says
+    // no and MAP_PANELS never offers it. A Waves run there would have the
+    // ladder's win condition and Waves' endlessness at once.
+    expect(runsWaves('bastion')).toBe(false);
+    expect(g.mapPanels().map((p: { kind: string }) => p.kind)).not.toContain('bastion');
+  });
+
+  it('does not let the escalation timer drive a siege', () => {
+    // The ladder in sim/siege-run.ts owns the population. If the crow timer ran
+    // as well, two things would be spawning and each would undo the other's
+    // pacing — the same collision runsCastleGauntlet exists to prevent.
+    g.setMode('siege');
+    g.go('playing');
+    const startWave = g.wave();
+    g.stepSim(Math.ceil(g.config().crowEscalationInterval * 60) * 3);
+    expect(g.wave()).toBe(startWave);
+    expect(g.crows().length).toBe(0);
+    expect(g.soldiers().length).toBe(0);
+  });
+
+  it('generates two towers behind a barrier that can be walked around', () => {
+    g.setMode('siege');
+    g.go('playing');
+    const tiles = g.tiles();
+    const c = g.config();
+    let huts = 0;
+    for (let row = 0; row < c.rows; row++) {
+      for (let col = 0; col < c.cols; col++) if (tiles.get(row, col) === TILE.HUT) huts++;
+    }
+    expect(huts).toBe(2);
+  });
+
+  it('knows the run is ten waves, and reads it from the table', () => {
+    expect(MODE_RULES.siege.waveCap).toBe(SIEGE_WAVE_COUNT);
+    expect(MODE_RULES.brawl.waveCap).toBeNull();
+    expect(MODE_RULES.waves.waveCap).toBeNull();
   });
 });

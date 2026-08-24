@@ -1,14 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   MODE_RULES, SINGLE_PLAYER_MODES, isSinglePlayerMode, modeRule, picksItsMap,
-  type SinglePlayerMode,
 } from './game-mode';
 
 describe('single player mode table', () => {
   it('has a row for every mode, and no rows for anything else', () => {
     // Driven off the table both ways so neither the union nor the list can
     // grow without the other noticing.
-    expect(SINGLE_PLAYER_MODES).toEqual(['brawl', 'waves']);
+    expect(SINGLE_PLAYER_MODES).toEqual(['brawl', 'waves', 'siege']);
     expect(Object.keys(MODE_RULES).sort()).toEqual([...SINGLE_PLAYER_MODES].sort());
   });
 
@@ -64,7 +63,7 @@ describe('single player mode table', () => {
 describe('narrowing an untrusted mode string', () => {
   it('accepts the real modes and rejects everything else', () => {
     for (const mode of SINGLE_PLAYER_MODES) expect(isSinglePlayerMode(mode)).toBe(true);
-    for (const junk of ['BRAWL', 'siege', '', 'toString', null, undefined, 7, {}]) {
+    for (const junk of ['BRAWL', 'skirmish', '', 'toString', null, undefined, 7, {}]) {
       expect(isSinglePlayerMode(junk)).toBe(false);
     }
   });
@@ -97,18 +96,34 @@ describe('picksItsMap', () => {
 });
 
 describe('the table is the only place a mode is described', () => {
-  it('answers every question the legacy comparisons used to ask', () => {
-    // One assertion per field, so a field deleted in a future refactor takes
-    // this test with it rather than silently reducing coverage.
-    const fields: readonly (keyof (typeof MODE_RULES)[SinglePlayerMode])[] = [
-      'label', 'mapChoice', 'fixedMap', 'waveScaling',
-      'bossTrigger', 'runsCastleGauntlet', 'announcesWaves', 'summaryStat',
+  it('answers every question the legacy comparisons used to ask, and no more', () => {
+    // Compared as a set rather than checked field by field. The field-by-field
+    // version caught a field being *deleted* and said nothing when one was
+    // added: `waveCap` arrived with siege and slipped straight past it, because
+    // asserting a list of eight has length eight is true no matter what the
+    // rows actually hold. An exact set catches both directions.
+    const expected = [
+      'announcesWaves', 'bossTrigger', 'fixedMap', 'label', 'mapChoice',
+      'runsCastleGauntlet', 'summaryStat', 'waveCap', 'waveScaling',
     ];
     for (const mode of SINGLE_PLAYER_MODES) {
-      for (const field of fields) {
-        expect(MODE_RULES[mode], `${mode}.${String(field)}`).toHaveProperty(field);
-      }
+      expect(Object.keys(MODE_RULES[mode]).sort(), mode).toEqual(expected);
     }
-    expect(fields).toHaveLength(8);
+  });
+
+  it('describes siege as a finite defence of one fixed place', () => {
+    expect(MODE_RULES.siege).toMatchObject({
+      label: 'SIEGE',
+      mapChoice: 'fixed',
+      fixedMap: 'bastion',
+      waveScaling: false,
+      bossTrigger: 'none',
+      runsCastleGauntlet: false,
+      announcesWaves: true,
+      summaryStat: 'wave',
+    });
+    // The only mode with an end in sight. Read from the table by the win
+    // transition rather than hardcoded, so the ladder's length has one home.
+    expect(MODE_RULES.siege.waveCap).toBe(10);
   });
 });

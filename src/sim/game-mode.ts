@@ -22,6 +22,7 @@
  */
 
 import { type MapKind } from './arena-map';
+import { SIEGE_WAVE_COUNT } from './siege-waves';
 
 /**
  * A mode the player picks at the title screen.
@@ -29,7 +30,7 @@ import { type MapKind } from './arena-map';
  * Two values today. The union is the reason a third one cannot be added
  * halfway: every table below is keyed on it.
  */
-export type SinglePlayerMode = 'brawl' | 'waves';
+export type SinglePlayerMode = 'brawl' | 'waves' | 'siege';
 
 /** Where the map for a run comes from. */
 export type MapChoice = 'fixed' | 'free';
@@ -92,6 +93,17 @@ export interface ModeRule {
 
   /** Which figure the HUD's top line and the game-over screen report. */
   readonly summaryStat: SummaryStat;
+
+  /**
+   * How many waves the run is, or `null` for a mode that never ends on a
+   * count.
+   *
+   * `null` rather than `Infinity` because the two mean different things to a
+   * reader: brawl ends on a kill count and waves does not end at all, and
+   * neither is 'a very large number of waves'. The win transition reads this
+   * instead of hardcoding a ten.
+   */
+  readonly waveCap: number | null;
 }
 
 /**
@@ -109,6 +121,7 @@ export const MODE_RULES: Record<SinglePlayerMode, ModeRule> = {
     runsCastleGauntlet: true,
     announcesWaves: false,
     summaryStat: 'kills',
+    waveCap: null,
   },
   waves: {
     label: 'WAVES',
@@ -119,6 +132,31 @@ export const MODE_RULES: Record<SinglePlayerMode, ModeRule> = {
     runsCastleGauntlet: false,
     announcesWaves: true,
     summaryStat: 'wave',
+    waveCap: null,
+  },
+  /**
+   * The bastion siege: a finite defence of two towers with a retinue, over ten
+   * waves drawn from the whole bestiary.
+   *
+   * `mapChoice: 'fixed'` because a siege is a place, not a setting — the
+   * towers, the barrier and the corridor are the mode, so offering it on the
+   * forest would be offering a different game with the same name. That also
+   * keeps it off the mapselect screen, which has nothing to ask.
+   *
+   * `waveScaling: false` because its ladder already sets each wave's
+   * composition explicitly; multiplying crow hp on top would ramp the
+   * difficulty twice and make the ladder's own numbers a lie.
+   */
+  siege: {
+    label: 'SIEGE',
+    mapChoice: 'fixed',
+    fixedMap: 'bastion',
+    waveScaling: false,
+    bossTrigger: 'none',
+    runsCastleGauntlet: false,
+    announcesWaves: true,
+    summaryStat: 'wave',
+    waveCap: SIEGE_WAVE_COUNT,
   },
 };
 

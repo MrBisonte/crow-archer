@@ -643,6 +643,9 @@ const MENU_ENTRIES = [
   { key: 'W', label: 'WAVES', section: 'mode',
     sub: 'survive escalating swarms  ·  endless run',
     run: () => { gameMode = 'waves'; transitionTo('charselect'); } },
+  { key: 'S', label: 'SIEGE', section: 'mode',
+    sub: 'hold the bastion  ·  ten waves  ·  a retinue that grows',
+    run: () => { gameMode = 'siege'; transitionTo('charselect'); } },
   { key: 'M', label: 'MULTIPLAYER', section: 'mode',
     sub: 'up to 4 players  ·  co-op or 2v2  ·  needs a server',
     run: () => transitionTo('multiplayer') },
@@ -10361,6 +10364,11 @@ export const devHooks = {
   // happen through the real timer rather than asserting on a draw call.
   wave: () => wave,
   waveBanner: () => ({ secs: waveAnnounce, text: waveAnnounceText }),
+  // The two screens that decide what a player can reach at all. Exposed
+  // because a mode or a map whose rules are complete but whose entry is
+  // missing is unreachable, and nothing else in the suite would notice.
+  menuEntries: () => MENU_ENTRIES,
+  mapPanels: () => MAP_PANELS,
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
   // hold onto after the call; setLogLevel changes what future calls record,
   // it does not retroactively add or remove anything already in the ring.
