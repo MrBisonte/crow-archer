@@ -117,6 +117,18 @@ export type GameEvent =
   // Striking a torch in the dark. The only thing in the maze that gives sight
   // back, so it is the one beat that is relief rather than threat.
   | { type: 'TORCH_LIT'; x: number; y: number }
+  // The bastion. A siege is the only mode with anyone on the player's side, so
+  // these are the first events about a friendly body rather than a hostile one.
+  // GUARD_SWING and GUARD_SHOT are separate for the same reason MELEE_HIT and
+  // ICE_BOLT_FIRED are: one is a blade at arm's length, the other is an arrow
+  // leaving, and the render layer should not have to read a flag to find out.
+  | { type: 'GUARD_SWING'; x: number; y: number }
+  | { type: 'GUARD_SHOT'; x: number; y: number }
+  | { type: 'GUARD_DOWN'; x: number; y: number }
+  | { type: 'TOWER_FELL'; x: number; y: number }
+  // Carries the wave that was just survived, not the one about to start: the
+  // banner reads "wave 3 held", and the run has already advanced past it.
+  | { type: 'SIEGE_WAVE_CLEARED'; wave: number }
   // World
   // Emitted before the tile grid is replaced, so a render layer can swap theme
   // and let the reset repaint once rather than twice.

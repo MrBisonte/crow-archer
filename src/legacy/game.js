@@ -1097,6 +1097,7 @@ const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
  * screen (`selectedMapKind`, any map runsWaves accepts), and the dev
  * harness.
+
  */
 function generateMap(kind = 'forest') {
   mapKind = kind;
@@ -2102,6 +2103,8 @@ const SHAKE = {
   explosion:      [9,  300],
   bossSlam:       [12, 400],
   gameOver:       [12, 600],
+  guardDown:      [4,  180],
+  towerFell:      [8,  320],
   bossDeath:      [14, 600],
   stormCast:      [14, 600],
 };
@@ -2137,6 +2140,22 @@ const WEAPON_FX = {
   sapperShot: { sound: () => sndCrossbow, shake: [2, 70] },
   net:       { sound: () => sndChargeWhoosh, shake: null },
 };
+
+// The retinue reaches twelve, and every guard swings on its own timer. Played
+// straight, that is a dozen clangs stacked inside the same few milliseconds,
+// which reads as noise rather than as a line holding. One voice per window: the
+// ear learns "the wall is fighting" without being told how many swings landed.
+//
+// Kill and collapse are deliberately NOT routed through this. Those are facts
+// the player has to hear every single time, and there are never twelve at once.
+const RETINUE_VOICE_GAP_MS = 90;
+let retinueVoiceAt = -Infinity;
+function retinueVoice(snd) {
+  const now = performance.now();
+  if (now - retinueVoiceAt < RETINUE_VOICE_GAP_MS) return;
+  retinueVoiceAt = now;
+  playSound(snd);
+}
 
 events.on(e => {
   switch (e.type) {
@@ -2209,6 +2228,48 @@ events.on(e => {
         speedMin: 20, speedMax: 90, decay: 2.0, shape: 'spark',
         sizeMin: 1, sizeMax: 2.5, gravity: -60, shadowBlur: 10, shadowColor: '#FF7A1F' });
       break;
+    // ── The bastion ──────────────────────────────────────────────────────
+    case 'GUARD_SWING':
+      retinueVoice(sndPitchfork);
+      burst(e.x, e.y, { count: 3, colors: ['#E7EDF4','#B7BFC9'],
+        speedMin: 20, speedMax: 70, decay: 3.4, shape: 'spark',
+        sizeMin: 1, sizeMax: 1.8, pri: PRI.AMBIENT });
+      break;
+
+    case 'GUARD_SHOT':
+      retinueVoice(sndShoot);
+      break;
+
+    case 'GUARD_DOWN':
+      // Violet for the retinue's livery, red because a guard is a person: the
+      // same distinction SOLDIER_KILLED draws against the undead's bone.
+      playSound(sndGuardDown);
+      triggerShake(...SHAKE.guardDown);
+      burst(e.x, e.y, { count: 16, colors: ['#6A4FB0','#9B7CE2','#A03028','#FFFFFF'],
+        speedMin: 40, speedMax: 130, decay: 1.8,
+        shapeMix: [['circle', 0.6], ['spark', 0.4]],
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6,
+        shadowBlur: 4, shadowColor: '#9B7CE2', pri: PRI.KILL });
+      break;
+
+    case 'TOWER_FELL':
+      // Heavier than a guard and duller than an explosion: stone giving up.
+      playSound(sndTowerFell);
+      triggerShake(...SHAKE.towerFell);
+      burst(e.x, e.y, { count: 26, colors: ['#8A8578','#B5AFA0','#5A564C','#FFFFFF'],
+        speedMin: 30, speedMax: 160, decay: 1.3, shape: 'circle',
+        sizeMin: 2, sizeMax: 4.5, gravity: 220, damping: 0.7,
+        shadowBlur: 6, shadowColor: '#B5AFA0', pri: PRI.CRITICAL });
+      break;
+
+    case 'SIEGE_WAVE_CLEARED': {
+      // The chime climbs with the ladder, because holding wave nine should not
+      // sound like holding wave one. Slot 2 is zzfx's base frequency.
+      const held = [...sndWaveHeld];
+      held[2] = sndWaveHeld[2] * (1 + 0.06 * e.wave);
+      playSound(held);
+      break; }
+
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -6498,6 +6559,9 @@ const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // trian
 const sndKeyDrop       = [.3,  .02, 1400, 0, .02, .12, 1, 1, 0, 0, 300, .05]; // triangle chime + pitch jump — small metal landing
 const sndChestOpen     = [.4,  .05, 160, 0, .1,  .22, 2, 1, 120];       // sawtooth rising — a lid coming up
 const sndDoorOpen      = [.6,  .1,   70, 0, .3,  .5,  4, 1, 40];        // low bit noise grinding up — stone giving way
+const sndWaveHeld      = [.4,  .05, 520, 0, .08, .22, 1, 1, 120];      // triangle rising — the line held
+const sndGuardDown     = [.35, .05, 300, 0, .05, .12, 2, 1, -220];     // sawtooth dropping — a body going down
+const sndTowerFell     = [.7,  .1,   80, 0, .2,  .4,  4, 1, -30];      // low bit noise — masonry collapsing
 const sndTorchLight    = [.3,  .3,  420, 0, .06, .18, 4, 1, 90];        // bit noise, rising — a strike catching
 
 // Multi-voice sounds — ZzFX is single-voice, so use staggered calls via setTimeout
