@@ -10934,6 +10934,36 @@ export const devHooks = {
   giveMazeKeys() { if (mazeRun) { mazeRun.held.silver = true; mazeRun.held.golden = true; } },
   /** Wipes the field so a test can reach the next wave without fighting one. */
   clearSiegeWave() { crows = []; skeletons = []; soldiers = []; boss = null; siegeExtraBosses = []; },
+  /**
+   * Fast-forwards a siege to the start of wave , promoting and recruiting on
+   * the way exactly as clearing each wave would.
+   *
+   * It walks the real completeWave rather than assigning the number, so the
+   * retinue that arrives is the one ten cleared waves would actually have
+   * produced — ranks, recruits and all. Assigning siegeRun.wave directly would
+   * put you on wave 9 with two rank-0 guards, which is not a state the game can
+   * reach and therefore not worth looking at.
+   */
+  jumpToSiegeWave(n) {
+    if (!siegeRun) return null;
+    let guardStops = 0;
+    while (siegeRun.wave < n && siegeRun.outcome === 'running' && guardStops < 64) {
+      this.clearSiegeWave();
+      updateSiege(FIXED_DT);
+      guardStops++;
+    }
+    this.clearSiegeWave();
+    siegeSpawned = false;
+    updateSiege(FIXED_DT);
+    return { wave: siegeRun.wave, outcome: siegeRun.outcome, guards: siegeRun.guards.length };
+  },
+  /** Wounds every guard by n, never below 1, so the priest has work to do. */
+  hurtGuards(n = 1) {
+    for (const body of guards) body.guard.hp = Math.max(1, body.guard.hp - n);
+    return guards.map((b) => b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp);
+  },
+  /** Drops every tower to hp, to watch cover come off when it falls. */
+  hurtTowers(hp = 1) { for (const t of towers) t.hp = hp; return towers.map((t) => t.hp); },
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
   // hold onto after the call; setLogLevel changes what future calls record,
   // it does not retroactively add or remove anything already in the ring.
