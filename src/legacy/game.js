@@ -6040,17 +6040,43 @@ function guardHome(g, index) {
 }
 
 /**
- * The nearest hostile near enough to the *hero* to be this guard's business.
+ * The ground a guard answers for: the gate it holds, AND the hero.
  *
- * Measured from the hero and not from the guard, which is the difference
- * between a bodyguard and a skirmisher: a guard already drawn out to the edge
- * of its leash must not find something further out and keep going. The leash is
- * therefore a property of the hero's surroundings, not of the guard's.
+ * Two anchors, not one, and that is the fix for the way the retinue used to
+ * look frozen. With the gate alone, anything that got past the barrier stopped
+ * being any guard's business the moment it was more than a leash from the post
+ * — and the hero stands further from the nearest gate than the leash is long.
+ * So a wave that walked through reached him, ate him, and six guards stood on
+ * their gates watching, each of them correctly concluding there was nothing
+ * within its remit. Measured in a headless run: three bodies stacked on the
+ * hero, nearest post 190px away, leash 170.
+ *
+ * The union of two discs rather than one bigger disc, because the two are
+ * different jobs and one radius cannot express both — widening the leash until
+ * it covered the hero would also let a guard chase a crow most of the way to
+ * the corridor. Overlapping is what keeps the region connected, so a guard can
+ * walk from its gate to the hero without ever being "outside".
  */
-function guardQuarry(g, hostiles, home) {
+function guardGround(home) {
+  return [home, { x: player.x, y: player.y }];
+}
+
+/** Is this point on the ground a guard answers for? */
+function onGuardGround(ground, x, y) {
   const reach = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
+  return ground.some((p) => dist2(p.x, p.y, x, y) <= reach);
+}
+
+/**
+ * The nearest hostile near enough to this guard's ground to be its business.
+ *
+ * Eligibility is measured from the ground and the choice from the guard, which
+ * is the difference between a bodyguard and a skirmisher: a guard already drawn
+ * out to the edge must not find something further out and keep going.
+ */
+function guardQuarry(g, hostiles, ground) {
   const near = [];
-  for (const h of hostiles) if (dist2(home.x, home.y, h.x, h.y) <= reach) near.push(h);
+  for (const h of hostiles) if (onGuardGround(ground, h.x, h.y)) near.push(h);
   return nearestHostile(g, near);
 }
 
@@ -6294,6 +6320,7 @@ function updateGuards(dt) {
     if (g.held) { g.facing = 0; continue; }
     const home = guardHome(g, i);
     g.anchor = home;
+    g.ground = guardGround(home);
     if (isPriest(g.guard)) { updatePriest(g, dt); continue; }
     const stats = GUARD_STATS[g.guard.kind];
     // A guard that has drifted past its leash goes home before it does anything
@@ -6306,8 +6333,8 @@ function updateGuards(dt) {
     // outward, so a guard that stepped over the line while fighting something
     // that then moved was free to follow it across the map. Deciding it here,
     // where the intent is known, is what closes that.
-    const atPost = dist2(home.x, home.y, g.x, g.y) <= CONFIG.guardPostLeash * CONFIG.guardPostLeash;
-    const target = atPost ? guardQuarry(g, hostiles, home) : null;
+    const onDuty = onGuardGround(g.ground, g.x, g.y);
+    const target = onDuty ? guardQuarry(g, hostiles, g.ground) : null;
     if (!target) { returnToPost(g, home, dt); continue; }
 
     const dx = target.x - g.x, dy = target.y - g.y;
@@ -6319,7 +6346,7 @@ function updateGuards(dt) {
       // An archer shoots from where it stands and only closes if it cannot
       // reach: its reach is nearly its leash, so in practice it stays on the
       // hero's shoulder and fires past him, which is what an escort archer is.
-      if (dist > CONFIG.guardArcherReach) moveGuard(g, dx / dist, dy / dist, dt);
+      if (dist > CONFIG.guardArcherReach) walkGuardTo(g, target.x, target.y, dt);
       else if (g.shotCD <= 0) { g.shotCD = CONFIG.guardShotInterval; fireGuardArrow(g, target); }
       else returnToPost(g, home, dt);
       continue;
@@ -6332,7 +6359,12 @@ function updateGuards(dt) {
       }
       continue;
     }
-    moveGuard(g, dx / dist, dy / dist, dt);
+    // Routed, not beelined. A guard chasing in a straight line walks into the
+    // barrier it is standing in a gate of, and stops there for as long as its
+    // quarry stays put -- which is the "stuck or frozen a few seconds into a
+    // wave" the playtest reported. Coming home already routed; going out did
+    // not, and going out is the half that has a wall in the way.
+    walkGuardTo(g, target.x, target.y, dt);
   }
 }
 
@@ -6420,8 +6452,16 @@ function updatePriest(g, dt) {
  */
 function walkGuardTo(g, tx, ty, dt) {
   g.routeTimer -= dt;
-  if (!g.route || g.route.length === 0 || g.routeTimer <= 0) {
+  // A route is also stale when the thing it was computed for has moved off the
+  // end of it. Without this a guard chasing a body across the field followed
+  // the path to where that body used to be for up to half a second at a time,
+  // which on a map with a wall through the middle of it is the difference
+  // between going round the barrier and walking into it.
+  const drifted = !g.routeGoal
+    || dist2(g.routeGoal.x, g.routeGoal.y, tx, ty) > CONFIG.tileSize * CONFIG.tileSize;
+  if (!g.route || g.route.length === 0 || g.routeTimer <= 0 || drifted) {
     g.route = computeAStarPath(g.x, g.y, tx, ty);
+    g.routeGoal = { x: tx, y: ty };
     g.routeTimer = CONFIG.guardRouteInterval;
   }
   let aimX = tx, aimY = ty;
@@ -6447,42 +6487,40 @@ function walkGuardTo(g, tx, ty, dt) {
  * at whatever it last walked past.
  */
 function returnToPost(g, home, dt) {
-  const dist = Math.hypot(home.x - g.x, home.y - g.y);
-  if (dist < CONFIG.guardPostSlack) {
+  if (Math.hypot(home.x - g.x, home.y - g.y) < CONFIG.guardPostSlack) {
     g.route = null;
+    g.routeGoal = null;
     g.facing = 0;
-    return;
-  }
-  // Close in it beelines, which keeps the last step smooth; further out it
-  // routes, which is what gets it round the barrier at all.
-  if (dist < CONFIG.guardPostRadius * 2) {
-    g.facing = Math.atan2(home.y - g.y, home.x - g.x);
-    moveGuard(g, (home.x - g.x) / dist, (home.y - g.y) / dist, dt);
     return;
   }
   walkGuardTo(g, home.x, home.y, dt);
 }
 
-/** One step, refused by terrain the way every other ground body's is. */
+/**
+ * One step, refused by terrain the way every other ground body's is.
+ *
+ * The leash is NOT enforced here, and that is a decision rather than an
+ * omission. It used to be: a step was refused if it left the guard's ground.
+ * That pins a guard against its own boundary, because this moves on each axis
+ * separately and an axis-separated step can leave a disc the diagonal would
+ * have stayed inside — so a guard heading for something perfectly legitimate
+ * would have both halves of its step refused and simply stop.
+ *
+ * Nothing is lost by dropping it, because the two rules that actually bound a
+ * guard live where the intent is known rather than where the pixels are:
+ * `guardQuarry` will only hand back a threat standing on the guard's ground,
+ * and `updateGuards` will not let a guard that is off its ground take a target
+ * at all. A guard therefore only ever walks from a point on its ground toward
+ * another point on its ground, and the moment its quarry steps off, it stops
+ * being a target and the guard turns for home. A rule enforced twice is a rule
+ * that can disagree with itself, and this was the half that was wrong.
+ */
 function moveGuard(g, ux, uy, dt) {
   const spd = CONFIG.guardSpeed;
   const nx = g.x + ux * spd * dt;
   const ny = g.y + uy * spd * dt;
-  // The leash is enforced on the step, not only on target selection. Choosing a
-  // near target keeps a guard home in the ordinary case; this stops it being
-  // dragged further out by one that walks away while being fought.
-  //
-  // Beyond the leash the rule inverts into "any step is allowed", not "only
-  // steps that shorten the straight-line distance". A guard coming home round a
-  // barrier has to move away from the hero for part of the way, and the
-  // stricter rule pinned it against the wall it was trying to walk around —
-  // which is exactly how the retinue got stranded at the towers.
-  const anchor = g.anchor ?? { x: player.x, y: player.y };
-  const cap = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
-  const inside = dist2(anchor.x, anchor.y, g.x, g.y) <= cap;
-  const allowed = (x, y) => !inside || dist2(anchor.x, anchor.y, x, y) <= cap;
-  if (tilePassable(tileAt(nx, g.y)) && allowed(nx, g.y)) g.x = nx;
-  if (tilePassable(tileAt(g.x, ny)) && allowed(g.x, ny)) g.y = ny;
+  if (tilePassable(tileAt(nx, g.y))) g.x = nx;
+  if (tilePassable(tileAt(g.x, ny))) g.y = ny;
   g.walkPhase += dt * 8;
 }
 

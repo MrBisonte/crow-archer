@@ -2913,6 +2913,49 @@ describe('the siege loop', () => {
     }
   });
 
+  /**
+   * Playtest: "they still get stuck or frozen after a few seconds into a new
+   * wave, our soldiers and knights."
+   *
+   * They were not stuck. They were standing on their gates having correctly
+   * concluded there was nothing within their remit, while a wave that had
+   * walked past the barrier ate the hero four tiles behind them. A guard's
+   * ground was its post alone, and the hero stands further from the nearest
+   * gate than the leash is long, so anything that got through stopped being
+   * anybody's business the moment it was past.
+   *
+   * Measured in a headless run before the fix: three bodies stacked on the
+   * hero, nearest post 190px away, leash 170, six guards motionless.
+   */
+  it('answers a threat standing on the hero, instead of holding a quiet gate', () => {
+    openSiege();
+    const hero = g.player() as { x: number; y: number };
+    const reach = g.config().guardMeleeReach as number;
+
+    // Nothing anywhere near a gate, so the only thing that can bring a guard
+    // over is the hero being in trouble.
+    const posts = (g.guards() as { anchor?: { x: number; y: number } }[])
+      .map((b) => b.anchor).filter(Boolean) as { x: number; y: number }[];
+    standAt(hero.x + 24, hero.y);
+    const foe = (g.skeletons() as { x: number; y: number }[]).at(-1);
+    if (!foe) throw new Error('no foe was placed');
+    for (const p of posts) {
+      expect(Math.hypot(p.x - foe.x, p.y - foe.y), 'the foe was placed inside a gate leash')
+        .toBeGreaterThan(g.config().guardPostLeash as number);
+    }
+
+    // Long enough to walk it. The furthest gate is most of the map from the
+    // hero and a guard moves at CONFIG.guardSpeed, so this is about arriving,
+    // not about reacting quickly.
+    for (let i = 0; i < 8; i++) { g.healHero(); g.stepSim(ONE_SECOND); }
+
+    // Somebody came. Priests are excluded: a healer arriving is not an answer.
+    const closest = (g.guards() as { x: number; y: number; guard: { kind: string } }[])
+      .filter((b) => b.guard.kind !== 'priest')
+      .map((b) => Math.hypot(b.x - foe.x, b.y - foe.y));
+    expect(Math.min(...closest), 'nobody left their gate for the hero').toBeLessThan(reach * 2);
+  });
+
   it('loses only when the hero dies, never when a tower falls', () => {
     openSiege();
     // Flatten both towers outright. The run must not notice.
@@ -3429,18 +3472,37 @@ describe('the retinue holds the barrier gates', () => {
     expect(gates().length).toBeGreaterThan(2);
   });
 
-  it('stands the retinue on the gates within a few seconds of opening', () => {
+  it('stands the retinue on its ground within a few seconds of opening', () => {
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
-    expect(farthestFromAnyGate(), 'a guard is not on any gate')
-      .toBeLessThan(g.config().guardPostLeash);
+    // A gate OR the hero. This used to say gates only, and it was right when a
+    // guard's ground was its post alone -- but a guard answering something
+    // that reached the hero is doing its job, not wandering, and the hero
+    // stands further from the nearest gate than the leash is long. Asserting
+    // gates only would now forbid the fix for the retinue standing still while
+    // he was eaten.
+    const leash = g.config().guardPostLeash as number;
+    const hero = g.player() as { x: number; y: number };
+    const posts = gates();
+    for (const b of g.guards() as { x: number; y: number; guard: { kind: string } }[]) {
+      const toGate = Math.min(...posts.map((p) => Math.hypot(b.x - p.x, b.y - p.y)));
+      const toHero = Math.hypot(b.x - hero.x, b.y - hero.y);
+      expect(Math.min(toGate, toHero), `${b.guard.kind} is on neither a gate nor the hero`)
+        .toBeLessThan(leash);
+    }
   });
 
   it('puts the retinue between the hero and the corridor', () => {
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
+    // Cleared again before asking. This is a claim about the resting
+    // formation, and a guard that has come back to meet something standing on
+    // the hero is legitimately west of him -- so the field has to be quiet for
+    // the question to mean what it says.
+    g.clearSiegeWave();
+    g.stepSim(180);
     const p = g.player() as { x: number };
     // Every guard east of the hero: the waves come down the right-hand
     // corridor, so a defender belongs on that side of the person defended.
@@ -3476,6 +3538,14 @@ describe('the retinue holds the barrier gates', () => {
     body.x += 120; body.y += 60;
     g.clearSiegeWave();
     g.stepSim(600);
+    // Quiet before asking, for the reason the resting-formation test above is:
+    // clearing a wave advances the run and spawns the next one, and a guard
+    // that has gone to meet something standing on the hero has not failed to
+    // come home -- it is answering. This test is about the walk back, so the
+    // field has to be empty when the question is put. Flaked 1 run in 10
+    // without it.
+    g.clearSiegeWave();
+    g.stepSim(240);
     let best = Infinity;
     for (const post of gates()) best = Math.min(best, Math.hypot(body.x - post.x, body.y - post.y));
     expect(best, 'the guard never went back to a gate').toBeLessThan(g.config().guardPostLeash);
@@ -3492,8 +3562,16 @@ describe('the retinue holds the barrier gates', () => {
     sk.y = 2 * g.config().tileSize;
     sk.hp = 99; sk.maxHp = 99;
     g.stepSim(300);
-    expect(farthestFromAnyGate(), 'a guard marched off to something far from its post')
-      .toBeLessThan(g.config().guardPostLeash);
+    // Measured against the skeleton itself rather than against the gates. The
+    // gate distance was a proxy for "did anyone go for it", and it stopped
+    // being one once the hero became part of a guard's ground: a guard 180px
+    // from a gate may be standing on the hero answering something that got to
+    // him, which is the opposite of marching off. This asks the question the
+    // test is actually named for.
+    const wentFor = Math.min(...(g.guards() as { x: number; y: number }[])
+      .map((b) => Math.hypot(b.x - sk.x, b.y - sk.y)));
+    expect(wentFor, 'a guard marched off to something far from its post and its hero')
+      .toBeGreaterThan(g.config().guardPostLeash);
   });
 });
 
