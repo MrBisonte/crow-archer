@@ -11054,6 +11054,31 @@ export function boot() {
   window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
   window.__game = devHooks;
 
+  // Short console verbs, for looking at the bastion without playing to it.
+  //
+  // These exist because the useful sequence is three chained calls on
+  // `__game`, and every browser now blocks pasting into the console until you
+  // type "allow pasting" at it — so the long form has to be typed by hand,
+  // which nobody should have to do to look at a map. Each of these is one
+  // word and a number.
+  //
+  // Deliberately globals rather than more devHooks entries: a devHook is for a
+  // test, which can afford to be explicit, and these are for a person at a
+  // console who cannot.
+  window.siege = (wave = 1) => {
+    devHooks.setMode('siege');
+    devHooks.go('playing');
+    return devHooks.jumpToSiegeWave(wave);
+  };
+  window.hurt = (n = 1) => devHooks.hurtGuards(n);
+  window.crack = (hp = 1) => devHooks.hurtTowers(hp);
+  window.retinue = () => devHooks.guards().map(
+    (b) => (RANK_MARK[b.guard.rank] || '') + b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp,
+  );
+  // Printed once so the verbs are discoverable from the console itself rather
+  // than only from a document the player would have to already be reading.
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue()');
+
   FEATHERS.init();
   requestAnimationFrame(loop);
 }
