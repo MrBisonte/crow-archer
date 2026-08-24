@@ -63,8 +63,8 @@ mistake `crows: boolean` made before it became `population`.
 
 `BastionTerrain`, in `src/sim/bastion-terrain.ts`.
 
-The layout is fixed and the scatter is seeded. Towers at columns 2-3, one above
-and one below centre; the barrier two columns in front of them, with a passable
+The layout is fixed and the scatter is seeded. Towers at columns 3-4, each a
+2x2 block, one above and one below centre; the barrier two columns in front of them, with a passable
 gap at each flank; open middle ground with sparse cover; the corridor clear.
 
 **Reachability is guaranteed by construction, not by repair.** The generator
@@ -203,8 +203,23 @@ is in the source so the next map does not inherit the assumption silently.
 
 ## The towers
 
-`src/sim/towers.ts`. 20 hit points each, and **they are cover, not
-objectives.**
+`src/sim/towers.ts`. 20 hit points each, a 2x2 footprint, and **they are cover
+that shoots back, not objectives.**
+
+Each standing tower picks the nearest enemy inside its reach and looses a bolt
+on a cooldown. It outranges every guard on the field and reloads faster, and
+its bolt is worth 2 where a guard's arrow is worth 1. That trade is the tower's
+whole argument for existing: a guard walks, is healed by the priest and is
+replaced by a recruit every wave, while a tower cannot be repaired, cannot be
+moved off a wave camping on it, and is gone for the rest of the run once it
+falls. Covering fire stops in the same frame the cover does — a fallen tower
+does not shoot.
+
+They occupy four tiles, not one. At 32px a tower was the same size as the hero
+and smaller than most of what walks at it, which reads as a bollard rather than
+as the thing the map is named for; at 64px it is the largest thing on the map
+that is not a boss. `TOWER_SPAN` is the one place that says so, and the
+generator, the renderer and the contact pass all derive the footprint from it.
 
 The number is tuned against the ladder rather than by feel: it fields 75 bodies
 across ten waves and the ordinary hit is worth 1, so both towers together are
@@ -212,7 +227,8 @@ across ten waves and the ordinary hit is worth 1, so both towers together are
 expected outcome and "lost neither" is having played well.
 
 A fallen tower does not block. `towerAt` answers with standing towers only, so
-its tile is as open as one that never had a tower, for arrows and bodies alike.
+its tiles are as open as ground that never had a tower, for arrows and bodies
+alike — all four of them are cleared when it comes down.
 If the cover did not actually go away, losing a tower would cost a sprite and
 nothing else, and the map's one piece of attrition would be inert. The rejected
 alternative — rubble as low cover, blocking bodies but not shots — is a

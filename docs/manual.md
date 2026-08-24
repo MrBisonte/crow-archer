@@ -192,7 +192,7 @@ flowchart LR
 | **Castle** | The same noise, denser, reading as pillars | Crows, then the skeleton gauntlet | Breakable, grows back |
 | **Maze** | Recursive backtracker, braided into loops | A scripted rat pack and the Minotaur | **Unbreakable**, and fogged |
 | **Cavern** | Cellular automata grown into chambers | A soldier garrison and its commander | Breakable, grows back |
-| **Bastion** | Two towers behind a stone barrier, open ground between | Ten waves of everything, and your own retinue | Breakable, grows back |
+| **Bastion** | Two shooting towers behind a stone barrier, open ground between | Ten waves of everything, and your own retinue | Breakable, grows back |
 
 - Where you get to choose is deliberately narrow. The multiplayer host picks
   any of the five (**G** forest, **V** castle, **Z** maze, **B** cavern,
@@ -295,6 +295,10 @@ than its ending.
 
 Two towers stand behind two courses of stone at your end of the arena. Ten
 waves come down the corridor at the other end. You are not alone.
+
+The towers are not scenery. Each one shoots at whatever comes into its reach,
+further than any of your guards can and harder than any of their arrows — and
+each one stops shooting the moment it is battered down.
 
 ### The retinue
 

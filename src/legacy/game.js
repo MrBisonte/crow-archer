@@ -20,7 +20,7 @@ import {
 } from '../sim/siege-run';
 import {
   TOWER_DAMAGE, TOWER_MAX_HP, damageTower, makeTowers, standingTowers, towerAt,
-  towerCentre, towerStanding,
+  towerCentre, towerStanding, towerTiles,
 } from '../sim/towers';
 import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { nearestHostile, nearestHostileWithin } from '../sim/targeting';
@@ -6591,9 +6591,15 @@ function updateSiegeContact(dt) {
       continue;
     }
     const row = Math.floor(e.y / ts), col = Math.floor(e.x / ts);
+    // The body's own tile and its four neighbours. It used to probe east and
+    // west only, which was enough when a tower was one tile wide and standing
+    // beside it meant standing level with it; a 2x2 can be met from the north
+    // or the south just as easily.
     const t = towerAt(towers, row, col)
       ?? towerAt(towers, row, col + 1)
-      ?? towerAt(towers, row, col - 1);
+      ?? towerAt(towers, row, col - 1)
+      ?? towerAt(towers, row + 1, col)
+      ?? towerAt(towers, row - 1, col);
     if (!t) continue;
     e.siegeSwingCD = (e.siegeSwingCD ?? 0) - dt;
     if (e.siegeSwingCD <= 0) {
@@ -6605,8 +6611,12 @@ function updateSiegeContact(dt) {
         // onChange in its constructor. An explicit rebuild call here was both
         // unnecessary and undefined, so the first tower ever to actually fall
         // threw — no test had driven one to zero until one was written for it.
-        tileMap.set(t.row, t.col, TILE.EMPTY);
-        events.emit({ type: 'TOWER_FELL', x: (t.col + 0.5) * ts, y: (t.row + 0.5) * ts });
+        // Every tile of it. Clearing only the north-west corner would leave
+        // three quarters of a fallen tower standing as cover that nothing can
+        // any longer shoot back from, which is the opposite of the trade.
+        for (const tile of towerTiles(t)) tileMap.set(tile.row, tile.col, TILE.EMPTY);
+        const at = towerCentre(t, ts);
+        events.emit({ type: 'TOWER_FELL', x: at.x, y: at.y });
       }
     }
   }

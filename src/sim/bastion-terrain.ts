@@ -41,6 +41,7 @@ import type { MapGenerator } from './map-generators';
 import { isArenaBorder, isCrowCorridor, isSpawnZone, type Noise2D } from './mapgen';
 import type { Rng } from './rng';
 import { TILE, type TileGrid, type TileId } from './tilemap';
+import { TOWER_SPAN, towerTiles } from './towers';
 
 /**
  * How the bastion is dressed.
@@ -90,12 +91,20 @@ const SPINE_COL = TOWER_COL - 1;
  *
  * Strictly greater than 3 at every size, because isSpawnZone clears everything
  * within 3 rows of centre in these columns and a tower inside that block would
- * be erased by the pass that keeps a fresh spawn out of terrain. A quarter of
- * the grid puts them at rows 5 and 15 of 21 — ten rows apart, far enough to
- * read as two towers rather than one thick one, with the spawn block between
- * them where the hero starts.
+ * be erased by the pass that keeps a fresh spawn out of terrain. It is the span
+ * that has to clear it, not the corner: the north tower extends SOUTH from its
+ * site, towards the centre, so its inner row sits `TOWER_SPAN - 1` closer to
+ * the block than its site does. Hence `3 + TOWER_SPAN` rather than a bare 4 —
+ * with one-tile towers those were the same number, and the day the footprint
+ * grew the north tower would otherwise have lost a row to the spawn pass on
+ * every grid under sixteen rows.
+ *
+ * A quarter of the grid puts them at rows 5 and 15 of 21 — ten rows apart, far
+ * enough to read as two towers rather than one thick one, with the spawn block
+ * between them where the hero starts.
  */
-const towerSpread = (rows: number): number => Math.max(4, Math.floor(rows / 4));
+const towerSpread = (rows: number): number =>
+  Math.max(3 + TOWER_SPAN, Math.floor(rows / 4));
 
 /**
  * Deterministic tower positions for a grid of this size. Exported so the
@@ -111,8 +120,9 @@ const towerSpread = (rows: number): number => Math.max(4, Math.floor(rows / 4));
 export function towerSites(rows: number, cols: number): readonly [TowerSite, TowerSite] {
   const mid = Math.floor(rows / 2);
   const spread = towerSpread(rows);
-  const col = Math.max(1, Math.min(TOWER_COL, cols - 2));
-  const onGrid = (r: number): number => Math.max(1, Math.min(r, Math.max(1, rows - 2)));
+  const col = Math.max(1, Math.min(TOWER_COL, cols - 1 - TOWER_SPAN));
+  const onGrid = (r: number): number =>
+    Math.max(1, Math.min(r, Math.max(1, rows - 1 - TOWER_SPAN)));
   return [
     { row: onGrid(mid - spread), col },
     { row: onGrid(mid + spread), col },
@@ -121,11 +131,16 @@ export function towerSites(rows: number, cols: number): readonly [TowerSite, Tow
 
 /** Is there room to stand a tower here, or is this grid too small to hold one? */
 const towerFits = (site: TowerSite, rows: number, cols: number): boolean =>
-  site.row > 0 &&
-  site.row < rows - 1 &&
-  !isArenaBorder(site.row, site.col, rows, cols) &&
-  !isCrowCorridor(site.col, cols) &&
-  !isSpawnZone(site.row, site.col, rows);
+  towerTiles(site).every(
+    (tile) =>
+      tile.row > 0 &&
+      tile.row < rows - 1 &&
+      tile.col > 0 &&
+      tile.col < cols - 1 &&
+      !isArenaBorder(tile.row, tile.col, rows, cols) &&
+      !isCrowCorridor(tile.col, cols) &&
+      !isSpawnZone(tile.row, tile.col, rows),
+  );
 
 /**
  * One section of the barrier: two courses of rock standing across a run of
@@ -409,8 +424,12 @@ function raiseBarrier(grid: TileGrid, rows: number, cols: number): void {
 function raiseTowers(grid: TileGrid, rows: number, cols: number): void {
   for (const site of towerSites(rows, cols)) {
     if (!towerFits(site, rows, cols)) continue;
-    const row = grid[site.row];
-    if (row) row[site.col] = TILE.HUT;
+    // The whole footprint or none of it. `towerFits` has already said every
+    // tile is legal, so a partial stamp here could only ever be a bug.
+    for (const tile of towerTiles(site)) {
+      const row = grid[tile.row];
+      if (row) row[tile.col] = TILE.HUT;
+    }
   }
 }
 
@@ -455,7 +474,17 @@ function reservedTiles(rows: number, cols: number): (r: number, c: number) => bo
     if (c === SPINE_COL && r > 0 && r < rows - 1) return true;
     if ((r === topLane || r === bottomLane) && c > 0) return true;
     if (gapRows.has(r) && c >= barrierWest - 1 && c <= barrierEast + 1) return true;
-    return towers.some((site) => Math.abs(site.row - r) + Math.abs(site.col - c) === 1);
+    // Orthogonally adjacent to any tile of any tower, and not inside one. With
+    // a one-tile tower this was a manhattan distance of exactly 1 from the
+    // site; a 2x2 needs the ring around the block, or three of the four tiles
+    // would have no reserved neighbour and the scatter could wall them in.
+    return towers.some((site) =>
+      towerTiles(site).some(
+        (tile) =>
+          Math.abs(tile.row - r) + Math.abs(tile.col - c) === 1 &&
+          !towerTiles(site).some((inside) => inside.row === r && inside.col === c),
+      ),
+    );
   };
 }
 

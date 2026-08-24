@@ -17,7 +17,7 @@ import {
   GUARD_STATS, OPENING_RETINUE, STARTING_RECRUITS, WARD_HEAL, WARD_TRIGGER_HURT,
   type GuardKind,
 } from '../sim/guards';
-import { TOWER_DAMAGE, TOWER_MAX_HP, towerCentre, type Tower } from '../sim/towers';
+import { TOWER_DAMAGE, TOWER_MAX_HP, TOWER_SPAN, towerCentre, type Tower } from '../sim/towers';
 import { barrierGates } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
@@ -2577,7 +2577,10 @@ describe('siege mode', () => {
     for (let row = 0; row < c.rows; row++) {
       for (let col = 0; col < c.cols; col++) if (tiles.get(row, col) === TILE.HUT) huts++;
     }
-    expect(huts).toBe(2);
+    // Two towers, each a TOWER_SPAN square block, so the count is derived
+    // rather than written down: a literal 2 here was what the map said back
+    // when a tower was a single tile.
+    expect(huts).toBe(2 * TOWER_SPAN * TOWER_SPAN);
   });
 
   it('knows the run is ten waves, and reads it from the table', () => {

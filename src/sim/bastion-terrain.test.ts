@@ -9,6 +9,7 @@ import {
   type TowerSite,
 } from './bastion-terrain';
 import { isArenaBorder, isCrowCorridor, isSpawnZone } from './mapgen';
+import { TOWER_SPAN, towerTiles } from './towers';
 import { noiseFor } from './noise';
 import { mulberry32 } from './rng';
 import { TILE, tilePassable, type TileGrid } from './tilemap';
@@ -81,13 +82,21 @@ function walkableFromCorridor(grid: TileGrid): boolean[][] {
  * Can the siege get at this tower?
  *
  * A tower is TILE.HUT and TILE.HUT is impassable, so nothing ever stands on
- * one. "Reachable" therefore means: at least one of the tower's four orthogonal
- * neighbours is passable and is in the flood fill from the corridor. That is
- * the definition every test in this file uses, and it is the one the game
- * needs — an attacker walks up beside a tower and hits it.
+ * one. "Reachable" therefore means: some tile orthogonally adjacent to the
+ * tower's FOOTPRINT is passable and is in the flood fill from the corridor.
+ * That is the definition every test in this file uses, and it is the one the
+ * game needs — an attacker walks up beside a tower and hits it.
+ *
+ * The footprint, not the north-west corner. Stepping off the corner alone is
+ * the check this was when a tower was one tile, and it silently weakened the
+ * day the tower became four: two of the corner's four neighbours are now the
+ * tower itself, so half of every answer came back "impassable, because it is
+ * me". It would still have passed — the walkway is west of the corner — while
+ * testing a quarter of what it claims to.
  */
 const towerReachable = (grid: TileGrid, site: TowerSite, seen: boolean[][]): boolean =>
-  STEPS.some(([dr, dc]) => seen[site.row + dr]?.[site.col + dc] === true);
+  towerTiles(site).some((tile) =>
+    STEPS.some(([dr, dc]) => seen[tile.row + dr]?.[tile.col + dc] === true));
 
 const towersReachable = (grid: TileGrid): boolean => {
   const seen = walkableFromCorridor(grid);
@@ -251,9 +260,16 @@ describe('BastionTerrain', () => {
       const grid = bastion(seed);
       const sites = towerSites(MAP_ROWS, MAP_COLS);
       for (const site of sites) {
-        expect(grid[site.row]?.[site.col], `seed ${seed} at ${site.row},${site.col}`).toBe(TILE.HUT);
+        // The whole footprint, not just the corner. A tower stamped one tile
+        // short would still satisfy a corner check, and three quarters of it
+        // would simply be missing from the map.
+        for (const tile of towerTiles(site)) {
+          expect(grid[tile.row]?.[tile.col], `seed ${seed} at ${tile.row},${tile.col}`)
+            .toBe(TILE.HUT);
+        }
       }
-      expect(grid.flat().filter((t) => t === TILE.HUT), `seed ${seed}`).toHaveLength(2);
+      expect(grid.flat().filter((t) => t === TILE.HUT), `seed ${seed}`)
+        .toHaveLength(sites.length * TOWER_SPAN * TOWER_SPAN);
       const [north, south] = sites;
       expect(south.row - north.row, 'the towers are too close to read as two').toBeGreaterThan(4);
     }
@@ -264,8 +280,15 @@ describe('BastionTerrain', () => {
   // to prevent.
   it('stands the towers clear of the spawn block, so nothing clears them away', () => {
     for (const site of towerSites(MAP_ROWS, MAP_COLS)) {
-      expect(isSpawnZone(site.row, site.col, MAP_ROWS)).toBe(false);
-      expect(isArenaBorder(site.row, site.col, MAP_ROWS, MAP_COLS)).toBe(false);
+      // Every tile of it. The north tower extends south, towards the block, so
+      // its corner clearing the spawn zone says nothing about its inner row --
+      // which is the half of this that towerSpread's `3 + TOWER_SPAN` floor is
+      // actually for.
+      for (const tile of towerTiles(site)) {
+        expect(isSpawnZone(tile.row, tile.col, MAP_ROWS), `${tile.row},${tile.col}`).toBe(false);
+        expect(isArenaBorder(tile.row, tile.col, MAP_ROWS, MAP_COLS), `${tile.row},${tile.col}`)
+          .toBe(false);
+      }
     }
   });
 

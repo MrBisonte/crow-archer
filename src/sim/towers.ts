@@ -91,6 +91,14 @@ export const TOWER_MAX_HP = 20;
 /**
  * How many tiles on a side a tower occupies.
  *
+ * Two, so a tower is a 2x2 block of tiles rather than one. `row` and `col` on
+ * a Tower are its NORTH-WEST corner and it extends east and south from there.
+ *
+ * One tile was 32px square, which is the same size as the hero and smaller
+ * than most of what walks at it -- a defence tower that a crow is as big as
+ * reads as a bollard. At 64px it is the largest thing on the map that is not a
+ * boss, which is what a tower on a siege ground should be.
+ *
  * Named rather than assumed so that "where is this tower" has one answer.
  * Every consumer -- the generator stamping tiles, the renderer, the contact
  * pass asking whether a body is hitting one, `towerCentre` below -- derives
@@ -98,7 +106,7 @@ export const TOWER_MAX_HP = 20;
  * they all did before and is why the tower's centre was written out by hand in
  * three different places.
  */
-export const TOWER_SPAN = 1;
+export const TOWER_SPAN = 2;
 
 /**
  * What one bolt from a tower takes off.
@@ -327,8 +335,37 @@ export function towerCentre(tower: Tower, tileSize: number): { x: number; y: num
 }
 
 export function towerAt(towers: readonly Tower[], row: number, col: number): Tower | null {
-  const found = towers.find(
-    (tower) => tower.row === row && tower.col === col && towerStanding(tower),
-  );
+  const found = towers.find((tower) => towerCovers(tower, row, col) && towerStanding(tower));
   return found ?? null;
+}
+
+/**
+ * Is this tile part of that tower, standing or not?
+ *
+ * Separate from `towerAt` because it answers a different question: this one is
+ * about geometry and `towerAt` is about cover, and a renderer drawing rubble
+ * needs the first without the second. Both used to be `row === tower.row &&
+ * col === tower.col`, which stopped being true the moment a tower stopped
+ * being one tile -- and would have failed silently, since three quarters of a
+ * tower would simply never have answered to anything.
+ */
+export function towerCovers(tower: Tower, row: number, col: number): boolean {
+  return (
+    row >= tower.row && row < tower.row + TOWER_SPAN &&
+    col >= tower.col && col < tower.col + TOWER_SPAN
+  );
+}
+
+/**
+ * Every tile a tower stands on, north-west first, in reading order.
+ *
+ * So a caller clearing a fallen tower's tiles, or reserving the ground under
+ * one, walks the footprint rather than working it out from TOWER_SPAN again.
+ */
+export function towerTiles(tower: TowerSite): TowerSite[] {
+  const out: TowerSite[] = [];
+  for (let r = 0; r < TOWER_SPAN; r++) {
+    for (let c = 0; c < TOWER_SPAN; c++) out.push({ row: tower.row + r, col: tower.col + c });
+  }
+  return out;
 }
