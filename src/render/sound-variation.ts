@@ -11,10 +11,15 @@
  * Which parameters move is a property of *that* synth, not of upstream ZzFX,
  * and was read out of it rather than out of the ZzFX docs: its noise shapes (4
  * and 5) never read the oscillator phase, so frequency, slide, pitch jump and
- * the array's own randomness field at index 1 are inaudible on the eleven of
- * the game's twenty-two sounds that use them — including the arrow. Volume and
- * the release tail are the two dimensions every shape hears; frequency is the
- * third, and is simply inert on the noise ones.
+ * the array's own randomness field at index 1 are inaudible on ten of the
+ * game's twenty-two sounds — the arrow among them. Volume and the release tail
+ * are the two dimensions every shape hears; frequency is the third, and is
+ * simply inert on the noise ones.
+ *
+ * On the other twelve, index 1 does detune the carrier, and nine of them set
+ * it to zero. So the two mechanisms stack rather than compete: index 1 is the
+ * per-sound colour a sound was tuned with, `pitch` is the floor under every
+ * sound that was not.
  *
  * Audio is presentation, so none of this touches a seeded stream: the source
  * of randomness is injected and defaults to `Math.random`, never the
@@ -65,9 +70,21 @@ const VOLUME = 0;
 const FREQUENCY = 2;
 const RELEASE = 5;
 
-/** Holds an amount inside `[0, MAX_VARIATION]`. */
-const clamp = (amount: number): number =>
-  Math.min(MAX_VARIATION, Math.max(0, amount));
+/**
+ * The loudest a play may ask for. The synth clamps the oscillator sample but
+ * not the product (`D[i] = clamp(sm) * env * v`), so a volume over 1 is not a
+ * louder sound, it is a clipped one — and the loudest sounds in the game are
+ * already at 0.8.
+ */
+const MAX_VOLUME = 1;
+
+/**
+ * Holds an amount inside `[0, MAX_VARIATION]`. An amount that is not a number
+ * at all reads as no variation rather than as NaN: a mistyped config key
+ * would otherwise silence every sound in the game without throwing.
+ */
+const clampAmount = (amount: number): number =>
+  Number.isFinite(amount) ? Math.min(MAX_VARIATION, Math.max(0, amount)) : 0;
 
 /**
  * Builds a profile from raw tunables (`CONFIG.soundVariation`), clamping each
@@ -76,7 +93,11 @@ const clamp = (amount: number): number =>
  * a different sound, so neither can be reached by editing a config value.
  */
 export function variationProfile(raw: VariationProfile): VariationProfile {
-  return { gain: clamp(raw.gain), pitch: clamp(raw.pitch), tail: clamp(raw.tail) };
+  return {
+    gain: clampAmount(raw.gain),
+    pitch: clampAmount(raw.pitch),
+    tail: clampAmount(raw.tail),
+  };
 }
 
 /**
@@ -95,6 +116,10 @@ export function varyParams(
   nudge(VOLUME, profile.gain);
   nudge(FREQUENCY, profile.pitch);
   nudge(RELEASE, profile.tail);
+  // Only downward, and only for a sound already near the ceiling: a loud one
+  // varied upward would clip rather than land louder.
+  const volume = heard[VOLUME];
+  if (volume !== undefined) heard[VOLUME] = Math.min(MAX_VOLUME, volume);
   return heard;
 }
 

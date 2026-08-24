@@ -42,6 +42,15 @@ describe('a profile of variation amounts', () => {
     expect(variationProfile({ gain: 0.1, pitch: 0.04, tail: 0.12 }))
       .toEqual({ gain: 0.1, pitch: 0.04, tail: 0.12 });
   });
+
+  it('reads an amount that is not a number as no variation, rather than silence', () => {
+    // A mistyped or dropped config key arrives as undefined, which multiplies
+    // every sample to NaN and silences the whole game without throwing.
+    const missing = { gain: undefined, pitch: NaN, tail: 0.12 } as unknown as VariationProfile;
+    const profile = variationProfile(missing);
+    expect(profile).toEqual({ gain: 0, pitch: 0, tail: 0.12 });
+    expect(varyParams(ARROW, profile).every((v) => Number.isFinite(v))).toBe(true);
+  });
 });
 
 describe('a varied sound', () => {
@@ -111,6 +120,21 @@ describe('a varied sound', () => {
         expect(value).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+
+  it('never asks a loud sound to play louder than 1, which would clip', () => {
+    // The synth clamps the oscillator sample but not volume * envelope, so a
+    // volume over 1 is a clipped sound rather than a louder one. The explosion
+    // is tuned at 0.8, close enough that the widest legal profile reaches it.
+    const explosion: SoundParams = [0.8, 0.05, 90, 0, 0.18, 0.3, 5, 1, -40];
+    const widest = variationProfile({ gain: MAX_VARIATION, pitch: 0, tail: 0 });
+    for (let play = 0; play < 200; play++) {
+      expect(varyParams(explosion, widest)[0]!).toBeLessThanOrEqual(1);
+    }
+    expect(varyParams(explosion, widest, scripted(1))[0]!).toBe(1);
+    // Quiet sounds are untouched by the ceiling: it clips nothing it need not.
+    expect(varyParams(ARROW, widest, scripted(1))[0]!)
+      .toBeCloseTo(ARROW[0]! * (1 + MAX_VARIATION), 10);
   });
 });
 
