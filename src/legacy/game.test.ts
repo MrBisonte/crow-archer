@@ -74,6 +74,14 @@ const angle = (fromX: number, fromY: number, toX: number, toY: number): number =
 const angleGap = (a: number, b: number): number =>
   Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
 
+/** The knight charge's wedge, as knightChargeWedge() hands it over: the one
+ * geometry its hit test and every drawing of it are read from. */
+interface Wedge {
+  angle: number;
+  half: number;
+  radius: number;
+}
+
 describe('legacy game module', () => {
   it('exports a boot seam and runs nothing on import', () => {
     expect(typeof boot).toBe('function');
@@ -1596,6 +1604,232 @@ describe('the knight charge', () => {
     g.stepSim(15);
     keys['ArrowRight'] = false;
     expect(p.x).toBeGreaterThan(from);
+  });
+
+  // knightChargeWedge() is the one home for the wedge's geometry, and its
+  // whole reason to exist is that three call sites used to hold their own
+  // copy of the same two numbers: the hit test, the dash sweep, and the
+  // windup. These check the wedge really is what inKnightArc() hits with, so
+  // that a wedge drawn from it is the wedge that lands.
+  describe('and the wedge every reading of it shares', () => {
+    /** Puts a knight mid-dash due east from a known tile, and reports the
+     * wedge that dash is sweeping. */
+    function dashingEast(): Wedge {
+      const c = g.config();
+      g.pick('knight');
+      g.go('playing');
+      clearArena();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 16.5 * c.tileSize;
+      p.y = 10.5 * c.tileSize;
+      p.aimAngle = 0;
+      g.startKnightCharge();
+      g.stepSim(1);
+      g.releaseKnightCharge();
+      return g.knightChargeWedge(g.knightCharge().angle) as Wedge;
+    }
+
+    it('reaches exactly as far as the hit test does', () => {
+      const w = dashingEast();
+      const p = g.player() as { x: number; y: number };
+      const on = (d: number): boolean =>
+        g.inKnightArc(p.x + Math.cos(w.angle) * d, p.y + Math.sin(w.angle) * d) as boolean;
+      expect(on(w.radius - 1)).toBe(true);
+      expect(on(w.radius + 1)).toBe(false);
+    });
+
+    it('opens exactly as wide either side as the hit test does', () => {
+      const w = dashingEast();
+      const p = g.player() as { x: number; y: number };
+      const at = (offset: number): boolean => {
+        const a = w.angle + offset;
+        return g.inKnightArc(p.x + Math.cos(a) * 40, p.y + Math.sin(a) * 40) as boolean;
+      };
+      for (const side of [1, -1]) {
+        expect(at(side * (w.half - 0.01))).toBe(true);
+        expect(at(side * (w.half + 0.01))).toBe(false);
+      }
+    });
+
+    it('points where the dash committed, not where the mouse went afterwards', () => {
+      const w = dashingEast();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.aimAngle = Math.PI;   // swing the aim right round mid-dash
+      const behind = { x: p.x - 40, y: p.y };
+      expect(g.inKnightArc(behind.x, behind.y)).toBe(false);
+      expect(g.knightChargeWedge(g.knightCharge().angle).angle).toBe(w.angle);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The charge telegraph
+// ---------------------------------------------------------------------------
+//
+// The windup roots the knight, then release commits him to a heading and a
+// second and a half he cannot steer. The telegraph is what he reads that
+// decision off, and it is worth nothing unless it shows the wedge that will
+// actually land — so these check the drawing against inKnightArc rather than
+// against a picture.
+
+/** One drawing call, as the painter asked for it. */
+interface DrawCall {
+  name: string;
+  args: number[];
+}
+
+/**
+ * A canvas context that records instead of drawing.
+ *
+ * Smaller on purpose than the one in src/render/characters.test.ts: that suite
+ * asserts on transformed coordinates, so it has to track the matrix stack.
+ * This painter is handed the knight's local space already established and
+ * draws in plain numbers, so the arguments are the assertion and a matrix
+ * would only obscure them.
+ */
+function recordingContext(): { ctx: CanvasRenderingContext2D; calls: DrawCall[] } {
+  const calls: DrawCall[] = [];
+  const target: Record<string, unknown> = {};
+  const methods = [
+    'save', 'restore', 'beginPath', 'closePath', 'moveTo', 'lineTo', 'arc', 'stroke',
+    'fill', 'setLineDash',
+  ];
+  for (const name of methods) {
+    target[name] = (...args: unknown[]): void => {
+      calls.push({ name, args: args.filter((a): a is number => typeof a === 'number') });
+    };
+  }
+  return { ctx: target as unknown as CanvasRenderingContext2D, calls };
+}
+
+/** The windup reading knightChargeTelegraph() hands the painter. */
+interface Telegraph extends Wedge {
+  frac: number;
+  endX: number;
+  endY: number;
+  travel: number;
+}
+
+describe('the knight charge telegraph', () => {
+  /** Points the aim by moving the mouse, which is the only thing updatePlayer
+   * reads: assigning player.aimAngle is overwritten on the next step. The HUD
+   * band sits above the world, so a world point is that far down the canvas. */
+  function aimAt(x: number, y: number): void {
+    const mouse = g.mouse() as { x: number; y: number };
+    mouse.x = x; mouse.y = y + g.config().hudHeight;
+  }
+
+  /** Roots a knight at a known tile aiming due east, mid-windup. */
+  function windingUpEast(col = 10, row = 10): { x: number; y: number } {
+    const c = g.config();
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * c.tileSize;
+    p.y = (row + 0.5) * c.tileSize;
+    aimAt(p.x + 200, p.y);
+    g.startKnightCharge();
+    g.stepSim(1);
+    return p;
+  }
+
+  it('shows nothing until he winds up, and nothing once he has let go', () => {
+    windingUpEast();
+    // Winding up is the only moment the direction is still his to change.
+    expect(g.knightTelegraph()).not.toBeNull();
+    g.releaseKnightCharge();
+    expect(g.knightCharge().dashing).toBe(true);
+    expect(g.knightTelegraph()).toBeNull();
+    g.stepSim(ONE_SECOND * 2);
+    expect(g.knightTelegraph()).toBeNull();
+  });
+
+  it.each(CHARACTERS.filter((k) => k !== 'knight'))(
+    'stays off the %s, who has no charge to telegraph', (character) => {
+      g.pick(character);
+      g.go('playing');
+      clearArena();
+      // The sniper key is shared, and starts something for most of the roster.
+      // None of it is a charge, so none of it draws a charge's wedge.
+      g.shift();
+      expect(g.knightTelegraph()).toBeNull();
+      g.shiftUp();
+
+      // And the wedge belongs to the body it is drawn around: a windup left
+      // set on some other character draws nothing rather than a knight's arc
+      // out of a wizard.
+      windingUpEast();
+      expect(g.knightTelegraph()).not.toBeNull();
+      g.pick(character);
+      expect(g.knightTelegraph()).toBeNull();
+      g.releaseKnightCharge();
+    });
+
+  it('draws the heading the release is about to commit to', () => {
+    const p = windingUpEast();
+    const before = g.knightTelegraph() as Telegraph;
+    // Still live: swinging the aim mid-windup moves the telegraph with it,
+    // which is the whole point of drawing one before the commit.
+    aimAt(p.x, p.y - 200);
+    g.stepSim(1);
+    const after = g.knightTelegraph() as Telegraph;
+    expect(angleGap(after.angle, before.angle)).toBeGreaterThan(1);
+
+    g.releaseKnightCharge();
+    expect(g.knightCharge().angle).toBe(after.angle);
+  });
+
+  it('outlines the wedge at the reach and width the hit test uses', () => {
+    windingUpEast();
+    const { ctx: fake, calls } = recordingContext();
+    const tele = g.paintKnightTelegraph(fake) as Telegraph;
+
+    // Facing east, so the mirrored space the knight draws in is the world's.
+    expect((g.player() as { facing: number }).facing).toBe(1);
+    const outline = calls.filter((c) => c.name === 'arc' && c.args[0] === 0 && c.args[1] === 0);
+    expect(outline.length).toBe(1);
+    const [, , radius, from, to] = outline[0]!.args as [number, number, number, number, number];
+    expect(radius).toBe(tele.radius);
+    expect(to - from).toBeCloseTo(tele.half * 2, 10);
+    expect(angleGap((from + to) / 2, tele.angle)).toBeCloseTo(0, 10);
+
+    // And what it outlines is what lands: release, and the hit test agrees
+    // with the drawn edge on both bounds.
+    const p = g.player() as { x: number; y: number };
+    g.releaseKnightCharge();
+    const at = (d: number, offset: number): boolean =>
+      g.inKnightArc(p.x + Math.cos(from + offset) * d, p.y + Math.sin(from + offset) * d) as boolean;
+    expect(at(radius - 1, 0.01)).toBe(true);
+    expect(at(radius + 1, 0.01)).toBe(false);
+    expect(at(radius - 1, -0.01)).toBe(false);
+  });
+
+  it('leaves the context it painted into balanced', () => {
+    windingUpEast();
+    const { ctx: fake, calls } = recordingContext();
+    g.paintKnightTelegraph(fake);
+    const count = (name: string): number => calls.filter((c) => c.name === name).length;
+    expect(count('save')).toBe(count('restore'));
+    expect(count('save')).toBeGreaterThan(0);
+    // Dashes are always turned back off; a leaked one would dash the sprite.
+    expect(calls.filter((c) => c.name === 'setLineDash').length % 2).toBe(0);
+  });
+
+  it('marks where terrain will stop the dash, not where open ground would', () => {
+    const c = g.config();
+    const p = windingUpEast(10, 10);
+    const open = g.knightTelegraph() as Telegraph;
+    expect(open.travel).toBeGreaterThan(c.tileSize * 2);
+
+    // A wall one tile ahead. The mark comes back to it rather than sitting
+    // inside it, so the telegraph never promises ground he cannot reach.
+    for (let d = -3; d <= 3; d++) g.tiles().set(10 + d, 12, TILE.ROCK);
+    const walled = g.knightTelegraph() as Telegraph;
+    expect(walled.travel).toBeLessThan(open.travel);
+    expect(walled.endX).toBeLessThan(12 * c.tileSize);
+    expect(g.fits(walled.endX, walled.endY)).toBe(true);
+    expect(walled.endY).toBeCloseTo(p.y, 6);
   });
 });
 
