@@ -6,6 +6,7 @@ Full mechanics reference. See the [README](../README.md) for the quick start.
 - [Game loop](#game-loop)
 - [Systems](#systems)
 - [Map](#map)
+- [The bastion](#the-bastion)
 - [Bosses](#bosses)
 - [Multiplayer](#multiplayer)
 
@@ -79,6 +80,8 @@ flowchart LR
     DA --> DK[Dark Knight entrance and fight]
     DK --> M[Maze: the Minotaur's lair]
     M --> W[Walk out the door]
+    W --> B[Bastion: hold ten waves with a retinue]
+    B --> V[Win]
 ```
 
 Crow King shield phases:
@@ -173,15 +176,31 @@ flowchart LR
 
 ## Map
 
-- 33 x 21 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT)
+- 33 x 21 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT, SAPLING)
 - Player spawns in a guaranteed clear zone, crows enter from the right corridor
 - Trees burn to ash on boss arrival, opening the arena
-- Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles permanently
-- Two themes, forest and castle. Same tile grid and the same rules (ROCK
-  still blocks shots and movement, WATER still stops you but not arrows),
-  different art: stone floor and walls, pillars instead of boulders and
-  trees. Single-player's castle stage always uses it; multiplayer's host
-  picks either one for the match
+- Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles.
+  On maps that allow it, ash grows back through SAPLING into TREE; the maze
+  allows none of it, and nothing there can be broken at all
+- **Five maps**, sharing the tile grid and its rules (ROCK still blocks shots
+  and movement, WATER still stops you but not arrows), differing in art,
+  generator and who lives there:
+
+| Map | Ground | Lives there | Terrain |
+|---|---|---|---|
+| **Forest** | Thresholded noise, scattered cover | Crows | Breakable, grows back |
+| **Castle** | The same noise, denser, reading as pillars | Crows, then the skeleton gauntlet | Breakable, grows back |
+| **Maze** | Recursive backtracker, braided into loops | A scripted rat pack and the Minotaur | **Unbreakable**, and fogged |
+| **Cavern** | Cellular automata grown into chambers | A soldier garrison and its commander | Breakable, grows back |
+| **Bastion** | Two towers behind a stone barrier, open ground between | Ten waves of everything, and your own retinue | Breakable, grows back |
+
+- Where you get to choose is deliberately narrow. The multiplayer host picks
+  any of the five (**G** forest, **V** castle, **Z** maze, **B** cavern,
+  **N** bastion).
+  Single-player's Waves mode picks among the maps that field an escalating
+  population (**F** forest, **C** castle, **V** cavern); the maze is absent
+  because its population is scripted, so a Waves run there would have two win
+  conditions and mean neither. Brawl's maps are fixed story beats, not a menu
 
 ## Bosses
 
@@ -201,7 +220,7 @@ they ignite the Crow King.
 
 Up to four players in a room, co-op or 2v2. The server runs the only simulation; each client predicts its own movement so your body answers the keyboard without waiting for a round trip, and draws everyone else 100 ms in the past so they move smoothly.
 
-Every match uses a fresh generated map built on both machines from the four-byte seed rather than sent over the wire. Terrain stops you and stops arrows; water stops you but not arrows; dynamite burns a hut down to ash you can then walk over. The host picks which of the two themes, forest or castle, before starting; see [Map](#map).
+Every match uses a fresh generated map built on both machines from the four-byte seed rather than sent over the wire. Terrain stops you and stops arrows; water stops you but not arrows; dynamite burns a hut down to ash you can then walk over. The host picks any of the four maps before starting; see [Map](#map).
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
@@ -213,7 +232,7 @@ Every fifteen seconds or so a **crow** drifts across. It dies to one hit and dro
 
 1. Open the server's URL and press **M**.
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
-3. The host sets the mode with **D** for deathmatch or **C** for co-op, the map with **G** for forest or **V** for castle, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes). Pick one win condition, not both. Everyone presses **R**, and it starts once the last player is ready.
+3. The host sets the mode with **D** for deathmatch or **C** for co-op, the map with **G** forest, **V** castle, **Z** maze or **B** cavern, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes). Pick one win condition, not both. Everyone presses **R**, and it starts once the last player is ready.
 
 Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or Q** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight), **X** (ranger) or **S** (sapper). They play differently.
 
@@ -267,3 +286,50 @@ Fly over Railway on cost, decided against a €20/month ceiling: this game is ba
 Both on one network: run `npm run server` and `npm run build`, serve the repo, and the others open `http://<your-lan-ip>:8082`. The page and the socket come from the same place, so nothing needs configuring.
 
 Otherwise a tunnel to `localhost:8082` gives a public HTTPS URL without deploying. That publishes the port on the machine running it for as long as it is open, so close it when the game ends.
+
+## The bastion
+
+The fifth map, and two ways in: **S** on the title screen for a standalone
+siege, or through the maze door, which is now the campaign's last stage rather
+than its ending.
+
+Two towers stand behind two courses of stone at your end of the arena. Ten
+waves come down the corridor at the other end. You are not alone.
+
+### The retinue
+
+You start with **two guards** and gain **one more after every wave you
+survive**. Which kind arrives is rolled:
+
+| Guard | HP | Damage | How often | Fights by |
+|---|---|---|---|---|
+| Archer | 1 | 1x | 40% | Shooting, from a long way off |
+| Foot soldier | 3 | 1x | 40% | Shield and sword, up close |
+| Knight | 2 | 2x | 20% | Charging what it can reach |
+
+**A guard that survives a wave is promoted**, up to three times, and wears its
+rank as gold pips: `*`, then `**`, then `***`. The first two ranks are +1 hp
+each and the third is +1 damage. A senior foot soldier ends up at 5 hp and 2
+damage — a knight's damage on more than twice a knight's body, and the reason
+keeping one alive is worth doing.
+
+Knights do not promote. They are rare and already doubled on both counts.
+
+Guards do not heal between waves. Promotion is the only way one gets stronger,
+which is what makes the difference between a retinue you protected and one you
+spent.
+
+### The waves
+
+Ten, and they empty the whole bestiary at you. One kind at a time for the first
+three, pairs from the fourth, and a boss folded in from the seventh. Wave ten
+brings two bosses at once, which has never happened anywhere else in the game.
+
+### What you can lose
+
+**Only yourself.** The towers can be battered down and every guard can fall,
+and the run carries on either way — you will just be holding the ground with
+less. Clear wave ten and you have won; in the campaign, that is the ending.
+
+A fallen tower stops being cover the moment it comes down, for your arrows as
+much as for theirs.

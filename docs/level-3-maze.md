@@ -1,5 +1,13 @@
 # Level 3: the maze
 
+> **Historical.** This is the design document written *before* the maze was
+> built, kept as the record of that argument. Its snapshots of the codebase
+> describe the repo as it stood then, when there were two maps and no maze —
+> not as it stands now. For current state see
+> [Architecture](architecture.md); the maps today are forest, castle, maze
+> and cavern. The reasoning is still worth reading; the inventories are not
+> a reference.
+
 Design and architecture for the third single-player level. Written to be read
 before any code exists, so the shape can be argued with while arguing is still
 cheap.
@@ -7,7 +15,7 @@ cheap.
 The point of this document is not the maze. It is that a third map is the
 smallest possible feature that breaks the map abstraction this project already
 has, which makes it a good place to show what the existing guardrails buy and
-what they cost. Every claim below points at a real file and line.
+what they cost. Every claim below points at a real file.
 
 - [The three parts](#the-three-parts)
 - [Part 1: the maze map](#part-1-the-maze-map)
@@ -31,7 +39,7 @@ decided and what it cost.
 
 ## Part 1: the maze map
 
-### What exists today
+### What existed when this was written
 
 A map is a string tag with tables hanging off it. This is the same
 composition-over-inheritance shape documented for characters in
@@ -39,15 +47,15 @@ composition-over-inheritance shape documented for characters in
 
 | Name | Where | Shape |
 |---|---|---|
-| `MapKind` | `src/sim/arena-map.ts:25` | `'forest' \| 'castle'` |
-| `MAP_GEN` | `src/sim/arena-map.ts:38` | `Record<MapKind, { density: number }>` |
-| `TILE_THEMES` | `src/render/tiles.ts:202` | `Record<MapKind, Partial<Record<TileId, TilePainter>>>` |
-| `ANIMATED_THEMES` | `src/render/tiles.ts:312` | `Record<MapKind, AnimatedPalette>` |
-| `MAPS` | `src/net/protocol.ts:394` | `readonly MapKind[]`, backs `isMapKind` at :424 |
+| `MapKind` | `src/sim/arena-map.ts` | `'forest' \| 'castle'` |
+| `MAP_GEN` | `src/sim/arena-map.ts` | `Record<MapKind, { density: number }>` |
+| `TILE_THEMES` | `src/render/tiles.ts` | `Record<MapKind, Partial<Record<TileId, TilePainter>>>` |
+| `ANIMATED_THEMES` | `src/render/tiles.ts` | `Record<MapKind, AnimatedPalette>` |
+| `MAPS` | `src/net/protocol.ts` | `readonly MapKind[]`, backs `isMapKind` |
 
 `MAP_GEN` has exactly two consumers: `Terrain.fromSeed`
-(`src/sim/arena-map.ts:78`) and `generateMap` in the legacy single-player file
-(`src/legacy/game.js:520`). Both do the same thing with it. They pass
+(`src/sim/arena-map.ts`) and `generateMap` in the legacy single-player file
+(`src/legacy/game.js`). Both do the same thing with it. They pass
 `MAP_GEN[kind].density` into `generateGrid`.
 
 Widening the union to `'forest' | 'castle' | 'maze'` produces three compile
@@ -69,7 +77,7 @@ const rockAt  = cut(0.77);
 const treeAt  = cut(0.76);
 ```
 
-`src/sim/mapgen.ts:28`
+`src/sim/mapgen.ts`
 
 Forest and castle differ only in how much simplex noise survives thresholding.
 They are the same algorithm with two settings, which is precisely why one
@@ -162,7 +170,7 @@ knows the other exists.
   proposed only because `NoiseTerrain` genuinely carries construction
   parameters and `MazeTerrain` will carry more of them. If that turns out to be
   wrong, the interface collapses to a function type without touching callers.
-- `src/legacy/game.js:520` has to change too, and it is untyped, so nothing
+- `src/legacy/game.js` has to change too, and it is untyped, so nothing
   catches it if the signature drifts. Until the core/shell split lands and
   that file gets tests, this edit is verified by playing the game.
 - One indirection is added between "which map" and "what it looks like". A
@@ -177,7 +185,7 @@ simply never goes there.
 
 A maze must connect, or the level is unfinishable. That is a new class of
 requirement for this codebase, and it invalidates a documented assumption. From
-`src/sim/spawns.ts:80`:
+`src/sim/spawns.ts`:
 
 > Every tile within twelve of the anchor is solid, which the generator does not
 > produce.
@@ -233,7 +241,7 @@ single-player `smashTile` gates on the same row.
 
 ### Algorithm and grid fit
 
-The arena is 33 by 21 tiles (`MAP_COLS`, `MAP_ROWS`, `src/sim/arena-map.ts:47`).
+The arena is 33 by 21 tiles (`MAP_COLS`, `MAP_ROWS`, `src/sim/arena-map.ts`).
 Standard carvers place cells on odd indices with walls between them, which
 needs odd dimensions in both axes. 33 = 2(16) + 1 and 21 = 2(10) + 1, so the
 existing grid is exactly a 16 by 10 cell maze with no resizing and no border
@@ -277,7 +285,7 @@ blockers.
   deciding on purpose whether that is the level's identity or a problem to
   compensate for.
 - **The crow corridor assumption disappears.** `generateGrid` always leaves the
-  right-hand two columns open so crows can enter (`src/sim/mapgen.ts:53`).
+  right-hand two columns open so crows can enter (`src/sim/mapgen.ts`).
   `MazeTerrain` has no such corridor unless it is built in deliberately. Part 2
   has to say where enemies come from.
 
@@ -338,7 +346,7 @@ drop from most of the arena to one corridor, which means enemies that walk at
 you in the open are trivial and enemies that appear around a corner are not.
 
 Movement is in better shape than expected. Skeletons already path: they call
-`pathScheduler.request(s)` (`src/legacy/game.js:1999`) and only beeline as a
+`pathScheduler.request(s)` (`src/legacy/game.js`) and only beeline as a
 fallback when no path exists. Aggro crows do the same. Both work in a maze
 with no change at all.
 
@@ -346,11 +354,11 @@ Two things do break, and neither is movement.
 
 **Passive crows fly through walls.** A passive crow moves `c.x -= spd * dt`
 with no terrain check and wraps when it leaves the left edge
-(`src/legacy/game.js:2168`). On an open forest map that reads as a bird
+(`src/legacy/game.js`). On an open forest map that reads as a bird
 crossing the sky. Inside a maze it reads as a bug.
 
 **Screech-aggro almost never fires.** `aggroCrows` only converts crows that
-pass a `tileVisible` line-of-sight check (`src/legacy/game.js:2204`), which is
+pass a `tileVisible` line-of-sight check (`src/legacy/game.js`), which is
 correct on an open map and nearly always false in a corridor. Any maze
 antagonist that summons or aggros needs a rule that is not line of sight.
 
@@ -367,7 +375,7 @@ implication: if the boss cannot die, the win condition cannot be killing it.
 Three of the four mechanics it needs are already built.
 
 **Line of sight is free.** `updateFOV` computes visibility from the player's
-own tile (`src/legacy/game.js:550`), and shadowcasting is symmetric in
+own tile (`src/legacy/game.js`), and shadowcasting is symmetric in
 practice, so `tileVisible(minotaurCol, minotaurRow)` is a correct and free
 answer to "does the minotaur see the hero". No second FOV pass. A corridor
 gives one long sightline down its axis, so the maze produces the "he is at the
@@ -375,11 +383,11 @@ end of this hall" moment on its own, with no scripting.
 
 **The stun already exists.** `dazeBoss()` sets one countdown and
 `bossDazePhase()` derives `'stun' | 'slow1' | 'slow2' | null` from it
-(`src/legacy/game.js:2543`), so movement, speed and the visual all read one
+(`src/legacy/game.js`), so movement, speed and the visual all read one
 source. It is gated to the Crow King today by a single line in `damageBoss`.
 The minotaur is that mechanic with the HP line removed.
 
-**Smashing walls is free, and safe.** `smashTile` (`src/legacy/game.js:531`)
+**Smashing walls is free, and safe.** `smashTile` (`src/legacy/game.js`)
 already turns ROCK and HUT to EMPTY and TREE to ASH. A charge that ends in a
 wall should break it. That opens the maze up as the fight goes on, and by the
 invariant above it can never make the level unfinishable, because removing a
@@ -387,7 +395,7 @@ wall only ever adds connections.
 
 **The fourth piece is the one that needs design work.** `damageBoss` routes
 every hit through `applyBossDamage`, which calls `startBossDeath()` at zero HP
-(`src/legacy/game.js:2421`). An unkillable boss has no HP row for
+(`src/legacy/game.js`). An unkillable boss has no HP row for
 `BOSS_HP_KEYS` to hold and no death sequence to run.
 
 This is where `boss.kind`'s branch stops paying.

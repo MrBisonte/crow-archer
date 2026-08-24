@@ -15,7 +15,7 @@
         A R C H E R
 ```
 
-Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. [Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
+Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it — and hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. [Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
 
 ![Gameplay: the Ranger fighting a crow swarm, a satchel blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
 
