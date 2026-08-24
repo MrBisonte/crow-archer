@@ -21,6 +21,7 @@ import { LocalInput, Button, hasButton } from '../sim/input';
 import { CHARACTER_STATS } from '../sim/arena';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
+import { Hitstop } from '../sim/hitstop';
 import { log, attachToEvents } from '../sim/log';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
@@ -1011,6 +1012,10 @@ function transitionTo(next) {
   if (next === 'controls') controlsFrom = appState;
   const prev = appState;
   appState = next;
+  // A freeze belongs to one moment of one run. Resuming from the pause menu,
+  // starting a fresh run, or walking into a boss fight all end that moment, so
+  // none of them inherit whatever the last impact was still owed.
+  hitstop.clear();
   if (prev !== next) log.info('transitionTo', `${prev} -> ${next}`, { prev, next, gameMode, mapKind });
   // The multiplayer screen owns a socket, so entering opens one and leaving
   // closes it. Handled here rather than at each call site, because every route
@@ -2119,6 +2124,85 @@ const SHAKE = {
   stormCast:      [14, 600],
 };
 
+/**
+ * Impact freeze ladder: how many fixed sim steps each impact holds the world
+ * still for. One row per SHAKE row, because shake without hitstop is half an
+ * impact — the camera moves and the world never stops — and the two only stay
+ * in step if one table cannot gain a row the other lacks.
+ *
+ * Steps, not milliseconds: the loop advances the sim in whole fixed 60 Hz
+ * steps, so a freeze is a count of them and nothing else. 2 is a tap, 6 is a
+ * boss dying.
+ *
+ * `0` is a real answer, not a gap. It means "shakes but does not freeze", and
+ * every one of them is either something that lands constantly (a miss), an
+ * announcement rather than an impact (a milestone, a flock turning on you), a
+ * cast leaving rather than a hit arriving (whirlwind, storm), or the run being
+ * over. Freezing any of those trades weight for stutter, which is the same
+ * call the SHAKE comment above makes about not shaking on a critter kill.
+ *
+ * These numbers are not in CONFIG, and that is the one place this file
+ * deliberately departs from "all tunables live in CONFIG". Same reason SHAKE
+ * is not: a row here means nothing on its own and everything read against its
+ * neighbours, so the ladder has to be reviewable as a ladder. CONFIG is a flat
+ * bag of independent figures and would scatter the ordering that is the whole
+ * point.
+ */
+const HITSTOP = {
+  arrowMiss:      0,
+  foreshadow:     0,
+  crowsAggro:     0,
+  whirlwindStart: 0,
+  stormCast:      0,
+  gameOver:       0,
+  meleeHit:       2,
+  playerHit:      2,
+  shieldBlocked:  2,
+  playerFrozen:   2,
+  heavyMelee:     3,
+  // No SHAKE row of its own: a landed boss hit shakes per weapon, out of
+  // BOSS_HIT_FX below. It freezes by source rather than by weapon, because
+  // what a freeze reports is "that was a real chunk of the fight", which is
+  // the same size whether it arrived by spear or by arrow.
+  bossHit:        3,
+  fireSkelBlast:  4,
+  bossSlam:       4,
+  explosion:      5,
+  bossDeath:      6,
+};
+
+// The same load-time guard MAP_PANELS and BOSS_STAGES run for the half of
+// their data that cannot be derived. A SHAKE row added without a HITSTOP row
+// would silently never freeze, and a silent never is indistinguishable from a
+// deliberate 0 six months later.
+for (const kind of Object.keys(SHAKE)) {
+  if (!(kind in HITSTOP)) {
+    throw new Error(
+      `SHAKE.${kind} has no HITSTOP row. Add one to the HITSTOP table above; ` +
+      `0 means "shakes but does not freeze".`
+    );
+  }
+}
+
+/**
+ * The freeze itself. See src/sim/hitstop.ts for why the counter lives on the
+ * sim side of the seam while this table, the policy, lives here.
+ */
+const hitstop = new Hitstop();
+
+/**
+ * One impact, felt two ways: the camera moves and the world stops.
+ *
+ * Every caller that used to spread a SHAKE row into triggerShake says
+ * `impact('x')` instead, so an impact cannot pick up a shake and forget a
+ * freeze — a row can only be missing from both or neither. The two
+ * tables are looked up under one key, once, at one call site per event.
+ */
+function impact(kind) {
+  triggerShake(...SHAKE[kind]);
+  hitstop.trigger(HITSTOP[kind]);
+}
+
 // Sound and shake per boss-hit source. The sim states what landed; the table
 // decides how it sounds.
 const BOSS_HIT_FX = {
@@ -2269,7 +2353,7 @@ events.on(e => {
     }
 
     case 'FIRE_SKELETON_BLAST':
-      playSound(sndExplosion); triggerShake(...SHAKE.fireSkelBlast);
+      playSound(sndExplosion); impact('fireSkelBlast');
       burst(e.x, e.y, {
         count: 20, colors: ['#FFB400','#FF6020','#FFFFFF','#8A1010'],
         speedMin: 80, speedMax: 220, decay: 2.0,
@@ -2288,7 +2372,7 @@ events.on(e => {
       break;
 
     case 'PLAYER_FROZEN':
-      triggerShake(...SHAKE.playerFrozen);
+      impact('playerFrozen');
       burst(e.x, e.y, {
         count: 12, colors: ['#40D0F0','#A0E8FF','#FFFFFF'],
         speedMin: 30, speedMax: 90, decay: 2.2, shape: 'spark',
@@ -2298,12 +2382,12 @@ events.on(e => {
 
     case 'MELEE_HIT':
       if (e.kind === 'pitchfork') {
-        triggerShake(...SHAKE.heavyMelee);
+        impact('heavyMelee');
         burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
           speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
           gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14', pri: PRI.IMPACT });
       } else {
-        triggerShake(...SHAKE.meleeHit);
+        impact('meleeHit');
         burst(e.x, e.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
           speedMin: 40, speedMax: 110, decay: 3.0, shape: 'spark',
           shadowBlur: e.fire ? 8 : 3, pri: PRI.IMPACT,
@@ -2314,11 +2398,16 @@ events.on(e => {
     case 'BOSS_HIT': {
       playSound(sndBossHit);
       const shake = BOSS_HIT_FX[e.source];
-      if (shake) triggerShake(shake[0], shake[1]);
+      // One condition for both, so the freeze inherits every reason a source
+      // is null there: whirlwind and storm tick their damage many times per
+      // cast, and dynamite and satchel already land through EXPLOSION. A
+      // freeze on any of those is the same double-count the shake avoids,
+      // except a player feels this one as the game stuttering.
+      if (shake) { triggerShake(shake[0], shake[1]); hitstop.trigger(HITSTOP.bossHit); }
       break; }
 
     case 'ARROW_MISS':
-      playSound(sndMiss); triggerShake(...SHAKE.arrowMiss);
+      playSound(sndMiss); impact('arrowMiss');
       break;
 
     case 'JAVELIN_BOUNCE':
@@ -2327,7 +2416,7 @@ events.on(e => {
       break;
 
     case 'EXPLOSION':
-      playSound(sndExplosion); triggerShake(...SHAKE.explosion);
+      playSound(sndExplosion); impact('explosion');
       if (e.onWater) {
         burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
           speedMin: 80, speedMax: 200, decay: 1.6,
@@ -2459,7 +2548,7 @@ events.on(e => {
       break;
 
     case 'WHIRLWIND_START':
-      playSound(sndExplosion); triggerShake(...SHAKE.whirlwindStart);
+      playSound(sndExplosion); impact('whirlwindStart');
       burst(e.x, e.y, {
         count: 20, colors: ['#C0C0C0','#9090A0','#FFFFFF','#7080B0'],
         speedMin: 50, speedMax: 130, decay: 2.8, shape: 'spark',
@@ -2484,7 +2573,7 @@ events.on(e => {
       break;
 
     case 'STORM_CAST':
-      playSound(sndLightning); triggerShake(...SHAKE.stormCast);
+      playSound(sndLightning); impact('stormCast');
       burst(e.x, e.y, { count: 32, colors: ['#FFFFFF','#AAAAFF','#8888FF','#FFB400'],
         speedMin: 60, speedMax: 360, decay: 2.5, shape: 'spark',
         shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
@@ -2499,11 +2588,11 @@ events.on(e => {
       break;
 
     case 'PLAYER_HIT':
-      triggerShake(...SHAKE.playerHit);
+      impact('playerHit');
       break;
 
     case 'SHIELD_BLOCKED':
-      triggerShake(...SHAKE.shieldBlocked);
+      impact('shieldBlocked');
       burst(e.x, e.y, { count: 10, colors: ['#FFB400','#FFFFFF','#FF7A1F'],
         speedMin: 60, speedMax: 200, decay: 2.5, shape: 'spark',
         shadowBlur: 10, shadowColor: '#FFB400', pri: PRI.CRITICAL });
@@ -2529,15 +2618,15 @@ events.on(e => {
       break;
 
     case 'GAME_OVER':
-      triggerShake(...SHAKE.gameOver); playSound(sndGameover);
+      impact('gameOver'); playSound(sndGameover);
       break;
 
     case 'CROWS_AGGRO':
-      playSound(sndAggro); triggerShake(...SHAKE.crowsAggro);
+      playSound(sndAggro); impact('crowsAggro');
       break;
 
     case 'BOSS_CONTACT':
-      triggerShake(...SHAKE.bossSlam);
+      impact('bossSlam');
       break;
 
     case 'BOSS_BATS':
@@ -2563,7 +2652,7 @@ events.on(e => {
       break;
 
     case 'BOSS_DEATH_START':
-      playSound(sndBossDeath); triggerShake(...SHAKE.bossDeath);
+      playSound(sndBossDeath); impact('bossDeath');
       break;
 
     // Staggered 3-wave death burst: a=0ms, b=+80ms, c=+160ms
@@ -5873,7 +5962,7 @@ const FORESHADOW = (() => {
     if (!m) return;
     _skyTarget = m.tint;
     _banner    = { text: m.text, timer: 2.8 };
-    if (m.shake)   triggerShake(...SHAKE.foreshadow);
+    if (m.shake)   impact('foreshadow');
     if (m.screech) playSound(sndBossScreech);
   }
 
@@ -10288,6 +10377,41 @@ function stepGame(dt) {
 
 }
 
+/**
+ * One fixed step of the frame clock: the screen shake decays, and the
+ * simulation advances unless hitstop is holding it.
+ *
+ * The gate is here rather than inside stepGame or inside loop() for two
+ * reasons. It has to be above stepGame, because a freeze that lived inside
+ * stepGame's playing branch would be a rule every future update function had
+ * to remember to ask about. And it has to be below loop(), because
+ * devHooks.stepSim drives the sim without a frame or a render: a gate written
+ * only into loop() would leave the headless harness running a second, subtly
+ * different simulation, and the tests would be checking that copy.
+ *
+ * render() is deliberately not in here. It stays in loop(), outside the
+ * accumulator, so a held world is still drawn every frame — the screen stays
+ * alive and the world holds still, which is the whole effect.
+ */
+function fixedStep() {
+  updateShake(FIXED_DT);
+  // Only a live run can be held. Every other screen — the title, char select,
+  // the pause menu, game over — reads its input inside stepGame, so a freeze
+  // that reached them would freeze the menu with no key left to unfreeze it.
+  //
+  // Outside a run any freeze still owed is dropped, not banked. transitionTo
+  // clears it too, and that is the statement of the rule; this is the safety
+  // net for the two places that assign appState directly rather than going
+  // through it (showStageIntro and the intro dismissal), where a freeze armed
+  // by the impact that cleared the stage would otherwise wake up on the next.
+  if (!inGame()) {
+    hitstop.clear();
+    stepGame(FIXED_DT);
+    return;
+  }
+  if (hitstop.step() === 'run') stepGame(FIXED_DT);
+}
+
 function loop(ts) {
   let frameTime = (ts - lastTs) / 1000;
   lastTs = ts; loopT = ts / 1000;
@@ -10299,8 +10423,7 @@ function loop(ts) {
   accumulator += frameTime;
   let steps = 0;
   while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
-    updateShake(FIXED_DT);
-    stepGame(FIXED_DT);
+    fixedStep();
     accumulator -= FIXED_DT;
     steps++;
   }
@@ -10354,9 +10477,19 @@ export const devHooks = {
    * Advances the simulation only, one fixed step per count, with no frame and
    * no render. Needs no canvas, so this is what the headless tests drive;
    * step() and frame() above go through the real loop and need a booted page.
+   *
+   * It runs fixedStep(), the same body the real loop's accumulator runs, so a
+   * hitstop freeze holds a scripted run exactly as it holds a played one.
    */
-  stepSim(n = 1) { for (let i = 0; i < n; i++) { updateShake(FIXED_DT); stepGame(FIXED_DT); } },
+  stepSim(n = 1) { for (let i = 0; i < n; i++) fixedStep(); },
   gameTime: () => gameTime,
+  // The impact freeze. `hitstop` is the fixed steps still owed; `holdFrames`
+  // arms one directly, the way startKnightCharge exposes an edge a headless
+  // test cannot press; `hitstopLadder` is the table itself, so a test reads
+  // the rows the game reads rather than a second copy of them.
+  hitstop: () => hitstop.held,
+  holdFrames(n) { hitstop.trigger(n); },
+  hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
   // The live key map and the one-shot fire latch, so a test can drive the same
   // input path a real keyboard does instead of a parallel one.

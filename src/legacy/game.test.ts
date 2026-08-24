@@ -27,6 +27,22 @@ import {
 const ONE_SECOND = 60;
 
 /**
+ * Advances the simulation by exactly `n` fixed steps, riding out any impact
+ * freeze on the way.
+ *
+ * `stepSim(n)` is n *frames* of the loop, and hitstop can spend some of them
+ * holding the world still (see the HITSTOP ladder in game.js), so a test
+ * waiting out a cooldown has to count sim steps rather than frames or it comes
+ * up short by however heavily the run happened to land.
+ */
+function stepPast(n: number): void {
+  for (let i = 0; i < n; i++) {
+    while (g.hitstop() > 0) g.stepSim(1);
+    g.stepSim(1);
+  }
+}
+
+/**
  * The maps the mapselect screen offers, derived the same way MAP_PANELS
  * derives them. Naming them here instead would be a third copy of a list the
  * game deliberately keeps in one place.
@@ -807,11 +823,12 @@ describe('the sapper', () => {
       if (e.type === 'WEAPON_FIRED' && e.kind === 'charge') thrown++;
     });
 
-    // Empty it, then keep pressing.
+    // Empty it, then keep pressing. Every charge thrown here goes off, and an
+    // explosion freezes the world, so the cooldown wait counts sim steps.
     for (let i = 0; i < g.config().resources.bombs.max + 3; i++) {
       g.shoot();
       g.stepSim(1);
-      g.stepSim(step);
+      stepPast(step);
     }
     expect(thrown).toBe(g.config().resources.bombs.max);
     expect((g.inv() as Record<string, number>).bombs).toBe(0);
@@ -843,7 +860,7 @@ describe('the sapper', () => {
         g.shoot();
         g.stepSim(1);
         kinds.push(g.dynamites()[g.dynamites().length - 1].element);
-        g.stepSim(step);
+        stepPast(step);   // the bomb goes off mid-wait, and that freezes the world
       }
       expect(kinds).toEqual(['fire', 'ice', 'none']);
     });
@@ -2881,5 +2898,84 @@ describe('every boss the stage list names', () => {
     expect(boss.hp).toBe(Infinity);
     g.blast(boss.x, boss.y);
     expect((g.boss() as { hp: number }).hp).toBe(Infinity);
+  });
+});
+
+describe('hitstop', () => {
+  /** The ladder the game itself reads, so a test never holds a second copy. */
+  const ladder = (): Record<string, number> => g.hitstopLadder() as Record<string, number>;
+
+  it('states every row as a whole number of fixed steps', () => {
+    const rows = Object.entries(ladder());
+    expect(rows.length).toBeGreaterThan(0);
+    for (const [kind, frames] of rows) {
+      expect(Number.isInteger(frames), kind).toBe(true);
+      expect(frames, kind).toBeGreaterThanOrEqual(0);
+    }
+    // Not a table of zeroes: the heavy end really does stop the world.
+    expect(rows.some(([, frames]) => frames > 0)).toBe(true);
+  });
+
+  it('holds the world for exactly the steps the impact asked for', () => {
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    // A real explosion through the real path, well clear of the player so the
+    // freeze under test is the blast's own and not a hit taken from it.
+    g.blast(p.x + 300, p.y);
+    const owed = ladder().explosion;
+    expect(owed).toBeGreaterThan(0);
+    expect(g.hitstop()).toBe(owed);
+
+    const before = g.gameTime();
+    g.stepSim(owed);
+    // Every one of those frames was spent holding: no simulated time passed.
+    expect(g.gameTime()).toBe(before);
+    expect(g.hitstop()).toBe(0);
+
+    // And the world starts again on its own, without anything releasing it.
+    g.stepSim(1);
+    expect(g.gameTime()).toBeGreaterThan(before);
+  });
+
+  it('does not freeze on a critter kill, the same call SHAKE makes', () => {
+    g.go('playing');
+    g.spawnCrow();
+    g.kill(0);
+    // Crows die constantly and in groups; a freeze per kill is a stutter, not
+    // information. See the note on SHAKE and the zero rows in HITSTOP.
+    expect(g.hitstop()).toBe(0);
+  });
+
+  it('never freezes a screen that is not a live run', () => {
+    g.go('playing');
+    press('Escape');
+    expect(g.state()).toBe('paused');
+
+    g.holdFrames(10);
+    press('Escape');
+    // The pause menu answered on the very next step rather than sitting frozen
+    // with no key left to unfreeze it, and the stale hold was dropped.
+    expect(g.state()).toBe('playing');
+    expect(g.hitstop()).toBe(0);
+  });
+
+  it('never carries a freeze across a screen change', () => {
+    g.go('playing');
+    g.holdFrames(10);
+    expect(g.hitstop()).toBe(10);
+    g.go('paused');
+    expect(g.hitstop()).toBe(0);
+  });
+
+  it('never opens a new run mid-freeze', () => {
+    g.go('playing');
+    g.holdFrames(10);
+    g.go('menu');
+    g.go('playing');
+    expect(g.hitstop()).toBe(0);
+    const before = g.gameTime();
+    g.stepSim(1);
+    expect(g.gameTime()).toBeGreaterThan(before);
   });
 });
