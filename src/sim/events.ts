@@ -32,7 +32,12 @@ export type WeaponKind =
   | 'pitchfork'
   | 'spear'
   | 'javelin'
-  | 'charge';
+  | 'charge'
+  // The sapper's two. Both predate this union's last edit and were emitted
+  // without being listed, which type-checked only because game.js was not
+  // checked: WEAPON_FX carries a row for each, so the sound played anyway.
+  | 'barrage'
+  | 'sapperShot';
 
 export type PickupKind = 'ricochet' | 'fire' | 'shield';
 
@@ -58,7 +63,9 @@ export type GameEvent =
   | { type: 'BOSS_HIT'; source: HitSource }
   | { type: 'ARROW_MISS' }
   | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean }
+  // `big` is the sapper's shift-detonated combo, which reaches a wider
+  // radius than a normal blast and whose burst is scaled to match.
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean }
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }

@@ -6,7 +6,7 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { MAP_GEN, MAP_RULES, runsWaves } from '../sim/arena-map';
+import { MAP_GEN, MAP_KINDS, MAP_RULES, runsWaves } from '../sim/arena-map';
 import { modeRule, picksItsMap } from '../sim/game-mode';
 import { BESTIARY } from '../sim/bestiary';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
@@ -884,7 +884,7 @@ const MAP_PANEL_INFO = {
   cavern: { key:'V', color:'#5AD8B0', bg:'rgba(90,216,176,0.10)', dim:'#2A6858', dimBg: DIM_PANEL_BG,
     lines:['Rough chambers, still pools','Wide rooms, short blind necks','Rock cover, fungus that burns'] },
 };
-const MAP_PANELS = Object.keys(MAP_RULES)
+const MAP_PANELS = MAP_KINDS
   .filter(kind => runsWaves(kind))
   .map(kind => {
     const info = MAP_PANEL_INFO[kind];
@@ -952,6 +952,7 @@ let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger'
 // Map selection for Waves mode — persists for the session. Brawl ignores this
 // and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
 // One of MAP_PANELS' kinds, which is every MAP_RULES map that runs waves.
+/** @type {import('../sim/arena-map').MapKind} */
 let selectedMapKind = 'forest';
 
 // Wizard combat cooldowns
@@ -1045,6 +1046,7 @@ const tileMap = new TileMap(CONFIG.rows, CONFIG.cols);
 let waterPhase = false, waterLastTs = 0;
 
 let mapSeed = 0;
+/** @type {import('../sim/arena-map').MapKind} */
 let mapKind = 'forest';
 
 /**
@@ -1097,7 +1099,8 @@ const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
  * screen (`selectedMapKind`, any map runsWaves accepts), and the dev
  * harness.
-
+ *
+ * @param {import('../sim/arena-map').MapKind} kind
  */
 function generateMap(kind = 'forest') {
   mapKind = kind;
@@ -3068,7 +3071,13 @@ function updatePlayer(dt) {
     knightChargeTick -= dt;
     if (knightChargeTick <= 0) {
       knightChargeTick = CONFIG.knightChargeTickRate;
-      for (const [list, damage] of [[crows, damageCrow], [skeletons, damageSkeleton]])
+      /**
+       * Annotated because the literal alone infers `(any[] | fn)[][]`, which
+       * loses the pairing and makes `damage` possibly-an-array.
+       * @type {readonly [any[], (j: number, amount?: number, knock?: any) => void][]}
+       */
+      const arcTargets = [[crows, damageCrow], [skeletons, damageSkeleton]];
+      for (const [list, damage] of arcTargets)
         for (let j = list.length - 1; j >= 0; j--)
           if (inKnightArc(list[j].x, list[j].y)) {
             events.emit({ type: 'MELEE_HIT', x: list[j].x, y: list[j].y, kind: 'spear', fire: false });
@@ -5608,7 +5617,7 @@ function fireIceBolt(s) {
  */
 function detonateHostileBomb(b) {
   const onWater = tileAt(b.x, b.y) === TILE.WATER;
-  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater });
+  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater, big: false });
   if (dist2(b.x, b.y, player.x, player.y) < b.blastRadius * b.blastRadius) {
     damagePlayer(b.damage);
   }

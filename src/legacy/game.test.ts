@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CHARACTERS, type CharacterKind } from '../net/protocol';
 import { CHARACTER_STATS } from '../sim/arena';
-import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
+import { MAP_KINDS, MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { MODE_RULES } from '../sim/game-mode';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
 import {
@@ -40,7 +40,7 @@ const ONE_SECOND = 60;
  * derives them. Naming them here instead would be a third copy of a list the
  * game deliberately keeps in one place.
  */
-const WAVE_MAPS = (Object.keys(MAP_RULES) as MapKind[]).filter((kind) => runsWaves(kind));
+const WAVE_MAPS = MAP_KINDS.filter((kind) => runsWaves(kind));
 
 /**
  * Waves mode remembers the last map picked, for the whole session and so

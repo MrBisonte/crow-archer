@@ -29,6 +29,29 @@ import { TILE, TileMap, tilePassable, type TileId } from './tilemap';
 export type MapKind = 'forest' | 'castle' | 'maze' | 'cavern' | 'bastion';
 
 /**
+ * Every map kind, in the order the menu walks them.
+ *
+ * `Object.keys(MAP_RULES)` returns `string[]` -- a `Record<MapKind, ...>` does
+ * not carry its union through `keys` -- so each caller that wanted this list
+ * was asserting it back by hand. There were three, spelled three ways: the
+ * wire validator kept its own literal array, the legacy tests cast the keys,
+ * and the map-select panel builder did neither and simply passed `string`.
+ * This is the one home.
+ *
+ * `as const satisfies` catches a wrong entry. It cannot catch a MISSING one,
+ * because a short list of MapKinds is still a valid list of MapKinds, and a
+ * kind omitted here does not fail loudly: it drops out of the menu, and the
+ * wire quietly refuses it. The guard below turns that into a build error.
+ */
+export const MAP_KINDS = ['forest', 'castle', 'maze', 'cavern', 'bastion'] as const satisfies readonly MapKind[];
+
+/** Resolves only when `T` is `never`, so naming a non-never type fails to compile. */
+type Exhaustive<T extends never> = T;
+
+/** Fails the build naming the kinds MAP_KINDS forgot. Erased at runtime. */
+export type EveryMapKindIsListed = Exhaustive<Exclude<MapKind, (typeof MAP_KINDS)[number]>>;
+
+/**
  * How each map builds its grid, one row per MapKind so a fifth map fails to
  * compile until it has a generator.
  *
