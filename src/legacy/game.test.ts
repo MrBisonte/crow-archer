@@ -13,6 +13,9 @@ import { CHARACTER_STATS } from '../sim/arena';
 import { MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
 import { MODE_RULES } from '../sim/game-mode';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
+import { GUARD_STATS, STARTING_GUARDS, type GuardKind } from '../sim/guards';
+import { TOWER_MAX_HP } from '../sim/towers';
+import { mulberry32 } from '../sim/rng';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable } from '../sim/tilemap';
@@ -2540,11 +2543,23 @@ describe('siege mode', () => {
     // pacing — the same collision runsCastleGauntlet exists to prevent.
     g.setMode('siege');
     g.go('playing');
-    const startWave = g.wave();
-    g.stepSim(Math.ceil(g.config().crowEscalationInterval * 60) * 3);
-    expect(g.wave()).toBe(startWave);
-    expect(g.crows().length).toBe(0);
-    expect(g.soldiers().length).toBe(0);
+    // Wave 1 is three bats, put there by the ladder on the first tick. The
+    // point is that three escalation intervals later it is still wave 1: the
+    // timer has no say here, only clearing the field does.
+    g.stepSim(1);
+    expect(siegeState().wave).toBe(1);
+    expect(g.crows().length).toBe(3);
+    expect(g.crows().every((c: { white: boolean }) => c.white)).toBe(true);
+    // Every banner a siege raises names the ladder it is part of. The
+    // escalation timer raises a bare one, so seeing a bare banner here would
+    // mean the timer had got in — which is what the population gate prevents.
+    // Asserted on the banner rather than on the wave number, because the
+    // retinue clears wave 1 unaided and the wave legitimately does advance.
+    for (let n = 0; n < 3; n++) {
+      g.stepSim(Math.ceil(g.config().crowEscalationInterval * 60));
+      const text = g.waveBanner().text;
+      if (text !== '') expect(text, text).toContain('/');
+    }
   });
 
   it('generates two towers behind a barrier that can be walked around', () => {
@@ -2563,5 +2578,160 @@ describe('siege mode', () => {
     expect(MODE_RULES.siege.waveCap).toBe(SIEGE_WAVE_COUNT);
     expect(MODE_RULES.brawl.waveCap).toBeNull();
     expect(MODE_RULES.waves.waveCap).toBeNull();
+  });
+});
+
+// ── THE SIEGE, RUNNING ────────────────────────────────────────────────────────
+//
+// The loop rather than the setup: waves arriving, being cleared, promoting the
+// survivors and ending. Driven through devHooks.clearSiegeWave so a ten-wave run
+// takes a test rather than an afternoon; the fighting itself is covered by the
+// retinue and contact describes below.
+/**
+ * The siege run, insisted upon.
+ *
+ * devHooks.siege() is null on every map that is not a bastion, which is the
+ * right answer for it to give and the wrong one to thread through forty
+ * assertions. A test that reaches for it on the wrong map should say so once,
+ * here, rather than fail forty lines later on a property of null.
+ */
+const siegeState = (): { wave: number; outcome: string; guards: { kind: GuardKind; rank: number; hp: number }[] } => {
+  const run = g.siege();
+  // Narrowed with a bang, which is a test-only liberty: the expect above is
+  // what actually establishes it, and tsc cannot see through an assertion.
+  expect(run, 'no siege run: the loaded map is not a bastion').not.toBeNull();
+  return run!;
+};
+
+describe('the siege loop', () => {
+  // Pinned, so which kinds open the retinue is a fact rather than the weather.
+  // A knight cannot be promoted, so an unpinned roll makes every rank assertion
+  // conditional on a coin toss — this flaked five runs in twelve before pinning.
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
+
+  it('opens with two guards and two towers', () => {
+    openSiege();
+    expect(siegeState().guards).toHaveLength(STARTING_GUARDS);
+    expect(g.guards()).toHaveLength(STARTING_GUARDS);
+    expect(g.towers()).toHaveLength(2);
+    expect(g.towers().every((t: { hp: number }) => t.hp === TOWER_MAX_HP)).toBe(true);
+  });
+
+  it('every guard on the field starts at its kind\u2019s hp, and rank zero', () => {
+    openSiege();
+    for (const body of g.guards()) {
+      expect(body.guard.rank).toBe(0);
+      expect(body.guard.hp).toBe(GUARD_STATS[body.guard.kind as GuardKind].baseHp);
+    }
+  });
+
+  it('advances a wave only when the field is cleared, and recruits one each time', () => {
+    openSiege();
+    expect(siegeState().wave).toBe(1);
+    const before = siegeState().guards.length;
+    g.clearSiegeWave();
+    g.stepSim(2);
+    expect(siegeState().wave).toBe(2);
+    expect(siegeState().guards).toHaveLength(before + 1);
+    expect(g.guards()).toHaveLength(before + 1);
+  });
+
+  it('promotes the survivors before the recruit joins', () => {
+    openSiege();
+    g.clearSiegeWave();
+    g.stepSim(2);
+    const after = siegeState().guards as { kind: GuardKind; rank: number }[];
+    // The opening retinue is rolled, so which kinds are present varies run to
+    // run and the assertion has to survive that. Two things are always true:
+    // everyone who fought wave 1 and can be promoted has climbed to rank 1,
+    // and the newest guard has not, because it arrived after the promoting.
+    const veterans = after.slice(0, after.length - 1);
+    for (const v of veterans) {
+      expect(v.rank, v.kind).toBe(GUARD_STATS[v.kind].promotable ? 1 : 0);
+    }
+    const recruit = after[after.length - 1];
+    expect(recruit?.rank, 'the recruit fought nothing and should be rank 0').toBe(0);
+  });
+
+  it('runs ten waves and then wins', () => {
+    openSiege();
+    for (let n = 0; n < SIEGE_WAVE_COUNT; n++) { g.clearSiegeWave(); g.stepSim(2); }
+    expect(g.state()).toBe('win');
+    expect(siegeState().outcome).toBe('won');
+  });
+
+  it('does not run past ten', () => {
+    openSiege();
+    for (let n = 0; n < SIEGE_WAVE_COUNT + 4; n++) { g.clearSiegeWave(); g.stepSim(2); }
+    expect(siegeState().wave).toBe(SIEGE_WAVE_COUNT);
+    expect(siegeState().outcome).toBe('won');
+  });
+
+  it('puts a boss on the field from wave seven and two on wave ten', () => {
+    openSiege();
+    const bossesAt = (n: number): number => {
+      while (siegeState().wave < n) { g.clearSiegeWave(); g.stepSim(2); }
+      g.stepSim(1);
+      return (g.boss() ? 1 : 0) + g.siegeBosses().length;
+    };
+    expect(bossesAt(6)).toBe(0);
+    expect(bossesAt(7)).toBe(1);
+    expect(bossesAt(10)).toBe(2);
+  });
+
+  it('loses only when the hero dies, never when a tower falls', () => {
+    openSiege();
+    // Flatten both towers outright. The run must not notice.
+    for (const t of g.towers()) t.hp = 0;
+    g.stepSim(4);
+    expect(g.state()).toBe('playing');
+    expect(siegeState().outcome).toBe('running');
+  });
+});
+
+describe('the retinue in the field', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  it('kills what it is standing next to, without the hero doing anything', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    // The wave is deliberately left standing. Clearing it advances the ladder
+    // mid-test, wave 2 arrives, and the guard reasonably goes for a nearer
+    // crow instead — which made this flake five runs in twelve.
+    const body = g.guards()[0];
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons()[g.skeletons().length - 1];
+    sk.x = body.x + 8; sk.y = body.y;
+    const before = g.skeletons().length;
+    g.stepSim(180);
+    expect(g.skeletons().length).toBeLessThan(before);
+  });
+
+  it('a guard that dies leaves the retinue and does not come back', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    const before = g.guards().length;
+    const body = g.guards()[0];
+    // One hit from death, with a skeleton parked on it. The wave is left alone
+    // on purpose: clearing it would recruit a replacement and hide the loss.
+    body.guard.hp = 1;
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons()[g.skeletons().length - 1];
+    sk.x = body.x + 6; sk.y = body.y;
+    // Tough enough to outlive the guard. A one-hp skeleton dies to the guard's
+    // own swing before it can land one, because updateGuards runs first in the
+    // tick — which is correct, and makes it useless as an executioner.
+    sk.hp = 50; sk.maxHp = 50;
+    g.stepSim(120);
+    expect(g.guards().length).toBe(before - 1);
+    // The body and the record leave together. A retinue that disagreed with
+    // the field would promote a guard nobody can see.
+    expect(siegeState().guards.length).toBe(g.guards().length);
   });
 });
