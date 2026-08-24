@@ -21,9 +21,11 @@ import {
   BASTION_TILE_GRID,
   paintBastionAsh,
   paintBastionGround,
+  paintBastionSapling,
   paintBastionStone,
   paintBastionTower,
   paintBastionTree,
+  paintBastionWater,
 } from './bastion-tiles';
 import { countFilled, gridColours, gridSize, invalidColours, isHexColour, raggedRows } from './grid-testkit';
 import { makePixelGrid, type PixelGrid } from './pixel-grid';
@@ -38,6 +40,11 @@ const PAINTERS: ReadonlyArray<readonly [string, BastionPainter]> = [
   ['tower', paintBastionTower],
   ['tree', paintBastionTree],
   ['ash', paintBastionAsh],
+  // Ash regrows through a sapling on this map, and TILE_THEMES is checked for
+  // every tile a map can hold rather than every tile its generator emits, so
+  // both of these are painted even though BastionTerrain makes neither.
+  ['sapling', paintBastionSapling],
+  ['water', paintBastionWater],
 ];
 
 /** The seeds a per-tile check sweeps. Wider than one seed because every

@@ -80,6 +80,11 @@ const C = {
   leaf: '#6f7b3c',
   leafHi: '#8b9950',
   leafDark: '#55602c',
+  // Standing water. The generator makes none, so these exist for the case a
+  // run somehow produces a pool anyway: a siege ground's water should read as
+  // a churned puddle in this map's own earth, not as a window onto the forest.
+  puddle: '#3c3020',
+  puddleLit: '#5a4832',
 } as const;
 
 /** Named so the wiring and the tests refer to one list of colours. */
@@ -326,4 +331,50 @@ export function paintBastionAsh(grid: PixelGrid, seed: number): void {
   }
   // Rust bleeding out of whatever ironwork burned with it.
   if (seed % 7 === 5) pixelRect(grid, (seed % 10) + 3, (seed % 6) + 8, 2, 1, C.rust);
+}
+
+/**
+ * A sapling: ash growing back into cover.
+ *
+ * Needed because the bastion is `destructibleTerrain: true`, so `Regrowth`
+ * turns its burnt ground back into trees by way of this stage. A missing
+ * painter here fails quietly rather than loudly — `StaticTileLayer` skips a
+ * tile it has no painter for — so the tile would be a hole in the ground that
+ * blocks a body while showing nothing. `tiles.test.ts` is what caught its
+ * absence, which is the whole reason that test lists grown tiles separately
+ * from generated ones.
+ *
+ * Drawn as the tree's own shape at a third the height and with one lobe rather
+ * than three, and leaning the same way, so it reads as the same species caught
+ * early rather than as a different plant.
+ */
+export function paintBastionSapling(grid: PixelGrid, seed: number): void {
+  paintEarthBase(grid);
+  pixelEllipse(grid, 8, 14, 3, 1, C.shadow);
+  const lean = seed % 2;
+  pixelRect(grid, 7, 11, 2, 4, C.bark);
+  pixelRect(grid, 7, 11, 1, 4, C.barkLit);
+  pixelEllipse(grid, 8 + lean, 9, 2.6, 2, C.leaf);
+  pixelEllipse(grid, 7 + lean, 8, 1.4, 1.2, C.leafHi);
+  if (seed % 3 === 0) pixelEllipse(grid, 10 + lean, 10, 1, 1, C.leafDark);
+}
+
+/**
+ * Standing water, which `BastionTerrain` never generates.
+ *
+ * It exists because `TILE_THEMES` is checked for every tile a map can hold and
+ * not for every tile it happens to produce, and that is the right way round: a
+ * theme that answers only for today's generator breaks the moment the
+ * generator changes, and it breaks silently. Painting it in this map's earth
+ * rather than borrowing another theme's blue means that if a pool ever does
+ * appear here it looks like a mistake in the right palette instead of a hole
+ * cut through to the forest.
+ */
+export function paintBastionWater(grid: PixelGrid, seed: number): void {
+  fillTile(grid, C.puddle);
+  pixelRect(grid, 0, 0, BASTION_TILE_GRID, 1, C.shadow);
+  pixelRect(grid, 0, 0, 1, BASTION_TILE_GRID, C.shadow);
+  pixelEllipse(grid, 8, 8, 5, 3.5, C.puddleLit);
+  if (seed % 2 === 0) pixelRect(grid, (seed % 7) + 3, (seed % 5) + 5, 3, 1, C.puddle);
+  if (seed % 3 === 0) pixelRect(grid, (seed % 6) + 5, (seed % 7) + 4, 2, 1, C.clay);
 }
