@@ -132,6 +132,7 @@ export type GameEvent =
   | { type: 'GUARD_SWING'; x: number; y: number }
   | { type: 'GUARD_SHOT'; x: number; y: number }
   | { type: 'GUARD_DOWN'; x: number; y: number }
+  | { type: 'TOWER_SHOT'; x: number; y: number }
   | { type: 'TOWER_FELL'; x: number; y: number }
   // Carries the wave that was just survived, not the one about to start: the
   // banner reads "wave 3 held", and the run has already advanced past it.

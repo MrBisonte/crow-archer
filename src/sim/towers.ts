@@ -89,6 +89,34 @@ export interface TowerSite {
 export const TOWER_MAX_HP = 20;
 
 /**
+ * How many tiles on a side a tower occupies.
+ *
+ * Named rather than assumed so that "where is this tower" has one answer.
+ * Every consumer -- the generator stamping tiles, the renderer, the contact
+ * pass asking whether a body is hitting one, `towerCentre` below -- derives
+ * its footprint from this instead of hardcoding a single tile, which is what
+ * they all did before and is why the tower's centre was written out by hand in
+ * three different places.
+ */
+export const TOWER_SPAN = 1;
+
+/**
+ * What one bolt from a tower takes off.
+ *
+ * Two, against the guard's one, and the difference is the tower's entire
+ * argument for existing. A guard walks, is healed by the priest, and is
+ * replaced by a recruit every wave. A tower does none of those: it cannot be
+ * repaired, cannot be moved off a wave that is camping on it, and is gone for
+ * the rest of the run once it falls. If its shot were worth the same as a
+ * body's, the sensible play would be to ignore the towers entirely and the map
+ * would be a brawl with scenery.
+ *
+ * A single number rather than a table for the same reason TOWER_MAX_HP is: one
+ * kind of tower means one row, and one row is a table pretending.
+ */
+export const TOWER_DAMAGE = 2;
+
+/**
  * One tower on the field.
  *
  * `row` and `col` are `readonly` because they are the tower's identity, and
@@ -108,6 +136,16 @@ export interface Tower {
   readonly col: number;
   hp: number;
   readonly maxHp: number;
+  /**
+   * Seconds until this tower may loose its next bolt.
+   *
+   * Running state, so it sits beside `hp` rather than with the readonly
+   * identity above, and is counted down by the loop that owns the frame -- the
+   * same split a guard body makes. It lives on the tower rather than in a
+   * parallel map in the renderer because a cooldown keyed by tile is a second
+   * name for a tower, and the two can then disagree about which towers exist.
+   */
+  shotCD: number;
 }
 
 /**
@@ -124,7 +162,11 @@ export interface Tower {
  * takes the sites.
  */
 export function makeTower(row: number, col: number): Tower {
-  return { row, col, hp: TOWER_MAX_HP, maxHp: TOWER_MAX_HP };
+  // shotCD starts at zero, so a tower may fire the first frame something comes
+  // into range. Both towers therefore open together, which is deliberate: a
+  // volley reads as the bastion answering, and staggering them would need a
+  // rng this module does not have and does not want.
+  return { row, col, hp: TOWER_MAX_HP, maxHp: TOWER_MAX_HP, shotCD: 0 };
 }
 
 /**
@@ -269,6 +311,21 @@ export function standingTowers(towers: readonly Tower[]): Tower[] {
  * caller writes one check and `noUncheckedIndexedAccess` has nothing to
  * complain about.
  */
+/**
+ * Where a tower's shots come from, in world pixels.
+ *
+ * Derived from TOWER_SPAN rather than assuming the tower is one tile, so the
+ * day the footprint grows the muzzle moves with it instead of staying pinned
+ * to the top-left corner. `row`/`col` are the tower's NORTH-WEST tile, which is
+ * the corner the generator stamps from.
+ */
+export function towerCentre(tower: Tower, tileSize: number): { x: number; y: number } {
+  return {
+    x: (tower.col + TOWER_SPAN / 2) * tileSize,
+    y: (tower.row + TOWER_SPAN / 2) * tileSize,
+  };
+}
+
 export function towerAt(towers: readonly Tower[], row: number, col: number): Tower | null {
   const found = towers.find(
     (tower) => tower.row === row && tower.col === col && towerStanding(tower),

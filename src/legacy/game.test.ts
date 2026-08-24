@@ -10,14 +10,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CHARACTERS, type CharacterKind } from '../net/protocol';
 import { CHARACTER_STATS } from '../sim/arena';
-import { MAP_KINDS, MAP_RULES, runsWaves, type MapKind } from '../sim/arena-map';
+import { MAP_KINDS, MAP_RULES, TILE_SIZE, runsWaves, type MapKind } from '../sim/arena-map';
 import { MODE_RULES } from '../sim/game-mode';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
 import {
   GUARD_STATS, OPENING_RETINUE, STARTING_RECRUITS, WARD_HEAL, WARD_TRIGGER_HURT,
   type GuardKind,
 } from '../sim/guards';
-import { TOWER_MAX_HP } from '../sim/towers';
+import { TOWER_DAMAGE, TOWER_MAX_HP, towerCentre, type Tower } from '../sim/towers';
 import { barrierGates } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
@@ -2832,6 +2832,82 @@ describe('the siege loop', () => {
     const left = onField();
     expect(left, 'the displaced boss was dropped on the floor').toHaveLength(1);
     expect(left[0]?.bstate, 'the survivor should not be the one that died').not.toBe('dead');
+  });
+
+  /**
+   * The towers shoot, which is the difference between a defence map and a
+   * brawl with scenery on it.
+   *
+   * The retinue is emptied rather than the wave cleared. Clearing the wave
+   * completes it, which recruits a guard and puts a fresh archer on the field
+   * firing allied arrows of its own; leaving the wave alone keeps the retinue
+   * empty, so every allied arrow in these tests came from a tower.
+   */
+  const bastionNoRetinue = (): void => {
+    openSiege();
+    g.guards().length = 0;
+  };
+
+  const alliedShots = (): { damage: number }[] =>
+    (g.arrows() as { allied?: boolean; damage: number }[]).filter((a) => a.allied);
+
+  /** Something solid standing exactly where you put it. */
+  const standAt = (x: number, y: number): void => {
+    g.spawnSkeleton('normal');
+    const list = g.skeletons() as { x: number; y: number; hp: number; maxHp: number }[];
+    const sk = list[list.length - 1];
+    if (!sk) throw new Error('spawnSkeleton put nothing on the field');
+    sk.x = x; sk.y = y; sk.hp = 99; sk.maxHp = 99;
+  };
+
+  it('holds fire until something comes inside its reach', () => {
+    bastionNoRetinue();
+    const tower = g.towers()[0] as Tower;
+    const muzzle = towerCentre(tower, TILE_SIZE);
+
+    // Wave one is already on the field, but it marches in from the far edge,
+    // which is most of the map away from a tower.
+    g.stepSim(1);
+    expect(alliedShots(), 'shot at something outside its reach').toHaveLength(0);
+
+    standAt(muzzle.x + 80, muzzle.y);
+    g.stepSim(1);
+    expect(alliedShots().length, 'never shot at a target in reach').toBeGreaterThan(0);
+  });
+
+  it('looses a bolt worth more than a guard arrow', () => {
+    bastionNoRetinue();
+    const muzzle = towerCentre(g.towers()[0] as Tower, TILE_SIZE);
+    standAt(muzzle.x + 80, muzzle.y);
+    g.stepSim(1);
+    // The whole argument for a tower: it cannot move, be healed or be
+    // replaced, so its shot has to be worth more than a body's.
+    for (const bolt of alliedShots()) expect(bolt.damage).toBe(TOWER_DAMAGE);
+    expect(TOWER_DAMAGE).toBeGreaterThan(1);
+  });
+
+  it('stops shooting the moment it falls', () => {
+    bastionNoRetinue();
+    const muzzle = towerCentre(g.towers()[0] as Tower, TILE_SIZE);
+    // Both, so the second one cannot answer for the first.
+    for (const t of g.towers()) t.hp = 0;
+    standAt(muzzle.x + 80, muzzle.y);
+    // Frame by frame, not one long step. A bolt fired at a target 80px away
+    // lands and is spliced out of `arrows` inside about ten frames, so a
+    // single stepSim(30) finds an empty list whether the tower shot or not --
+    // this test passed against a build with the standing check deleted until
+    // it was checked every frame instead.
+    for (let frame = 0; frame < 30; frame++) {
+      // Every frame, not once at the top. Wave one can finish inside these
+      // thirty frames, and finishing a wave recruits a guard -- whose arrow is
+      // `allied` too. That put a stray archer's shot in the list on 3 runs in
+      // 8 before this line existed.
+      g.guards().length = 0;
+      g.stepSim(1);
+      // Cover and covering fire go together. A tower that kept shooting from
+      // rubble would make taking one down cost the player nothing.
+      expect(alliedShots(), `rubble is still shooting, frame ${frame}`).toHaveLength(0);
+    }
   });
 
   it('loses only when the hero dies, never when a tower falls', () => {

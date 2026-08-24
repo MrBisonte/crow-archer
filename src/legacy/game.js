@@ -18,9 +18,12 @@ import {
   completeWave as siegeCompleteWave, guardLost as siegeGuardLost,
   heroDied as siegeHeroDied, startSiege, waveRoster,
 } from '../sim/siege-run';
-import { TOWER_MAX_HP, damageTower, makeTowers, standingTowers, towerAt } from '../sim/towers';
+import {
+  TOWER_DAMAGE, TOWER_MAX_HP, damageTower, makeTowers, standingTowers, towerAt,
+  towerCentre, towerStanding,
+} from '../sim/towers';
 import { barrierGates, towerSites } from '../sim/bastion-terrain';
-import { nearestHostile } from '../sim/targeting';
+import { nearestHostile, nearestHostileWithin } from '../sim/targeting';
 import {
   GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITES,
   KNIGHT_VARIANTS, KNIGHT_VARIANT_NAMES,
@@ -193,6 +196,10 @@ const CONFIG = {
   // spawn so a retinue does not all solve on the same frame.
   guardRouteInterval: 0.5,
   guardShotInterval: 1.6, guardSwingInterval: 0.9, guardArrowSpeed: 420,
+  // The towers outrange every guard on the field and reload faster. That is
+  // the trade for being unable to move, be healed, or be replaced: all of a
+  // tower's value has to sit in the arc it covers while it is still up.
+  towerReach: 320, towerShotInterval: 1.1, towerBoltSpeed: 480,
   // The priest's numbers. The heal interval is well over twice a sword swing
   // on purpose: a retinue whose mending outpaces the damage coming in is a
   // retinue that cannot be spent, and the whole bastion is built on spending
@@ -2255,6 +2262,15 @@ events.on(e => {
         shadowBlur: 4, shadowColor: '#9B7CE2', pri: PRI.KILL });
       break;
 
+    case 'TOWER_SHOT':
+      // Heavier than a guard's bow and drier than the wizard's bolt: an
+      // emplacement loosing, not a person shooting.
+      playSound(sndCrossbow);
+      burst(e.x, e.y, { count: 3, colors: ['#E7EDF4','#B7BFC9'],
+        speedMin: 30, speedMax: 80, decay: 3.6, shape: 'spark',
+        sizeMin: 1, sizeMax: 1.6, pri: PRI.AMBIENT });
+      break;
+
     case 'TOWER_FELL':
       // Heavier than a guard and duller than an explosion: stone giving up.
       playSound(sndTowerFell);
@@ -3579,10 +3595,15 @@ function updateArrows(dt) {
     const hitR = a.hitRadius || CONFIG.arrowHitRadius;
     // A player arrow is worth one hit whatever it carries — the quiver is
     // balanced around that and every pickup changes the arrow, not the number.
-    // A guard's arrow is worth what its rank makes it, because seniority's
-    // last step is +1 damage and an archer never swings: without this, a
-    // senior archer's promotion would be a badge with nothing behind it.
-    const arrowDamage = a.fromGuard ? (a.damage ?? 1) : 1;
+    // A shot from the hero's side is worth what it carries: an archer guard's
+    // rank adds damage and an archer never swings, so without this a senior
+    // archer's promotion would be a badge with nothing behind it, and a tower
+    // bolt would be worth the same as a crow peck.
+    //
+    // `allied` rather than `fromGuard`, which is what this was called when a
+    // guard was the only thing that could set it. The flag was never about who
+    // fired: it is about whether `damage` on the arrow is to be believed.
+    const arrowDamage = a.allied ? (a.damage ?? 1) : 1;
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
         damageCrow(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
@@ -6473,9 +6494,58 @@ function fireGuardArrow(g, target) {
     vx: Math.cos(ang) * CONFIG.guardArrowSpeed,
     vy: Math.sin(ang) * CONFIG.guardArrowSpeed,
     life: 2, angle: ang, damage: guardDamage(g.guard),
-    fromGuard: true, type: 'normal', pierce: 0,
+    allied: true, type: 'normal', pierce: 0,
   });
   events.emit({ type: 'GUARD_SHOT', x: g.x, y: g.y });
+}
+
+/**
+ * The towers shoot.
+ *
+ * This is what makes them towers rather than walls. Cover that only absorbs is
+ * a wall with a roof, and the bastion is a defence map; a hero who could ignore
+ * the two stone drums entirely would be playing a brawl with scenery.
+ *
+ * Fallen towers are skipped, so the shots stop in the same frame the cover
+ * does. There is no separate "destroyed" flag to fall out of step with the hp
+ * -- `towerStanding` is the one question, the way `towerAt` already asks it.
+ */
+function updateTowers(dt) {
+  if (!siegeRun || bossDeathSeq) return;
+  const hostiles = siegeHostiles();
+  for (const t of towers) {
+    if (!towerStanding(t)) continue;
+    t.shotCD -= dt;
+    if (t.shotCD > 0) continue;
+    const from = towerCentre(t, CONFIG.tileSize);
+    // Team.A so the shared helper applies the same canDamage rule a guard's
+    // targeting does, rather than this loop reimplementing "is that an enemy".
+    const target = nearestHostileWithin(
+      { x: from.x, y: from.y, team: Team.A }, hostiles, CONFIG.towerReach);
+    if (!target) continue;
+    t.shotCD = CONFIG.towerShotInterval;
+    fireTowerBolt(from, target);
+  }
+}
+
+/**
+ * One bolt, from a tower's centre at whatever it just picked.
+ *
+ * Goes into `arrows` with the same shape a guard's shot has, so it inherits
+ * flight, terrain collision and the hit loop already written for those rather
+ * than growing a second projectile system beside them. `allied` is what makes
+ * that hit loop read `damage` instead of assuming one.
+ */
+function fireTowerBolt(from, target) {
+  const ang = Math.atan2(target.y - from.y, target.x - from.x);
+  arrows.push({
+    x: from.x, y: from.y,
+    vx: Math.cos(ang) * CONFIG.towerBoltSpeed,
+    vy: Math.sin(ang) * CONFIG.towerBoltSpeed,
+    life: 2, angle: ang, damage: TOWER_DAMAGE,
+    allied: true, type: 'normal', pierce: 0,
+  });
+  events.emit({ type: 'TOWER_SHOT', x: from.x, y: from.y });
 }
 
 /** Applies damage to whatever a guard just hit, through that kind's own path. */
@@ -11108,7 +11178,7 @@ function stepGame(dt) {
       updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt);
       updateSoldiers(dt); regrowth.tick(dt);
-      updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
+      updateTowers(dt); updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -11122,7 +11192,7 @@ function stepGame(dt) {
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       updateSoldiers(dt); regrowth.tick(dt); updateBarrageBombs(dt); updateSapperShots(dt);
-      updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
+      updateTowers(dt); updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
