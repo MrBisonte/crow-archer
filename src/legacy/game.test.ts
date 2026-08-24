@@ -2898,7 +2898,7 @@ describe('the sound a repeated shot makes', () => {
   /** The sounds that opted out, keyed by the array the call sites pass. */
   const optedOut = (): Map<number[], string> => g.soundPlayback() as Map<number[], string>;
 
-  const play = (sound: number[]): number[] => g.soundParams(sound) as number[];
+  const play = (sound: number[]): number[] => g.soundPlan(sound) as number[];
 
   afterEach(() => { g.config().audio = true; });
 
@@ -2949,16 +2949,19 @@ describe('the sound a repeated shot makes', () => {
     for (const sound of weaponSounds()) expect(optedOut().has(sound)).toBe(false);
   });
 
-  it('hands the synth nothing at all while audio is off', () => {
+  it('plays nothing at all, of any kind, while audio is off', () => {
     g.config().audio = false;
-    for (const sound of weaponSounds()) expect(g.soundParams(sound)).toBeNull();
-    for (const [sound] of optedOut()) expect(g.soundParams(sound)).toBeNull();
+    const multiVoice = (): void => {};
+    for (const sound of weaponSounds()) expect(g.soundPlan(sound)).toBeNull();
+    for (const [sound] of optedOut()) expect(g.soundPlan(sound)).toBeNull();
+    expect(g.soundPlan(multiVoice)).toBeNull();
   });
 
   it('leaves a multi-voice sound to play its own voices', () => {
     // A function calls the synth itself, once per voice, so there is no single
     // parameter array to vary — which is also why the announce beep stays the
     // same beep without needing a row of its own.
-    expect(g.soundParams(() => {})).toBeNull();
+    const multiVoice = (): void => {};
+    expect(g.soundPlan(multiVoice)).toBe(multiVoice);
   });
 });

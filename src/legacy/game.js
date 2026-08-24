@@ -71,9 +71,9 @@ import { MultiplayerSession } from '../ui/multiplayer-session';
 //
 // Shapes 4 and 5 never read the oscillator phase, so on a noise sound the
 // whole pitch half of the layout — frequency, randomness, slide, deltaSlide,
-// pitchJump — is computed and thrown away. Half the sounds below are noise,
-// including the arrow, so `randomness` is not what makes a repeated sound
-// vary; see playSound() and src/render/sound-variation.ts for what does.
+// pitchJump — is computed and thrown away. Ten of the twenty-two sounds below
+// are noise, the arrow among them, so `randomness` is not what makes a
+// repeated sound vary; see playSound() and src/render/sound-variation.ts.
 var zzfxX;
 try { zzfxX = new (window.AudioContext || window.webkitAudioContext); } catch(_) {}
 
@@ -5828,27 +5828,30 @@ function updateBossDeath(dt) {
 // playSound() accepts either an array or a function (for multi-voice sounds).
 
 /**
- * What the synth is handed for one play of `s`: the tuned array, varied unless
- * the sound opted out (SOUND_PLAYBACK). Null means nothing is played at all —
- * audio is off, or the sound is multi-voice and plays its own.
+ * What one play of `s` amounts to, and the one home of the rule that audio can
+ * be off. Three answers: null plays nothing, a function is a multi-voice sound
+ * that calls the synth itself once per voice, and an array is what the synth
+ * is handed — the tuned parameters, varied unless the sound opted out
+ * (SOUND_PLAYBACK).
  *
- * The decision is split out of playSound() because a headless test has no
- * AudioContext: this is the half that can be checked, zzfx() is the half that
- * cannot.
+ * Split out of playSound() because a headless test has no AudioContext: this
+ * is the half that can be checked, zzfx() is the half that cannot.
+ *
+ * The profile is rebuilt per play so that editing CONFIG.soundVariation from
+ * the console takes effect, which costs one small object against the whole
+ * sample buffer zzfx() allocates immediately after.
  */
-function soundParams(s) {
-  if (!CONFIG.audio || typeof s === 'function') return null;
+function soundPlan(s) {
+  if (!CONFIG.audio) return null;
+  if (typeof s === 'function') return s;
   return PLAYBACK[playbackOf(s)](s, variationProfile(CONFIG.soundVariation));
 }
 
 function playSound(s) {
-  if (!CONFIG.audio) return;
   try {
-    // A multi-voice sound is a function that calls the synth itself, once per
-    // voice, so it plays as written.
-    if (typeof s === 'function') { s(); return; }
-    const params = soundParams(s);
-    if (params) zzfx(...params);
+    const plan = soundPlan(s);
+    if (typeof plan === 'function') plan();
+    else if (plan) zzfx(...plan);
   } catch (_) {}
 }
 
@@ -5896,6 +5899,10 @@ const sndTorchLight    = [.3,  .3,  420, 0, .06, .18, 4, 1, 90];        // bit n
  * Rows carry a kind rather than the table being a set of exceptions, because
  * the kind is what is being modelled: a third way for a sound to repeat lands
  * as a row here and a row in PLAYBACK, not as a second flag.
+ *
+ * Keyed on the array itself, so a call site has to pass the const. A copy of
+ * sndEmpty is a different sound as far as this table is concerned, and would
+ * quietly start varying.
  */
 const SOUND_PLAYBACK = new Map([
   [sndEmpty,       'fixed'],  // the dry click for "that did nothing" — a UI answer
@@ -10628,10 +10635,10 @@ export const devHooks = {
   menuShown: () => MENU_SHOWN,
   mapPanels: () => MAP_PANELS,
   // Audio. A headless test has no AudioContext, so zzfx() is a no-op there and
-  // the only observable half is the decision: what one play of a sound asks
-  // the synth for (null when audio is off), which sounds opted out of per-play
-  // variation, and the render-side table the weapons play through.
-  soundParams: (s) => soundParams(s),
+  // the only observable half is the decision: what one play of a sound comes
+  // to (null when audio is off), which sounds opted out of per-play variation,
+  // and the render-side table the weapons play through.
+  soundPlan: (s) => soundPlan(s),
   soundPlayback: () => SOUND_PLAYBACK,
   weaponFx: () => WEAPON_FX,
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
