@@ -438,8 +438,10 @@ const BASTION_TILE_PAINTERS: Partial<Record<TileId, TilePainter>> = {
   [TILE.ROCK](g, x, y, seed, { tileSize: ts }) {
     paintGrid(g, x, y, ts, (grid) => paintBastionStone(grid, seed));
   },
-  [TILE.HUT](g, x, y, seed, { tileSize: ts }) {
-    paintGrid(g, x, y, ts, (grid) => paintBastionTower(grid, seed));
+  [TILE.HUT](g, x, y, seed, { tileSize: ts }, hutAbove, hutLeft) {
+    // A bastion tower is 2x2, so the painter needs to know which quarter of it
+    // this tile is. Same two flags the castle's huts assemble on.
+    paintGrid(g, x, y, ts, (grid) => paintBastionTower(grid, seed, hutAbove, hutLeft));
   },
   [TILE.TREE](g, x, y, seed, { tileSize: ts }) {
     paintGrid(g, x, y, ts, (grid) => paintBastionTree(grid, seed));

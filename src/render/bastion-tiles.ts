@@ -192,88 +192,120 @@ export function paintBastionStone(grid: PixelGrid, seed: number): void {
 }
 
 /**
- * A defence tower. Painted for TILE.HUT on this map.
+ * A defence tower, assembled from the four tiles of its 2x2 footprint.
  *
- * Fills all 16 rows: nothing is left transparent. A crenellated top is the
- * obvious place to want transparency, and it is not needed here, because the
- * gaps between the merlons show the earth this tile has already painted behind
- * them. Leaving those gaps empty instead would punch holes in the map wherever
- * a tower stands, and the tile is opaque terrain, not a sprite standing on it.
+ * Each call paints ONE quadrant of one 64px tower. `hutAbove` and `hutLeft` say
+ * which: a tile with a hut to its left is the eastern column, a tile with a hut
+ * above it is the southern row. The tile system already computes both for the
+ * castle's huts, which assemble the same way — this is that mechanism used for
+ * the thing it was built for.
  *
- * One tile is one whole tower, apex to base. The painter is given no neighbour
- * information — unlike the hut painters in tiles.ts, which switch roof, door and
- * window on `hutAbove`/`hutLeft` to assemble a 2x2 building out of four tiles —
- * so a cluster here reads as a rank of towers along the wall rather than as one
- * building with three quarters of it missing. A neighbour-aware version is a
- * bigger signature and a different job; this one cannot get that wrong.
+ * The whole tower is laid out in one 32x32 coordinate space and each quadrant
+ * draws the parts of it that fall inside its own 16x16 window, by subtracting
+ * its origin. `setPixel` bounds-checks, so everything outside simply clips and
+ * no part has to be split by hand at the seam — which is what makes the door
+ * able to straddle the two southern tiles at all.
+ *
+ * One tile used to be one whole tower, and the comment here used to explain why
+ * that was right: a neighbour-aware version was "a bigger signature and a
+ * different job". It was, and this is that job. The reason it became worth
+ * doing is that a 32px tower is the same size as the hero and smaller than most
+ * of what walks at it, which reads as a bollard rather than as the thing the
+ * map is named for.
+ *
+ * Nothing is left transparent, in any quadrant. The crenellation gaps show the
+ * earth the tile has already painted behind them; leaving them empty would
+ * punch holes in the map, because this is opaque terrain and not a sprite.
+ *
+ * Per-tile variation is deliberately kept LOCAL to a quadrant. Each of the four
+ * tiles gets its own seed from the tile layer, so anything that spanned the
+ * seam would be decided twice and disagree with itself; a banner hung on the
+ * eastern face is one quadrant's business and cannot contradict its neighbour.
  */
-export function paintBastionTower(grid: PixelGrid, seed: number): void {
+export function paintBastionTower(
+  grid: PixelGrid,
+  seed: number,
+  hutAbove = false,
+  hutLeft = false,
+): void {
   paintEarthBase(grid);
-  // Contact shadow, in a flat hex rather than the translucent black tiles.ts
-  // uses. Everything here has to survive a check that every cell is a real hex
-  // colour, and an rgba() shadow is the one thing in the existing tile art that
-  // would not; on ground this uniform a baked-in shade costs nothing anyway.
-  pixelEllipse(grid, 8, 15, 6, 1.4, C.shadow);
 
-  // Drum, inset two columns each side so earth shows down both flanks. That
-  // inset is the whole difference in silhouette between this tile and the stone
-  // course: barrier fills its tile, tower stands in one.
-  pixelRect(grid, 3, 5, 10, 11, C.stone);
-  pixelRect(grid, 3, 5, 2, 11, C.stoneHi);
-  pixelRect(grid, 11, 5, 2, 11, C.stoneShade);
-  // Parapet, overhanging the drum by a column each side, with the corbel
+  // This tile's origin inside the tower's own 32x32 space.
+  const ox = hutLeft ? BASTION_TILE_GRID : 0;
+  const oy = hutAbove ? BASTION_TILE_GRID : 0;
+  const rect = (x: number, y: number, w: number, h: number, c: string): void =>
+    pixelRect(grid, x - ox, y - oy, w, h, c);
+  const dot = (x: number, y: number, c: string): void => setPixel(grid, x - ox, y - oy, c);
+
+  // Contact shadow, in a flat hex rather than a translucent black: every cell
+  // here has to be a real hex colour, and on ground this uniform a baked-in
+  // shade costs nothing.
+  pixelEllipse(grid, 16 - ox, 30 - oy, 10, 2.2, C.shadow);
+
+  // Drum, inset four columns each side so earth shows down both flanks. That
+  // inset is the difference in silhouette between a tower and the stone course:
+  // barrier fills its tile, tower stands in one.
+  rect(7, 7, 18, 23, C.stone);
+  rect(7, 7, 3, 23, C.stoneHi);
+  rect(22, 7, 3, 23, C.stoneShade);
+
+  // Parapet, overhanging the drum by two columns each side, with the corbel
   // shadow under it. A tower whose top is flush with its shaft reads as a pipe.
-  pixelRect(grid, 2, 3, 12, 2, C.stone);
-  pixelRect(grid, 2, 3, 12, 1, C.stoneHi);
-  pixelRect(grid, 3, 5, 10, 1, C.stoneShade);
-  // Three merlons over the parapet; the crenels between them are the earth
-  // base showing through. Two wide at columns 2, 7 and 12, which is the only
-  // spacing that comes out symmetric about the tile's centre and flush with
-  // both ends of a 12-column parapet — three-wide merlons need 11 columns and
-  // leave a stray column of parapet at one end, which reads as a tower built
-  // slightly crooked rather than as a wider merlon.
-  for (let m = 0; m < 3; m++) {
-    pixelRect(grid, 2 + m * 5, 1, 2, 2, C.stone);
-    pixelRect(grid, 2 + m * 5, 1, 2, 1, C.stoneHi);
-  }
-  // Bed and head joints on the drum, staggered, so it is masonry and not
-  // render. The head joints avoid the middle columns on purpose: an arrow slit
-  // goes there and would swallow any joint drawn behind it, leaving a course
-  // that looks like one unbroken block.
-  pixelRect(grid, 3, 9, 10, 1, C.mortar);
-  pixelRect(grid, 3, 13, 10, 1, C.mortar);
-  pixelRect(grid, 10, 6, 1, 3, C.mortar);
-  pixelRect(grid, 5, 10, 1, 3, C.mortar);
-  pixelRect(grid, 10, 14, 1, 2, C.mortar);
-  // Door at the base and an arrow slit above it, painted last so they cut
-  // through the joint lines rather than being cut by them.
-  pixelRect(grid, 6, 12, 4, 4, C.iron);
-  pixelRect(grid, 6, 12, 4, 1, C.stoneShade);
-  pixelRect(grid, 7, 7, 2, 4, C.iron);
-  setPixel(grid, 7, 6, C.stoneShade);
-  setPixel(grid, 8, 6, C.stoneShade);
+  rect(5, 4, 22, 3, C.stone);
+  rect(5, 4, 22, 1, C.stoneHi);
+  rect(7, 7, 18, 1, C.stoneShade);
 
-  // Per-tower variation. A rank of towers along one wall is the most repetitive
-  // thing this map draws, so this is the tile that most needs its seed.
-  if (seed % 3 === 0) {
-    // Banner hung from the parapet down the shaded face, with a forked tail.
-    // Deliberately not on the middle columns beside the slit: rust and iron are
-    // the two dark things on a pale tower, and butted against each other they
-    // merge into one dark blot that reads as damage rather than as a banner.
-    pixelRect(grid, 10, 6, 2, 5, C.rust);
-    setPixel(grid, 10, 11, C.rust);
+  // Four merlons, four wide, over a 22-wide parapet: 4*4 + 3*2 = 22 exactly,
+  // so the rank is symmetric about the centre and flush with both ends. The
+  // crenels between them are the earth base showing through.
+  for (let m = 0; m < 4; m++) {
+    rect(5 + m * 6, 1, 4, 3, C.stone);
+    rect(5 + m * 6, 1, 4, 1, C.stoneHi);
   }
-  if (seed % 4 === 1) pixelRect(grid, (seed % 5) + 5, (seed % 2) + 10, 2, 2, C.soot);
-  // A merlon knocked off its top course: the stone goes, the earth behind shows.
-  if (seed % 5 === 2) {
-    const mx = 2 + (seed % 3) * 5;
-    pixelRect(grid, mx, 1, 2, 1, C.earth);
-    pixelRect(grid, mx, 2, 2, 1, C.stoneShade);
+
+  // Bed and head joints, staggered, so it is masonry and not render. The head
+  // joints avoid the columns the slits and the door occupy, which would
+  // otherwise swallow them and leave a course looking like one unbroken block.
+  for (const y of [12, 18, 24]) rect(7, y, 18, 1, C.mortar);
+  rect(10, 8, 1, 4, C.mortar);
+  rect(16, 13, 1, 5, C.mortar);
+  rect(21, 19, 1, 5, C.mortar);
+  rect(9, 19, 1, 5, C.mortar);
+  rect(19, 25, 1, 5, C.mortar);
+
+  // Door across the seam of the two southern tiles, and two arrow slits above
+  // it. Painted after the joints so they cut through the courses rather than
+  // being cut by them.
+  rect(13, 23, 6, 7, C.iron);
+  rect(13, 23, 6, 1, C.stoneShade);
+  rect(11, 13, 2, 6, C.iron);
+  rect(19, 13, 2, 6, C.iron);
+  rect(11, 12, 2, 1, C.stoneShade);
+  rect(19, 12, 2, 1, C.stoneShade);
+
+  // Per-quadrant dressing. A rank of towers along one wall is the most
+  // repetitive thing this map draws, so each tile still spends its seed --
+  // only on marks that belong to it alone.
+  if (!hutAbove && hutLeft && seed % 3 === 0) {
+    // A banner down the shaded eastern face, with a forked tail. Kept off the
+    // slit columns: rust and iron are the two dark things on a pale tower, and
+    // butted together they merge into a blot that reads as damage.
+    rect(22, 8, 2, 6, C.rust);
+    dot(22, 14, C.rust);
   }
-  // A brazier lit on the roof line.
-  if (seed % 7 === 3) {
-    setPixel(grid, 12, 0, C.char);
-    setPixel(grid, 13, 0, C.ember);
+  if (!hutAbove && seed % 5 === 2) {
+    // A merlon knocked off the top course: the stone goes, the earth shows.
+    const mx = 5 + (seed % 2) * 6 + ox;
+    rect(mx, 1, 4, 2, C.earth);
+    rect(mx, 3, 4, 1, C.stoneShade);
+  }
+  if (hutAbove && seed % 4 === 1) {
+    rect((seed % 4) + 8 + ox, (seed % 3) + 20, 2, 2, C.soot);
+  }
+  if (!hutAbove && !hutLeft && seed % 7 === 3) {
+    // A brazier lit on the roof line.
+    dot(14, 0, C.char);
+    dot(15, 0, C.ember);
   }
 }
 

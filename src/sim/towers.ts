@@ -89,6 +89,42 @@ export interface TowerSite {
 export const TOWER_MAX_HP = 20;
 
 /**
+ * How many tiles on a side a tower occupies.
+ *
+ * Two, so a tower is a 2x2 block of tiles rather than one. `row` and `col` on
+ * a Tower are its NORTH-WEST corner and it extends east and south from there.
+ *
+ * One tile was 32px square, which is the same size as the hero and smaller
+ * than most of what walks at it -- a defence tower that a crow is as big as
+ * reads as a bollard. At 64px it is the largest thing on the map that is not a
+ * boss, which is what a tower on a siege ground should be.
+ *
+ * Named rather than assumed so that "where is this tower" has one answer.
+ * Every consumer -- the generator stamping tiles, the renderer, the contact
+ * pass asking whether a body is hitting one, `towerCentre` below -- derives
+ * its footprint from this instead of hardcoding a single tile, which is what
+ * they all did before and is why the tower's centre was written out by hand in
+ * three different places.
+ */
+export const TOWER_SPAN = 2;
+
+/**
+ * What one bolt from a tower takes off.
+ *
+ * Two, against the guard's one, and the difference is the tower's entire
+ * argument for existing. A guard walks, is healed by the priest, and is
+ * replaced by a recruit every wave. A tower does none of those: it cannot be
+ * repaired, cannot be moved off a wave that is camping on it, and is gone for
+ * the rest of the run once it falls. If its shot were worth the same as a
+ * body's, the sensible play would be to ignore the towers entirely and the map
+ * would be a brawl with scenery.
+ *
+ * A single number rather than a table for the same reason TOWER_MAX_HP is: one
+ * kind of tower means one row, and one row is a table pretending.
+ */
+export const TOWER_DAMAGE = 2;
+
+/**
  * One tower on the field.
  *
  * `row` and `col` are `readonly` because they are the tower's identity, and
@@ -108,6 +144,16 @@ export interface Tower {
   readonly col: number;
   hp: number;
   readonly maxHp: number;
+  /**
+   * Seconds until this tower may loose its next bolt.
+   *
+   * Running state, so it sits beside `hp` rather than with the readonly
+   * identity above, and is counted down by the loop that owns the frame -- the
+   * same split a guard body makes. It lives on the tower rather than in a
+   * parallel map in the renderer because a cooldown keyed by tile is a second
+   * name for a tower, and the two can then disagree about which towers exist.
+   */
+  shotCD: number;
 }
 
 /**
@@ -124,7 +170,11 @@ export interface Tower {
  * takes the sites.
  */
 export function makeTower(row: number, col: number): Tower {
-  return { row, col, hp: TOWER_MAX_HP, maxHp: TOWER_MAX_HP };
+  // shotCD starts at zero, so a tower may fire the first frame something comes
+  // into range. Both towers therefore open together, which is deliberate: a
+  // volley reads as the bastion answering, and staggering them would need a
+  // rng this module does not have and does not want.
+  return { row, col, hp: TOWER_MAX_HP, maxHp: TOWER_MAX_HP, shotCD: 0 };
 }
 
 /**
@@ -269,9 +319,53 @@ export function standingTowers(towers: readonly Tower[]): Tower[] {
  * caller writes one check and `noUncheckedIndexedAccess` has nothing to
  * complain about.
  */
+/**
+ * Where a tower's shots come from, in world pixels.
+ *
+ * Derived from TOWER_SPAN rather than assuming the tower is one tile, so the
+ * day the footprint grows the muzzle moves with it instead of staying pinned
+ * to the top-left corner. `row`/`col` are the tower's NORTH-WEST tile, which is
+ * the corner the generator stamps from.
+ */
+export function towerCentre(tower: Tower, tileSize: number): { x: number; y: number } {
+  return {
+    x: (tower.col + TOWER_SPAN / 2) * tileSize,
+    y: (tower.row + TOWER_SPAN / 2) * tileSize,
+  };
+}
+
 export function towerAt(towers: readonly Tower[], row: number, col: number): Tower | null {
-  const found = towers.find(
-    (tower) => tower.row === row && tower.col === col && towerStanding(tower),
-  );
+  const found = towers.find((tower) => towerCovers(tower, row, col) && towerStanding(tower));
   return found ?? null;
+}
+
+/**
+ * Is this tile part of that tower, standing or not?
+ *
+ * Separate from `towerAt` because it answers a different question: this one is
+ * about geometry and `towerAt` is about cover, and a renderer drawing rubble
+ * needs the first without the second. Both used to be `row === tower.row &&
+ * col === tower.col`, which stopped being true the moment a tower stopped
+ * being one tile -- and would have failed silently, since three quarters of a
+ * tower would simply never have answered to anything.
+ */
+export function towerCovers(tower: Tower, row: number, col: number): boolean {
+  return (
+    row >= tower.row && row < tower.row + TOWER_SPAN &&
+    col >= tower.col && col < tower.col + TOWER_SPAN
+  );
+}
+
+/**
+ * Every tile a tower stands on, north-west first, in reading order.
+ *
+ * So a caller clearing a fallen tower's tiles, or reserving the ground under
+ * one, walks the footprint rather than working it out from TOWER_SPAN again.
+ */
+export function towerTiles(tower: TowerSite): TowerSite[] {
+  const out: TowerSite[] = [];
+  for (let r = 0; r < TOWER_SPAN; r++) {
+    for (let c = 0; c < TOWER_SPAN; c++) out.push({ row: tower.row + r, col: tower.col + c });
+  }
+  return out;
 }

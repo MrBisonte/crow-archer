@@ -11,6 +11,9 @@ import {
   GUARD_GRID_BUILDERS,
   GUARD_PALETTES,
   GUARD_SPRITE,
+  GUARD_SPRITES,
+  KNIGHT_VARIANTS,
+  KNIGHT_VARIANT_NAMES,
   buildGuardGrid,
   type StrideFrame,
 } from './guard-grids';
@@ -30,6 +33,16 @@ const RANKS: number[] = Array.from({ length: MAX_RANK + 1 }, (_, r) => r);
 
 /** The row a guard's boots land on, where two legs have to read as two. */
 const BOOT_ROW = 22;
+/** Where the mount's hooves land. Mirrors HOOF_ROW in guard-grids.ts. */
+const HOOF_ROW = 25;
+
+/** Which row each kind's feet are on, and how many runs should be there. */
+const LEG_ROW: Record<GuardKind, number> = {
+  archer: BOOT_ROW, foot_soldier: BOOT_ROW, knight: HOOF_ROW, priest: BOOT_ROW,
+};
+const LEG_RUNS: Record<GuardKind, number> = {
+  archer: 2, foot_soldier: 2, knight: 4, priest: 2,
+};
 
 /**
  * What a rank badge is allowed to cost, as a share of the sprite it is worn on.
@@ -120,7 +133,7 @@ describe('guard grids', () => {
     for (const frame of FRAMES)
       for (const rank of RANKS) {
         const g = buildGuardGrid(kind, frame, rank);
-        expect(gridSize(g), `${kind} ${frame} r${rank}`).toEqual(GUARD_SPRITE);
+        expect(gridSize(g), `${kind} ${frame} r${rank}`).toEqual(GUARD_SPRITES[kind]);
         expect(raggedRows(g), `${kind} ${frame} r${rank}`).toEqual([]);
       }
   });
@@ -148,16 +161,26 @@ describe('guard grids', () => {
    * the boot row is a bug on any frame. The garrison legitimately closes its
    * feet mid-stride and is allowed its one run there.
    *
-   * All three kinds, because the shared body is not shared by fiat — a kind
-   * that grew its own legs would be caught here and nowhere else.
+   * Every kind, because the shared body is not shared by fiat — a kind that
+   * grew its own legs, or hung a robe or a staff across the boot row, would be
+   * caught here and nowhere else.
    */
-  it.each(KINDS)('keeps %s\'s two legs apart on every frame of the stride', (kind) => {
-    const outline = GUARD_PALETTES[kind]['edge']!;
+  it.each(KINDS)('keeps %s standing on all its legs, on every frame', (kind) => {
+    // How many runs a kind shows at its own boot row. Two for a body on its own
+    // feet; four for the mounted knight, whose fore and hind pairs are two legs
+    // each. A table rather than a ternary, so a fifth kind has to say what it
+    // stands on instead of inheriting an answer meant for something else.
+    //
+    // buildCommanderGrid records the failure that matters on a horse — centres
+    // two columns apart fuse under pixelOutline, and a shared centre makes two
+    // frames identical — so the mount gets the same scrutiny the walkers get
+    // rather than a pass for being complicated.
+    const outline = GUARD_PALETTES[kind].edge;
     for (const frame of FRAMES)
       for (const rank of RANKS) {
         const g = buildGuardGrid(kind, frame, rank);
-        expect(bodyRuns(g, BOOT_ROW, outline), `${kind} ${frame} r${rank} fused its legs into one`)
-          .toBe(2);
+        expect(bodyRuns(g, LEG_ROW[kind], outline), `${kind} ${frame} r${rank} lost a leg`)
+          .toBe(LEG_RUNS[kind]);
       }
   });
 
@@ -168,9 +191,120 @@ describe('guard grids', () => {
     expect(new Set(shapes).size, `${kind} repeats a frame`).toBe(FRAMES.length);
   });
 
-  it('draws the three kinds differently, so they are told apart on sight', () => {
+
+  // ── THE THREE THINGS A PLAYTEST ASKED FOR ──────────────────────────────────
+  //
+  // "the guards, knights and priest all look the same, show they differ
+  // clearly, give a spear and shield to the foot soldiers, horse should be
+  // visible for the knight and the priest should have a red cross sign on his
+  // robes, so we know who he is and can protect him."
+  //
+  // Distinctness alone does not cover this. Four sprites can be pairwise
+  // different and still be four men in tunics; what was asked for is three
+  // named, recognisable things, so each is pinned by name.
+
+  it('gives the priest a red cross, worn by nothing else', () => {
+    const cross = GUARD_PALETTES.priest.cross;
+    expect(cross, 'the priest has no cross colour').toBeDefined();
+    const cells = (kind: GuardKind): number => {
+      const g = buildGuardGrid(kind, 'mid', 0);
+      let n = 0;
+      for (const row of g) for (const cell of row) if (cell === cross) n++;
+      return n;
+    };
+    // Big enough to find at a glance across a battlefield, which is the stated
+    // reason it exists: the player has to know who to protect.
+    expect(cells('priest'), 'the cross is too small to pick out').toBeGreaterThanOrEqual(8);
+    for (const kind of KINDS) {
+      if (kind === 'priest') continue;
+      expect(cells(kind), `${kind} is wearing the priest's cross`).toBe(0);
+    }
+  });
+
+  it('puts the knight on a horse that is actually visible', () => {
+    // Wider than a tile is the silhouette test: a mounted body cannot be
+    // mistaken for a man on foot at any distance, whatever its palette.
+    expect(GUARD_SPRITES.knight.w).toBeGreaterThan(GUARD_SPRITES.archer.w);
+    const horse = GUARD_PALETTES.knight.horse;
+    expect(horse, 'the knight has no horse colour').toBeDefined();
+    const g = buildGuardGrid('knight', 'mid', 0);
+    let n = 0;
+    for (const row of g) for (const cell of row) if (cell === horse) n++;
+    expect(n, 'the horse is barely painted').toBeGreaterThan(20);
+    // And four legs under it, which the stride test above pins per frame.
+    expect(LEG_RUNS.knight).toBe(4);
+  });
+
+  it('gives the foot soldier a shield, which is bulk on its leading side', () => {
+    // Everything is drawn facing +x, so the shield is filled cells on the right
+    // half. Measured against the archer, whose leading side carries a bow: a
+    // shield is a solid slab and a bow is a line, so the difference is real
+    // rather than a matter of a pixel or two.
+    const leadingCells = (kind: GuardKind): number => {
+      const g = buildGuardGrid(kind, 'mid', 0);
+      const width = GUARD_SPRITES[kind].w;
+      let n = 0;
+      for (const row of g)
+        for (let x = Math.floor(width / 2); x < width; x++) if (row[x]) n++;
+      return n;
+    };
+    expect(leadingCells('foot_soldier'), 'no shield on the foot soldier')
+      .toBeGreaterThan(leadingCells('archer'));
+  });
+
+  it('draws every kind differently, so they are told apart on sight', () => {
     const shapes = KINDS.map((kind) => shapeOf(buildGuardGrid(kind, 'mid', 0)));
     expect(new Set(shapes).size).toBe(KINDS.length);
+  });
+
+  /**
+   * "Different" is not enough for the priest, so this measures how different.
+   *
+   * The check above passes on a one-pixel difference, which is the whole
+   * distance between two sprites that are the same body with a recoloured hood.
+   * The priest is the one guard the player has exactly one of and cannot get
+   * back, so picking it out of a scrum is a thing the art has to do rather than
+   * a thing the player has to remember — and the pairwise minimum below is the
+   * floor for that being true.
+   *
+   * A third of the sprite is the threshold and the measured figures are 97%,
+   * 117% and 103% of its filled cells (a share can exceed 100% because a cell
+   * the priest leaves empty and another kind fills counts as a difference). So
+   * this fails long before the silhouettes converge, and it does not fail for a
+   * palette tweak.
+   */
+  it('keeps the priest plainly apart from every other kind', () => {
+    const priest = buildGuardGrid('priest', 'mid', 0);
+    const body = countFilled(priest);
+    for (const kind of KINDS) {
+      if (kind === 'priest') continue;
+      const share = differingCells(priest, buildGuardGrid(kind, 'mid', 0)) / body;
+      expect(share, `the priest differs from the ${kind} by only ${(share * 100).toFixed(0)}%`)
+        .toBeGreaterThan(0.33);
+    }
+  });
+
+  /**
+   * The priest's own version of the leg check, on the rows a robe would cover.
+   *
+   * A floor-length cassock is the obvious way to dress this kind and it is
+   * exactly the fusion recorded in guard-grids.ts: a hem is one band of cloth
+   * across the boot row, which merges the legs on *every* frame rather than
+   * only at full swing. The shared check above reads BOOT_ROW; this one reads
+   * the three rows a hem would reach, so a robe that stopped one pixel short of
+   * the floor is caught too.
+   *
+   * BOOT_ROW - 3 is deliberately not included: the staff's shaft ends there and
+   * is a legitimate third run, being neither a leg nor anywhere near one.
+   */
+  it('keeps the priest\'s robe clear of its legs on every frame and rank', () => {
+    const outline = GUARD_PALETTES.priest['edge']!;
+    for (const frame of FRAMES)
+      for (const rank of RANKS)
+        for (const row of [BOOT_ROW - 2, BOOT_ROW - 1, BOOT_ROW]) {
+          const g = buildGuardGrid('priest', frame, rank);
+          expect(bodyRuns(g, row, outline), `priest ${frame} r${rank} row ${row}`).toBe(2);
+        }
   });
 
   // Pairwise, not "the top differs from the bottom". A ladder that draws one
@@ -284,13 +418,16 @@ describe('guard grids', () => {
   });
 
   // The other half of the "reads as friendly" argument: the three enemies share
-  // nothing, the three guards share a livery. If a kind drifted onto its own
+  // nothing, the whole retinue shares a livery. If a kind drifted onto its own
   // violet the retinue would stop reading as one body, and nothing on screen
   // would say so — the sprites would each still look fine alone.
-  it('paints all three guards in one livery and one promotion gold', () => {
-    for (const slot of ['livery', 'liveryHi', 'rank'])
-      expect(new Set(KINDS.map((kind) => GUARD_PALETTES[kind][slot])).size, `${slot} drifted`)
-        .toBe(1);
+  it('paints the whole retinue in one livery and one promotion gold', () => {
+    // Named explicitly rather than looped over a key list: the three shared
+    // slots are the argument, and a loop keyed on strings needs an index
+    // signature the palette deliberately does not have.
+    expect(new Set(KINDS.map((k) => GUARD_PALETTES[k].livery)).size, 'livery drifted').toBe(1);
+    expect(new Set(KINDS.map((k) => GUARD_PALETTES[k].liveryHi)).size, 'liveryHi drifted').toBe(1);
+    expect(new Set(KINDS.map((k) => GUARD_PALETTES[k].rank)).size, 'rank drifted').toBe(1);
   });
 
   /**
@@ -343,5 +480,43 @@ describe('guard grids', () => {
 
     expect(offenders, `structure painted in the seam colour: ${JSON.stringify(offenders)}`)
       .toEqual([]);
+  });
+});
+
+/**
+ * The mounts nothing is riding yet.
+ *
+ * One of these four is the knight; the other three are finished art kept for a
+ * second mounted kind rather than deleted. Art with no caller is art nobody
+ * notices breaking, so every name in KNIGHT_VARIANT_NAMES is held to the same
+ * rules as the sprites in play: the right box, real colours, a full grid, and
+ * every frame and rank buildable. An unused mount that stops meeting them is a
+ * bug now rather than a surprise on the day something starts riding it.
+ */
+describe('every mount, ridden or not', () => {
+  it('builds at the mounted sprite size for every frame and rank', () => {
+    for (const name of KNIGHT_VARIANT_NAMES) {
+      for (const frame of FRAMES) {
+        for (const rank of RANKS) {
+          const grid = KNIGHT_VARIANTS[name](frame, rank);
+          expect(gridSize(grid), `${name} ${frame} rank ${rank}`)
+            .toEqual({ w: GUARD_SPRITES.knight.w, h: GUARD_SPRITES.knight.h });
+          expect(raggedRows(grid), `${name} has rows of different lengths`).toEqual([]);
+          expect(invalidColours(grid), `${name} painted something that is not a hex colour`)
+            .toEqual([]);
+          expect(countFilled(grid), `${name} ${frame} rank ${rank} drew almost nothing`)
+            .toBeGreaterThan(40);
+        }
+      }
+    }
+  });
+
+  it('has the knight the retinue rides among them', () => {
+    // The `knight` row of GUARD_GRID_BUILDERS has to BE one of these, not a
+    // fifth mount that drifted from all four.
+    const ridden = JSON.stringify(GUARD_GRID_BUILDERS.knight('mid', 0));
+    const matches = KNIGHT_VARIANT_NAMES
+      .filter((name) => JSON.stringify(KNIGHT_VARIANTS[name]('mid', 0)) === ridden);
+    expect(matches, 'the retinue rides a mount that is in no variant row').not.toEqual([]);
   });
 });

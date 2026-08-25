@@ -47,4 +47,23 @@ describe('event coverage', () => {
     const stray = [...handled].filter(t => !declared.has(t));
     expect(stray).toEqual([]);
   });
+
+  /**
+   * The fourth direction, and the one that was missing.
+   *
+   * The three tests above walk declared -> handled, declared -> emitted, and
+   * handled -> declared. Nothing walked emitted -> declared, so an event the
+   * sim emits under a name the union never mentions passed every check here:
+   * it is not declared, so `declares a non-trivial union` never sees it; it is
+   * not declared, so neither of the `every declared` tests looks for it; and it
+   * has no handler, so `declares every handled` has nothing to catch. Five
+   * siege events lived in exactly that blind spot -- GUARD_SWING, GUARD_SHOT,
+   * GUARD_DOWN, TOWER_FELL, SIEGE_WAVE_CLEARED were emitted for the whole of
+   * the bastion's development and were silent the entire time, with the suite
+   * green. This closes the ring: with all four, the three sets are equal.
+   */
+  it('declares every emitted event type', () => {
+    const undeclared = [...emitted].filter(t => !declared.has(t));
+    expect(undeclared).toEqual([]);
+  });
 });

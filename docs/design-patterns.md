@@ -22,18 +22,18 @@ class that the tag is an instance of.
 | `SILHOUETTES` | `Record<CharacterKind, Silhouette>` | Shadow and halo geometry for the body. |
 | `PAINTERS` | `Record<CharacterKind, (ctx, pose) => void>` | The draw routine. |
 
-- `CharacterKind` is defined at `src/net/protocol.ts:69`. It crosses the
+- `CharacterKind` is defined at `src/net/protocol.ts`. It crosses the
   network in the `SET_CHARACTER` message, so it needs a runtime check as well
   as a compile time type.
-- `CHARACTERS` is defined at `src/net/protocol.ts:392` and is the source both
-  the type and `isCharacter()` (`protocol.ts:420`) check against, so the
+- `CHARACTERS` is defined at `src/net/protocol.ts` and is the source both
+  the type and `isCharacter()` (`protocol.ts`) check against, so the
   valid set is written once.
-- `PRIMARY` is defined at `src/sim/weapons.ts:578`. `primaryWeapon('wizard')`
+- `PRIMARY` is defined at `src/sim/weapons.ts`. `primaryWeapon('wizard')`
   returns a `new Staff()`.
-- `SILHOUETTES` is defined at `src/render/characters.ts:139`. Each entry is a
+- `SILHOUETTES` is defined at `src/render/characters.ts`. Each entry is a
   plain object, `shadowY`, `shadowRX`, `shadowRY`, `haloY`, `haloR`, sized so
   a halo drawn for the archer does not sit inside the knight's breastplate.
-- `PAINTERS` is defined at `src/render/characters.ts:219`. Each entry is the
+- `PAINTERS` is defined at `src/render/characters.ts`. Each entry is the
   function that draws that character's body for one frame.
 
 ### How it works
@@ -168,7 +168,7 @@ routine actually differ from the others.
   result.
 - **The player crosses the wire and gets replayed.** Every tick the server
   packs a player's state into one number (`packPlayerState`,
-  `src/net/entity-state.ts:52`), the client unpacks it, and client side
+  `src/net/entity-state.ts`), the client unpacks it, and client side
   prediction rewinds and replays a plain record on every reconciliation. A
   `CharacterKind` string survives that for free. A class instance does not:
   JSON does not revive a class, so a `Ranger` instance would need to be
@@ -177,7 +177,7 @@ routine actually differ from the others.
   shape. Splitting stats onto a base class while everything else stays table
   driven means a new hero is added in two different kinds of places for one
   concept. The same idiom recurs independently for pickups: `EFFECTS` in
-  `src/sim/pickups.ts:44` is a `Record<PickupKind, (target: Empowerable) =>
+  `src/sim/pickups.ts` is a `Record<PickupKind, (target: Empowerable) =>
   void>` for the same reason.
 
 ### Example: adding a hero
@@ -247,7 +247,7 @@ The fix is not a new cache. `src/render/stamps.ts` already has one.
 | `gridPainter` / `gridFlashPainter` | `(grid, scale) => StampPainter` | Adapts a `PixelGrid` into a `StampPainter`: real colors, or a flat single-color silhouette for hit-flash. |
 | `spriteCanvas` / `spriteFlashCanvas` | `(key, grid, w, h, ...) => HTMLCanvasElement` | The public entry point: the cached canvas for one sprite kind. |
 
-- `StampCache`, `stamps`, `StampPainter` are defined at `src/render/stamps.ts:7-30`,
+- `StampCache`, `stamps`, `StampPainter` are defined at `src/render/stamps.ts-30`,
   built for a different problem first: `glowDotStamp`/`glowRectStamp` cache
   pre-rendered glow effects the same way, keyed by `` `dot|${color}|${r}|${blur}` ``.
 - `PixelGrid`, `gridPainter`, `gridFlashPainter`, `spriteCanvas`, and
@@ -318,7 +318,7 @@ Crow and skeleton pixel art landed the same way: one call site each, nothing
 about `stamps` or `pixel-sprite.ts` touched.
 
 ```js
-// src/legacy/game.js:4194
+// src/legacy/game.js
 : spriteCanvas(`crow|${kind}|${frame}`, grid, CROW_SPRITE.w, CROW_SPRITE.h);
 ```
 

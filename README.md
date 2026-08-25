@@ -15,7 +15,7 @@
         A R C H E R
 ```
 
-Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. [Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
+Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it — and hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. [Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
 
 ![Gameplay: the Ranger fighting a crow swarm, a satchel blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
 
@@ -94,6 +94,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 | [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Balance](docs/balance.md) | Character stats, boss health, and the one dial that relates them |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
+| [Working rules](CLAUDE.md) | Contributing: the traps this codebase has already fallen into, and what is mechanically enforced |
 
 ## License
 

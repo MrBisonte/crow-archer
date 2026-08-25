@@ -3,10 +3,17 @@ import { describe, expect, it } from 'vitest';
 import {
   GUARD_STATS,
   MAX_RANK,
-  STARTING_GUARDS,
+  OPENING_RETINUE,
+  RECRUITABLE_GUARD_KINDS,
+  STARTING_RECRUITS,
+  UNIQUE_GUARD_KINDS,
   guardDamage,
+  guardHeal,
+  invokeWard,
+  isPriest,
   makeGuard,
   promote,
+  rollGuardKind,
   type Guard,
 } from './guards';
 import { mulberry32, type Rng } from './rng';
@@ -89,13 +96,24 @@ const ladderReference = (kind: Guard['kind'], waves: number): Guard => {
   return guard;
 };
 
+/** Every priest in a retinue. The count is the assertion in most of these. */
+const priestsIn = (state: SiegeState): Guard[] => state.guards.filter(isPriest);
+
+/** The one priest, or a failure that says the retinue had none rather than a
+ *  TypeError from a property read on `undefined` three lines later. */
+const thePriest = (state: SiegeState): Guard => {
+  const found = priestsIn(state);
+  expect(found, `expected exactly one priest, found ${found.length}`).toHaveLength(1);
+  return found[0]!;
+};
+
 describe('startSiege', () => {
-  it('opens at wave 1, running, with STARTING_GUARDS unpromoted recruits', () => {
+  it('opens at wave 1, running, with OPENING_RETINUE unpromoted guards', () => {
     const state = startSiege(mulberry32(SEED_ALL_PROMOTABLE));
 
     expect(state.wave).toBe(1);
     expect(state.outcome).toBe('running');
-    expect(state.guards).toHaveLength(STARTING_GUARDS);
+    expect(state.guards).toHaveLength(OPENING_RETINUE);
     for (const guard of state.guards) {
       expect(guard.rank, guard.kind).toBe(0);
       expect(guard.hp, guard.kind).toBe(guard.maxHp);
@@ -105,7 +123,54 @@ describe('startSiege', () => {
 
   it('rolls the opening retinue from the weighted table', () => {
     const state = startSiege(mulberry32(SEED_ALL_PROMOTABLE));
-    expect(state.guards.map((guard) => guard.kind)).toEqual(['archer', 'archer']);
+    expect(state.guards.map((guard) => guard.kind)).toEqual(['archer', 'archer', 'priest']);
+  });
+
+  /**
+   * The priest turns up once, on top of the roll, and behind it.
+   *
+   * Three separate claims, and all three matter. Exactly one, because the kind
+   * is unique. On top of the recruits rather than instead of one, because the
+   * opening was balanced around two rolled bodies and a priest that displaced
+   * one would quietly make wave 1 harder. Behind them, because `completeWave`
+   * appends the recruit at the end and the loop reads the last entry to find
+   * the body it has not placed yet.
+   */
+  it('seats exactly one of each unique kind, behind the recruits', () => {
+    const state = startSiege(mulberry32(SEED_ALL_PROMOTABLE));
+    const kinds = state.guards.map((guard) => guard.kind);
+
+    expect(priestsIn(state)).toHaveLength(1);
+    expect(kinds.slice(0, STARTING_RECRUITS).every((kind) =>
+      (RECRUITABLE_GUARD_KINDS as readonly string[]).includes(kind))).toBe(true);
+    expect(kinds.slice(STARTING_RECRUITS)).toEqual([...UNIQUE_GUARD_KINDS]);
+
+    const priest = thePriest(state);
+    expect(priest.rank).toBe(0);
+    expect(isPriest(priest) && priest.ward).toBe('ready');
+  });
+
+  /**
+   * Seating the priest must not have moved the recruit roll.
+   *
+   * It is added after the loop rather than through it, so the rng is consumed
+   * exactly as it was before the kind existed and every seed in this suite
+   * still opens the run it used to. A version that rolled and then substituted,
+   * or that seated the priest first, would silently re-key every pinned seed in
+   * the project — including the one game.test.ts uses to make its rank
+   * assertions repeatable.
+   */
+  it('leaves the recruit roll on the same seeds it always drew', () => {
+    for (const seed of [SEED_ALL_PROMOTABLE, SEED_OPENS_WITH_KNIGHT, 1, 20260824]) {
+      const opened = startSiege(mulberry32(seed)).guards
+        .filter((guard) => !isPriest(guard))
+        .map((guard) => guard.kind);
+
+      const rng = mulberry32(seed);
+      const rolled = Array.from({ length: STARTING_RECRUITS }, () => makeGuard(rollGuardKind(rng)).kind);
+
+      expect(opened, `seed ${seed}`).toEqual(rolled);
+    }
   });
 
   // The reason the rng is a parameter: a bastion run has to replay.
@@ -171,7 +236,7 @@ describe('completeWave', () => {
       expect(state.guards, `after clearing wave ${wave}`).toHaveLength(before + 1);
     }
 
-    expect(state.guards).toHaveLength(STARTING_GUARDS + SIEGE_WAVE_COUNT - 1);
+    expect(state.guards).toHaveLength(OPENING_RETINUE + SIEGE_WAVE_COUNT - 1);
   });
 
   it('wins on the last wave without advancing past it or recruiting again', () => {
@@ -201,7 +266,7 @@ describe('completeWave', () => {
     // and the returned ones must have.
     expect(guardAt(state, 0).rank).toBe(0);
     expect(guardAt(after, 0).rank).toBe(1);
-    expect(state.guards).toHaveLength(STARTING_GUARDS);
+    expect(state.guards).toHaveLength(OPENING_RETINUE);
   });
 
   // Promotion before recruitment: the fresh recruit did not fight the wave that
@@ -210,7 +275,9 @@ describe('completeWave', () => {
     const rng = mulberry32(SEED_ALL_PROMOTABLE);
     const opened = startSiege(rng);
     for (const guard of opened.guards) {
-      expect(GUARD_STATS[guard.kind].promotable, guard.kind).toBe(true);
+      // Every opener climbs something, priest included — otherwise "exactly one
+      // guard is rank 0 afterwards" would be true for the wrong reason.
+      expect(GUARD_STATS[guard.kind].promotion, guard.kind).not.toBe('none');
     }
 
     const after = completeWave(opened, rng);
@@ -260,6 +327,120 @@ describe('completeWave', () => {
     expect(knight.maxHp).toBe(GUARD_STATS.knight.baseHp);
     expect(guardDamage(knight)).toBe(GUARD_STATS.knight.baseDamage);
   });
+
+  /**
+   * The most important rule about the priest, walked the whole ladder.
+   *
+   * Ten waves is ten recruits, and every one of them comes from
+   * `rollGuardKind`, which cannot return a priest. The claim is checked after
+   * every single wave rather than only at the end, so a run that grew a second
+   * priest on wave 4 and lost one on wave 7 fails here instead of passing a
+   * final count.
+   */
+  it('never adds a second priest, across all ten waves', () => {
+    const rng = mulberry32(SEED_ALL_PROMOTABLE);
+    let state = startSiege(rng);
+    expect(priestsIn(state)).toHaveLength(1);
+
+    for (let cleared = 0; cleared < SIEGE_WAVE_COUNT; cleared++) {
+      state = completeWave(state, rng);
+      expect(priestsIn(state), `after clearing ${cleared + 1} waves`).toHaveLength(1);
+    }
+
+    expect(state.outcome).toBe('won');
+    expect(priestsIn(state)).toHaveLength(1);
+  });
+
+  /**
+   * And the same claim from the other side: a priest that dies stays dead.
+   *
+   * This is the half a weighted table could never guarantee. Even a priest with
+   * a weight of zero would be one careless edit from walking back in on the
+   * next wave; a priest that is not in the roll at all has nowhere to come
+   * from, and the run simply goes on one guard lighter and a body short of a
+   * healer for the remaining nine waves.
+   */
+  it('does not replace a priest that has been lost, for the rest of the run', () => {
+    const rng = mulberry32(SEED_ALL_PROMOTABLE);
+    let state = startSiege(rng);
+    const at = state.guards.findIndex(isPriest);
+    expect(at, 'the opening retinue had no priest to lose').toBeGreaterThanOrEqual(0);
+
+    state = guardLost(state, at);
+    expect(priestsIn(state)).toHaveLength(0);
+
+    for (let cleared = 0; cleared < SIEGE_WAVE_COUNT; cleared++) {
+      state = completeWave(state, rng);
+      expect(priestsIn(state), `after clearing ${cleared + 1} waves`).toHaveLength(0);
+    }
+
+    // The run is not over, and it is not diminished in any other way: the
+    // recruits still arrived, one per wave, on top of the retinue that was left.
+    expect(state.outcome).toBe('won');
+    expect(state.guards).toHaveLength(OPENING_RETINUE - 1 + SIEGE_WAVE_COUNT - 1);
+  });
+
+  it('climbs the priest its own ladder, three waves and no further', () => {
+    const rng = mulberry32(SEED_ALL_PROMOTABLE);
+    let state = startSiege(rng);
+
+    for (let cleared = 0; cleared < 3; cleared++) state = completeWave(state, rng);
+    const senior = thePriest(state);
+
+    expect(senior.rank).toBe(MAX_RANK);
+    const reference = ladderReference('priest', 3);
+    expect(senior.maxHp).toBe(reference.maxHp);
+    expect(guardHeal(senior)).toBe(guardHeal(reference));
+    // And the numbers those come out as, so a ladder retuned in both places at
+    // once still fails here.
+    expect(senior.maxHp).toBe(4);
+    expect(guardHeal(senior)).toBe(2);
+    // What it must never have collected on the way up.
+    expect(guardDamage(senior)).toBe(0);
+
+    state = completeWave(state, rng);
+    expect(thePriest(state).rank).toBe(MAX_RANK);
+  });
+
+  /**
+   * The ward is once per wave, and this is the "per wave" half.
+   *
+   * `completeWave` is the only thing in the codebase that hands the charge
+   * back, which is what makes the ability worth exactly one use per wave
+   * whether that wave took twenty seconds or two minutes. Spending it and
+   * clearing a wave puts it back; nothing else does.
+   */
+  it('hands the priest its ward back when a wave is cleared', () => {
+    const rng = mulberry32(SEED_ALL_PROMOTABLE);
+    const opened = startSiege(rng);
+    const priest = thePriest(opened);
+    if (!isPriest(priest)) throw new Error('the opening retinue had no priest');
+
+    invokeWard(priest, []);
+    expect(priest.ward).toBe('spent');
+
+    const after = thePriest(completeWave(opened, rng));
+
+    expect(isPriest(after) && after.ward).toBe('ready');
+    // The caller's own copy is untouched, like every other field: completeWave
+    // recharges the guard it hands back, not the one it was given.
+    expect(priest.ward).toBe('spent');
+  });
+
+  it('does not hand the ward back for anything short of a cleared wave', () => {
+    const rng = mulberry32(SEED_ALL_PROMOTABLE);
+    const opened = startSiege(rng);
+    const priest = thePriest(opened);
+    if (!isPriest(priest)) throw new Error('the opening retinue had no priest');
+    invokeWard(priest, []);
+
+    // A guard lost, and the hero dying, are the other two things that happen to
+    // a run. Neither is a wave being held.
+    for (const state of [guardLost(opened, 0), heroDied(opened)]) {
+      const stillThere = state.guards.find(isPriest);
+      expect(stillThere && isPriest(stillThere) && stillThere.ward).toBe('spent');
+    }
+  });
 });
 
 describe('heroDied', () => {
@@ -307,10 +488,10 @@ describe('guardLost', () => {
 
     const after = completeWave(bereaved, rng);
 
-    expect(after.guards).toHaveLength(STARTING_GUARDS - 1 + 1);
+    expect(after.guards).toHaveLength(OPENING_RETINUE - 1 + 1);
   });
 
-  it.each([-1, -5, STARTING_GUARDS, STARTING_GUARDS + 5, 1.5])(
+  it.each([-1, -5, OPENING_RETINUE, OPENING_RETINUE + 5, 1.5])(
     'leaves the retinue alone for index %s, which names no guard',
     (index) => {
       const state = startSiege(mulberry32(SEED_ALL_PROMOTABLE));

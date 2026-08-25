@@ -160,6 +160,64 @@ describe('bastion tile painters', () => {
  * all, and the tower is an object standing on visible earth. That is the
  * silhouette difference, and it is the one that survives a repaint of either.
  */
+/**
+ * The tower is four tiles that have to add up to one building.
+ *
+ * Every other painter here is asked whether a tile is right on its own. This
+ * one has to be asked whether four tiles agree, because the failure it can have
+ * is not a bad tile: it is four perfectly good tiles that are each a whole
+ * tower, which is what this painter did before it took the quadrant flags and
+ * what it silently goes back to the moment anything stops passing them.
+ */
+describe('the tower assembles from its four quarters', () => {
+  const QUADRANTS = [
+    ['north-west', false, false],
+    ['north-east', false, true],
+    ['south-west', true, false],
+    ['south-east', true, true],
+  ] as const;
+
+  const quadrant = (above: boolean, left: boolean, seed = 0): PixelGrid => {
+    const grid = makePixelGrid(BASTION_TILE_GRID, BASTION_TILE_GRID);
+    paintBastionTower(grid, seed, above, left);
+    return grid;
+  };
+
+  it('paints a different quarter for each pair of flags', () => {
+    const drawn = QUADRANTS.map(([, above, left]) => JSON.stringify(quadrant(above, left)));
+    // Four towers rather than one is exactly what identical output means.
+    expect(new Set(drawn).size, 'the quadrant flags changed nothing').toBe(QUADRANTS.length);
+  });
+
+  it('crowns the northern tiles and runs unbroken shaft through the southern', () => {
+    // Row 0 says which half a tile is, and says it the same way in both
+    // columns. The tower's topmost row is its battlements, which sit one row
+    // down, so a northern tile's first row is open ground; a southern tile's
+    // first row is the middle of the shaft and is solid masonry. A painter
+    // ignoring `hutAbove` gives every tile open sky there -- four towers.
+    const MASONRY = new Set([
+      BASTION_PALETTE.stone, BASTION_PALETTE.stoneHi,
+      BASTION_PALETTE.stoneShade, BASTION_PALETTE.mortar,
+    ]);
+    for (const [name, above, left] of QUADRANTS) {
+      const top = (quadrant(above, left)[0] ?? []).filter((c) => c && MASONRY.has(c)).length;
+      if (above) expect(top, `${name} has open sky where the shaft should run`).toBeGreaterThan(0);
+      else expect(top, `${name} has masonry above its own battlements`).toBe(0);
+    }
+  });
+
+  it('splits the door across the two southern tiles', () => {
+    // The door straddles the seam: its western half is on the south-west tile's
+    // eastern edge and its eastern half on the south-east tile's western edge.
+    // Whole on one tile means the two halves are not lining up.
+    const iron = (grid: PixelGrid, col: number): boolean =>
+      grid.some((row) => row[col] === BASTION_PALETTE.iron);
+    expect(iron(quadrant(true, false), BASTION_TILE_GRID - 1), 'no door on the south-west tile')
+      .toBe(true);
+    expect(iron(quadrant(true, true), 0), 'no door on the south-east tile').toBe(true);
+  });
+});
+
 describe('the stone course against the tower', () => {
   it.each([0, 1, 2, 3, 4, 5, 6, 7])('keeps them apart on seed %i', (seed) => {
     const stone = paint(paintBastionStone, seed);

@@ -6,8 +6,27 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { MAP_GEN, MAP_RULES, runsWaves } from '../sim/arena-map';
+import { MAP_GEN, MAP_KINDS, MAP_RULES, runsWaves } from '../sim/arena-map';
 import { modeRule, picksItsMap } from '../sim/game-mode';
+import { BESTIARY } from '../sim/bestiary';
+import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
+import {
+  GUARD_STATS, RANK_MARK, guardDamage, guardHeal, healGuard, invokeWard,
+  isPriest, makeGuard, missingHp, shouldWard,
+} from '../sim/guards';
+import {
+  completeWave as siegeCompleteWave, guardLost as siegeGuardLost,
+  heroDied as siegeHeroDied, startSiege, waveRoster,
+} from '../sim/siege-run';
+import {
+  TOWER_DAMAGE, TOWER_MAX_HP, damageTower, makeTowers, standingTowers, towerAt,
+  towerCentre, towerStanding, towerTiles,
+} from '../sim/towers';
+import { barrierGates, towerSites } from '../sim/bastion-terrain';
+import { nearestHostile, nearestHostileWithin } from '../sim/targeting';
+import {
+  GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITES,
+} from '../render/guard-grids';
 import { Regrowth } from '../sim/regrowth';
 import {
   COMMANDER_WAVE, SOLDIER_STATS, shieldFacing, shieldStops, waveComposition,
@@ -44,6 +63,27 @@ import {
   KNIGHT_SPRITE, buildKnightGrid,
   SAPPER_SPRITE, buildSapperGrid,
 } from '../render/character-grids';
+
+/**
+ * The ground disc that says whose side a body is on.
+ *
+ * Keyed by Team, which is the model multiplayer already uses, so adding team
+ * colours there is a row here rather than a second mechanism. Single player
+ * only ever fields Team.A and Team.ENEMY, and the enemy's is deliberately the
+ * plain shadow every body drew before any of this: the question a player asks
+ * in a crowd is "which of these is mine", so the answer is carried by the
+ * allies rather than paid for by everything on screen.
+ */
+const TEAM_DISC = {
+  [Team.A]: 'rgba(120,190,255,0.55)',
+  [Team.B]: 'rgba(255,150,90,0.55)',
+  [Team.ENEMY]: 'rgba(0,0,0,0.35)',
+};
+const TEAM_RIM = {
+  [Team.A]: 'rgba(190,230,255,0.9)',
+  [Team.B]: 'rgba(255,205,160,0.9)',
+  [Team.ENEMY]: 'rgba(0,0,0,0)',
+};
 
 // Single-player has no team concept, so each hero gets one fixed trim
 // colour instead of the multiplayer per-team one. Archer's was already its
@@ -142,6 +182,42 @@ const CONFIG = {
   // long enough to see, too short to be mistaken for a state you are in.
   blockedFlashSecs: 0.1,
   killsToTriggerBoss: 10,
+  // The retinue. Reach and interval are the cavern garrison's numbers, so an
+  // allied foot soldier and an enemy shieldman trade blows at the same rhythm.
+  guardSpeed: 74, guardMeleeReach: 26, guardArcherReach: 260,
+  // Far enough that a boss does not land on top of the hero, near enough
+  // that it is on screen and reachable the moment its wave begins.
+  siegeBossSpawnDistance: 260,
+  // The retinue is a bodyguard, not a hunting pack. postRadius is how far out
+  // they ring the hero at rest, postDrift the slow rotation that keeps a
+  // standing retinue milling rather than frozen into a diagram, and leash how
+  // far from the hero something has to be before it stops being their problem.
+  //
+  // The leash is the whole behaviour. Without it every guard walked at the
+  // nearest enemy on the map, which on an open bastion meant the retinue
+  // scattered across the field in the first ten seconds and the hero fought
+  // the wave alone — the opposite of what a bodyguard is for.
+  guardPostRadius: 58, guardPostDrift: 0.25, guardLeash: 210,
+  // How far a guard will leave its gate to fight, and how near it has to get
+  // before it counts as standing there again. The leash is generous enough to
+  // meet something walking into the gap and mean enough that it comes back.
+  guardPostLeash: 170, guardPostSlack: 14,
+  // How often a guard re-solves its route home. Staggered per guard at
+  // spawn so a retinue does not all solve on the same frame.
+  guardRouteInterval: 0.5,
+  guardShotInterval: 1.6, guardSwingInterval: 0.9, guardArrowSpeed: 420,
+  // The towers outrange every guard on the field and reload faster. That is
+  // the trade for being unable to move, be healed, or be replaced: all of a
+  // tower's value has to sit in the arc it covers while it is still up.
+  towerReach: 320, towerShotInterval: 1.1, towerBoltSpeed: 480,
+  // The priest's numbers. The heal interval is well over twice a sword swing
+  // on purpose: a retinue whose mending outpaces the damage coming in is a
+  // retinue that cannot be spent, and the whole bastion is built on spending
+  // it. Reach is long enough to work from behind the line and short enough
+  // that the priest has to walk somewhere to be useful. The ward's radius is
+  // wider than that again, because a once-per-wave sweep that reached fewer
+  // allies than the cooldown heal could visit would never be worth casting.
+  guardHealInterval: 2.4, guardHealReach: 130, guardWardRadius: 190,
 
   // Castle stage (brawl mode's second act). Persistently hostile, so no
   // passive-speed figure the way a crow has one; slower than an aggro'd
@@ -326,6 +402,12 @@ const CONFIG = {
   // less than the knight's. Tanky rather than punishing, so the fight is long
   // enough to be about reading his charges rather than about surviving one.
   commanderHP: 20,
+  // The keeper's pool, and only a siege ever reads it — see bossHpFor. Equal
+  // to the commander's on purpose: wave ten fields the two of them on one
+  // shared bar, so an even split is what makes that bar a doubled number
+  // rather than a lopsided one. One figure rather than the three the siege
+  // branch wrote, because bossDamageMult now carries the per-character half.
+  keeperHP: 20,
   commanderContactDamage: 2, commanderContactReach: 30,
   // Rides the player down between charges, slower than he charges by a wide
   // margin so the wind-up is legible.
@@ -608,6 +690,14 @@ const STAGE_INTROS = {
     accent: '#B040E0', dim: '#8A40A8', frame: '#4a1a5c',
     sweep: 'rgba(176,64,224,0.045)',
   },
+  bastion: {
+    text: 'HOLD THE BASTION',
+    // Limestone and gold rather than the maze's torchlight: the run comes up
+    // out of the dark into daylight for its last stand, and the title is the
+    // first thing that should say so.
+    accent: '#D8B048', dim: '#8f8265', frame: '#4a3b28',
+    sweep: 'rgba(216,176,72,0.05)',
+  },
   maze: {
     text: "YOU HAVE ENTERED THE MINOTAUR'S LAIR",
     // Torchlight amber rather than the castle's purple: the maze is lit by
@@ -661,6 +751,8 @@ let appState = 'menu', controlsFrom = 'menu', pausedFrom = 'playing';
 
 let gameMode = 'brawl'; // a SinglePlayerMode; see MODE_RULES — persists across restarts
 let score = 0, wave = 1, gameTime = 0, escalationTimer = 0;
+// The bastion's run, or null on every other map. See the SIEGE section.
+let siegeRun = null, towers = [], guards = [], siegeExtraBosses = [], siegeSpawned = false;
 let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
 let waveAnnounce = 0;            // countdown timer for wave banner display
@@ -893,7 +985,7 @@ const MAP_PANEL_INFO = {
   cavern: { key:'V', color:'#5AD8B0', bg:'rgba(90,216,176,0.10)', dim:'#2A6858', dimBg: DIM_PANEL_BG,
     lines:['Rough chambers, still pools','Wide rooms, short blind necks','Rock cover, fungus that burns'] },
 };
-const MAP_PANELS = Object.keys(MAP_RULES)
+const MAP_PANELS = MAP_KINDS
   .filter(kind => runsWaves(kind))
   .map(kind => {
     const info = MAP_PANEL_INFO[kind];
@@ -966,6 +1058,7 @@ let winScore = 0, winKills = 0, winSkeletons = 0, winHP = 0;
 // Map selection for Waves mode — persists for the session. Brawl ignores this
 // and always starts on forest; see MAP_PANELS and MENU_ENTRIES' 'WAVES' entry.
 // One of MAP_PANELS' kinds, which is every MAP_RULES map that runs waves.
+/** @type {import('../sim/arena-map').MapKind} */
 let selectedMapKind = 'forest';
 
 // Wizard combat cooldowns
@@ -1063,6 +1156,7 @@ const tileMap = new TileMap(CONFIG.rows, CONFIG.cols);
 let waterPhase = false, waterLastTs = 0;
 
 let mapSeed = 0;
+/** @type {import('../sim/arena-map').MapKind} */
 let mapKind = 'forest';
 
 /**
@@ -1115,6 +1209,8 @@ const regrowth = new Regrowth(tileMap, mapKind, undefined, (row, col) => {
  * stage transitions (`'castle'`, then `'maze'`), Waves mode's mapselect
  * screen (`selectedMapKind`, any map runsWaves accepts), and the dev
  * harness.
+ *
+ * @param {import('../sim/arena-map').MapKind} kind
  */
 function generateMap(kind = 'forest') {
   mapKind = kind;
@@ -1140,6 +1236,10 @@ function generateMap(kind = 'forest') {
   // cleared here, with the grid it is placed on. Every consumer then has one
   // guard, `mazeRun`, instead of its own check on mapKind.
   mazeRun = kind === 'maze' ? newMazeRun() : null;
+  // Same argument as mazeRun, one map along: the siege belongs to the bastion,
+  // it is opened and closed with the grid, and every consumer then has one
+  // guard — siegeRun — instead of its own check on mapKind.
+  if (mapIsSiege()) startSiegeRun(); else endSiegeRun();
   // A population belongs to its map. Moving to one that does not have it has
   // to take the last map's with it, or they keep walking through the new map's
   // walls and keep counting toward a win condition this map does not use.
@@ -1202,6 +1302,19 @@ function tileAt(wx, wy) {
 /** Can anything on this map break terrain at all? One home for the rule. */
 function terrainDestructible() {
   return MAP_RULES[mapKind].destructibleTerrain;
+}
+
+/**
+ * How fast everything hostile moves here, as a multiplier. One home again.
+ *
+ * The bastion runs at 0.8 because a siege is fought from a fixed position: you
+ * are holding a line rather than kiting round an arena, and at full speed a
+ * wave crosses the open ground faster than a retinue can be repositioned to
+ * meet it. It is a per-map fact rather than a per-mode one for the usual
+ * reason — the bastion is reachable from two modes and both want it.
+ */
+function mapEnemySpeed() {
+  return MAP_RULES[mapKind].enemySpeed;
 }
 
 /** Does this map hide what the player cannot see? One home for that rule too. */
@@ -2191,6 +2304,8 @@ const SHAKE = {
   explosion:      [9,  300],
   bossSlam:       [12, 400],
   gameOver:       [12, 600],
+  guardDown:      [4,  180],
+  towerFell:      [8,  320],
   bossDeath:      [14, 600],
   stormCast:      [14, 600],
 };
@@ -2240,6 +2355,15 @@ const HITSTOP = {
   bossSlam:       4,
   explosion:      5,
   bossDeath:      6,
+  // The bastion's two, which arrived on the siege branch after this table
+  // and were caught by the guard below rather than by review.
+  //
+  // A guard goes down repeatedly across ten waves, so it gets the light tap
+  // the player's own hit gets, not a beat that would turn a bad wave into a
+  // stutter. A tower is one of two and losing one is most of the objective,
+  // so it lands where the heavy structural hits do.
+  guardDown:      2,
+  towerFell:      4,
 };
 
 // The same load-time guard MAP_PANELS and BOSS_STAGES run for the half of
@@ -2305,6 +2429,22 @@ const WEAPON_FX = {
   sapperShot: { sound: () => sndCrossbow, shake: [2, 70] },
   net:       { sound: () => sndChargeWhoosh, shake: null },
 };
+
+// The retinue reaches twelve, and every guard swings on its own timer. Played
+// straight, that is a dozen clangs stacked inside the same few milliseconds,
+// which reads as noise rather than as a line holding. One voice per window: the
+// ear learns "the wall is fighting" without being told how many swings landed.
+//
+// Kill and collapse are deliberately NOT routed through this. Those are facts
+// the player has to hear every single time, and there are never twelve at once.
+const RETINUE_VOICE_GAP_MS = 90;
+let retinueVoiceAt = -Infinity;
+function retinueVoice(snd) {
+  const now = performance.now();
+  if (now - retinueVoiceAt < RETINUE_VOICE_GAP_MS) return;
+  retinueVoiceAt = now;
+  playSound(snd);
+}
 
 events.on(e => {
   switch (e.type) {
@@ -2377,6 +2517,57 @@ events.on(e => {
         speedMin: 20, speedMax: 90, decay: 2.0, shape: 'spark',
         sizeMin: 1, sizeMax: 2.5, gravity: -60, shadowBlur: 10, shadowColor: '#FF7A1F' });
       break;
+    // ── The bastion ──────────────────────────────────────────────────────
+    case 'GUARD_SWING':
+      retinueVoice(sndPitchfork);
+      burst(e.x, e.y, { count: 3, colors: ['#E7EDF4','#B7BFC9'],
+        speedMin: 20, speedMax: 70, decay: 3.4, shape: 'spark',
+        sizeMin: 1, sizeMax: 1.8, pri: PRI.AMBIENT });
+      break;
+
+    case 'GUARD_SHOT':
+      retinueVoice(sndShoot);
+      break;
+
+    case 'GUARD_DOWN':
+      // Violet for the retinue's livery, red because a guard is a person: the
+      // same distinction SOLDIER_KILLED draws against the undead's bone.
+      playSound(sndGuardDown);
+      triggerShake(...SHAKE.guardDown);
+      burst(e.x, e.y, { count: 16, colors: ['#6A4FB0','#9B7CE2','#A03028','#FFFFFF'],
+        speedMin: 40, speedMax: 130, decay: 1.8,
+        shapeMix: [['circle', 0.6], ['spark', 0.4]],
+        sizeMin: 1.5, sizeMax: 2.5, damping: 0.6,
+        shadowBlur: 4, shadowColor: '#9B7CE2', pri: PRI.KILL });
+      break;
+
+    case 'TOWER_SHOT':
+      // Heavier than a guard's bow and drier than the wizard's bolt: an
+      // emplacement loosing, not a person shooting.
+      playSound(sndCrossbow);
+      burst(e.x, e.y, { count: 3, colors: ['#E7EDF4','#B7BFC9'],
+        speedMin: 30, speedMax: 80, decay: 3.6, shape: 'spark',
+        sizeMin: 1, sizeMax: 1.6, pri: PRI.AMBIENT });
+      break;
+
+    case 'TOWER_FELL':
+      // Heavier than a guard and duller than an explosion: stone giving up.
+      playSound(sndTowerFell);
+      triggerShake(...SHAKE.towerFell);
+      burst(e.x, e.y, { count: 26, colors: ['#8A8578','#B5AFA0','#5A564C','#FFFFFF'],
+        speedMin: 30, speedMax: 160, decay: 1.3, shape: 'circle',
+        sizeMin: 2, sizeMax: 4.5, gravity: 220, damping: 0.7,
+        shadowBlur: 6, shadowColor: '#B5AFA0', pri: PRI.CRITICAL });
+      break;
+
+    case 'SIEGE_WAVE_CLEARED': {
+      // The chime climbs with the ladder, because holding wave nine should not
+      // sound like holding wave one. Slot 2 is zzfx's base frequency.
+      const held = [...sndWaveHeld];
+      held[2] = sndWaveHeld[2] * (1 + 0.06 * e.wave);
+      playSound(held);
+      break; }
+
     case 'CROW_KILLED':
       playSound(sndHitCrow);
       burst(e.x, e.y, {
@@ -3210,7 +3401,13 @@ function updatePlayer(dt) {
     knightChargeTick -= dt;
     if (knightChargeTick <= 0) {
       knightChargeTick = CONFIG.knightChargeTickRate;
-      for (const [list, damage] of [[crows, damageCrow], [skeletons, damageSkeleton]])
+      /**
+       * Annotated because the literal alone infers `(any[] | fn)[][]`, which
+       * loses the pairing and makes `damage` possibly-an-array.
+       * @type {readonly [any[], (j: number, amount?: number, knock?: any) => void][]}
+       */
+      const arcTargets = [[crows, damageCrow], [skeletons, damageSkeleton]];
+      for (const [list, damage] of arcTargets)
         for (let j = list.length - 1; j >= 0; j--)
           if (inKnightArc(list[j].x, list[j].y)) {
             events.emit({ type: 'MELEE_HIT', x: list[j].x, y: list[j].y, kind: 'spear', fire: false });
@@ -3710,16 +3907,27 @@ function updateArrows(dt) {
     // damage never matters here — only its smaller hitRadius does.
     let hit = false;
     const hitR = a.hitRadius || CONFIG.arrowHitRadius;
+    // A player arrow is worth one hit whatever it carries — the quiver is
+    // balanced around that and every pickup changes the arrow, not the number.
+    // A shot from the hero's side is worth what it carries: an archer guard's
+    // rank adds damage and an archer never swings, so without this a senior
+    // archer's promotion would be a badge with nothing behind it, and a tower
+    // bolt would be worth the same as a crow peck.
+    //
+    // `allied` rather than `fromGuard`, which is what this was called when a
+    // guard was the only thing that could set it. The flag was never about who
+    // fired: it is about whether `damage` on the arrow is to be believed.
+    const arrowDamage = a.allied ? (a.damage ?? 1) : 1;
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
-        damageCrow(j, 1, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageCrow(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
     if (hit) continue;
     for (let j = skeletons.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, skeletons[j].x, skeletons[j].y) < hitR*hitR) {
-        damageSkeleton(j, 1, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
+        damageSkeleton(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
         arrows.splice(i, 1); hit = true; break;
       }
     }
@@ -3729,7 +3937,7 @@ function updateArrows(dt) {
         // The arrow's own heading is what a shieldman's guard is measured
         // against, so it is passed rather than recomputed from the two
         // positions: where the shot came from is not where it was aimed.
-        const landed = damageSoldier(j, 1, knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx));
+        const landed = damageSoldier(j, arrowDamage, knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx));
         // Spent either way — an arrow stopped by a shield is still stopped —
         // but only a hit that landed sets fire to anything.
         if (landed && a.type === 'fire') spawnFire(a.x, a.y);
@@ -4045,7 +4253,7 @@ function updateSkeletons(dt) {
       if (s.kind === 'rat') poisonPlayer();
       continue;
     }
-    if (chaseAlongPath(s, SKELETON_SPEED[s.kind](), dt)) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, SKELETON_SPEED[s.kind]() * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
 
     if (s.kind === 'ice') {
       s.shotCD -= dt;
@@ -4197,8 +4405,8 @@ function updateSoldiers(dt) {
       // than sliding along the wall, so a charge broken on rock is a real
       // opening rather than a soldier grinding into stone.
       s.charge -= dt;
-      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * dt;
-      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * dt;
+      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * mapEnemySpeed() * dt;
+      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * mapEnemySpeed() * dt;
       if (tilePassable(tileAt(nx, ny))) { s.x = nx; s.y = ny; s.walkPhase += dt * 14; }
       else s.charge = 0;
       continue;
@@ -4207,7 +4415,7 @@ function updateSoldiers(dt) {
     if (s.kind === 'archer') {
       s.shotCD -= dt;
       if (dist > stats.reach) {
-        if (chaseAlongPath(s, stats.speed, dt)) s.walkPhase += dt * 8;
+        if (chaseAlongPath(s, stats.speed * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
       } else if (s.shotCD <= 0) {
         s.shotCD = CONFIG.soldierArcherShotInterval;
         fireSoldierArrow(s);
@@ -4223,7 +4431,7 @@ function updateSoldiers(dt) {
       continue;
     }
 
-    if (chaseAlongPath(s, stats.speed, dt)) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, stats.speed * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
   }
 }
 
@@ -4466,7 +4674,7 @@ function updateCrows(dt) {
     if (c.heldTimer > 0) { c.heldTimer = Math.max(0, c.heldTimer - dt); continue; }
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
-      const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod();
+      const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod() * mapEnemySpeed();
       c.x -= spd * dt;
       c.y  = c.baseY + Math.sin(gameTime / 3 + c.phaseOff) * 40;
       c.y  = Math.max(CONFIG.tileSize, Math.min((CONFIG.rows-1)*CONFIG.tileSize, c.y));
@@ -4479,7 +4687,7 @@ function updateCrows(dt) {
       c.aggroTimer -= dt;
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
-      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult();
+      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult() * mapEnemySpeed();
       chaseAlongPath(c, spd, dt);
       if (c.aggroTimer <= 0) { c.state = 'passive'; c.baseY = c.y; c.path = null; }
     }
@@ -4655,7 +4863,12 @@ const MAZE_LOCKS = {
     needs: 'golden',
     open: (x, y) => {
       events.emit({ type: 'DOOR_OPENED', x, y });
-      transitionTo('win');
+      // The door is the way out of the maze, and out of the maze is the
+      // bastion. It used to end the run; the siege is the campaign's last
+      // stage now, so walking through here is a hand-off rather than a
+      // curtain — the same shape the crow king's and the dark knight's
+      // deaths already use.
+      startBastionStage();
     },
   },
 };
@@ -5086,6 +5299,11 @@ const BOSS_HUNTS_WHILE_EXPLORING = {
 function bossInPlay() {
   if (!boss || boss.bstate === 'dead') return false;
   if (appState === 'boss_fight') return true;
+  // A siege boss is on the field during ordinary play with no entrance and no
+  // boss_fight state around it, so it has to be a live target the same way the
+  // warden is. Without this it walks about being immune, which is the same
+  // no-counterplay bug the warden's own row was added to fix.
+  if (appState === 'playing' && siegeRun) return true;
   return appState === 'playing' && BOSS_HUNTS_WHILE_EXPLORING[boss.kind];
 }
 
@@ -5093,9 +5311,12 @@ const BOSS_ON_HIT = {
   crowking:    (amount) => { dazeBoss(); applyBossDamage(amount); },
   dark_archer: (amount) => applyBossDamage(amount),
   dark_knight: (amount) => applyBossDamage(amount),
-  // No HP to lower and no death path to reach. A hit buys time instead:
-  // it stuns him, which interrupts a charge and lets you get down the corridor.
-  minotaur:    ()       => stunMinotaur(),
+  // In the maze he has no death path to reach, so a hit buys time instead: it
+  // stuns him, which interrupts a charge and lets you get down the corridor.
+  // In a siege he is one enemy inside wave ten and the wave cannot clear until
+  // he is dead, so there the same hit also has to land. He keeps the stun in
+  // both, since that is what makes him read as himself.
+  minotaur:    (amount) => { stunMinotaur(); if (siegeRun) applyBossDamage(amount); },
   // Nothing special, like the two dark bosses: no shield to time and no daze.
   commander:   (amount) => applyBossDamage(amount),
 };
@@ -5110,13 +5331,22 @@ const BOSS_HP_KEY = {
   dark_archer: 'darkArcherHP',
   dark_knight: 'darkKnightHP',
   commander:   'commanderHP',
+  // The keeper has a pool now, read only in a siege — see bossHpFor.
+  minotaur:    'keeperHP',
 };
 
 function bossHpFor(kind) {
-  // The minotaur cannot be killed, so he has no HP row. Infinity rather than a
-  // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without
-  // any of them learning that an unkillable boss exists.
-  if (kind === 'minotaur') return Infinity;
+  // The keeper cannot be killed IN THE MAZE. That is the maze's rule — he is
+  // the level's pressure, not its objective — and Infinity rather than a
+  // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without any
+  // of them learning that an unkillable boss exists.
+  //
+  // A siege is the other case. Wave ten fields him as one enemy inside a wave,
+  // and the wave cannot clear until every boss in it is dead, so with no pool
+  // the last wave of the bastion could not be won by fighting it. The ten-wave
+  // test missed it because that harness kills through startBossDeath, which
+  // never consults hp.
+  if (kind === 'minotaur' && !siegeRun) return Infinity;
   return CONFIG[BOSS_HP_KEY[kind]];
 }
 
@@ -5138,9 +5368,7 @@ for (const kind of BOSS_STAGES) {
     throw new Error(`BOSS_ON_HIT has no row for '${kind}', which BOSS_STAGES lists`);
   if (typeof BOSS_HUNTS_WHILE_EXPLORING[kind] !== 'boolean')
     throw new Error(`BOSS_HUNTS_WHILE_EXPLORING has no row for '${kind}', which BOSS_STAGES lists`);
-  // The minotaur is the one deliberate absence: bossHpFor answers Infinity for
-  // him rather than reading a key, so a row here would be a number nobody uses.
-  if (kind !== 'minotaur' && !BOSS_HP_KEY[kind])
+  if (!BOSS_HP_KEY[kind])
     throw new Error(`BOSS_HP_KEY has no row for '${kind}', which BOSS_STAGES lists`);
 }
 
@@ -5770,7 +5998,7 @@ function fireIceBolt(s) {
  */
 function detonateHostileBomb(b) {
   const onWater = tileAt(b.x, b.y) === TILE.WATER;
-  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater });
+  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater, big: false });
   if (dist2(b.x, b.y, player.x, player.y) < b.blastRadius * b.blastRadius) {
     damagePlayer(b.damage);
   }
@@ -5907,6 +6135,26 @@ function updateBossDeath(dt) {
     bossDeathSeq = null;
     const deadKind = boss.kind;
     boss = null; hostileBolts = [];
+    // On a siege the boss is one enemy inside a wave, not the end of a stage.
+    // Every branch below hands off to another map or to a win screen, so
+    // running any of them here would load the castle in the middle of wave 7.
+    // The wave-clear check is what advances a siege, and it needs nothing from
+    // this function beyond the slot being empty.
+    if (siegeRun) {
+      // Except the thaw. startBossDeath freezes every crow to hold the field
+      // still for the cinematic, and updateCrows skips a frozen one outright.
+      // Nothing ever had to undo that, because every brawl branch below either
+      // clears `crows` or loads a map that replaces them -- so the flag died
+      // with the bodies. A siege keeps its wave, and a crow left frozen is a
+      // body no wave-clear check will ever see leave: the run stalls with the
+      // last two bats hanging in the air and cannot be finished.
+      //
+      // Found by playing it in a browser, not by the suite: every siege test
+      // that kills a boss either clears the wave first or never looks at what
+      // the survivors do afterwards.
+      for (const c of crows) c.frozen = false;
+      return;
+    }
     if (deadKind === 'crowking') {
       // Stage 1 done. The run continues into the castle stage: reload the
       // map, reposition on the same corner initGame() always starts from
@@ -5958,6 +6206,885 @@ function updateBossDeath(dt) {
       // maze is won by walking out of the door, not by clearing the room.
       skeletons = [];
       transitionTo('win');
+    }
+  }
+}
+
+// ── THE BASTION SIEGE ─────────────────────────────────────────────────────────
+//
+// A finite ten-wave defence of two towers, with a retinue that grows. The rules
+// live in sim/: siege-run.ts owns the run, siege-waves.ts the ladder, guards.ts
+// the retinue, towers.ts the cover. This is only the wiring that puts them on
+// the field.
+//
+// The retinue grows by recruitment and by exactly one exception. The priest is
+// seated once by startSiege and never rolled for, which is enforced in the
+// types rather than here — rollGuardKind cannot return one. Nothing in this
+// section needs to defend against a second priest arriving, and nothing here
+// should start trying to: the day this file grows a check for it is the day
+// the guarantee has moved to the wrong place.
+//
+// EVERYTHING HERE KEYS ON THE MAP, NOT THE MODE.
+//
+// `mapPopulation() === 'siege'` is the gate, never `gameMode === 'siege'`. The
+// bastion is reachable two ways — S on the title screen, and as the last stage
+// of the brawl chain after the maze — and a mode check would run the siege on
+// one and leave the map inert on the other. That is the shape of the
+// Waves+Castle bug mirrored: that one keyed on the map where it should have
+// keyed on the mode, and this would key on the mode where it should key on the
+// map. Who lives on a map is the map's business.
+
+/**
+ * Where the retinue's rolls come from.
+ *
+ * Math.random by default, and replaceable so a harness can pin a run. The roll
+ * decides which kinds open the siege and which arrive each wave, and a knight
+ * cannot be promoted — so with an unpinned roll, any assertion about ranks is
+ * really an assertion about the weather. Pinning it is what makes the retinue
+ * testable rather than merely observable.
+ */
+let siegeRng = Math.random;
+
+/**
+ * Hands the run over to the bastion: the campaign's last stage.
+ *
+ * Built the way the castle and the maze hand-offs are — generate, reposition,
+ * then hold the new map behind a title — and for the same reason each of them
+ * gives: transitionTo('playing') runs initGame(), which would wipe the run
+ * that just earned its way here. generateMap opens the siege by itself, since
+ * the siege belongs to the map.
+ *
+ * The mode is left alone. A brawl that reaches the bastion is still a brawl,
+ * and the siege runs because the map says so, not because the mode does.
+ */
+function startBastionStage() {
+  boss = null; bossDeathSeq = null; hostileBolts = [];
+  skeletons = []; crows = []; soldiers = [];
+  mazeRun = null;
+  generateMap('bastion');
+  const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+  player.x = spawn.x; player.y = spawn.y;
+  showStageIntro('bastion');
+}
+
+/** Is the map currently loaded a siege ground? */
+function mapIsSiege() {
+  return mapPopulation() === 'siege';
+}
+
+/**
+ * Opens a run on the grid that was just generated.
+ *
+ * Called from generateMap rather than initGame, because the brawl chain reaches
+ * the bastion by generating it mid-run and never goes near initGame again.
+ */
+function startSiegeRun() {
+  siegeRun = startSiege(siegeRng);
+  towers = makeTowers(towerSites(CONFIG.rows, CONFIG.cols));
+  guards = [];
+  siegeExtraBosses = [];
+  siegeSpawned = false;
+  // Bodies are NOT seated here. generateMap runs before the hero is positioned
+  // — in initGame and in the brawl chain's hand-off alike — so a retinue placed
+  // now rings wherever the hero stood on the previous map. seatRetinue is
+  // called from the tick instead, by which time the hero is where it belongs.
+}
+
+/**
+ * Puts a body on the field for every record that has not got one yet.
+ *
+ * Called every tick rather than at one moment, so it covers both the opening
+ * retinue and the recruit each cleared wave adds, and so neither depends on
+ * being run at exactly the right point in a start-up sequence.
+ */
+function seatRetinue() {
+  if (!siegeRun) return;
+  while (guards.length < siegeRun.guards.length) {
+    placeGuard(siegeRun.guards[guards.length]);
+  }
+}
+
+/** Clears everything siege, for a map that is not one. */
+function endSiegeRun() {
+  siegeRun = null; towers = []; guards = []; siegeExtraBosses = []; siegeSpawned = false;
+}
+
+/**
+ * Puts one guard on the field, behind the barrier and near a tower.
+ *
+ * Placed rather than walked in: a retinue that marched in from the corridor
+ * would be arriving through the siege it is defending against.
+ */
+/**
+ * The gates a retinue holds, in world pixels, or the hero's own ring on a map
+ * with no barrier to hold.
+ *
+ * Recomputed rather than cached because a tower or a section can come down mid
+ * run; the generator's answer is about the grid it built, and this is about the
+ * grid as it stands.
+ */
+function guardPosts() {
+  const gates = barrierGates(CONFIG.rows, CONFIG.cols);
+  return gates.map((gate) => ({
+    x: (gate.col + 0.5) * CONFIG.tileSize,
+    y: (gate.row + 0.5) * CONFIG.tileSize,
+  }));
+}
+
+/**
+ * Which gate this guard holds.
+ *
+ * Assigned by index around the list, so four guards on four gates take one
+ * each and the fifth doubles up on the first. A guard with no gate to hold —
+ * a grid too small to fortify — falls back to the ring around the hero, which
+ * is what the retinue did before it had posts at all.
+ */
+function postOf(g, index) {
+  const posts = guardPosts();
+  if (posts.length === 0) return guardStation(g);
+  return posts[index % posts.length];
+}
+
+function placeGuard(guard) {
+  // Seated on a gate in the barrier, one guard to each, between the hero and
+  // the corridor the waves come down.
+  //
+  // Two earlier answers were wrong for opposite reasons. At the towers, a
+  // recruit arrived five hundred pixels behind the fight and spent ten seconds
+  // walking. Ringing the hero put the whole retinue behind the wall it was
+  // supposed to be holding, so a wave came through a gap unopposed and reached
+  // him before anyone met it. A gate is where a defender stands: forward of the
+  // person guarded, on the ground the attack has to cross.
+  const posts = guardPosts();
+  const seat = posts.length > 0
+    ? posts[guards.length % posts.length]
+    : {
+        x: player.x + Math.cos((guards.length * 2 * Math.PI) / 4) * CONFIG.guardPostRadius,
+        y: player.y + Math.sin((guards.length * 2 * Math.PI) / 4) * CONFIG.guardPostRadius,
+      };
+  const at = nearestOpenTile(seat.x, seat.y);
+  guards.push({
+    // The sim's record is the source of truth for hp and rank; this is its body.
+    guard,
+    // Its station in the ring around the hero. Spread by index rather than
+    // rolled, so a retinue of four stands at four points of the compass
+    // instead of clumping wherever the rng happened to send them.
+    post: (guards.length * 2 * Math.PI) / Math.max(3, guards.length + 1),
+    // Its own cached route home. Guards do not share the crows' path
+    // scheduler — see walkGuardTo.
+    route: null, routeTimer: Math.random() * CONFIG.guardRouteInterval,
+    x: at.x, y: at.y,
+    facing: 0, walkPhase: Math.random() * Math.PI * 2, hitFlash: 0,
+    shotCD: GUARD_STATS[guard.kind].ranged ? CONFIG.guardShotInterval * Math.random() : 0,
+    swingCD: 0,
+    // A priest arrives having just prayed, so its first heal is a full interval
+    // away. Starting at zero would let it mend somebody on the frame it walked
+    // in, which reads as the ability firing at nothing in particular and makes
+    // the opening of a wave depend on which frame the body was placed on.
+    healCD: guard.kind === 'priest' ? CONFIG.guardHealInterval : 0,
+    team: Team.A,
+  });
+}
+
+/**
+ * Where a guard should be standing when there is nothing worth leaving for.
+ *
+ * A slow orbit of the hero rather than a fixed offset: a retinue holding
+ * station in perfect formation reads as furniture, and the drift costs one
+ * cosine per guard per frame.
+ */
+function guardStation(g) {
+  const ang = g.post + gameTime * CONFIG.guardPostDrift;
+  return {
+    x: player.x + Math.cos(ang) * CONFIG.guardPostRadius,
+    y: player.y + Math.sin(ang) * CONFIG.guardPostRadius,
+  };
+}
+
+/**
+ * Where this guard should be when there is nothing to do: its gate.
+ *
+ * Falls back to the hero's ring when the map has no barrier, which keeps the
+ * retinue meaningful on a grid too small to fortify rather than leaving it
+ * standing on a post that does not exist.
+ */
+function guardHome(g, index) {
+  const post = postOf(g, index);
+  return post;
+}
+
+/**
+ * The ground a guard answers for: the gate it holds, AND the hero.
+ *
+ * Two anchors, not one, and that is the fix for the way the retinue used to
+ * look frozen. With the gate alone, anything that got past the barrier stopped
+ * being any guard's business the moment it was more than a leash from the post
+ * — and the hero stands further from the nearest gate than the leash is long.
+ * So a wave that walked through reached him, ate him, and six guards stood on
+ * their gates watching, each of them correctly concluding there was nothing
+ * within its remit. Measured in a headless run: three bodies stacked on the
+ * hero, nearest post 190px away, leash 170.
+ *
+ * The union of two discs rather than one bigger disc, because the two are
+ * different jobs and one radius cannot express both — widening the leash until
+ * it covered the hero would also let a guard chase a crow most of the way to
+ * the corridor. Overlapping is what keeps the region connected, so a guard can
+ * walk from its gate to the hero without ever being "outside".
+ */
+function guardGround(home) {
+  return [home, { x: player.x, y: player.y }];
+}
+
+/** Is this point on the ground a guard answers for? */
+function onGuardGround(ground, x, y) {
+  const reach = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
+  return ground.some((p) => dist2(p.x, p.y, x, y) <= reach);
+}
+
+/**
+ * The nearest hostile near enough to this guard's ground to be its business.
+ *
+ * Eligibility is measured from the ground and the choice from the guard, which
+ * is the difference between a bodyguard and a skirmisher: a guard already drawn
+ * out to the edge must not find something further out and keep going.
+ */
+function guardQuarry(g, hostiles, ground) {
+  const near = [];
+  for (const h of hostiles) if (onGuardGround(ground, h.x, h.y)) near.push(h);
+  return nearestHostile(g, near);
+}
+
+/** Every hostile body on the field, as things nearestHostile can weigh up. */
+function siegeHostiles() {
+  const out = [];
+  for (const c of crows) out.push({ x: c.x, y: c.y, team: Team.ENEMY, ref: c, kind: 'crow' });
+  for (const sk of skeletons) out.push({ x: sk.x, y: sk.y, team: Team.ENEMY, ref: sk, kind: 'skel' });
+  for (const so of soldiers) out.push({ x: so.x, y: so.y, team: Team.ENEMY, ref: so, kind: 'soldier' });
+  if (boss && boss.bstate !== 'dead') out.push({ x: boss.x, y: boss.y, team: Team.ENEMY, ref: boss, kind: 'boss' });
+  return out;
+}
+
+/** Everything on the hero's side, hero included. Read by the contact pass. */
+function siegeFriendlies() {
+  const out = [{ x: player.x, y: player.y, team: Team.A, ref: player, kind: 'hero' }];
+  for (const g of guards) out.push({ x: g.x, y: g.y, team: Team.A, ref: g, kind: 'guard' });
+  return out;
+}
+
+/** Sends in one wave's worth, using the spawners each roster already has. */
+function spawnSiegeWave() {
+  const roster = waveRoster(siegeRun);
+  for (const entry of roster.enemies) {
+    const info = BESTIARY[entry.kind];
+    for (let n = 0; n < entry.count; n++) {
+      if (info.roster === 'crows') {
+        spawnCrow();
+        const c = crows[crows.length - 1];
+        if (c) {
+          // Aggro on arrival, and white for a bat. A passive crow drifts left
+          // and recycles off the edge forever, which on a finite ladder means a
+          // wave that can never be cleared.
+          c.state = 'aggro'; c.aggroTimer = 9999;
+          c.white = entry.kind === 'bat';
+        }
+      } else if (info.roster === 'skeletons') {
+        spawnSkeleton(info.spawnArg ?? 'normal');
+      } else {
+        spawnSoldier(info.spawnArg ?? 'spearman');
+      }
+    }
+  }
+  for (const kind of roster.bosses) spawnSiegeBoss(kind);
+  waveAnnounce = 2.2;
+  waveAnnounceText = '── WAVE ' + siegeRun.wave + ' / ' + SIEGE_WAVE_COUNT + ' ──';
+  siegeSpawned = true;
+}
+
+/**
+ * One boss for a siege wave.
+ *
+ * Wave 10 calls this twice and the single `boss` slot cannot hold two. Rather
+ * than turn every `boss` read in this file into an array lookup — there are
+ * dozens and each assumes one object or null — the second and later bosses of a
+ * wave go into `siegeExtraBosses` and are ticked alongside. The slot keeps its
+ * meaning as "the boss the camera and the health bar are about", which is what
+ * every existing reader already wants of it.
+ */
+function spawnSiegeBoss(kind) {
+  const stage = BOSS_STAGES.indexOf(kind) + 1;
+  if (stage < 1) return;
+  const keep = boss;
+  bossStage = stage;
+  spawnBoss();
+  landSiegeBoss(boss);
+  if (keep && boss !== keep) {
+    // The newcomer joins the extras and the original keeps the health bar.
+    siegeExtraBosses.push(boss);
+    boss = keep;
+  }
+}
+
+/**
+ * Puts a freshly spawned boss on the field, in a state that fights.
+ *
+ * spawnBoss leaves most kinds at `canvasW + 40` in `bstate: 'entering'`, which
+ * is correct for the brawl chain: the entrance is its own appState, and
+ * updateBossEntrance walks them in. A siege has no entrance — the wave simply
+ * arrives — so without this a boss sat off the right edge, out of reach and out
+ * of the frame, and `siegeWaveCleared` waited on it for ever. That is a run
+ * that cannot be finished, and it is what a playtest found.
+ *
+ * The minotaur and the commander already place themselves inside the map for
+ * their own reasons, so they are left exactly as they are.
+ */
+function landSiegeBoss(b) {
+  if (!b || b.bstate !== 'entering') return;
+  const at = openTileAwayFrom(player.x, player.y, CONFIG.siegeBossSpawnDistance)
+    ?? nearestOpenTile(CONFIG.canvasW - 3 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
+  b.x = at.x; b.y = at.y;
+  b.bstate = 'orbit';
+  b.stateTimer = 0;
+  b.orbitAngle = Math.atan2(b.y - player.y, b.x - player.x);
+  b.orbitRadius = Math.max(CONFIG.bossOrbitRadius, Math.hypot(b.x - player.x, b.y - player.y));
+  // What pathScheduler.serve() requires, for the kinds that walk.
+  b.state = 'aggro';
+}
+
+/** Is every enemy of the current wave off the field? */
+/**
+ * The siege's bosses as one pool, or null when none is up.
+ *
+ * Wave ten fields two and they share a bar rather than getting one each: the
+ * pair is one enemy with a doubled pool, so the number on the bar is the sum
+ * of both and a hit on either drains it. Waves seven to nine field one, and
+ * the same function describes that without a special case -- a pool of one.
+ *
+ * Live bodies only. A boss mid-death-sequence is still on the field as a heap
+ * of fragments, and counting its zero into the total would leave the bar
+ * showing half a pool that nothing can be done about.
+ */
+function siegeBossPool() {
+  const live = [];
+  if (boss && boss.bstate !== 'dead') live.push(boss);
+  for (const b of siegeExtraBosses) if (b && b !== boss && b.bstate !== 'dead') live.push(b);
+  if (live.length === 0) return null;
+  let hp = 0, hpMax = 0, flash = false;
+  for (const b of live) {
+    // A non-finite pool is left out of the totals rather than poisoning them.
+    // Nothing should reach here with one now that the siege keeper has a row,
+    // but drawHpBar draws one divider per hit point and Infinity there is a
+    // hung frame, not a slow one -- the same hazard drawLaneContext guards.
+    const max = b.hpMax || CONFIG.bossHP;
+    if (!Number.isFinite(max)) continue;
+    hp += Math.max(0, b.hp);
+    hpMax += max;
+    if (b.hitFlash > 0) flash = true;
+  }
+  if (hpMax <= 0) return null;
+  return { hp, hpMax, count: live.length, flash };
+}
+
+/**
+ * One life between them: when a siege boss dies, the rest go with it.
+ *
+ * Called from updateSiege rather than from startBossDeath, and that is the
+ * whole subtlety. tickSiegeBosses briefly moves an extra into the boss slot to
+ * update it, so for the length of that call neither `boss` nor
+ * siegeExtraBosses holds the complete set -- and a boss dying inside
+ * updateBoss dies exactly there. By the time this runs the handover has
+ * finished and the two lists are whole again.
+ *
+ * Idempotent: the death sequence lasts a couple of seconds and this is on the
+ * path for every frame of it, so it has to be safe to run against bodies it
+ * has already felled.
+ */
+function felledWithTheOther() {
+  for (const b of siegeExtraBosses) {
+    if (!b || b.bstate === 'dead') continue;
+    b.bstate = 'dead';
+    b.hp = 0;
+    // A burst where the twin was, so it is seen to go rather than vanishing
+    // between frames. The one that took the last hit has the full sequence.
+    events.emit({ type: 'BOSS_DEATH_BURST', x: b.x, y: b.y, phase: 'c' });
+  }
+}
+
+function siegeWaveCleared() {
+  return crows.length === 0 && skeletons.length === 0 && soldiers.length === 0
+    && (!boss || boss.bstate === 'dead') && siegeExtraBosses.length === 0;
+}
+
+/**
+ * The run's own tick: spawn a wave, wait for it to be cleared, then promote,
+ * recruit and move on — or win.
+ */
+function updateSiege(dt) {
+  if (!siegeRun || siegeRun.outcome !== 'running') return;
+  seatRetinue();
+  if (!siegeSpawned) { spawnSiegeWave(); return; }
+  tickSiegeBosses(dt);
+  if (bossDeathSeq) felledWithTheOther();
+  siegeExtraBosses = siegeExtraBosses.filter((b) => b && b.bstate !== 'dead');
+  if (!siegeWaveCleared()) return;
+
+  const before = siegeRun.wave;
+  siegeRun = siegeCompleteWave(siegeRun, siegeRng);
+  events.emit({ type: 'SIEGE_WAVE_CLEARED', wave: before });
+  if (siegeRun.outcome === 'won') { transitionTo('win'); return; }
+
+  // Promotion happens in the sim, and completeWave clones on promotion rather
+  // than mutating, so the bodies must be re-seated onto the new records or they
+  // would keep drawing yesterday's rank.
+  reseatGuards();
+  seatRetinue();
+  wave = siegeRun.wave;
+  siegeSpawned = false;
+}
+
+/**
+ * Runs the boss AI for every boss a siege has on the field.
+ *
+ * Two things were broken here and a playtest found both. `updateBoss` only runs
+ * during 'playing' for kinds BOSS_HUNTS_WHILE_EXPLORING marks as hunters —
+ * which is the minotaur alone, and the table has no row for the commander at
+ * all — so a siege boss never ticked. And the extras of wave 10 were never
+ * ticked by anything, despite a comment of mine claiming they were. Both left
+ * a wave that could not be cleared.
+ *
+ * The extras are ticked by swapping each into the `boss` slot and back.
+ * updateBoss reads and writes the global throughout — it is hundreds of lines
+ * built on there being exactly one — and threading a parameter through all of
+ * it to field a second boss on one wave of one map would be a large change to
+ * a lot of code that works. The swap is honest about what it is: the engine
+ * has one boss, and this lends it out.
+ */
+/**
+ * Hands the boss slot to `extra` and puts `held` back among the extras.
+ *
+ * Called when an extra dies while occupying the slot: the one that just died
+ * keeps it, so updateBossDeath clears the right body, and the one that was
+ * holding it rejoins the list rather than being dropped on the floor -- which
+ * would leave a live boss on the field that nothing ticks and no wave-clear
+ * check can see.
+ *
+ * Shared with the harness hook that kills an extra, so a test cannot exercise
+ * a handover the game does not perform.
+ */
+function seatSiegeBoss(extra, held) {
+  siegeExtraBosses = siegeExtraBosses.filter((b) => b !== extra);
+  // A dead `held` is not handed back. It used to be, harmlessly, because the
+  // slot's occupant was always alive; with one life shared between wave ten's
+  // pair it can now be dead by the time the handover runs, and a dead body in
+  // the live list is one siegeWaveCleared would wait on.
+  if (held && held !== extra && held.bstate !== 'dead') siegeExtraBosses.push(held);
+}
+
+function tickSiegeBosses(dt) {
+  if (bossDeathSeq) return;
+  if (boss && boss.bstate !== 'dead' && !BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
+  if (siegeExtraBosses.length === 0) return;
+  const held = boss;
+  for (const extra of siegeExtraBosses) {
+    if (!extra || extra.bstate === 'dead') continue;
+    boss = extra;
+    updateBoss(dt);
+    if (bossDeathSeq) { seatSiegeBoss(extra, held); return; }
+  }
+  boss = held;
+}
+
+/** Re-points each body at its promoted record, dropping bodies whose record went. */
+function reseatGuards() {
+  const records = siegeRun.guards;
+  for (let i = guards.length - 1; i >= 0; i--) {
+    const rec = records[i];
+    if (!rec) { guards.splice(i, 1); continue; }
+    guards[i].guard = rec;
+  }
+}
+
+/** A guard was killed: it leaves the field and the retinue, and does not return. */
+function killGuard(index) {
+  const body = guards[index];
+  if (!body) return;
+  events.emit({ type: 'GUARD_DOWN', x: body.x, y: body.y });
+  guards.splice(index, 1);
+  siegeRun = siegeGuardLost(siegeRun, index);
+}
+
+/** Damage onto a guard, from a contact hit or a shot. */
+function damageGuard(index, amount = 1) {
+  const body = guards[index];
+  if (!body) return;
+  body.guard.hp -= amount;
+  body.hitFlash = 0.15;
+  if (body.guard.hp <= 0) killGuard(index);
+}
+
+/**
+ * The retinue's turn: each guard closes on the nearest enemy and hits it.
+ *
+ * Movement is direct rather than A*: pathScheduler.serve takes one goal for the
+ * whole frame and the crows already own it, so a guard asking for a path would
+ * be asking for a path to the player. Over the bastion's open middle that costs
+ * nothing — it is the one map deliberately built without corridors — and this
+ * note is here so the next map does not inherit the assumption silently.
+ */
+function updateGuards(dt) {
+  if (!siegeRun || bossDeathSeq) return;
+  const hostiles = siegeHostiles();
+  for (let i = guards.length - 1; i >= 0; i--) {
+    const g = guards[i];
+    if (g.hitFlash > 0) g.hitFlash = Math.max(0, g.hitFlash - dt);
+    if (g.swingCD > 0) g.swingCD = Math.max(0, g.swingCD - dt);
+    // The priest turns off here, before a target is ever looked for. Every path
+    // below this line ends in damage, and the one guarantee the kind is built
+    // on is that none of them can run for it: there is no branch further down
+    // that has to remember to check, and no arm of one that could be added
+    // later without noticing. Its own turn is a separate function for the same
+    // reason — a healer is not a fighter with `if (canFight)` around it.
+    // The anchor is set before the priest branches away, because the priest has
+    // a gate to hold like everyone else and moveGuard measures its leash from
+    // there. Set after the branch, the priest spent its first frame anchored to
+    // nothing and fell back to the hero.
+    const home = guardHome(g, i);
+    g.anchor = home;
+    g.ground = guardGround(home);
+    if (isPriest(g.guard)) { updatePriest(g, dt); continue; }
+    const stats = GUARD_STATS[g.guard.kind];
+    // A guard that has drifted past its leash goes home before it does anything
+    // else, and takes no target on the way.
+    //
+    // Without this the leash leaked. moveGuard has to allow any step once a
+    // guard is outside — a body coming home round a barrier must move away from
+    // the hero for part of the route, and forbidding that pinned it to the wall.
+    // But 'outside, so anything goes' is also permission to keep walking
+    // outward, so a guard that stepped over the line while fighting something
+    // that then moved was free to follow it across the map. Deciding it here,
+    // where the intent is known, is what closes that.
+    const onDuty = onGuardGround(g.ground, g.x, g.y);
+    const target = onDuty ? guardQuarry(g, hostiles, g.ground) : null;
+    if (!target) { returnToPost(g, home, dt); continue; }
+
+    const dx = target.x - g.x, dy = target.y - g.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    g.facing = Math.atan2(dy, dx);
+
+    if (stats.ranged) {
+      g.shotCD -= dt;
+      // An archer shoots from where it stands and only closes if it cannot
+      // reach: its reach is nearly its leash, so in practice it stays on the
+      // hero's shoulder and fires past him, which is what an escort archer is.
+      if (dist > CONFIG.guardArcherReach) walkGuardTo(g, target.x, target.y, dt);
+      else if (g.shotCD <= 0) { g.shotCD = CONFIG.guardShotInterval; fireGuardArrow(g, target); }
+      else returnToPost(g, home, dt);
+      continue;
+    }
+    if (dist <= CONFIG.guardMeleeReach) {
+      if (g.swingCD <= 0) {
+        g.swingCD = CONFIG.guardSwingInterval;
+        hitSiegeTarget(target, guardDamage(g.guard));
+        events.emit({ type: 'GUARD_SWING', x: g.x, y: g.y });
+      }
+      continue;
+    }
+    // Routed, not beelined. A guard chasing in a straight line walks into the
+    // barrier it is standing in a gate of, and stops there for as long as its
+    // quarry stays put -- which is the "stuck or frozen a few seconds into a
+    // wave" the playtest reported. Coming home already routed; going out did
+    // not, and going out is the half that has a wall in the way.
+    walkGuardTo(g, target.x, target.y, dt);
+  }
+}
+
+/**
+ * The priest's turn: the ward if the retinue is coming apart, otherwise one
+ * ally mended, otherwise stand fast.
+ *
+ * It never asks `siegeHostiles()` anything. Not because enemies do not matter
+ * to it — they are what is putting the holes in the retinue — but because
+ * every question it could ask about a hostile would be the first half of an
+ * attack, and the kind is defined by not having one. What it looks at is the
+ * retinue's health, and where the health it needs to reach is standing.
+ *
+ * The ward comes first, before the cooldown heal is even considered. The one
+ * moment it exists for is a wave breaking through, and a priest that had just
+ * spent its turn mending one archer for 1 while three allies were down would
+ * be holding the ability for a better moment that has already gone past.
+ *
+ * NO EVENT IS EMITTED FOR A HEAL, and that is a scope boundary rather than an
+ * oversight. `GameEvent` in src/sim/events.ts is a closed union and the effects
+ * layer switches over it exhaustively; a `GUARD_HEALED` variant belongs there,
+ * in a change that owns that file. Reusing GUARD_SWING or GUARD_SHOT to get a
+ * burst on screen was the alternative and is worse than nothing — events.ts is
+ * explicit that an event which lies about what happened costs more than one
+ * that duplicates another. The heal is legible from the health it restores
+ * until that variant exists.
+ */
+function updatePriest(g, dt) {
+  if (g.healCD > 0) g.healCD = Math.max(0, g.healCD - dt);
+
+  // Who the ward would land on. The priest itself is deliberately not in this
+  // list: guards.ts puts it into its own congregation, so "the priest is always
+  // blessed by its own ward" is a rule of the ability rather than a thing this
+  // call site has to remember to include.
+  const inRadius = [];
+  for (const b of guards) {
+    if (b === g) continue;
+    if (Math.hypot(b.x - g.x, b.y - g.y) <= CONFIG.guardWardRadius) inRadius.push(b.guard);
+  }
+  if (shouldWard(g.guard, inRadius)) { invokeWard(g.guard, inRadius); return; }
+
+  // Otherwise the ally furthest from its own maximum, the priest included, so
+  // the heal goes where it is worth the most rather than to whoever is nearest.
+  // `missingHp` is the sim's answer to "how hurt is this one", so the choice
+  // made here and the clamp applied in `healGuard` cannot come to disagree
+  // about what full health means.
+  let target = null;
+  let worst = 0;
+  for (const b of guards) {
+    const need = missingHp(b.guard);
+    if (need > worst) { worst = need; target = b; }
+  }
+  // Nobody is hurt, so it falls in with the rest of the retinue and keeps
+  // station on the hero. It still never advances on an enemy — holdStation
+  // walks toward the ring around the hero and nothing else, so the one unit
+  // that never respawns is never the one walking at the wave. But standing
+  // where it spawned while the hero moves off is how a healer ends the wave
+  // out of range of everyone it exists to heal.
+  if (!target) { returnToPost(g, g.anchor ?? guardStation(g), dt); return; }
+
+  const dx = target.x - g.x, dy = target.y - g.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > 0) g.facing = Math.atan2(dy, dx);
+  if (dist > CONFIG.guardHealReach) { walkGuardTo(g, target.x, target.y, dt); return; }
+  if (g.healCD > 0) return;
+  g.healCD = CONFIG.guardHealInterval;
+  healGuard(target.guard, guardHeal(g.guard));
+}
+
+/**
+ * Walks a guard toward an arbitrary point, around terrain rather than into it.
+ *
+ * Guards used to move in a straight line, and a comment here said that cost
+ * nothing because the bastion's middle is open. That was true only while a
+ * guard never had to go anywhere: it fought whatever was already beside it. The
+ * moment the retinue had to follow the hero, the barrier it is standing behind
+ * became a wall it walked into and stayed at — a playtest found the retinue
+ * left behind at the towers while the hero was across the map.
+ *
+ * It solves its own A* rather than joining pathScheduler, because the scheduler
+ * serves one destination for the whole frame and the crows own it — every agent
+ * on that queue is going to the player. A guard is going to a moving point near
+ * the player, and each guard's is different. The cost is bounded by the
+ * recompute interval, not by the frame.
+ */
+function walkGuardTo(g, tx, ty, dt) {
+  g.routeTimer -= dt;
+  // A route is also stale when the thing it was computed for has moved off the
+  // end of it. Without this a guard chasing a body across the field followed
+  // the path to where that body used to be for up to half a second at a time,
+  // which on a map with a wall through the middle of it is the difference
+  // between going round the barrier and walking into it.
+  const drifted = !g.routeGoal
+    || dist2(g.routeGoal.x, g.routeGoal.y, tx, ty) > CONFIG.tileSize * CONFIG.tileSize;
+  if (!g.route || g.route.length === 0 || g.routeTimer <= 0 || drifted) {
+    g.route = computeAStarPath(g.x, g.y, tx, ty);
+    g.routeGoal = { x: tx, y: ty };
+    g.routeTimer = CONFIG.guardRouteInterval;
+  }
+  let aimX = tx, aimY = ty;
+  if (g.route && g.route.length > 0) {
+    const wp = g.route[0];
+    if (Math.hypot(wp.x - g.x, wp.y - g.y) < 8) g.route.shift();
+    else { aimX = wp.x; aimY = wp.y; }
+  }
+  const dx = aimX - g.x, dy = aimY - g.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  g.facing = Math.atan2(dy, dx);
+  moveGuard(g, dx / dist, dy / dist, dt);
+}
+
+/**
+ * Walks a guard back to its gate, and stands it down when it is there.
+ *
+ * The slack matters: without a dead zone a guard oscillates across its own post
+ * every frame, which at this sprite size is a visible jitter rather than a
+ * subtle one. Facing is turned toward the corridor once it arrives, so a
+ * retinue at rest is looking at the ground the wave will come over rather than
+ * at whatever it last walked past.
+ */
+function returnToPost(g, home, dt) {
+  if (Math.hypot(home.x - g.x, home.y - g.y) < CONFIG.guardPostSlack) {
+    g.route = null;
+    g.routeGoal = null;
+    g.facing = 0;
+    return;
+  }
+  walkGuardTo(g, home.x, home.y, dt);
+}
+
+/**
+ * One step, refused by terrain the way every other ground body's is.
+ *
+ * The leash is NOT enforced here, and that is a decision rather than an
+ * omission. It used to be: a step was refused if it left the guard's ground.
+ * That pins a guard against its own boundary, because this moves on each axis
+ * separately and an axis-separated step can leave a disc the diagonal would
+ * have stayed inside — so a guard heading for something perfectly legitimate
+ * would have both halves of its step refused and simply stop.
+ *
+ * Nothing is lost by dropping it, because the two rules that actually bound a
+ * guard live where the intent is known rather than where the pixels are:
+ * `guardQuarry` will only hand back a threat standing on the guard's ground,
+ * and `updateGuards` will not let a guard that is off its ground take a target
+ * at all. A guard therefore only ever walks from a point on its ground toward
+ * another point on its ground, and the moment its quarry steps off, it stops
+ * being a target and the guard turns for home. A rule enforced twice is a rule
+ * that can disagree with itself, and this was the half that was wrong.
+ */
+function moveGuard(g, ux, uy, dt) {
+  const spd = CONFIG.guardSpeed;
+  const nx = g.x + ux * spd * dt;
+  const ny = g.y + uy * spd * dt;
+  if (tilePassable(tileAt(nx, g.y))) g.x = nx;
+  if (tilePassable(tileAt(g.x, ny))) g.y = ny;
+  g.walkPhase += dt * 8;
+}
+
+/** A guard archer's shot. Reuses the arrow array so nothing new has to fly. */
+function fireGuardArrow(g, target) {
+  const ang = Math.atan2(target.y - g.y, target.x - g.x);
+  arrows.push({
+    x: g.x, y: g.y,
+    vx: Math.cos(ang) * CONFIG.guardArrowSpeed,
+    vy: Math.sin(ang) * CONFIG.guardArrowSpeed,
+    life: 2, angle: ang, damage: guardDamage(g.guard),
+    allied: true, type: 'normal', pierce: 0,
+  });
+  events.emit({ type: 'GUARD_SHOT', x: g.x, y: g.y });
+}
+
+/**
+ * The towers shoot.
+ *
+ * This is what makes them towers rather than walls. Cover that only absorbs is
+ * a wall with a roof, and the bastion is a defence map; a hero who could ignore
+ * the two stone drums entirely would be playing a brawl with scenery.
+ *
+ * Fallen towers are skipped, so the shots stop in the same frame the cover
+ * does. There is no separate "destroyed" flag to fall out of step with the hp
+ * -- `towerStanding` is the one question, the way `towerAt` already asks it.
+ */
+function updateTowers(dt) {
+  if (!siegeRun || bossDeathSeq) return;
+  const hostiles = siegeHostiles();
+  for (const t of towers) {
+    if (!towerStanding(t)) continue;
+    t.shotCD -= dt;
+    if (t.shotCD > 0) continue;
+    const from = towerCentre(t, CONFIG.tileSize);
+    // Team.A so the shared helper applies the same canDamage rule a guard's
+    // targeting does, rather than this loop reimplementing "is that an enemy".
+    const target = nearestHostileWithin(
+      { x: from.x, y: from.y, team: Team.A }, hostiles, CONFIG.towerReach);
+    if (!target) continue;
+    t.shotCD = CONFIG.towerShotInterval;
+    fireTowerBolt(from, target);
+  }
+}
+
+/**
+ * One bolt, from a tower's centre at whatever it just picked.
+ *
+ * Goes into `arrows` with the same shape a guard's shot has, so it inherits
+ * flight, terrain collision and the hit loop already written for those rather
+ * than growing a second projectile system beside them. `allied` is what makes
+ * that hit loop read `damage` instead of assuming one.
+ */
+function fireTowerBolt(from, target) {
+  const ang = Math.atan2(target.y - from.y, target.x - from.x);
+  arrows.push({
+    x: from.x, y: from.y,
+    vx: Math.cos(ang) * CONFIG.towerBoltSpeed,
+    vy: Math.sin(ang) * CONFIG.towerBoltSpeed,
+    life: 2, angle: ang, damage: TOWER_DAMAGE,
+    allied: true, type: 'normal', pierce: 0,
+  });
+  events.emit({ type: 'TOWER_SHOT', x: from.x, y: from.y });
+}
+
+/** Applies damage to whatever a guard just hit, through that kind's own path. */
+function hitSiegeTarget(target, amount) {
+  if (target.kind === 'crow') {
+    const j = crows.indexOf(target.ref);
+    if (j >= 0) damageCrow(j, amount);
+  } else if (target.kind === 'skel') {
+    const j = skeletons.indexOf(target.ref);
+    if (j >= 0) damageSkeleton(j, amount);
+  } else if (target.kind === 'soldier') {
+    const j = soldiers.indexOf(target.ref);
+    if (j >= 0) damageSoldier(j, amount);
+  } else if (target.kind === 'boss' && boss) {
+    damageBoss(amount, target.x, target.y, 'guard');
+  }
+}
+
+/**
+ * What the siege does to the hero's side: enemies that reach a guard fight it,
+ * and enemies pressed against a standing tower knock lumps off it.
+ *
+ * Run here rather than inside each enemy's own update because the enemies do
+ * not know the bastion exists. Their AI still walks them at the hero — the path
+ * scheduler has one goal a frame and the hero is it — so this pass is what makes
+ * a guard in the way, or a tower in the way, actually matter.
+ */
+function updateSiegeContact(dt) {
+  if (!siegeRun || bossDeathSeq) return;
+  const friendlies = siegeFriendlies();
+  const ts = CONFIG.tileSize;
+  const all = [...crows, ...skeletons, ...soldiers];
+  for (const e of all) {
+    const near = nearestHostile({ x: e.x, y: e.y, team: Team.ENEMY }, friendlies);
+    if (near && near.kind === 'guard'
+      && Math.hypot(near.x - e.x, near.y - e.y) < CONFIG.guardMeleeReach) {
+      e.siegeSwingCD = (e.siegeSwingCD ?? 0) - dt;
+      if (e.siegeSwingCD <= 0) {
+        e.siegeSwingCD = CONFIG.guardSwingInterval;
+        const j = guards.indexOf(near.ref);
+        if (j >= 0) damageGuard(j, 1);
+      }
+      continue;
+    }
+    const row = Math.floor(e.y / ts), col = Math.floor(e.x / ts);
+    // The body's own tile and its four neighbours. It used to probe east and
+    // west only, which was enough when a tower was one tile wide and standing
+    // beside it meant standing level with it; a 2x2 can be met from the north
+    // or the south just as easily.
+    const t = towerAt(towers, row, col)
+      ?? towerAt(towers, row, col + 1)
+      ?? towerAt(towers, row, col - 1)
+      ?? towerAt(towers, row + 1, col)
+      ?? towerAt(towers, row - 1, col);
+    if (!t) continue;
+    e.siegeSwingCD = (e.siegeSwingCD ?? 0) - dt;
+    if (e.siegeSwingCD <= 0) {
+      e.siegeSwingCD = CONFIG.guardSwingInterval;
+      if (damageTower(t, 1)) {
+        // It came down: the tile stops being cover, which is the whole point of
+        // giving a tower hit points at all.
+        // The layer redraws itself: StaticTileLayer subscribes to TileMap's
+        // onChange in its constructor. An explicit rebuild call here was both
+        // unnecessary and undefined, so the first tower ever to actually fall
+        // threw — no test had driven one to zero until one was written for it.
+        // Every tile of it. Clearing only the north-west corner would leave
+        // three quarters of a fallen tower standing as cover that nothing can
+        // any longer shoot back from, which is the opposite of the trade.
+        for (const tile of towerTiles(t)) tileMap.set(tile.row, tile.col, TILE.EMPTY);
+        const at = towerCentre(t, ts);
+        events.emit({ type: 'TOWER_FELL', x: at.x, y: at.y });
+      }
     }
   }
 }
@@ -6020,6 +7147,9 @@ const sndArm           = [.22, 0,   900, 0, .02, .04, 1, 1, 300];       // trian
 const sndKeyDrop       = [.3,  .02, 1400, 0, .02, .12, 1, 1, 0, 0, 300, .05]; // triangle chime + pitch jump — small metal landing
 const sndChestOpen     = [.4,  .05, 160, 0, .1,  .22, 2, 1, 120];       // sawtooth rising — a lid coming up
 const sndDoorOpen      = [.6,  .1,   70, 0, .3,  .5,  4, 1, 40];        // low bit noise grinding up — stone giving way
+const sndWaveHeld      = [.4,  .05, 520, 0, .08, .22, 1, 1, 120];      // triangle rising — the line held
+const sndGuardDown     = [.35, .05, 300, 0, .05, .12, 2, 1, -220];     // sawtooth dropping — a body going down
+const sndTowerFell     = [.7,  .1,   80, 0, .2,  .4,  4, 1, -30];      // low bit noise — masonry collapsing
 const sndTorchLight    = [.3,  .3,  420, 0, .06, .18, 4, 1, 90];        // bit noise, rising — a strike catching
 
 /**
@@ -8000,6 +9130,89 @@ function soldierGrid(kind, frame) {
  * looking, so the side its shield is drawn on is the side that stops arrows,
  * and a player works out to go round it by looking at it.
  */
+/**
+ * One guard, drawn the way a soldier is, with its rank on it.
+ *
+ * The rank is not drawn here — it is baked into the grid by buildGuardGrid,
+ * because the pips have to sit on the body and mirror with it when the guard
+ * turns round. Drawing them on top afterwards would leave them on the wrong
+ * shoulder half the time, and the sprite cache key carries the rank so a
+ * promotion is a new cached canvas rather than a stale one.
+ */
+/**
+ * One guard's pixel grid, built once and kept.
+ *
+ * Memoised for the reason `_skeletonGrids` and `_soldierGrids` are, which
+ * drawGuard should have done from the start and did not: the painted canvas is
+ * already cached by `stamps`, and on a cache hit — which is almost every frame
+ * — `stamps.get` returns it WITHOUT calling the painter. So the grid handed in
+ * was built and thrown away, per guard, per frame.
+ *
+ * Measured before this landed: 9.1 us for a foot guard, 22.4 for the mounted
+ * knight, and a wave-10 retinue of twelve rebuilding every frame came to
+ * 122 us — 0.73% of a 16.7 ms frame, or 7.3 ms of work per second of play, all
+ * of it discarded. Small, but it was bought for nothing.
+ *
+ * The table is bounded and tiny: four kinds by three frames by four ranks.
+ */
+const _guardGrids = {};
+function guardGrid(kind, frame, rank, key) {
+  const hit = _guardGrids[key];
+  if (hit) return hit;
+  const built = GUARD_GRID_BUILDERS[kind](frame, rank);
+  _guardGrids[key] = built;
+  return built;
+}
+
+/**
+ * The disc under an ally, in its team's colour.
+ *
+ * Every body in this game already draws a flat black ellipse for a shadow, so
+ * this costs a fill colour rather than a new draw. It is the readable half of
+ * "whose side is that": a livery on a 16px sprite is a handful of pixels and
+ * disappears in the twelve-body crowd of wave 10, while a coloured disc under
+ * the feet survives being half-hidden behind another body and never competes
+ * with the silhouette that says *what* the unit is — the spear, the shield,
+ * the horse, the cross.
+ *
+ * Keyed on team rather than on being a guard, so multiplayer's teams drop into
+ * the same call unchanged.
+ */
+function drawTeamDisc(team, rx = 7) {
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = TEAM_DISC[team] ?? 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(0, 9, rx, rx * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+  // A hard rim, because a translucent disc over dark ground reads as a smudge.
+  ctx.strokeStyle = TEAM_RIM[team] ?? 'rgba(0,0,0,0)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawGuard(gd) {
+  const cx = gd.x, cy = gd.y + CONFIG.hudHeight;
+  const flashOn = gd.hitFlash > 0;
+  const frame = animFrame3(gd.walkPhase);
+  const rank = gd.guard.rank;
+  const kind = gd.guard.kind;
+  const size = GUARD_SPRITES[kind];
+  const key = 'guard|' + kind + '|' + frame + '|' + rank;
+  const grid = guardGrid(kind, frame, rank, key);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  // Wider body, wider disc: a mounted knight on a foot soldier's disc looks
+  // like it is standing beside its own marker.
+  drawTeamDisc(gd.team, size.w > GUARD_SPRITES.archer.w ? 12 : 7);
+  if (Math.cos(gd.facing) < 0) ctx.scale(-1, 1);
+  const sprite = flashOn
+    ? spriteFlashCanvas(key, grid, size.w, size.h, '#ffffff')
+    : spriteCanvas(key, grid, size.w, size.h);
+  if (flashOn) { ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 8; }
+  ctx.drawImage(sprite, -size.w / 2, -16);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
 function drawSoldier(s) {
   const cx = s.x, cy = s.y + CONFIG.hudHeight;
   const flashOn = s.hitFlash > CONFIG.hitFlashSecs - CONFIG.hitFlashWhiteSecs;
@@ -9599,14 +10812,56 @@ function drawLaneContext(t, isBoss) {
   if (mazeRun) drawMazeKeys(cx);
 
   ctx.textAlign = 'right'; ctx.fillStyle = '#196407';
-  ctx.fillText(modeRule(gameMode).label, 792, 42);
+  ctx.fillText(mapIsSiege() ? 'BASTION' : modeRule(gameMode).label, 792, 42);
+  if (siegeRun) drawSiegeHud(t, cx);
 }
 
-function drawBossBar(t, cx) {
-  const x = 520, y = 6, w = 272, h = 16;
-  const hpMax = boss.hpMax || CONFIG.bossHP;
-  const frac  = boss.hp / hpMax;
-  const hitOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash*18)%2 === 0;
+/**
+ * The siege's own line: how far through the ladder, what is left of the
+ * retinue, and how the towers are holding.
+ *
+ * Keyed on siegeRun rather than on the mode, like everything else here, so the
+ * brawl chain's last stage reads the same as the standalone one.
+ */
+function drawSiegeHud(t, cx) {
+  const standing = standingTowers(towers);
+  const hp = standing.reduce((n, t) => n + t.hp, 0);
+  const full = towers.length * TOWER_MAX_HP;
+  ctx.textAlign = 'center';
+  // A boss on the field takes the top row, and carries the wave counter with
+  // it rather than costing it -- see drawSiegeBossBar.
+  const pool = siegeBossPool();
+  if (pool) {
+    drawSiegeBossBar(t, pool);
+  } else {
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.shadowColor = '#D8B048'; ctx.shadowBlur = 4; ctx.fillStyle = '#D8B048';
+    ctx.fillText('WAVE ' + siegeRun.wave + '/' + SIEGE_WAVE_COUNT, cx, 18);
+    ctx.shadowBlur = 0;
+  }
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.fillStyle = standing.length === towers.length ? '#8f8265' : '#8c3a24';
+  // Rank marks rather than a count: a retinue of three seniors is not the same
+  // asset as three recruits, and the HUD should say which one you have.
+  const retinue = guards.map((gd) => (RANK_MARK[gd.guard.rank] || '') + gd.guard.kind.charAt(0).toUpperCase()).join(' ');
+  ctx.fillText('TOWERS ' + standing.length + '/' + towers.length
+    + '  ' + hp + '/' + full + '   ' + (retinue || 'ALONE'), cx, 34);
+}
+
+/** Where the boss bar sits, shared by both callers so the two cannot drift. */
+const BOSS_BAR = { x: 520, y: 6, w: 272, h: 16 };
+
+/**
+ * The bar itself: track, fill, one divider per hit point, border.
+ *
+ * Extracted because a siege draws the same bar in the same place for a
+ * different thing -- one pool shared by wave ten's pair -- and differs only in
+ * what it writes on top of it. The bar is the shared part; the labelling is
+ * not, so the labels stay with their callers.
+ */
+function drawHpBar(t, hp, hpMax, hitOn) {
+  const { x, y, w, h } = BOSS_BAR;
+  const frac = hpMax > 0 ? Math.max(0, Math.min(1, hp / hpMax)) : 0;
 
   ctx.fillStyle = '#1A2A1A'; ctx.fillRect(x, y, w, h);
   ctx.shadowColor = hitOn ? '#FFFFFF' : '#FF1F1F';
@@ -9619,13 +10874,46 @@ function drawBossBar(t, cx) {
   for (let i = 1; i < hpMax; i++) ctx.fillRect(x + (w/hpMax)*i - 0.5, y, 1, h);
   ctx.strokeStyle = '#FF1F1F'; ctx.lineWidth = 1;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+
+/** Burn damage makes hp fractional; the readout shows the point still held. */
+const hpReadout = (hp, hpMax) => Math.ceil(hp - 1e-6) + ' / ' + hpMax;
+
+function drawBossBar(t, cx) {
+  const hpMax = boss.hpMax || CONFIG.bossHP;
+  const hitOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash*18)%2 === 0;
+  drawHpBar(t, boss.hp, hpMax, hitOn);
 
   ctx.font = 'bold 10px "Courier New", monospace';
   ctx.textAlign = 'center'; ctx.fillStyle = '#FF8888';
-  // Burn damage makes hp fractional, so the readout shows the point the boss
-  // is still on while the bar behind it drains smoothly. The epsilon keeps
-  // float dust from rounding a whole point back up.
-  ctx.fillText(Math.ceil(boss.hp - 1e-6) + ' / ' + hpMax, cx, 34);
+  // The epsilon keeps float dust from rounding a whole point back up.
+  ctx.fillText(hpReadout(boss.hp, hpMax), cx, 34);
+}
+
+/**
+ * The siege's boss bar: one bar for however many are up.
+ *
+ * Its labels sit INSIDE the bar rather than under it, which is the one thing
+ * it does differently from a boss fight's. A boss fight owns the whole of lane
+ * C and can put the number on the row below; a siege still has to show the
+ * towers and the retinue there, and the two would land on the same pixels.
+ * Putting the wave on the left and the pool on the right also means the bar
+ * costs the wave counter nothing -- it replaces that line and carries it.
+ */
+function drawSiegeBossBar(t, pool) {
+  const { x, y, w, h } = BOSS_BAR;
+  const flashOn = pool.flash && Math.floor(t*18)%2 === 0;
+  drawHpBar(t, pool.hp, pool.hpMax, flashOn);
+
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.shadowColor = '#000000'; ctx.shadowBlur = 3;
+  ctx.fillStyle = '#FFFFFF';
+  const mid = y + h / 2 + 3.5;
+  ctx.textAlign = 'left';
+  ctx.fillText('W' + siegeRun.wave + '/' + SIEGE_WAVE_COUNT, x + 6, mid);
+  ctx.textAlign = 'right';
+  ctx.fillText(hpReadout(pool.hp, pool.hpMax), x + w - 6, mid);
+  ctx.shadowBlur = 0;
 }
 
 /**
@@ -10322,6 +11610,7 @@ function render(t) {
     for (const c of crows) if (litAt(c.x, c.y)) { drawCrow(c); drawFrozenOverlay(c); }
     for (const s of skeletons) if (litAt(s.x, s.y)) { drawSkeleton(s); drawFrozenOverlay(s); }
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
+    for (const gd of guards) if (litAt(gd.x, gd.y)) drawGuard(gd);
     drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts(); drawNets(); drawHeldMarkers();
     drawChargeArc(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
@@ -10509,10 +11798,18 @@ function stepGame(dt) {
       // as in a boss fight. See BOSS_HUNTS_WHILE_EXPLORING for why this is a
       // table lookup and not a kind check.
       if (boss && BOSS_HUNTS_WHILE_EXPLORING[boss.kind]) updateBoss(dt);
+      // A boss can now die outside a boss fight — a siege kills one in the
+      // middle of a wave — and the death sequence is what clears bossDeathSeq.
+      // Without this it is set and never cleared, and the five update
+      // functions that bail on it (crows, skeletons, soldiers, guards, the
+      // siege contact pass) stop for good: the whole field freezes and the run
+      // cannot be finished. Found by playing it.
+      if (bossDeathSeq) updateBossDeath(dt);
       updateHostileBolts(dt);
       updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt);
       updateSoldiers(dt); regrowth.tick(dt);
+      updateTowers(dt); updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
 
@@ -10526,6 +11823,7 @@ function stepGame(dt) {
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
       updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       updateSoldiers(dt); regrowth.tick(dt); updateBarrageBombs(dt); updateSapperShots(dt);
+      updateTowers(dt); updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
       FORESHADOW.update(dt); STREAK.update(dt); BOUNTIES.update(dt);
       break;
@@ -10898,6 +12196,109 @@ export const devHooks = {
   soundPlan: (s) => soundPlan(s),
   soundPlayback: () => SOUND_PLAYBACK,
   weaponFx: () => WEAPON_FX,
+  // The siege, for a harness that wants to drive a ten-wave run without
+  // playing one. siege() is the sim state; guards and towers are the bodies.
+  siege: () => (siegeRun ? { wave: siegeRun.wave, outcome: siegeRun.outcome, guards: siegeRun.guards } : null),
+  guards: () => guards,
+  towers: () => towers,
+  siegeBosses: () => siegeExtraBosses,
+  /**
+   * One hit on the boss holding the slot, through the real per-kind on-hit
+   * path -- not startBossDeath. killBoss skips straight to the death sequence
+   * and never consults hp, which is why the ten-wave run passed for months
+   * against a wave ten that could not actually be fought.
+   */
+  hitBoss(amount = 1) {
+    if (!boss || boss.bstate === 'dead') return null;
+    damageBoss(amount, boss.x - 40, boss.y, 'arrow', 0);
+    return { hp: boss.hp, bstate: boss.bstate };
+  },
+  /** What the siege's shared boss bar is showing, or null when none is up. */
+  siegeBossBar: () => siegeBossPool(),
+  // The flag five update functions bail on. Exposed because a death sequence
+  // that never finishes freezes the whole field, and that is invisible from
+  // outside unless something can look at it.
+  bossDeathSeq: () => bossDeathSeq,
+  /** Pins the retinue rolls. Pass null to hand it back to Math.random. */
+  setSiegeRng(fn) { siegeRng = fn ?? Math.random; },
+  /**
+   * Puts both maze keys in hand, so a harness can reach the door without
+   * playing the whole level. It grants the keys only — the locks still have to
+   * be walked onto, so what the door does is still exercised for real.
+   */
+  giveMazeKeys() { if (mazeRun) { mazeRun.held.silver = true; mazeRun.held.golden = true; } },
+  /**
+   * Kills one boss on the field the way play does, extras included.
+   *
+   * `which` picks the slot. 'primary' takes whoever holds it; 'extra' takes
+   * one from the extras list even while a live boss holds the slot, which is
+   * the order the field actually produces and the only one that reaches the
+   * handover's second half: tickSiegeBosses displaces the primary to tick an
+   * extra, so a LIVE boss is out of the slot when that extra dies and has to
+   * be given back. Killing the primary first never tests that -- the displaced
+   * boss is already dead by then, and dropping it changes nothing observable.
+   *
+   * Returns which one died, or null when there is no live boss left.
+   *
+   * This exists because clearSiegeWave() nulls `boss` and `siegeExtraBosses`
+   * outright. Every ladder test in the suite advanced that way, so ten waves
+   * were walked without a single boss ever dying -- which is how a boss death
+   * could freeze the field with the suite fully green.
+   */
+  killSiegeBoss(which = 'primary') {
+    const primaryLive = boss && boss.bstate !== 'dead';
+    const extra = siegeExtraBosses.find((b) => b && b.bstate !== 'dead');
+    if (extra && (which === 'extra' || !primaryLive)) {
+      const held = boss;
+      boss = extra;
+      startBossDeath();
+      seatSiegeBoss(extra, held);
+      return 'extra';
+    }
+    if (primaryLive) { startBossDeath(); return 'primary'; }
+    return null;
+  },
+  /** Wipes the field so a test can reach the next wave without fighting one. */
+  clearSiegeWave() { crows = []; skeletons = []; soldiers = []; boss = null; siegeExtraBosses = []; },
+  /**
+   * Fast-forwards a siege to the start of wave `n`, promoting and recruiting on
+   * the way exactly as clearing each wave would.
+   *
+   * It walks the real completeWave rather than assigning the number, so the
+   * retinue that arrives is the one ten cleared waves would actually have
+   * produced — ranks, recruits and all. Assigning siegeRun.wave directly would
+   * put you on wave 9 with two rank-0 guards, which is not a state the game can
+   * reach and therefore not worth looking at.
+   */
+  jumpToSiegeWave(n) {
+    if (!siegeRun) return null;
+    let guardStops = 0;
+    while (siegeRun.wave < n && siegeRun.outcome === 'running' && guardStops < 64) {
+      this.clearSiegeWave();
+      updateSiege(FIXED_DT);
+      guardStops++;
+    }
+    this.clearSiegeWave();
+    siegeSpawned = false;
+    updateSiege(FIXED_DT);
+    return { wave: siegeRun.wave, outcome: siegeRun.outcome, guards: siegeRun.guards.length };
+  },
+  /**
+   * Tops the hero back up.
+   *
+   * For a harness driving a long run in which the hero is not the subject.
+   * Nobody is holding the keys, so a hero left standing in a wave dies, and a
+   * test about whether the ladder completes would be measuring that instead --
+   * which is exactly how the ten-wave play-through first failed, on wave ten.
+   */
+  healHero() { playerHP = FEATHERS.maxHP(); return playerHP; },
+  /** Wounds every guard by n, never below 1, so the priest has work to do. */
+  hurtGuards(n = 1) {
+    for (const body of guards) body.guard.hp = Math.max(1, body.guard.hp - n);
+    return guards.map((b) => b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp);
+  },
+  /** Drops every tower to hp, to watch cover come off when it falls. */
+  hurtTowers(hp = 1) { for (const t of towers) t.hp = hp; return towers.map((t) => t.hp); },
   // The diagnostic log — see src/sim/log.ts. logs() is a snapshot, safe to
   // hold onto after the call; setLogLevel changes what future calls record,
   // it does not retroactively add or remove anything already in the ring.
@@ -10987,6 +12388,31 @@ export function boot() {
   // Pure classes exposed for the test harness in tests.html.
   window.CrowArcherInternals = { TILE, TileMap, PathScheduler, FovMap };
   window.__game = devHooks;
+
+  // Short console verbs, for looking at the bastion without playing to it.
+  //
+  // These exist because the useful sequence is three chained calls on
+  // `__game`, and every browser now blocks pasting into the console until you
+  // type "allow pasting" at it — so the long form has to be typed by hand,
+  // which nobody should have to do to look at a map. Each of these is one
+  // word and a number.
+  //
+  // Deliberately globals rather than more devHooks entries: a devHook is for a
+  // test, which can afford to be explicit, and these are for a person at a
+  // console who cannot.
+  window.siege = (wave = 1) => {
+    devHooks.setMode('siege');
+    devHooks.go('playing');
+    return devHooks.jumpToSiegeWave(wave);
+  };
+  window.hurt = (n = 1) => devHooks.hurtGuards(n);
+  window.crack = (hp = 1) => devHooks.hurtTowers(hp);
+  window.retinue = () => devHooks.guards().map(
+    (b) => (RANK_MARK[b.guard.rank] || '') + b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp,
+  );
+  // Printed once so the verbs are discoverable from the console itself rather
+  // than only from a document the player would have to already be reading.
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue()');
 
   FEATHERS.init();
   requestAnimationFrame(loop);

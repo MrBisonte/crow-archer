@@ -12,6 +12,11 @@ dist/
 # The server bundle is built by the image, not committed.
 dist-server/
 
+# Design scratch: render scripts and the PNGs they emit, for looking at sprite
+# work at 8x before it goes in. Deliberately not committed — they are a way of
+# checking the art, not the art itself, and the art lives in src/render.
+_design/
+
 # OS artifacts
 Thumbs.db
 .DS_Store
