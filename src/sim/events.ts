@@ -32,7 +32,12 @@ export type WeaponKind =
   | 'pitchfork'
   | 'spear'
   | 'javelin'
-  | 'charge';
+  | 'charge'
+  // The sapper's two. Both predate this union's last edit and were emitted
+  // without being listed, which type-checked only because game.js was not
+  // checked: WEAPON_FX carries a row for each, so the sound played anyway.
+  | 'barrage'
+  | 'sapperShot';
 
 export type PickupKind = 'ricochet' | 'fire' | 'shield';
 
@@ -58,7 +63,9 @@ export type GameEvent =
   | { type: 'BOSS_HIT'; source: HitSource }
   | { type: 'ARROW_MISS' }
   | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean }
+  // `big` is the sapper's shift-detonated combo, which reaches a wider
+  // radius than a normal blast and whose burst is scaled to match.
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean }
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
@@ -117,6 +124,19 @@ export type GameEvent =
   // Striking a torch in the dark. The only thing in the maze that gives sight
   // back, so it is the one beat that is relief rather than threat.
   | { type: 'TORCH_LIT'; x: number; y: number }
+  // The bastion. A siege is the only mode with anyone on the player's side, so
+  // these are the first events about a friendly body rather than a hostile one.
+  // GUARD_SWING and GUARD_SHOT are separate for the same reason MELEE_HIT and
+  // ICE_BOLT_FIRED are: one is a blade at arm's length, the other is an arrow
+  // leaving, and the render layer should not have to read a flag to find out.
+  | { type: 'GUARD_SWING'; x: number; y: number }
+  | { type: 'GUARD_SHOT'; x: number; y: number }
+  | { type: 'GUARD_DOWN'; x: number; y: number }
+  | { type: 'TOWER_SHOT'; x: number; y: number }
+  | { type: 'TOWER_FELL'; x: number; y: number }
+  // Carries the wave that was just survived, not the one about to start: the
+  // banner reads "wave 3 held", and the run has already advanced past it.
+  | { type: 'SIEGE_WAVE_CLEARED'; wave: number }
   // World
   // Emitted before the tile grid is replaced, so a render layer can swap theme
   // and let the reset repaint once rather than twice.

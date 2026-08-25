@@ -1,0 +1,22 @@
+{
+  // The legacy game runtime, type-checked at the loosest setting that still
+  // binds names. `src/legacy/game.js` predates the TypeScript half of the
+  // codebase and cannot meet the strict settings in tsconfig.json: under those
+  // it reports ~3900 errors, essentially all of them implicit-any and
+  // possibly-null noise from DOM calls. Checked this way it reports a handful,
+  // and TS2304 "Cannot find name" still fires, which is the class that matters
+  // here -- a function that was never defined type-checks fine as plain JS and
+  // crashes the moment the branch calling it runs.
+  //
+  // Tightening any of these is welcome; loosening them further is not, because
+  // `noImplicitAny` and `strict` are already off and there is nothing left to
+  // give up except the name binding this exists for.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "checkJs": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src/legacy/game.js", "src/legacy/globals.d.ts"]
+}

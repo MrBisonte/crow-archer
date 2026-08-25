@@ -25,7 +25,9 @@ Tech stack, dependencies and the framework decisions behind them. See the [READM
 Reference for every kind-tagged content system: what the tag is, which
 tables key off it, and what actually happens when a new value is added.
 Rationale and worked examples for *why* this shape was chosen live in
-[Design patterns](design-patterns.md#composition-over-inheritance-character-definition);
+[Design patterns](design-patterns.md#composition-over-inheritance-character-definition),
+and the case for one number per character rather than a column per boss in
+[One dial per character](design-patterns.md#one-dial-per-character-not-a-column-per-boss);
 this section is the flat data reference across every kind, not just
 character.
 
@@ -34,11 +36,12 @@ character.
 | Class | Kind type | Values today | Tables keyed on it | Cross-cuts |
 |---|---|---|---|---|
 | Character | `CharacterKind` | `archer \| wizard \| knight \| ranger \| sapper` | `PRIMARY`, `SILHOUETTES`, `PAINTERS`, `CHARACTER_STATS`, `CHARACTER_KEYS` | sim, render, net, ui |
-| Map | `MapKind` | `forest \| castle \| maze \| cavern` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
+| Map | `MapKind` | `forest \| castle \| maze \| cavern \| bastion` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
-| Skeleton (single-player) | plain string | `normal \| fire \| ice` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
-| Boss | plain string, **not tabled** | `crowking \| dark_archer \| dark_knight` | none (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
-| Weapon | implicit, via `PRIMARY` | `Bow \| Staff \| Spear \| Crossbow` | each implements the `Weapon` interface | sim, net |
+| Skeleton (single-player) | plain string | `normal \| fire \| ice \| rat` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
+| Boss | plain string, **HP tabled, behavior branched** | `crowking \| dark_archer \| dark_knight \| minotaur \| commander` | `BOSS_HP_KEY` (HP), `BOSS_ON_HIT`, `BOSS_HUNTS_WHILE_EXPLORING` (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
+| Guard (single-player) | `GuardKind` = `RecruitableGuardKind \| UniqueGuardKind` | `archer \| foot_soldier \| knight` + `priest` | `GUARD_STATS`, `GUARD_PALETTES`, `GUARD_GRID_BUILDERS`; `RECRUIT_WEIGHTS` keyed on the recruitable half only | sim, render |
+| Weapon | implicit, via `PRIMARY` | `Bow \| Staff \| Spear \| Crossbow \| PowderCharge` | each implements the `Weapon` interface | sim, net |
 
 Two systems only exist in `src/legacy/game.js` (skeletons, bosses): the
 castle stage's monster content is single-player-only today, with no
@@ -54,6 +57,7 @@ flowchart LR
     castle((castle))
     maze((maze))
     cavern((cavern))
+    bastion((bastion))
     next(("?, new")):::newKind
 
     subgraph GEN["MAP_GEN (one generator per tag)"]
@@ -61,6 +65,7 @@ flowchart LR
         gc["NoiseTerrain 0.5"]
         gm["MazeTerrain"]
         gv["CavernTerrain"]
+        gb["BastionTerrain"]
         g3["? generator"]:::newKind
     end
 
@@ -69,6 +74,7 @@ flowchart LR
         tc["castle painters"]
         tm["maze painters"]
         tv["cavern painters"]
+        tb["bastion painters"]
         t3["? painters"]:::newKind
     end
 
@@ -76,15 +82,17 @@ flowchart LR
     castle --> gc
     maze --> gm
     cavern --> gv
+    bastion --> gb
     next -.-> g3
     forest --> tf
     castle --> tc
     maze --> tm
     cavern --> tv
+    bastion --> tb
     next -.-> t3
 
-    gf & gc & gm & gv & g3 --> Terrain["Terrain.fromSeed(seed, mapKind)\nsrc/sim/arena-map.ts"]
-    tf & tc & tm & tv & t3 --> TileLayer["StaticTileLayer(painters)\nsrc/render/tiles.ts"]
+    gf & gc & gm & gv & gb & g3 --> Terrain["Terrain.fromSeed(seed, mapKind)\nsrc/sim/arena-map.ts"]
+    tf & tc & tm & tv & tb & t3 --> TileLayer["StaticTileLayer(painters)\nsrc/render/tiles.ts"]
     Terrain --> Sim["sim: passability, spawn points"]
     TileLayer --> Render["render: what a tile looks like"]
 ```
@@ -103,21 +111,32 @@ at two settings; the maze is carved and the cavern is grown. See
 One table is not keyed on `MapKind` and is worth knowing about:
 `MAP_PANEL_INFO` in `src/legacy/game.js` holds only the presentation of the
 Waves map-select panels, and *membership* of that screen is derived from
-`MAP_RULES[kind].crows` rather than listed. A map earns a panel by having
-crows. `MAP_PANELS` throws at load if a map earns one and has no
-presentation row, so the half that cannot be derived fails early instead of
-drawing blank.
+`runsWaves(kind)` rather than listed. A map earns a panel by fielding a
+population that escalates on the wave timer, which is not the same thing as
+having crows: `MAP_RULES[kind].population` is one of `crows`, `soldiers`,
+`scripted` or `siege`, and only the first two run waves. The last two are
+distinct rather than folded together because a scripted map has no wave count
+at all while a siege has exactly ten. `MAP_PANELS` throws at load if
+a map earns one and has no presentation row, so the half that cannot be
+derived fails early instead of drawing blank.
 
 ### Map selection: where the free choice actually lives
 
 **Decision (2026-08-21):** map is a real, player-facing choice in exactly
 two places. Everywhere else it is fixed. Logged as ROADMAP.md decision 9.
 
+**Still two, after the bastion (2026-08-24).** Siege mode adds a third
+*context* but not a third free choice: its map is fixed, because a siege is a
+place rather than a setting — the towers, the barrier and the corridor are the
+mode, so offering it on the forest would be offering a different game under the
+same name. The decision holds as written.
+
 | Context | Map choice | Mechanism |
 |---|---|---|
 | Multiplayer lobby | **Free**, host-selected | `SET_MAP` → `Room.setMap()` → `MATCH_START` |
-| Single-player, Waves mode | **Free**, player-selected | mapselect screen (`MAP_PANELS`, filtered from `MAP_RULES.crows`) → `selectedMapKind` → `initGame()` |
-| Single-player, Brawl mode | **Fixed** | `generateMap('castle')` fires once, hardcoded inside `updateBossDeath()` when the Crow King dies: a story beat, not a menu |
+| Single-player, Waves mode | **Free**, player-selected | mapselect screen (`MAP_PANELS`, filtered by `runsWaves`) → `selectedMapKind` → `initGame()` |
+| Single-player, Brawl mode | **Fixed** | `generateMap('castle')` when the Crow King dies, `'maze'` when the Dark Knight does, `'bastion'` through the maze door: story beats, not a menu |
+| Single-player, Siege mode | **Fixed** | `MODE_RULES.siege.fixedMap` is `'bastion'`, read by `initGame()`; the mapselect screen is skipped because it has nothing to ask |
 
 ```mermaid
 sequenceDiagram
@@ -137,38 +156,86 @@ sequenceDiagram
     Match->>Match: StaticTileLayer(TILE_THEMES[mapKind])
 ```
 
-Single-player's `gameMode` (`'brawl' | 'waves'`, `src/legacy/game.js:337`)
-is a different, older concept from multiplayer's `GameMode`
-(`'coop' | 'deathmatch'`, `src/net/protocol.ts:72`). Same name, unrelated
-values, picked at the main menu, not per-match. Worth not confusing the two
-when this gets built.
+Single-player's mode (`SinglePlayerMode`, `'brawl' | 'waves' | 'siege'`, in
+`src/sim/game-mode.ts`) is a different, older concept from multiplayer's
+`GameMode` (`'coop' | 'deathmatch'`, `src/net/protocol.ts`). Same word,
+unrelated values, picked at the main menu rather than per match. It was a bare
+string compared in eleven places inside the monolith until it became
+`MODE_RULES`; the rename to `SinglePlayerMode` is there so the two stop being
+confusable by name alone.
 
 ### Boss: the deliberate exception
 
-`boss.kind` (`'crowking' | 'dark_archer' | 'dark_knight'`,
-`src/legacy/game.js`) is plain string branching, not a `Record<Kind, X>`
-table. That's the same call `GameMode` makes over `CharacterKind`, and the
-right one here too: exactly three bosses, ever, each with genuinely
-divergent behavior (shield-window mechanic vs. none, orbit vs. charge
-tuning, different secondary attacks) rather than a shared data shape a
-table could hold. A table earns its keep when new rows are mostly data;
-bosses here are mostly algorithm.
+`boss.kind` (`'crowking' | 'dark_archer' | 'dark_knight' | 'minotaur' |
+'commander'`, `src/legacy/game.js`) is a plain string with five values, and
+what keys off it is split by field, not by kind.
+
+| Field | Where it lives | What a row is |
+|---|---|---|
+| HP | `BOSS_HP_KEY` | one CONFIG key per boss, the same pool whoever is fighting it |
+| What a landed hit does | `BOSS_ON_HIT` | one function per kind |
+| Alive outside a boss fight | `BOSS_HUNTS_WHILE_EXPLORING` | one flag per kind |
+| Shield window, orbit vs. charge tuning, secondary attacks | branched, no table | no row: genuinely divergent algorithm, not a shared data shape a table could hold |
+
+A table earns its keep when new rows are mostly data, and a boss is mostly
+algorithm, which is the same call `GameMode` makes over `CharacterKind`. The
+two behavior tables are not a counter-example: a row holds a function or a
+flag that selects one, so they are that branch written out per kind, which
+makes a fifth boss answer the question rather than inherit whichever answer
+an `if` happened to give it.
+
+HP is the one field that failed the test the other way. It used to be twelve
+hand-tuned numbers, four bosses times three named characters, read by a
+ternary on `selectedChar`; it is one pool per boss now, scaled by one
+`bossDamageMult` per character, so the two axes add instead of multiplying.
+Same test, applied per field rather than per kind. See
+[One dial per character](design-patterns.md#one-dial-per-character-not-a-column-per-boss)
+for the decision and [Balance](balance.md#boss-health) for the numbers.
+
+The minotaur is why the split is worth naming, and the siege sharpened it. In
+the maze `bossHpFor` answers `Infinity` for him and a hit buys a stun rather
+than damage — he is that level's pressure, not its objective. A siege fields
+him inside wave ten, where a wave cannot clear until every boss in it is
+dead, so there he reads a real pool (`keeperHP`) and the same hit both stuns
+and wounds. One kind, two answers, chosen by the run rather than by the tag.
+
+None of these are `Record`s the compiler checks, so a stage added without a
+row in each is `undefined` at the call site rather than a build failure, and
+the three call sites fail three different ways: a missing `BOSS_ON_HIT` row
+throws `TypeError` on the first hit that lands, a missing
+`BOSS_HUNTS_WHILE_EXPLORING` row reads as `false`, and a missing
+`BOSS_HP_KEY` row spawns a boss on `undefined` health. The commander shipped
+missing two of the three. A loop over `BOSS_STAGES` now refuses to load
+without a row in every table, which is the same guard `MAP_PANELS` and
+`CHAR_PANELS` already run for the half of their data that cannot be derived.
 
 ### Data structures (verified against current code)
 
 ```ts
+// src/net/protocol.ts
+type CharacterKind = 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper'
+
+// src/sim/arena.ts
+interface CharacterStats { speed: number; maxHp: number; bossDamageMult: number }
+const CHARACTER_STATS: Record<CharacterKind, CharacterStats>
+// rows are no longer identical; the figures are in docs/balance.md
+
 // src/sim/arena-map.ts
-type MapKind = 'forest' | 'castle' | 'maze' | 'cavern'
+type MapKind = 'forest' | 'castle' | 'maze' | 'cavern' | 'bastion'
 const MAP_GEN: Record<MapKind, MapGenerator>
 const MAP_RULES: Record<MapKind, {
-  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean
+  destructibleTerrain: boolean; fogOfWar: boolean; population: MapPopulation
+  enemySpeed: number
 }>
+type MapPopulation = 'crows' | 'soldiers' | 'scripted' | 'siege'
+const runsWaves: (kind: MapKind) => boolean
 
 // src/sim/map-generators.ts
 interface MapGenerator { generate(rows, cols, rng, noise): TileGrid }
-class NoiseTerrain  // thresholded noise: forest, castle
-class MazeTerrain   // recursive backtracker, braided
-class CavernTerrain // cellular automata, then joined into one region
+class NoiseTerrain   // thresholded noise: forest, castle
+class MazeTerrain    // recursive backtracker, braided
+class CavernTerrain  // cellular automata, then joined into one region
+class BastionTerrain // fixed layout, seeded scatter, reserved skeleton
 
 // src/render/tiles.ts
 const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>>
@@ -190,10 +257,29 @@ const tilePassable = (t: TileId) =>
 // src/sim/regrowth.ts
 class Regrowth  // ash -> sapling -> tree, on destructibleTerrain maps only
 
+// src/sim/game-mode.ts
+type SinglePlayerMode = 'brawl' | 'waves' | 'siege'
+const MODE_RULES: Record<SinglePlayerMode, ModeRule>
+
+// src/sim/siege-run.ts, siege-waves.ts, guards.ts, towers.ts, bestiary.ts
+type SiegeOutcome = 'running' | 'won' | 'lost'
+type RecruitableGuardKind = 'archer' | 'foot_soldier' | 'knight'
+type UniqueGuardKind = 'priest'
+type GuardKind = RecruitableGuardKind | UniqueGuardKind
+const RECRUIT_WEIGHTS: Record<RecruitableGuardKind, number>  // a priest cannot have one
+const GUARD_STATS: Record<GuardKind, GuardStats>
+const SIEGE_WAVE_COUNT = 10
+const TOWER_MAX_HP = 20, TOWER_SPAN = 2, TOWER_DAMAGE = 2
+const BESTIARY: Record<EnemyKind, EnemyEntry>  // 9 critters, 5 bosses
+
 // src/legacy/game.js: single-player only, not compiler-checked
-let gameMode: 'brawl' | 'waves'
-const SKELETON_PALETTES: Record<'normal' | 'fire' | 'ice', Palette>
-// boss.kind: 'crowking' | 'dark_archer' | 'dark_knight' (branched, not tabled)
+let gameMode  // a SinglePlayerMode string; every rule read via MODE_RULES
+const SKELETON_PALETTES: Record<'normal' | 'fire' | 'ice' | 'rat', Palette>
+// boss.kind is a plain string; BossKind is this block's name for its five values
+type BossKind = 'crowking' | 'dark_archer' | 'dark_knight' | 'minotaur' | 'commander'
+const BOSS_HP_KEY: Record<Exclude<BossKind, 'minotaur'>, string>  // kind -> CONFIG key
+const BOSS_ON_HIT: Record<BossKind, (amount: number) => void>
+const BOSS_HUNTS_WHILE_EXPLORING: Record<BossKind, boolean>
 ```
 
 `CharacterKind` and its five tables are the most complete instance of this
@@ -220,7 +306,11 @@ alternative, in
   `Record`; pickups have a third kind, `'ricochet'`, that the multiplayer
   `PickupKind` doesn't). Where the two diverge it's deliberate: PvE and
   PvP numbers are tuned separately. It means "add a kind" is two separate
-  edits today, not one.
+  edits today, not one. `CHARACTER_STATS` now carries that seam inside one
+  table: `BattleWorld` reads `speed` and `maxHp` out of it, so the roster's
+  bodies really are shared, while `bossDamageMult` in the same row is read
+  only by `src/legacy/game.js`, because multiplayer has no bosses. The field
+  name carries its own scope. See [Balance](balance.md#multiplayer).
 
 ## Netcode
 
@@ -239,10 +329,14 @@ Two npm packages, bundled into the build. The ZzFX-compatible synth is written i
 | [simplex-noise](https://github.com/jwagner/simplex-noise.js) | 2.4.0 | Coherent 2-D noise for terrain, independent layers for rocks, water and forest so tiles cluster naturally | [MIT](https://github.com/jwagner/simplex-noise.js/blob/main/LICENSE) |
 | [rot.js](https://github.com/ondras/rot.js) | 2.2.1 | `FOV.PreciseShadowcasting` for crow line-of-sight, `Path.AStar` so aggro crows path around obstacles | [BSD-2-Clause](https://github.com/ondras/rot.js/blob/master/license.txt) |
 
-Sound comes from a small synth in `src/legacy/game.js` that reads [ZzFX](https://github.com/KilledByAPixel/ZzFX)-style positional parameter arrays. It is a partial reimplementation rather than the upstream library ([MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE)): the envelope has no decay stage, shapes 4 and 5 are noise instead of ZzFX's waveforms, and seven parameters are accepted but ignored. Every sound was tuned against this implementation, so arrays copied from the ZzFX designer will not sound the same.
+Sound comes from a small synth in `src/legacy/game.js` that reads [ZzFX](https://github.com/KilledByAPixel/ZzFX)-style positional parameter arrays. It is a partial reimplementation rather than the upstream library ([MIT](https://github.com/KilledByAPixel/ZzFX/blob/master/LICENSE)): the envelope has no decay stage, shapes 4 and 5 are noise instead of ZzFX's waveforms, and seven parameters are accepted but ignored. Every sound was tuned against this implementation, so arrays copied from the ZzFX designer will not sound the same. Those two noise shapes never read the oscillator phase either, so on a noise sound the pitch half of the layout — including `randomness`, the field a repeated sound would otherwise vary through — is computed and discarded.
+
+A sound is therefore varied where every shape can hear it: `playSound` nudges volume, frequency and release per play, inside `CONFIG.soundVariation` and clamped so a tunable cannot turn texture into a new sound each time. Sounds the player learns by ear — the UI's answers, a boss's signature — opt out by playback kind rather than by a flag at the call site. See `src/render/sound-variation.ts`.
 
 ## See also
 
 - [Design patterns](design-patterns.md): composition over inheritance for character definitions
-- [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it
+- [Balance](balance.md): what every character and every boss is worth, and the one rule relating them
+- [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it. Historical — written before the maze existed
+- [Level 5: the bastion](level-5-bastion.md): the siege map, its retinue and its ladder, and why the whole feature gates on the map rather than the mode
 - [Design system](../.design-system/README.md): draw specs in pixels and hex, live preview cards, a playable UI kit demo

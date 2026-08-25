@@ -13,7 +13,7 @@
  * types later with no change here.
  */
 
-import type { MapKind } from '../sim/arena-map';
+import { MAP_KINDS, type MapKind } from '../sim/arena-map';
 import { Button, type InputCommand } from '../sim/input';
 import { Team } from '../sim/team';
 
@@ -397,24 +397,12 @@ const isArrayOf = <T>(v: unknown, item: (x: unknown) => x is T): v is T[] =>
 export const CHARACTERS: readonly CharacterKind[] = ['archer', 'wizard', 'knight', 'ranger', 'sapper'];
 const MODES: readonly GameMode[] = ['coop', 'deathmatch'];
 
-/**
- * Every map the wire will accept, and the reason it is `as const` rather than
- * `readonly MapKind[]` like its neighbours above.
- *
- * A validator that omits a kind does not fail: it rejects that map at the room
- * boundary, so the host picks it, the server refuses SET_MAP, and the lobby
- * silently keeps the old one. Annotating the array as `readonly MapKind[]`
- * cannot catch that, because a short list is still a valid list of MapKinds.
- * Widening it to the literals lets `Exhaustive` below turn a forgotten map
- * into a build failure instead.
- */
-const MAPS = ['forest', 'castle', 'maze', 'cavern'] as const satisfies readonly MapKind[];
-
-/** Resolves only when `T` is `never`, so naming a non-never type fails to compile. */
-type Exhaustive<T extends never> = T;
-
-/** Fails the build listing the maps MAPS forgot. Erased at runtime. */
-export type EveryMapIsValidated = Exhaustive<Exclude<MapKind, (typeof MAPS)[number]>>;
+// The wire accepts exactly the kinds the game defines, validated against the
+// one list in arena-map.ts. This used to be a second literal array here, kept
+// honest by its own exhaustiveness guard; the guard moved with the list. A
+// validator that omits a kind still fails silently -- the host picks the map,
+// the server refuses SET_MAP, and the lobby keeps the old one -- which is
+// precisely why neither the list nor the guard should be duplicated.
 const ERROR_CODES: readonly ErrorCode[] = [
   'VERSION_MISMATCH',
   'BAD_MESSAGE',
@@ -444,7 +432,7 @@ const isCharacter = (v: unknown): v is CharacterKind => isOneOf(CHARACTERS, v);
 
 const isMode = (v: unknown): v is GameMode => isOneOf(MODES, v);
 
-const isMapKind = (v: unknown): v is MapKind => isOneOf(MAPS, v);
+const isMapKind = (v: unknown): v is MapKind => isOneOf(MAP_KINDS, v);
 
 const isErrorCode = (v: unknown): v is ErrorCode => isOneOf(ERROR_CODES, v);
 

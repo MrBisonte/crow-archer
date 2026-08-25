@@ -387,8 +387,9 @@ wall only ever adds connections.
 
 **The fourth piece is the one that needs design work.** `damageBoss` routes
 every hit through `applyBossDamage`, which calls `startBossDeath()` at zero HP
-(`src/legacy/game.js:2421`). An unkillable boss has no HP row for
-`BOSS_HP_KEYS` to hold and no death sequence to run.
+(`src/legacy/game.js:2421`). An unkillable boss has no death sequence to run. He does carry a
+`BOSS_HP_KEY` row now, but `bossHpFor` answers `Infinity` unless a siege is
+running, so in the maze nothing can spend it.
 
 This is where `boss.kind`'s branch stops paying.
 [architecture.md](architecture.md#boss-the-deliberate-exception) justified

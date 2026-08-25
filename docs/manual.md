@@ -6,26 +6,39 @@ Full mechanics reference. See the [README](../README.md) for the quick start.
 - [Game loop](#game-loop)
 - [Systems](#systems)
 - [Map](#map)
+- [The bastion](#the-bastion)
 - [Bosses](#bosses)
 - [Multiplayer](#multiplayer)
 
 ## Characters
 
+Five heroes, and five different bodies: they no longer share one health bar and
+one walking speed. Each entry opens with what that body is worth, and with how
+hard the character hits a boss next to the rest of the roster. Those two figures
+are the base the FEATHERS upgrades stack on rather than the final number, so a
+knight who has bought the health axis stays a point ahead of an archer who has
+bought the same levels. [Balance](balance.md) carries the full table and the
+reasoning behind every figure in it.
+
 ### Archer
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
-- **Primary:** Arrows, quiver of 10, refilled by pickups
+- **Body:** 9 health, 200 px/s. The middle of the roster on both counts, and the row the other four are read against
+- **Against a boss:** the smallest hit per press on the roster. Roughly seven arrows take the Crow King down, the longest count of anyone, paid for by never once needing to be near him
+- **Primary:** Arrows, quiver of 16, refilled by pickups
 - **Special:** Dynamite, hold to charge, release to throw, blast clears tiles and damages the boss
 - **Power shot (hold Shift):** Draws the bow, rooted while he holds it, for up to 1 s. Releasing looses one arrow that pierces up to 3 bodies, flies at up to twice the usual 500 px/s, and hits a boss for up to 3x a plain arrow. A tap gets the bottom of every one of those ranges, so the question the key asks is how long to stand still. 5 s cooldown. It spends one unit of whatever ammo is queued, so a fully drawn fire arrow still burns, and it ignores the in-flight cap
 - **Pickups:** Ricochet arrows (bounce off walls with a speed boost), fire arrows (leave burning patches)
 
 ### Wizard
 Teleguided magic with area control.
-- **Primary:** Magic bolts, 3 s cooldown, home toward the nearest enemy, disappear on contact
+- **Body:** 7 health, 175 px/s. The least health on the roster and slower than everyone but the knight, so there is nothing to absorb a mistake and nothing to outrun one either
+- **Against a boss:** the hardest hit in the game by a wide margin. Four bolts take the Crow King down, fewer than anyone else needs. Hitting hardest and dying fastest is the whole of the character
+- **Primary:** Magic bolts, 1.2 s cooldown, home toward the nearest enemy, disappear on contact
 - **Blink (tap Shift):** Steps 160 px down the aim line, instantly, and ignores damage for 0.3 s on arrival. 6 s cooldown. It never crosses a wall: it walks the aim in short steps and stops at the last point the body fits, so it closes on cover rather than passing through it. A blink with nowhere to go is refused outright and costs no cooldown
 - **Blink chain:** Tap Shift again within 1.1 s of the first hop and the second one is free, ignoring the cooldown the first started. Two hops is the cap. The window is the only thing that carries it: let it lapse and you are back to waiting out the 6 s. A hop with nowhere to go is refused without spending the chain, so a wall in front of you costs nothing but the press
 - **Arrival pulse:** Every hop lets off a 56 px pulse where it lands, killing what is in it and taking 1 off a boss. A ring is drawn at exactly the radius the damage used, so what you see is a report of what was hit rather than a decoration
 - **Special:** Lightning Storm, 450 px AoE around the player, destroys ROCK, TREE and HUT tiles, damages all enemies
-- **Pickups:** Fire bolt (2x damage), laser stream (passes through walls, stops on the first enemy)
+- **Pickups:** Fire bolt (3 damage against a plain bolt's 1), laser stream (same 3 damage, passes through walls, stops on the first enemy)
 
 The wizard has no sniper mode. Bolts steer themselves onto a target after they
 are cast, so a tighter angle at the moment of casting buys almost nothing while
@@ -34,16 +47,20 @@ knight his charge on the same key.
 
 ### Knight
 Frontline melee with a long spear.
-- **Primary:** Spear thrust, 80 px reach along the aim line, 1.5 s cooldown, 1 damage to boss
-- **Charge (hold Shift):** Winds up in place for up to 3 s, taking no damage while he holds it. Releasing sends him forward at half speed for 1.5 s, sweeping a 45 degree arc 90 px in front. Anything caught in the arc dies outright; the boss takes 1.3x the spear's damage on an instant release, up to 2x at a full hold, once per charge. The invulnerability ends the moment he starts moving. 4 s cooldown
+- **Body:** 12 health, 150 px/s. The most health and the least speed on the roster, and the two go together: he is the only hero who has to be in contact to do anything at all, so he is the only one who cannot answer a bad position by leaving it
+- **Against a boss:** the hardest single action in the game. The thrust lands twice and he hits well above the baseline, so one swing is worth three and the Crow King goes down in three and a bit of them. That is the shortest fight on paper and the longest in practice, because every swing needs him inside 80 px of something that orbits and charges
+- **Primary:** Spear thrust, 80 px reach along the aim line, 1.0 s cooldown, 1 damage to a boss and it lands twice per swing
+- **Charge (hold Shift):** Winds up in place for up to 3 s, taking no damage while he holds it. Releasing sends him forward at half speed for 1.5 s, sweeping a 45 degree arc 90 px in front. Anything caught in the arc dies outright; the boss takes 2.6 on an instant release, up to 4 at a full hold, once per charge. That is the charge's own damage figure and it does not scale off the spear's. The invulnerability ends the moment he starts moving. 4 s cooldown
 - **Charge chain (tap Shift again):** Within 1.1 s of releasing, and with room left ahead, a second tap commits him harder: the dash goes from half speed to a little over walking pace for the rest of its run, and he lands one whirlwind swing, 60 px, where he is standing. Once per dash. He cannot steer with it — the angle was fixed at release and stays fixed — so the chain buys speed along a line already chosen, not a new one
 - **Special:** Block, passive with no keybind. Banks one absorbed hit, then recharges 10 s after that hit is spent
-- **Tool:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 8 s cooldown
+- **Tool:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 6 s cooldown
 - **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup), Fire Sword (2x damage and range for 8 s, leaves burning patches)
 
 ### Ranger
 Skirmisher with a rapid-fire crossbow.
-- **Primary:** Crossbow, same quiver of 10 as the archer's. One press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
+- **Body:** 8 health, 250 px/s. The fastest body in the game and the second-thinnest, so distance is the only defence he has and he is very good at keeping it
+- **Against a boss:** the only hero who lands for less than a plain weapon's worth, bolt for bolt. The volley is his unit of damage rather than the bolt, and six volleys take the Crow King down
+- **Primary:** Crossbow, same quiver as the archer's. One press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
 - **Net (hold Shift):** Draws and throws a weighted net. Drawing longer throws it further (120 to 320 px), opens it wider (34 to 70 px radius) and holds longer (0.8 to 2 s), all off the one draw, so a full one is a committed choice. He is not rooted while he draws it. 10 s cooldown
   - It deals 0.9 damage, and that number is the point: a fresh crow, skeleton or rat has exactly 1 hit point, so the net never kills what it catches. It leaves them on a sliver and holds them still. Anything already netted dies to the next scratch
   - Everything under it is caught, not just the first thing. A caught enemy stops moving and deciding entirely; it still bleeds and still burns
@@ -54,9 +71,15 @@ Skirmisher with a rapid-fire crossbow.
 
 ### Sapper
 Demolition. The only hero whose opening move is thrown at a place rather than at a person.
-- **Primary:** Powder charge, 1.1 s cooldown. The archer's own throw, uncharged: it bounces off cover, runs a 1.5 s fuse, and blows up where it stops. The blast damages everything in radius and clears ROCK, TREE and HUT tiles
-- **Ammo:** none. Charges are made on the spot, so the cooldown is the whole limit and there is no quiver to run dry, no pickup to chase, and no pitchfork fallback
-- **Special:** none, deliberately. The primary is already the explosive
+- **Body:** 9 health, 200 px/s. The archer's body exactly, health and speed both. The two of them differ only in what they throw, which is what makes them the pair the rest of the roster is measured against
+- **Against a boss:** a charge is worth twice what an arrow is before anything scales it, so about four of them take the Crow King down. Only the knight and the wizard finish him faster, and the sapper pays for that place with a reach that ends where the blast does
+- **Primary:** Powder charge, 1.1 s cooldown, thrown out of a pouch of ten. It bounces off cover the way the archer's dynamite does, but leaves the hand faster, 400 px/s against 336, and runs a longer fuse, 1.8 s against 1.5, so the same throw reaches further before it goes off. The blast damages everything in radius and clears ROCK, TREE and HUT tiles
+- **Ammo:** ten bombs, in a pouch that refills one at a time. Every pickup is worth a single bomb back, up to that same ten, so there is a supply to watch as well as a cooldown. Fire and ice bombs are spent before plain ones. Run all three dry and he swings the pitchfork, the same fallback the archer and ranger get on an empty quiver
+- **Special:** Barrage, five mini-bombs thrown at once across a 45 degree fan in front of him, 6 s cooldown. Each is its own blast at 40 px, against the charge's 90, and each goes off on the first thing it touches rather than counting down a fuse. A miss still goes off when its own 0.9 s runs out, so a barrage into open ground reads as five blasts rather than five bombs leaving the screen
+- **Combo shot (tap Shift):** One fast dart, 600 px/s for 1.5 s, straight, no bounce, and gone on the first thing it touches. Landed on an enemy it deals 3 where a plain arrow deals 1, and the same 3 against a boss. 10 s cooldown
+  - It checks his own bombs still in the air before it checks enemies, so catching one sets that bomb off early instead of flying past it. The early blast is wider, 1.33x the usual radius, and its damage is scaled from 10x at the centre down to 2x at the rim
+  - Threading the dart through whatever stands between him and his own charge is what the 10 s buys. It is the shot the ability exists for, not a way of wasting it
+- **Pickups:** Fire bombs, which leave the ground burning for 1.5 s where the blast went off, and ice bombs, which deal 1 to everything caught and hold it still for 1.5 s. Three of either per pickup, out of the same two slots that hand the archer his fire and ricochet arrows
 - **Reticle:** the only one that shows an area — a dashed ring at the blast radius, so you can see what the charge will reach and how near that is to your own feet
 
 ## Game loop
@@ -79,6 +102,8 @@ flowchart LR
     DA --> DK[Dark Knight entrance and fight]
     DK --> M[Maze: the Minotaur's lair]
     M --> W[Walk out the door]
+    W --> B[Bastion: hold ten waves with a retinue]
+    B --> V[Win]
 ```
 
 Crow King shield phases:
@@ -118,8 +143,11 @@ moving between them. Four torches are hidden in the level. Press **E** on one
 and it lights permanently, tripling sight to twelve tiles. The first torch is
 the whole upgrade, so the others are for reading the map, not for stacking.
 
-The **Minotaur** cannot be killed. Hitting him stuns him, which buys you
-distance and never progress. He hunts you the whole level, charges when he sees
+The **Minotaur** cannot be killed *in the maze*. Hitting him stuns him, which
+buys you distance and never progress. The bastion is the exception: there he is
+one enemy inside a wave rather than the level's pressure, so he has a health
+pool like anyone else and hits take it down — the stun still lands as well.
+He hunts you the whole level, charges when he sees
 you down a corridor, and smashes the wall he ends against. Maze walls are
 otherwise indestructible: dynamite, Lightning Storm and Whirlwind still damage
 what is in radius, they just do not open the level up.
@@ -173,24 +201,45 @@ flowchart LR
 
 ## Map
 
-- 33 x 21 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT)
+- 33 x 21 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT, SAPLING)
 - Player spawns in a guaranteed clear zone, crows enter from the right corridor
 - Trees burn to ash on boss arrival, opening the arena
-- Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles permanently
-- Two themes, forest and castle. Same tile grid and the same rules (ROCK
-  still blocks shots and movement, WATER still stops you but not arrows),
-  different art: stone floor and walls, pillars instead of boulders and
-  trees. Single-player's castle stage always uses it; multiplayer's host
-  picks either one for the match
+- Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles.
+  On maps that allow it, ash grows back through SAPLING into TREE; the maze
+  allows none of it, and nothing there can be broken at all
+- **Five maps**, sharing the tile grid and its rules (ROCK still blocks shots
+  and movement, WATER still stops you but not arrows), differing in art,
+  generator and who lives there:
+
+| Map | Ground | Lives there | Terrain |
+|---|---|---|---|
+| **Forest** | Thresholded noise, scattered cover | Crows | Breakable, grows back |
+| **Castle** | The same noise, denser, reading as pillars | Crows, then the skeleton gauntlet | Breakable, grows back |
+| **Maze** | Recursive backtracker, braided into loops | A scripted rat pack and the Minotaur | **Unbreakable**, and fogged |
+| **Cavern** | Cellular automata grown into chambers | A soldier garrison and its commander | Breakable, grows back |
+| **Bastion** | Two shooting towers behind a stone barrier, open ground between | Ten waves of everything, and your own retinue | Breakable, grows back |
+
+- Where you get to choose is deliberately narrow. The multiplayer host picks
+  any of the five (**G** forest, **V** castle, **Z** maze, **B** cavern,
+  **N** bastion).
+  Single-player's Waves mode picks among the maps that field an escalating
+  population (**F** forest, **C** castle, **V** cavern); the maze is absent
+  because its population is scripted, so a Waves run there would have two win
+  conditions and mean neither. Brawl's maps are fixed story beats, not a menu
 
 ## Bosses
 
-| | Movement | Attack | Shield |
-|---|---|---|---|
-| **Crow King** | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
-| **Dark Archer** | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
-| **Dark Knight** | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
-| **Minotaur** | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None, and no HP: hits stun him instead of hurting him |
+| | Health | Movement | Attack | Shield |
+|---|---|---|---|---|
+| **Crow King** | 10 | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
+| **Dark Archer** | 12 | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
+| **Dark Knight** | 16 | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
+| **Minotaur** | none in the maze, 20 in the bastion | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None; in the maze hits only stun him, in the bastion they stun *and* wound |
+
+Each of those is one pool, the same number whoever walks in. A boss no longer
+carries a separate health bar for the wizard, another for the knight and a
+third for everyone else: what differs between characters is how hard they hit,
+not how much boss there is to get through. See [Balance](balance.md#boss-health).
 
 The two dark bosses are corrupted echoes of the Archer and the Knight: the
 archer's silhouette keeps a bow drawn on you, the knight's keeps a spear that
@@ -205,7 +254,7 @@ Every match uses a fresh generated map built on both machines from the four-byte
 
 Everyone starts behind a **shield**, which absorbs one hit of any size and comes back when you respawn. Any hit also grants a third of a second of immunity, so a volley cannot delete you and a spear cannot count as five hits.
 
-Every character carries their own second weapon, in any mode. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. The **sapper** is the exception and carries nothing at all on the second button: a powder charge is already what the primary throws, so a second explosive would be the same press twice. The wizard's **Lightning Storm** and the knight's **Whirlwind** land instantly and over a 3-second channel respectively, hit everyone in range at once, and clear rock, trees and huts the way an explosion does. Both are cut down from their single-player radius, since a duel is not a boss fight and neither should be able to catch the whole arena in one press.
+Every character carries their own second weapon. **Dynamite** is the archer's: four sticks, a 1.5 second fuse, and it never catches you or your team. The **satchel** is the ranger's: thrown inert with one click, armed by a second click that starts a three-second countdown, and the ranger's own bolt sets it off on contact whether it is armed yet or not. The **sapper** is the exception and carries nothing at all on the second button here: his barrage is single-player only, and handing him dynamite instead would be his own primary on another button. The wizard's **Lightning Storm** and the knight's **Whirlwind** land instantly and over a 3-second channel respectively, hit everyone in range at once, and clear rock, trees and huts the way an explosion does. Both are cut down from their single-player radius, since a duel is not a boss fight and neither should be able to catch the whole arena in one press.
 
 Every fifteen seconds or so a **crow** drifts across. It dies to one hit and drops a powerup where it falls: a replacement shield, or fire that doubles your damage for eight seconds.
 
@@ -267,3 +316,70 @@ Fly over Railway on cost, decided against a €20/month ceiling: this game is ba
 Both on one network: run `npm run server` and `npm run build`, serve the repo, and the others open `http://<your-lan-ip>:8082`. The page and the socket come from the same place, so nothing needs configuring.
 
 Otherwise a tunnel to `localhost:8082` gives a public HTTPS URL without deploying. That publishes the port on the machine running it for as long as it is open, so close it when the game ends.
+
+## The bastion
+
+The fifth map, and two ways in: **S** on the title screen for a standalone
+siege, or through the maze door, which is now the campaign's last stage rather
+than its ending.
+
+Two towers stand behind two courses of stone at your end of the arena. Ten
+waves come down the corridor at the other end. You are not alone.
+
+The towers are not scenery. Each one shoots at whatever comes into its reach,
+further than any of your guards can and harder than any of their arrows — and
+each one stops shooting the moment it is battered down.
+
+### The retinue
+
+You start with **three**: two guards rolled at random, and the priest, who is
+always there. You gain **one more guard after every wave you survive**, and
+which kind arrives is rolled:
+
+| Guard | HP | Damage | How often | Fights by |
+|---|---|---|---|---|
+| Archer | 1 | 1x | 40% | Shooting, from a long way off |
+| Foot soldier | 3 | 1x | 40% | Shield and sword, up close |
+| Knight | 2 | 2x | 20% | Charging what it can reach |
+| Priest | 2 | none | never rolled | Healing, and never fighting |
+
+**A guard that survives a wave is promoted**, up to three times, and wears its
+rank as gold pips: `*`, then `**`, then `***`. The first two ranks are +1 hp
+each and the third is +1 damage. A senior foot soldier ends up at 5 hp and 2
+damage — a knight's damage on more than twice a knight's body, and the reason
+keeping one alive is worth doing.
+
+**One priest joins at the opening and is never replaced.** It heals the hurt
+ally nearest it, and once per wave — when two of the allies around it are hurt —
+it sweeps a +3 heal over all of them, itself included. That charge comes back
+only when you clear a wave, never on a timer. It carries no weapon at all and
+deals no damage at any rank. If it dies, you finish the siege without one — it
+is the only guard the recruit roll will never hand you.
+
+Knights do not promote: they are rare and already doubled on both counts. The
+priest does, on its own ladder — the same two +1 hp steps, and a third that
+adds +1 to its healing where a fighter would get damage. A senior priest is 4
+hp and heals 2.
+
+Guards do not heal between waves. Promotion is the only way one gets stronger,
+which is what makes the difference between a retinue you protected and one you
+spent.
+
+### The waves
+
+Ten, and they empty the whole bestiary at you. One kind at a time for the first
+three, pairs from the fourth, and a boss folded in from the seventh. Wave ten
+brings two bosses at once, which has never happened anywhere else in the game.
+
+They share one health bar and one life. The bar carries both pools added
+together, either of them can be worn down to empty it, and when one falls the
+other falls with it.
+
+### What you can lose
+
+**Only yourself.** The towers can be battered down and every guard can fall,
+and the run carries on either way — you will just be holding the ground with
+less. Clear wave ten and you have won; in the campaign, that is the ending.
+
+A fallen tower stops being cover the moment it comes down, for your arrows as
+much as for theirs.

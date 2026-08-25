@@ -71,6 +71,9 @@ const MAP_KEYS: Record<MapKind, string> = {
   castle: 'v',
   maze: 'z',
   cavern: 'b',
+  // 'b' is the cavern's and 's' is a movement key, so the bastion answers to
+  // the last consonant nothing else wanted.
+  bastion: 'n',
 };
 
 /** The reverse lookup the picker actually reads a keypress against. */
