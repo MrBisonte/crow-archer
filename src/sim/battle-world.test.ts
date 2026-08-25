@@ -37,6 +37,13 @@ const DT = 1 / 60;
 /** Open ground, so a test is about the fight and not about where a rock landed. */
 const clearGround = () => new Terrain(new TileMap(MAP_ROWS, MAP_COLS));
 
+/**
+ * Where a duel stands its two fighters: a fixed 220 px apart, well inside every
+ * weapon's reach and inside the smallest grid the game has ever shipped, so
+ * these tests measure the weapon and not the map.
+ */
+const DUEL_SEATS = [{ x: 200, y: 240 }, { x: 420, y: 240 }] as const;
+
 const start = (
   id: number,
   character: PlayerStart['character'],
@@ -48,6 +55,16 @@ interface Setup {
   teams?: PlayerStart['team'][];
   mode?: 'coop' | 'deathmatch';
   terrain?: Terrain;
+  /**
+   * Explicit seats, overriding the terrain's spawns.
+   *
+   * A test about what a hit does should not also be a test of how far apart
+   * the map happens to put two people. These used to inherit `pickSpawns`, so
+   * widening the grid moved the fighters apart until the shots stopped
+   * arriving inside the frame budget and five damage tests failed for a reason
+   * that had nothing to do with damage.
+   */
+  at?: readonly { x: number; y: number }[];
 }
 
 /**
@@ -67,7 +84,7 @@ function battle(setup: Setup = {}): BattleWorld {
     terrain,
     starts: characters.map((c, i) => ({
       ...start(i, c, teams[i] ?? Team.A),
-      ...(spawns[i] ?? { x: 100, y: 100 }),
+      ...(setup.at?.[i] ?? spawns[i] ?? { x: 100, y: 100 }),
     })),
   });
 }
@@ -96,14 +113,11 @@ function throwDynamite(w: BattleWorld, id: number, angle: number, windUp = 1): v
   hold(w, 1, id, cmd(0, angle, 2));
 }
 
-/** Places two fighters a set distance apart, facing each other. */
-function face(w: BattleWorld, gap: number): { shooter: number; target: number; angle: number } {
+/** The angle from seat 0 to seat 1, for a shot aimed at a standing target. */
+function face(w: BattleWorld): { shooter: number; target: number; angle: number } {
   const a = player(w, 0);
-  // Move seat 1 next to seat 0 by walking it; the world owns positions, so the
-  // test steers rather than reaching in.
   const b = player(w, 1);
-  const angle = Math.atan2(b.y - a.y, b.x - a.x);
-  return { shooter: 0, target: 1, angle: gap === 0 ? angle : angle };
+  return { shooter: 0, target: 1, angle: Math.atan2(b.y - a.y, b.x - a.x) };
 }
 
 describe('BattleWorld', () => {
@@ -180,8 +194,8 @@ describe('BattleWorld', () => {
   describe('taking damage', () => {
     /** Fires from seat 0 straight at seat 1 until something lands. */
     const duel = (characters: PlayerStart['character'][] = ['archer', 'archer']) => {
-      const w = battle({ characters });
-      const { angle } = face(w, 0);
+      const w = battle({ characters, at: DUEL_SEATS });
+      const { angle } = face(w);
       return { w, angle };
     };
 
@@ -212,15 +226,15 @@ describe('BattleWorld', () => {
 
     it('never lets an arrow through to a teammate', () => {
       const w = battle({ characters: ['archer', 'archer'], teams: [Team.A, Team.A] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       hold(w, 400, 0, cmd(Button.FIRE, angle));
       expect(player(w, 1).hp).toBe(FULL_HP);
       expect(unpackPlayerState(player(w, 1).state).shielded).toBe(true);
     });
 
     it('reports a kill with the team that made it', () => {
-      const w = battle();
-      const { angle } = face(w, 0);
+      const w = battle({ at: DUEL_SEATS });
+      const { angle } = face(w);
       const inputs = new Map([[0, cmd(Button.FIRE, angle)]]);
       let killerTeam: number | null = null;
       for (let i = 0; i < 3000 && killerTeam === null; i++) {
@@ -242,8 +256,8 @@ describe('BattleWorld', () => {
     };
 
     it('returns with health, and with the shield back up', () => {
-      const w = battle();
-      const { angle } = face(w, 0);
+      const w = battle({ at: DUEL_SEATS });
+      const { angle } = face(w);
       kill(w, angle);
       hold(w, RESPAWN_TICKS + 2, 1, null);
       const back = player(w, 1);
@@ -253,8 +267,8 @@ describe('BattleWorld', () => {
     });
 
     it('stays down for the whole wait', () => {
-      const w = battle();
-      const { angle } = face(w, 0);
+      const w = battle({ at: DUEL_SEATS });
+      const { angle } = face(w);
       kill(w, angle);
       hold(w, RESPAWN_TICKS - 4, 1, null);
       expect(unpackPlayerState(player(w, 1).state).dead).toBe(true);
@@ -355,16 +369,11 @@ describe('BattleWorld', () => {
     });
 
     it('hurts an enemy caught in the blast', () => {
-      // Uncharged dynamite covers about 500 px before the fuse runs out, which
-      // is well short of the width of the map. Walk the target into range
-      // first, the way anyone throwing one would have to.
-      const w = battle({ characters: ['archer', 'archer'] });
-      const a = player(w, 0);
-      const b = player(w, 1);
-      const towards = Math.atan2(a.y - b.y, a.x - b.x);
-      const closing = new Map([[1, cmd(Button.LEFT, towards)]]);
-      for (let i = 0; i < 200; i++) w.step(DT, closing);
-
+      // Uncharged dynamite covers about 500 px before the fuse runs out, so the
+      // two stand inside that. They used to start on the map's spawns and walk
+      // together for 200 ticks, which stopped being far enough the moment the
+      // grid grew.
+      const w = battle({ characters: ['archer', 'archer'], at: DUEL_SEATS });
       const me = player(w, 0);
       const them = player(w, 1);
       const angle = Math.atan2(them.y - me.y, them.x - me.x);
@@ -380,7 +389,7 @@ describe('BattleWorld', () => {
 
     it('never catches a teammate, since friendly fire is off', () => {
       const w = battle({ characters: ['archer', 'archer'], teams: [Team.A, Team.A] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       hold(w, 400, 0, cmd(Button.SPECIAL, angle));
       expect(player(w, 1).hp).toBe(FULL_HP);
       expect(unpackPlayerState(player(w, 1).state).shielded).toBe(true);
@@ -530,7 +539,7 @@ describe('BattleWorld', () => {
 
     it('is thrown by one click, unarmed, showing no countdown yet', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       click(w, 0, angle);
       expect(shots(w)).toHaveLength(1);
       expect(unpackShotState(shots(w)[0]!.state).fuse).toBe(0);
@@ -538,14 +547,14 @@ describe('BattleWorld', () => {
 
     it('does nothing while held: only a fresh click throws or arms it', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       hold(w, 40, 0, cmd(Button.SPECIAL, angle)); // held, never released
       expect(shots(w)).toHaveLength(1); // exactly one throw, not one per tick
     });
 
     it('starts counting down only once armed by a second click', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       click(w, 0, angle); // throw
       hold(w, 30, 0, cmd(0, angle)); // sits inert; nothing arms it on its own
       expect(unpackShotState(shots(w)[0]!.state).fuse).toBe(0);
@@ -559,7 +568,7 @@ describe('BattleWorld', () => {
 
     it('explodes on its own once the armed countdown runs out', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       click(w, 0, angle);
       click(w, 0, angle);
       let sawBlast = false;
@@ -572,7 +581,7 @@ describe('BattleWorld', () => {
 
     it('never explodes on its own while unarmed', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       click(w, 0, angle); // thrown, never armed
       for (let i = 0; i < SATCHEL_IDLE_TICKS + 60; i++) w.step(DT, new Map());
       expect(blasts(w)).toHaveLength(0); // outlived its idle timer, and just went quiet
@@ -581,7 +590,7 @@ describe('BattleWorld', () => {
 
     it('goes off instantly if its owner shoots it, armed or not', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       click(w, 0, angle); // thrown, unarmed
       hold(w, 1, 0, cmd(Button.FIRE, angle)); // the ranger's own bolt, same line
       let sawBlast = false;
@@ -594,7 +603,7 @@ describe('BattleWorld', () => {
 
     it('runs out, so it cannot be thrown forever', () => {
       const w = battle({ characters: ['ranger', 'archer'] });
-      const { angle } = face(w, 0);
+      const { angle } = face(w);
       for (let i = 0; i < SATCHEL_CARRIED + 2; i++) {
         click(w, 0, angle); // throw
         click(w, 0, angle); // arm
