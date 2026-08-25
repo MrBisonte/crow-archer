@@ -6,7 +6,7 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { MAP_GEN, MAP_KINDS, MAP_RULES, runsWaves } from '../sim/arena-map';
+import { MAP_COLS, MAP_GEN, MAP_KINDS, MAP_ROWS, MAP_RULES, TILE_SIZE, runsWaves } from '../sim/arena-map';
 import { modeRule, picksItsMap } from '../sim/game-mode';
 import { BESTIARY } from '../sim/bestiary';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
@@ -165,9 +165,19 @@ function zzfx(
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 
+/**
+ * The band above the playfield. Named because the canvas height is the grid
+ * plus this, and a literal in both places is two places to get it wrong.
+ */
+const HUD_HEIGHT = 48;
+
 const CONFIG = {
-  tileSize: 32, cols: 33, rows: 21, hudHeight: 48,
-  canvasW: 1056, canvasH: 720,
+  // Derived from the grid rather than restated: these were a third copy of the
+  // arena's size, and a mismatch is invisible until something draws off the end
+  // of the map. `src/legacy/arena-size.test.ts` pins them to MAP_COLS/MAP_ROWS.
+  // Everything in world space is drawn at +hudHeight for the same reason.
+  tileSize: TILE_SIZE, cols: MAP_COLS, rows: MAP_ROWS, hudHeight: HUD_HEIGHT,
+  canvasW: MAP_COLS * TILE_SIZE, canvasH: MAP_ROWS * TILE_SIZE + HUD_HEIGHT,
 
   // No playerSpeed or playerMaxHP here on purpose. Both are per character,
   // in CHARACTER_STATS (src/sim/arena.ts), and FEATHERS stacks purchased

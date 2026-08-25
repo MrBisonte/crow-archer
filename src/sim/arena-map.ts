@@ -167,7 +167,12 @@ export const MAP_RULES: Record<MapKind, {
 /** Pixels per tile. The arena's pixel size follows from this and the grid. */
 export const TILE_SIZE = 32;
 
-/** Grid size. Matches ARENA_W and ARENA_H in arena.ts, in tiles. */
+/**
+ * Grid size, in tiles, and the one place the arena's size is decided.
+ *
+ * `ARENA_W`/`ARENA_H` in arena.ts and the canvas fields in the legacy `CONFIG`
+ * are both derived from these. Change them here and everything follows.
+ */
 export const MAP_COLS = 33;
 export const MAP_ROWS = 21;
 
