@@ -10339,6 +10339,26 @@ function drawBossEntrance() {
  * C · CONTEXT      run state, or the boss, or the maze objective
  * D · STATUS       cooldowns and non-countable power-ups
  */
+/**
+ * The width the HUD band is laid out for, which is the canvas width it was
+ * drawn against and no longer follows.
+ *
+ * The four lanes below sum to exactly this, and the painters inside them use
+ * absolute coordinates — `drawReservePool(key, 240 + i * 100)` and the like —
+ * so the band cannot be stretched without re-laying out every one of them. It
+ * is therefore drawn at its designed width and centred, with `hudBandInset()`
+ * as the single offset. On a wider canvas that leaves dead bar either side.
+ *
+ * Reflowing the lanes from `CONFIG.canvasW` is the real fix and is its own
+ * change; this is the part that keeps the HUD readable in the meantime.
+ */
+const HUD_BAND_W = 1056;
+
+/** Where the fixed-width HUD band starts, so it sits centred on any canvas. */
+function hudBandInset() {
+  return Math.max(0, Math.round((CONFIG.canvasW - HUD_BAND_W) / 2));
+}
+
 const LANE = {
   A: { x:   0, w: 232 },
   B: { x: 232, w: 280 },
@@ -10710,6 +10730,10 @@ function drawHUD(t) {
 
   ctx.fillStyle = '#0A0F0A'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
   ctx.textBaseline = 'middle';
+
+  // The band is a fixed-width island, centred. See HUD_BAND_W.
+  ctx.save();
+  ctx.translate(hudBandInset(), 0);
   ctx.fillStyle = '#243424';
   for (const l of [LANE.B, LANE.C, LANE.D]) ctx.fillRect(l.x, 4, 1, 38);
 
@@ -10717,6 +10741,7 @@ function drawHUD(t) {
   drawLaneConsumables();
   drawLaneContext(t, isBoss);
   drawLaneStatus();
+  ctx.restore();
 
   ctx.shadowColor = lowHP ? '#FF1F1F' : '#196407';
   ctx.shadowBlur  = lowHP ? 6 + 6*Math.sin(t*8) : 4;
