@@ -700,9 +700,16 @@ export function makeVignette(width: number, height: number, hudHeight: number): 
   cv.height = height;
   const g = cv.getContext('2d');
   if (g) {
+    // Keyed to the diagonal, not the height. Height alone works only while the
+    // arena stays near its shipped 1.47:1 — the outer radius has to reach the
+    // side edges, and at 1.84:1 `height * 0.80` stops 150px short of them,
+    // leaving a hard black band down each side rather than a fade. The ratios
+    // are chosen to reproduce the shipped 1056x720 within a pixel: 255.6 and
+    // 575.1 against the 252 and 576 they replace.
+    const reach = Math.hypot(width, height);
     const vg = g.createRadialGradient(
-      width / 2, height / 2, height * 0.35,
-      width / 2, height / 2, height * 0.80);
+      width / 2, height / 2, reach * 0.20,
+      width / 2, height / 2, reach * 0.45);
     vg.addColorStop(0, 'rgba(0,0,0,0)');
     vg.addColorStop(1, 'rgba(0,0,0,0.52)');
     g.fillStyle = vg;
