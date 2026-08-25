@@ -195,11 +195,42 @@ needs a second sprite beside it to compare against, which a bastion rarely
 offers. The blank row is the device — three touching pips are a three-pixel bar
 and nothing is countable.
 
-**Movement is direct, not A\*.** `PathScheduler.serve` takes one goal for the
-whole frame and the crows already own it, so a guard asking for a path would be
-asking for a path to the player. Over the bastion's open middle that costs
-nothing — it is the one map deliberately built without corridors — and the note
-is in the source so the next map does not inherit the assumption silently.
+**Each guard solves its own A\*, and does not join the crows' scheduler.**
+Direct movement was the first call, on the grounds that the bastion's middle is
+open. That held only while a guard never had to go anywhere: it fought whatever
+was already beside it. The moment the retinue had to follow the hero, the
+barrier it was standing behind became a wall it walked into and stayed at, and a
+playtest found the retinue left at the towers with the hero across the map.
+
+`PathScheduler` was still the wrong home for the fix. It serves one destination
+for the whole frame and the crows own it — every agent on that queue is going to
+the player. A guard is going to a *different* moving point near the player, one
+per guard. So `walkGuardTo` calls `computeAStarPath` itself and caches the
+route, re-solving on `guardRouteInterval` or as soon as the goal has drifted
+more than a tile from what the route was computed for. Without that drift check
+a guard chasing a body followed the path to where that body used to be for up to
+half a second, which on a map with a wall through the middle is the difference
+between going round the barrier and walking into it. The cost is bounded by the
+recompute interval rather than by the frame.
+
+### The ground a guard answers for
+
+Two anchors, not one: the gate it holds, **and** the hero. With the gate alone,
+anything that got past the barrier stopped being any guard's business the moment
+it was more than a leash from the post — and the hero stands further from the
+nearest gate than the leash is long. A headless run measured the failure
+exactly: three bodies stacked on the hero, nearest post 190px away, leash 170.
+The retinue stood on its gates and watched, each guard correctly concluding
+there was nothing within its remit.
+
+The union of two discs rather than one wider one, because they are two different
+jobs and one radius cannot express both — widening the leash until it covered
+the hero would also let a guard chase a crow most of the way to the corridor.
+Overlapping is what keeps the region connected, so a guard can walk from its
+gate to the hero without ever being outside it. Eligibility is measured from the
+ground and the choice from the guard, which is the difference between a
+bodyguard and a skirmisher: a guard already drawn out to the edge must not find
+something further out and keep going.
 
 ## The towers
 
