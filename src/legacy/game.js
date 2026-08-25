@@ -6607,8 +6607,18 @@ function moveGuard(g, ux, uy, dt) {
   const spd = CONFIG.guardSpeed;
   const nx = g.x + ux * spd * dt;
   const ny = g.y + uy * spd * dt;
-  if (tilePassable(tileAt(nx, g.y))) g.x = nx;
-  if (tilePassable(tileAt(g.x, ny))) g.y = ny;
+  // A body already INSIDE terrain gets to walk out. Without this the
+  // passability check refuses both halves of every step and the guard is
+  // entombed for the rest of the run -- it cannot fight, cannot go home, and
+  // nothing ever frees it. The player has a way out of this (PLAYER_UNSTUCK,
+  // and master has just added a key for it); a guard had none.
+  //
+  // Allowing "any step" while inside is safe because a guard only ever walks
+  // toward its post or a target, and both of those stand on open ground, so
+  // the direction it is pushed is out rather than deeper.
+  const stuck = !tilePassable(tileAt(g.x, g.y));
+  if (stuck || tilePassable(tileAt(nx, g.y))) g.x = nx;
+  if (stuck || tilePassable(tileAt(g.x, ny))) g.y = ny;
   g.walkPhase += dt * 8;
 }
 
