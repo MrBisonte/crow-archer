@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAP_COLS, MAP_ROWS } from './arena-map';
+
 import { DEFAULT_REGROWTH, Regrowth, regrowthDelay, type RegrowthRules } from './regrowth';
 import { TILE, TileMap, tilePassable } from './tilemap';
 
@@ -242,8 +244,8 @@ describe('regrowthDelay', () => {
 
   it('stays inside the band the stagger describes', () => {
     const rules: RegrowthRules = { sprout: 10, mature: 10, stagger: 0.4 };
-    for (let r = 0; r < 21; r++)
-      for (let c = 0; c < 33; c++) {
+    for (let r = 0; r < MAP_ROWS; r++)
+      for (let c = 0; c < MAP_COLS; c++) {
         const d = regrowthDelay(rules, 'sprout', r, c);
         expect(d).toBeGreaterThanOrEqual(6);
         expect(d).toBeLessThanOrEqual(14);
@@ -252,8 +254,8 @@ describe('regrowthDelay', () => {
 
   it('never asks for a negative delay, however wide the stagger', () => {
     const wild: RegrowthRules = { sprout: 1, mature: 1, stagger: 10 };
-    for (let r = 0; r < 21; r++)
-      for (let c = 0; c < 33; c++) {
+    for (let r = 0; r < MAP_ROWS; r++)
+      for (let c = 0; c < MAP_COLS; c++) {
         expect(regrowthDelay(wild, 'sprout', r, c)).toBeGreaterThanOrEqual(0);
       }
   });
