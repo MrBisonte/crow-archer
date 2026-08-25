@@ -619,9 +619,11 @@ export const ANIMATED_THEMES: Record<MapKind, AnimatedPalette> = {
  * per-frame loop touches only animated tiles, never the whole grid.
  */
 export class AnimatedTileOverlay {
-  water: AnimatedTile[] = [];
-  trees: AnimatedTile[] = [];
-  ash: AnimatedTile[] = [];
+  // Keyed by cell so one changed tile is one delete and one insert. These were
+  // arrays rebuilt in full on every change; see the constructor.
+  private water = new Map<number, AnimatedTile>();
+  private trees = new Map<number, AnimatedTile>();
+  private ash = new Map<number, AnimatedTile>();
   private map: TileMap;
   private layout: TileLayout;
   private palette: AnimatedPalette;
@@ -631,22 +633,44 @@ export class AnimatedTileOverlay {
     this.layout = layout;
     this.palette = palette;
     map.onReset(() => this.rebuild());
-    map.onChange(() => this.rebuild());
+    // Per changed tile, not per change. This was `() => this.rebuild()`, a full
+    // rows x cols rescan for every single tile written — and TileMap.set fires
+    // the callback once per tile, so a mass terrain event cost changes x area.
+    // The boss entrance turns every TREE to ASH in one frame. StaticTileLayer
+    // above already takes the coordinates it is handed; this now does too.
+    map.onChange((r, c, old, tile) => {
+      this.listFor(old)?.delete(this.cellOf(r, c));
+      this.seat(r, c, tile);
+    });
   }
 
   rebuild(): void {
-    const ts = this.layout.tileSize, hh = this.layout.hudHeight;
-    this.water.length = 0;
-    this.trees.length = 0;
-    this.ash.length = 0;
+    this.water.clear();
+    this.trees.clear();
+    this.ash.clear();
     for (let r = 0; r < this.map.rows; r++)
-      for (let c = 0; c < this.map.cols; c++) {
-        const entry = { x: c * ts, y: r * ts + hh, seed: r * 97 + c * 31 };
-        const t = this.map.get(r, c);
-        if (t === TILE.WATER) this.water.push(entry);
-        else if (t === TILE.TREE) this.trees.push(entry);
-        else if (t === TILE.ASH) this.ash.push(entry);
-      }
+      for (let c = 0; c < this.map.cols; c++) this.seat(r, c, this.map.get(r, c));
+  }
+
+  /** Stable identity for a cell, so a tile can be found again to remove it. */
+  private cellOf(r: number, c: number): number {
+    return r * this.map.cols + c;
+  }
+
+  /** Which list a tile animates in, or null if it does not animate at all. */
+  private listFor(tile: TileId | undefined): Map<number, AnimatedTile> | null {
+    if (tile === TILE.WATER) return this.water;
+    if (tile === TILE.TREE) return this.trees;
+    if (tile === TILE.ASH) return this.ash;
+    return null;
+  }
+
+  /** Records a cell in the list its tile animates in, if it animates. */
+  private seat(r: number, c: number, tile: TileId | undefined): void {
+    const list = this.listFor(tile);
+    if (!list) return;
+    const ts = this.layout.tileSize, hh = this.layout.hudHeight;
+    list.set(this.cellOf(r, c), { x: c * ts, y: r * ts + hh, seed: r * 97 + c * 31 });
   }
 
   /**
@@ -664,16 +688,16 @@ export class AnimatedTileOverlay {
     const [ripple0, ripple1] = this.palette.waterRipple;
     // Water: phase-flipped base plus three ripple bands per tile
     target.fillStyle = phase ? base0 : base1;
-    for (const w of this.water) target.fillRect(w.x, w.y, ts, ts);
+    for (const w of this.water.values()) target.fillRect(w.x, w.y, ts, ts);
     target.fillStyle = phase ? ripple0 : ripple1;
-    for (const w of this.water) {
+    for (const w of this.water.values()) {
       const wp = t * 1.8 + (w.seed % 10) * 0.7;
       target.fillRect(w.x + 4 + Math.round(2*Math.sin(wp)),     w.y + 8  + Math.round(Math.sin(wp*0.7)),    11, 2);
       target.fillRect(w.x + 18 + Math.round(2*Math.sin(wp+1.5)),w.y + 17 + Math.round(Math.sin(wp*0.9+.5)), 8,  2);
       target.fillRect(w.x + 7 + Math.round(2*Math.sin(wp+2.8)), w.y + 23 + Math.round(Math.sin(wp*0.6+1)),  13, 2);
     }
     // Tree slot's flicker: a canopy highlight in the forest, ember glow elsewhere
-    for (const tr of this.trees) {
+    for (const tr of this.trees.values()) {
       const tfl = 0.7 + 0.3 * Math.sin(t * 2.5 + tr.seed * 0.8);
       target.fillStyle = this.palette.treeFlicker(tfl * 0.18);
       target.beginPath();
@@ -681,7 +705,7 @@ export class AnimatedTileOverlay {
       target.fill();
     }
     // Ash embers, slowly fading orange dots
-    for (const a of this.ash) {
+    for (const a of this.ash.values()) {
       const emb = 0.12 + 0.10 * Math.sin(t * 1.5 + a.seed * 0.6);
       target.fillStyle = `rgba(160,60,0,${emb.toFixed(2)})`;
       target.fillRect(a.x + (a.seed % 20) + 4, a.y + (a.seed % 18) + 5, 2, 2);
