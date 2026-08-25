@@ -5799,7 +5799,21 @@ function updateBossDeath(dt) {
     // running any of them here would load the castle in the middle of wave 7.
     // The wave-clear check is what advances a siege, and it needs nothing from
     // this function beyond the slot being empty.
-    if (siegeRun) return;
+    if (siegeRun) {
+      // Except the thaw. startBossDeath freezes every crow to hold the field
+      // still for the cinematic, and updateCrows skips a frozen one outright.
+      // Nothing ever had to undo that, because every brawl branch below either
+      // clears `crows` or loads a map that replaces them -- so the flag died
+      // with the bodies. A siege keeps its wave, and a crow left frozen is a
+      // body no wave-clear check will ever see leave: the run stalls with the
+      // last two bats hanging in the air and cannot be finished.
+      //
+      // Found by playing it in a browser, not by the suite: every siege test
+      // that kills a boss either clears the wave first or never looks at what
+      // the survivors do afterwards.
+      for (const c of crows) c.frozen = false;
+      return;
+    }
     if (deadKind === 'crowking') {
       // Stage 1 done. The run continues into the castle stage: reload the
       // map, reposition on the same corner initGame() always starts from

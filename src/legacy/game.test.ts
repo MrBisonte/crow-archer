@@ -3794,6 +3794,40 @@ describe('a siege boss dying leaves the wave running', () => {
     expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
   });
 
+  it('thaws the crows it froze, so the wave can still be cleared', () => {
+    // startBossDeath freezes every crow to hold the field still for the death
+    // cinematic, and updateCrows skips a frozen one outright. In a brawl the
+    // tail then clears `crows` or loads a new map, so the flag died with the
+    // bodies and nothing ever had to undo it. A siege keeps its wave.
+    //
+    // Left frozen, the survivors hang in the air for ever and siegeWaveCleared
+    // never comes true: the run stalls on the last two bats. Measured in a
+    // browser at wave ten -- two crows, frozen, 0px in 14 seconds.
+    atBossWave();
+    g.spawnCrow();
+    const crows = g.crows() as { x: number; y: number; frozen?: boolean }[];
+    expect(crows.length, 'no crows to freeze').toBeGreaterThan(0);
+
+    g.killBoss();
+    for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
+    g.healHero();
+    expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
+
+    const stillFrozen = (g.crows() as { frozen?: boolean }[]).filter((c) => c.frozen);
+    expect(stillFrozen, 'crows left frozen: the wave can never be cleared').toHaveLength(0);
+
+    // And the flag being clear has to actually mean they move again.
+    const before = (g.crows() as { x: number; y: number }[]).map((c) => ({ x: c.x, y: c.y }));
+    g.healHero();
+    g.stepSim(120);
+    const after = g.crows() as { x: number; y: number }[];
+    const moved = after.map((c, i) => {
+      const b = before[i];
+      return b ? Math.hypot(c.x - b.x, c.y - b.y) : 0;
+    });
+    expect(Math.max(...moved, 0), 'thawed crows still are not moving').toBeGreaterThan(1);
+  });
+
   it('leaves the rest of the wave moving', () => {
     atBossWave();
     // Something on the field that should still be walking afterwards.
