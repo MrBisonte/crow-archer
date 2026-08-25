@@ -2069,7 +2069,7 @@ const playerInput = new LocalInput(() => {
     fire:    !!keys[CONFIG.keys.shoot],
     special: !!mouseRightHeld,
     snipe:   !!keys[CONFIG.keys.snipe],
-    aimAngle: Math.atan2((mouse.y - CONFIG.hudHeight) - player.y, mouse.x - player.x),
+    aimAngle: (() => { const a = aimWorld(); return Math.atan2(a.y - player.y, a.x - player.x); })(),
   };
 });
 
@@ -11014,9 +11014,38 @@ const RETICLE_PAINTERS = {
   sapper: drawSapperReticle,
 };
 
+/**
+ * Where the shot is going, in canvas pixels — and therefore where the reticle
+ * belongs.
+ *
+ * `mouse` is already canvas-space: the listener scales it by
+ * canvasW / rect.width, so it survives the canvas being displayed at any size.
+ * The aim ray converts it to world space by subtracting hudHeight, and world
+ * space is drawn hudHeight further down, so the point the arrow flies at is
+ * canvas `mouse.y` exactly.
+ *
+ * drawReticle used to ADD hudHeight here, putting the reticle 48px below the
+ * point being aimed at. The OS cursor is hidden in game — see syncCursor — so
+ * the reticle is the only aiming reference the player has: lining it up on a
+ * crow sent the arrow a clean 48px over its head, on a target 16px tall. A
+ * reticle that is not the aim point is a lie the player aims with.
+ *
+ * One function so the two can never disagree again, and exposed on devHooks so
+ * the agreement is checkable without a canvas.
+ */
+function reticleAt() {
+  return { x: mouse.x, y: mouse.y };
+}
+
+/** The world point the aim ray is pointed at. */
+function aimWorld() {
+  return { x: mouse.x, y: mouse.y - CONFIG.hudHeight };
+}
+
 function drawReticle() {
+  const at = reticleAt();
   ctx.save();
-  ctx.translate(mouse.x, mouse.y + CONFIG.hudHeight);
+  ctx.translate(at.x, at.y);
   (RETICLE_PAINTERS[selectedChar] || drawRangerReticle)();
   drawBlockedFlash();
   ctx.restore();
@@ -11785,6 +11814,10 @@ export const devHooks = {
   crows: () => crows,
   skeletons: () => skeletons,
   mouse: () => mouse,
+  /** Where the reticle is drawn, in canvas pixels. */
+  reticleAt: () => reticleAt(),
+  /** The world point the shot is aimed at. */
+  aimWorld: () => aimWorld(),
   counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, hp: playerHP }),
   // The pixel art, as the data it is (see SPRITE_GRIDS). One reading of what
   // sprites exist, and one way to build any of their grids, so the art can be

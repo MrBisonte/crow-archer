@@ -3585,13 +3585,23 @@ describe('the retinue holds the barrier gates', () => {
     g.clearSiegeWave();
     g.stepSim(600);
     // Quiet before asking, for the reason the resting-formation test above is:
-    // clearing a wave advances the run and spawns the next one, and a guard
-    // that has gone to meet something standing on the hero has not failed to
-    // come home -- it is answering. This test is about the walk back, so the
-    // field has to be empty when the question is put. Flaked 1 run in 10
-    // without it.
-    g.clearSiegeWave();
-    g.stepSim(240);
+    // a guard that has gone to meet something standing on the hero has not
+    // failed to come home -- it is answering. This test is about the walk
+    // back, so the field has to be empty when the question is put.
+    //
+    // Cleared repeatedly rather than once, because clearing a wave ADVANCES
+    // the run and spawns the next one. A single clear plus a long settle gives
+    // the new wave the whole settle to cross the map and reach the hero, and
+    // then a guard is legitimately at his side rather than at its gate. One
+    // clear flaked 1 run in 10, then landed at 170.14 against a limit of 170.
+    // Short steps between clears keep the field empty for the whole walk.
+    // Six clears at two seconds apart: long enough for the walk home even on a
+    // map seed that scatters cover across the route, and frequent enough that
+    // the wave each clear spawns never crosses the map to reach the hero. The
+    // map seed is Math.random, so the route length varies run to run -- 320
+    // frames was enough on some seeds and left the guard still walking at
+    // 175px on others, which is what failed 4 runs in 20.
+    for (let i = 0; i < 6; i++) { g.clearSiegeWave(); g.stepSim(120); }
     let best = Infinity;
     for (const post of gates()) best = Math.min(best, Math.hypot(body.x - post.x, body.y - post.y));
     expect(best, 'the guard never went back to a gate').toBeLessThan(g.config().guardPostLeash);
@@ -3760,6 +3770,61 @@ describe('allies are visibly the hero\u2019s', () => {
     // must not be the hero's, and this is where that would be caught.
     for (const sk of g.skeletons()) expect(sk.team ?? Team.ENEMY).not.toBe(hero.team);
     for (const so of g.soldiers()) expect(so.team ?? Team.ENEMY).not.toBe(hero.team);
+  });
+});
+
+// ── THE RETICLE IS THE AIM POINT ─────────────────────────────────────────────
+//
+// Playtest: "playing with the archer and aiming at a creep with the mouse makes
+// me fail the shot."
+//
+// The OS cursor is hidden in game (syncCursor), so the reticle is the only
+// aiming reference the player has. drawReticle translated to
+// `mouse.y + hudHeight` while the aim ray used `mouse.y - hudHeight`, which put
+// the reticle a full 48px below the point the arrow flew at. Lining the reticle
+// up on a crow shot a clean 48px over its head, on a target 16 pixels tall.
+describe('the reticle sits where the shot goes', () => {
+  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+
+  const MOUSE_POINTS = [
+    { x: 100, y: 100 }, { x: 528, y: 360 }, { x: 900, y: 640 }, { x: 0, y: 48 },
+  ];
+
+  it('draws the reticle at the point the aim ray is pointed at', () => {
+    const hud = g.config().hudHeight as number;
+    const mouse = g.mouse() as { x: number; y: number };
+    for (const at of MOUSE_POINTS) {
+      mouse.x = at.x; mouse.y = at.y;
+      const reticle = g.reticleAt() as { x: number; y: number };
+      const world = g.aimWorld() as { x: number; y: number };
+      // World space is drawn hudHeight further down, so the aim point in canvas
+      // pixels is world.y + hudHeight. The reticle has to be there.
+      expect(reticle.x, `x at ${at.x},${at.y}`).toBe(world.x);
+      expect(reticle.y, `reticle is not on the aim point at ${at.x},${at.y}`)
+        .toBe(world.y + hud);
+    }
+  });
+
+  it('sends the arrow at what the reticle is on', () => {
+    g.setMode('brawl');
+    g.go('playing');
+    g.stepSim(1);
+    const hero = g.player() as { x: number; y: number };
+    const mouse = g.mouse() as { x: number; y: number };
+
+    // A target dead level with the hero and to his right: aiming at it should
+    // give a heading of 0, and the 48px error showed up as a heading that was
+    // visibly tilted.
+    const target = { x: hero.x + 200, y: hero.y };
+    const reticle = g.reticleAt() as { x: number; y: number };
+    // Put the RETICLE on the target, which is what the player does.
+    mouse.x = target.x + (mouse.x - reticle.x);
+    mouse.y = target.y + g.config().hudHeight + (mouse.y - reticle.y);
+
+    const world = g.aimWorld() as { x: number; y: number };
+    const off = Math.hypot(world.x - target.x, world.y - target.y);
+    expect(off, 'the shot is aimed away from where the reticle is sitting')
+      .toBeLessThan(1);
   });
 });
 
