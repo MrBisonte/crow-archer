@@ -616,3 +616,54 @@ export const STARTING_RECRUITS = 2;
  * every test that counts the opening retinue.
  */
 export const OPENING_RETINUE = STARTING_RECRUITS + UNIQUE_GUARD_KINDS.length;
+
+/** A point in the arena, in pixels. */
+interface Spot {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Is `(x, y)` on the ground a guard posted at `post` answers for, while the
+ * hero stands at `hero`?
+ *
+ * The region is a capsule: everything within `leash` of the line from the post
+ * to the hero. Two jobs, one connected shape.
+ *
+ * It used to be two discs, one on each, and the connectedness the behaviour
+ * depends on was left to them overlapping. That holds only while the post and
+ * the hero are within twice the leash of each other, which is a fact about the
+ * map, not about guards. On the shipped 33x21 grid the nearest gate is 202px
+ * from where the hero spawns and the discs overlap by 138. At 55x33 it is
+ * 386.7px and they come apart by 47, so a guard walking from its gate to the
+ * hero leaves its own duty region halfway, turns round, arrives back on the
+ * gate, and starts again — while the thing it was walking towards eats the
+ * hero. That failure had already shipped once at 190px against the same 170
+ * leash, which is what put the second disc there in the first place.
+ *
+ * Widening the leash until the discs meet was the obvious repair and is the
+ * wrong one twice over: it breaks again at the next grid size, and a leash long
+ * enough to bridge the gap is also long enough to let a guard chase a crow that
+ * far in every other direction. The capsule is connected at any separation and
+ * is exactly as wide sideways as it always was.
+ */
+export function onGuardGround(
+  post: Spot,
+  hero: Spot,
+  x: number,
+  y: number,
+  leash: number,
+): boolean {
+  const dx = hero.x - post.x;
+  const dy = hero.y - post.y;
+  const span = dx * dx + dy * dy;
+  // Where the point falls along post -> hero, clamped to the ends so the shape
+  // is a capsule and not an infinite band. span === 0 is the hero standing on
+  // the post, which collapses to the disc this used to be.
+  const along = span === 0
+    ? 0
+    : Math.max(0, Math.min(1, ((x - post.x) * dx + (y - post.y) * dy) / span));
+  const nearX = post.x + along * dx;
+  const nearY = post.y + along * dy;
+  return (x - nearX) ** 2 + (y - nearY) ** 2 <= leash * leash;
+}

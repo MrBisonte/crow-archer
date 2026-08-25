@@ -12,7 +12,7 @@ import { BESTIARY } from '../sim/bestiary';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
 import {
   GUARD_STATS, RANK_MARK, guardDamage, guardHeal, healGuard, invokeWard,
-  isPriest, makeGuard, missingHp, shouldWard,
+  isPriest, makeGuard, missingHp, onGuardGround as onDutyGround, shouldWard,
 } from '../sim/guards';
 import {
   completeWave as siegeCompleteWave, guardLost as siegeGuardLost,
@@ -199,18 +199,23 @@ const CONFIG = {
   // that it is on screen and reachable the moment its wave begins.
   siegeBossSpawnDistance: 260,
   // The retinue is a bodyguard, not a hunting pack. postRadius is how far out
-  // they ring the hero at rest, postDrift the slow rotation that keeps a
-  // standing retinue milling rather than frozen into a diagram, and leash how
-  // far from the hero something has to be before it stops being their problem.
+  // they ring the hero at rest, and postDrift the slow rotation that keeps a
+  // standing retinue milling rather than frozen into a diagram.
+  //
+  // There was a second leash here, `guardLeash: 210`, carrying the rationale
+  // below. Nothing read it — the live path has always used guardPostLeash — so
+  // it has been deleted rather than left to look load-bearing.
+  guardPostRadius: 58, guardPostDrift: 0.25,
+  // How far a guard will leave its duty ground to fight, and how near it has to
+  // get before it counts as standing on its gate again.
   //
   // The leash is the whole behaviour. Without it every guard walked at the
   // nearest enemy on the map, which on an open bastion meant the retinue
   // scattered across the field in the first ten seconds and the hero fought
-  // the wave alone — the opposite of what a bodyguard is for.
-  guardPostRadius: 58, guardPostDrift: 0.25, guardLeash: 210,
-  // How far a guard will leave its gate to fight, and how near it has to get
-  // before it counts as standing there again. The leash is generous enough to
-  // meet something walking into the gap and mean enough that it comes back.
+  // the wave alone — the opposite of what a bodyguard is for. Generous enough
+  // to meet something walking into the gap, mean enough that it comes back.
+  //
+  // What it is measured from is the capsule in sim/guards.ts, not a disc.
   guardPostLeash: 170, guardPostSlack: 14,
   // How often a guard re-solves its route home. Staggered per guard at
   // spawn so a retinue does not all solve on the same frame.
@@ -6445,10 +6450,15 @@ function guardGround(home) {
   return [home, { x: player.x, y: player.y }];
 }
 
-/** Is this point on the ground a guard answers for? */
+/**
+ * Is this point on the ground a guard answers for?
+ *
+ * The geometry is `onGuardGround` in sim/guards.ts, which is where the reason
+ * it is a capsule rather than two discs is written down and unit tested.
+ */
 function onGuardGround(ground, x, y) {
-  const reach = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
-  return ground.some((p) => dist2(p.x, p.y, x, y) <= reach);
+  const [post, hero] = ground;
+  return onDutyGround(post, hero, x, y, CONFIG.guardPostLeash);
 }
 
 /**
