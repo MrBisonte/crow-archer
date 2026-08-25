@@ -98,13 +98,22 @@ export function generateGrid(
   return grid;
 }
 
+/** Columns kept clear of huts on the west edge, where the player spawns. */
+const HUT_WEST_MARGIN = 5;
+
 function placeHuts(grid: TileGrid, rows: number, cols: number, rng: Rng, midRow: number): void {
   const numHuts = rng() < 0.6 ? 2 : 1;
   let placed = 0;
   let tries = 0;
   while (placed < numHuts && tries < 60) {
     tries++;
-    const hc = 5 + Math.floor(rng() * 15);
+    // Huts sit between the spawn block and the crow corridor. The row draw
+    // below already scales; this was a fixed 5..19, so on a wider grid every
+    // hut still landed in the western third and the rest of the map had none.
+    // Six tenths of the buildable ground, which is 15 columns on the shipped
+    // 33 — the same band, expressed as a share of the grid instead of a count.
+    const hutBand = Math.round((cols - HUT_WEST_MARGIN - 3) * 0.6);
+    const hc = HUT_WEST_MARGIN + Math.floor(rng() * hutBand);
     const hr = 1 + Math.floor(rng() * (rows - 4));
     if (hc <= 4 && hr >= midRow - 3 && hr <= midRow + 3) continue;
     if (hc >= cols - 3) continue;
