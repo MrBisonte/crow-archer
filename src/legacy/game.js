@@ -388,6 +388,11 @@ const CONFIG = {
   // less than the knight's. Tanky rather than punishing, so the fight is long
   // enough to be about reading his charges rather than about surviving one.
   commanderHP: 10, commanderHPWizard: 24, commanderHPKnight: 22,
+  // The keeper's pool, and only a siege ever reads it — see bossHpFor. Equal
+  // to the commander's on purpose: wave ten fields the two of them on one
+  // shared bar, so an even split is what makes that bar a doubled number
+  // rather than a lopsided one.
+  keeperHP: 10, keeperHPWizard: 24, keeperHPKnight: 22,
   commanderContactDamage: 2, commanderContactReach: 30,
   // Rides the player down between charges, slower than he charges by a wide
   // margin so the wind-up is legible.
@@ -4992,9 +4997,15 @@ const BOSS_ON_HIT = {
   crowking:    (amount) => { dazeBoss(); applyBossDamage(amount); },
   dark_archer: (amount) => applyBossDamage(amount),
   dark_knight: (amount) => applyBossDamage(amount),
-  // No HP to lower and no death path to reach. A hit buys time instead:
-  // it stuns him, which interrupts a charge and lets you get down the corridor.
-  minotaur:    ()       => stunMinotaur(),
+  // In the maze he has no HP to lower and no death path to reach, so a hit
+  // buys time instead: it stuns him, which interrupts a charge and lets you
+  // get down the corridor.
+  //
+  // In a siege he does have a pool -- see bossHpFor -- and it has to be
+  // reachable, because a wave-ten boss you cannot hurt is a wave you cannot
+  // clear. He keeps the stun there too: it is the thing that makes him read as
+  // himself rather than as a commander with different art.
+  minotaur:    (amount) => { stunMinotaur(); if (siegeRun) applyBossDamage(amount); },
 };
 
 // Which CONFIG keys hold a kind's HP for each character, so bossHpFor has one
@@ -5005,13 +5016,22 @@ const BOSS_HP_KEYS = {
   dark_archer: ['darkArcherHP', 'darkArcherHPWizard', 'darkArcherHPKnight'],
   dark_knight: ['darkKnightHP', 'darkKnightHPWizard', 'darkKnightHPKnight'],
   commander:   ['commanderHP', 'commanderHPWizard', 'commanderHPKnight'],
+  minotaur:    ['keeperHP', 'keeperHPWizard', 'keeperHPKnight'],
 };
 
 function bossHpFor(kind) {
-  // The minotaur cannot be killed, so he has no HP row. Infinity rather than a
-  // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without
-  // any of them learning that an unkillable boss exists.
-  if (kind === 'minotaur') return Infinity;
+  // The keeper cannot be killed IN THE MAZE. That is the maze's rule -- he is
+  // the level's pressure, not its objective -- and Infinity rather than a
+  // sentinel keeps every `hp -= x` and `hp <= 0` in the file honest without any
+  // of them learning that an unkillable boss exists.
+  //
+  // A siege is the other case, and it had been missed. Wave ten fields him as
+  // one enemy inside a wave, and siegeWaveCleared waits on every boss being
+  // dead -- so with no pool, the last wave of the bastion could not be cleared
+  // by fighting it at all. The ten-wave test did not catch it because the
+  // harness kills through startBossDeath, which never consults hp. Here he has
+  // a pool like anyone else.
+  if (kind === 'minotaur' && !siegeRun) return Infinity;
   const [normal, wizard, knight] = BOSS_HP_KEYS[kind];
   const key = selectedChar === 'wizard' ? wizard : selectedChar === 'knight' ? knight : normal;
   return CONFIG[key];
@@ -6176,6 +6196,64 @@ function landSiegeBoss(b) {
 }
 
 /** Is every enemy of the current wave off the field? */
+/**
+ * The siege's bosses as one pool, or null when none is up.
+ *
+ * Wave ten fields two and they share a bar rather than getting one each: the
+ * pair is one enemy with a doubled pool, so the number on the bar is the sum
+ * of both and a hit on either drains it. Waves seven to nine field one, and
+ * the same function describes that without a special case -- a pool of one.
+ *
+ * Live bodies only. A boss mid-death-sequence is still on the field as a heap
+ * of fragments, and counting its zero into the total would leave the bar
+ * showing half a pool that nothing can be done about.
+ */
+function siegeBossPool() {
+  const live = [];
+  if (boss && boss.bstate !== 'dead') live.push(boss);
+  for (const b of siegeExtraBosses) if (b && b !== boss && b.bstate !== 'dead') live.push(b);
+  if (live.length === 0) return null;
+  let hp = 0, hpMax = 0, flash = false;
+  for (const b of live) {
+    // A non-finite pool is left out of the totals rather than poisoning them.
+    // Nothing should reach here with one now that the siege keeper has a row,
+    // but drawHpBar draws one divider per hit point and Infinity there is a
+    // hung frame, not a slow one -- the same hazard drawLaneContext guards.
+    const max = b.hpMax || CONFIG.bossHP;
+    if (!Number.isFinite(max)) continue;
+    hp += Math.max(0, b.hp);
+    hpMax += max;
+    if (b.hitFlash > 0) flash = true;
+  }
+  if (hpMax <= 0) return null;
+  return { hp, hpMax, count: live.length, flash };
+}
+
+/**
+ * One life between them: when a siege boss dies, the rest go with it.
+ *
+ * Called from updateSiege rather than from startBossDeath, and that is the
+ * whole subtlety. tickSiegeBosses briefly moves an extra into the boss slot to
+ * update it, so for the length of that call neither `boss` nor
+ * siegeExtraBosses holds the complete set -- and a boss dying inside
+ * updateBoss dies exactly there. By the time this runs the handover has
+ * finished and the two lists are whole again.
+ *
+ * Idempotent: the death sequence lasts a couple of seconds and this is on the
+ * path for every frame of it, so it has to be safe to run against bodies it
+ * has already felled.
+ */
+function felledWithTheOther() {
+  for (const b of siegeExtraBosses) {
+    if (!b || b.bstate === 'dead') continue;
+    b.bstate = 'dead';
+    b.hp = 0;
+    // A burst where the twin was, so it is seen to go rather than vanishing
+    // between frames. The one that took the last hit has the full sequence.
+    events.emit({ type: 'BOSS_DEATH_BURST', x: b.x, y: b.y, phase: 'c' });
+  }
+}
+
 function siegeWaveCleared() {
   return crows.length === 0 && skeletons.length === 0 && soldiers.length === 0
     && (!boss || boss.bstate === 'dead') && siegeExtraBosses.length === 0;
@@ -6190,6 +6268,7 @@ function updateSiege(dt) {
   seatRetinue();
   if (!siegeSpawned) { spawnSiegeWave(); return; }
   tickSiegeBosses(dt);
+  if (bossDeathSeq) felledWithTheOther();
   siegeExtraBosses = siegeExtraBosses.filter((b) => b && b.bstate !== 'dead');
   if (!siegeWaveCleared()) return;
 
@@ -6238,7 +6317,11 @@ function updateSiege(dt) {
  */
 function seatSiegeBoss(extra, held) {
   siegeExtraBosses = siegeExtraBosses.filter((b) => b !== extra);
-  if (held && held !== extra) siegeExtraBosses.push(held);
+  // A dead `held` is not handed back. It used to be, harmlessly, because the
+  // slot's occupant was always alive; with one life shared between wave ten's
+  // pair it can now be dead by the time the handover runs, and a dead body in
+  // the live list is one siegeWaveCleared would wait on.
+  if (held && held !== extra && held.bstate !== 'dead') siegeExtraBosses.push(held);
 }
 
 function tickSiegeBosses(dt) {
@@ -10263,7 +10346,7 @@ function drawLaneContext(t, isBoss) {
 
   ctx.textAlign = 'right'; ctx.fillStyle = '#196407';
   ctx.fillText(mapIsSiege() ? 'BASTION' : modeRule(gameMode).label, 792, 42);
-  if (siegeRun) drawSiegeHud(cx);
+  if (siegeRun) drawSiegeHud(t, cx);
 }
 
 /**
@@ -10273,15 +10356,22 @@ function drawLaneContext(t, isBoss) {
  * Keyed on siegeRun rather than on the mode, like everything else here, so the
  * brawl chain's last stage reads the same as the standalone one.
  */
-function drawSiegeHud(cx) {
+function drawSiegeHud(t, cx) {
   const standing = standingTowers(towers);
   const hp = standing.reduce((n, t) => n + t.hp, 0);
   const full = towers.length * TOWER_MAX_HP;
   ctx.textAlign = 'center';
-  ctx.font = 'bold 12px "Courier New", monospace';
-  ctx.shadowColor = '#D8B048'; ctx.shadowBlur = 4; ctx.fillStyle = '#D8B048';
-  ctx.fillText('WAVE ' + siegeRun.wave + '/' + SIEGE_WAVE_COUNT, cx, 18);
-  ctx.shadowBlur = 0;
+  // A boss on the field takes the top row, and carries the wave counter with
+  // it rather than costing it -- see drawSiegeBossBar.
+  const pool = siegeBossPool();
+  if (pool) {
+    drawSiegeBossBar(t, pool);
+  } else {
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.shadowColor = '#D8B048'; ctx.shadowBlur = 4; ctx.fillStyle = '#D8B048';
+    ctx.fillText('WAVE ' + siegeRun.wave + '/' + SIEGE_WAVE_COUNT, cx, 18);
+    ctx.shadowBlur = 0;
+  }
   ctx.font = 'bold 10px "Courier New", monospace';
   ctx.fillStyle = standing.length === towers.length ? '#8f8265' : '#8c3a24';
   // Rank marks rather than a count: a retinue of three seniors is not the same
@@ -10291,11 +10381,20 @@ function drawSiegeHud(cx) {
     + '  ' + hp + '/' + full + '   ' + (retinue || 'ALONE'), cx, 34);
 }
 
-function drawBossBar(t, cx) {
-  const x = 520, y = 6, w = 272, h = 16;
-  const hpMax = boss.hpMax || CONFIG.bossHP;
-  const frac  = boss.hp / hpMax;
-  const hitOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash*18)%2 === 0;
+/** Where the boss bar sits, shared by both callers so the two cannot drift. */
+const BOSS_BAR = { x: 520, y: 6, w: 272, h: 16 };
+
+/**
+ * The bar itself: track, fill, one divider per hit point, border.
+ *
+ * Extracted because a siege draws the same bar in the same place for a
+ * different thing -- one pool shared by wave ten's pair -- and differs only in
+ * what it writes on top of it. The bar is the shared part; the labelling is
+ * not, so the labels stay with their callers.
+ */
+function drawHpBar(t, hp, hpMax, hitOn) {
+  const { x, y, w, h } = BOSS_BAR;
+  const frac = hpMax > 0 ? Math.max(0, Math.min(1, hp / hpMax)) : 0;
 
   ctx.fillStyle = '#1A2A1A'; ctx.fillRect(x, y, w, h);
   ctx.shadowColor = hitOn ? '#FFFFFF' : '#FF1F1F';
@@ -10308,13 +10407,46 @@ function drawBossBar(t, cx) {
   for (let i = 1; i < hpMax; i++) ctx.fillRect(x + (w/hpMax)*i - 0.5, y, 1, h);
   ctx.strokeStyle = '#FF1F1F'; ctx.lineWidth = 1;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+
+/** Burn damage makes hp fractional; the readout shows the point still held. */
+const hpReadout = (hp, hpMax) => Math.ceil(hp - 1e-6) + ' / ' + hpMax;
+
+function drawBossBar(t, cx) {
+  const hpMax = boss.hpMax || CONFIG.bossHP;
+  const hitOn = boss.hitFlash > 0 && Math.floor(boss.hitFlash*18)%2 === 0;
+  drawHpBar(t, boss.hp, hpMax, hitOn);
 
   ctx.font = 'bold 10px "Courier New", monospace';
   ctx.textAlign = 'center'; ctx.fillStyle = '#FF8888';
-  // Burn damage makes hp fractional, so the readout shows the point the boss
-  // is still on while the bar behind it drains smoothly. The epsilon keeps
-  // float dust from rounding a whole point back up.
-  ctx.fillText(Math.ceil(boss.hp - 1e-6) + ' / ' + hpMax, cx, 34);
+  // The epsilon keeps float dust from rounding a whole point back up.
+  ctx.fillText(hpReadout(boss.hp, hpMax), cx, 34);
+}
+
+/**
+ * The siege's boss bar: one bar for however many are up.
+ *
+ * Its labels sit INSIDE the bar rather than under it, which is the one thing
+ * it does differently from a boss fight's. A boss fight owns the whole of lane
+ * C and can put the number on the row below; a siege still has to show the
+ * towers and the retinue there, and the two would land on the same pixels.
+ * Putting the wave on the left and the pool on the right also means the bar
+ * costs the wave counter nothing -- it replaces that line and carries it.
+ */
+function drawSiegeBossBar(t, pool) {
+  const { x, y, w, h } = BOSS_BAR;
+  const flashOn = pool.flash && Math.floor(t*18)%2 === 0;
+  drawHpBar(t, pool.hp, pool.hpMax, flashOn);
+
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.shadowColor = '#000000'; ctx.shadowBlur = 3;
+  ctx.fillStyle = '#FFFFFF';
+  const mid = y + h / 2 + 3.5;
+  ctx.textAlign = 'left';
+  ctx.fillText('W' + siegeRun.wave + '/' + SIEGE_WAVE_COUNT, x + 6, mid);
+  ctx.textAlign = 'right';
+  ctx.fillText(hpReadout(pool.hp, pool.hpMax), x + w - 6, mid);
+  ctx.shadowBlur = 0;
 }
 
 /**
@@ -11522,6 +11654,19 @@ export const devHooks = {
   guards: () => guards,
   towers: () => towers,
   siegeBosses: () => siegeExtraBosses,
+  /**
+   * One hit on the boss holding the slot, through the real per-kind on-hit
+   * path -- not startBossDeath. killBoss skips straight to the death sequence
+   * and never consults hp, which is why the ten-wave run passed for months
+   * against a wave ten that could not actually be fought.
+   */
+  hitBoss(amount = 1) {
+    if (!boss || boss.bstate === 'dead') return null;
+    damageBoss(amount, boss.x - 40, boss.y, 'arrow', 0);
+    return { hp: boss.hp, bstate: boss.bstate };
+  },
+  /** What the siege's shared boss bar is showing, or null when none is up. */
+  siegeBossBar: () => siegeBossPool(),
   // The flag five update functions bail on. Exposed because a death sequence
   // that never finishes freezes the whole field, and that is invisible from
   // outside unless something can look at it.

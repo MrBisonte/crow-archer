@@ -121,8 +121,10 @@ moving between them. Four torches are hidden in the level. Press **E** on one
 and it lights permanently, tripling sight to twelve tiles. The first torch is
 the whole upgrade, so the others are for reading the map, not for stacking.
 
-The **Minotaur** cannot be killed. Hitting him stuns him, which buys you
-distance and never progress. He hunts you the whole level, charges when he sees
+The **Minotaur** cannot be killed *in the maze*. Hitting him stuns him, which
+buys you distance and never progress. The bastion is the exception: there he is
+one enemy inside a wave rather than the level's pressure, so he has a health
+pool like anyone else and hits take it down — the stun still lands as well. He hunts you the whole level, charges when he sees
 you down a corridor, and smashes the wall he ends against. Maze walls are
 otherwise indestructible: dynamite, Lightning Storm and Whirlwind still damage
 what is in radius, they just do not open the level up.
@@ -209,7 +211,7 @@ flowchart LR
 | **Crow King** | Orbits the player, charges periodically | Screeches to aggro white crows, summons bats | Three phases, see [Game loop](#game-loop) |
 | **Dark Archer** | Orbits at range, never closes in | Three-bolt volley, an occasional lobbed bomb, and a summoned ice skeleton | None, every hit lands |
 | **Dark Knight** | Short lead-in, then charges often, sometimes halting into a whirlwind | Higher contact damage than the Crow King's charge, plus a summoned fire skeleton | None, every hit lands |
-| **Minotaur** | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None, and no HP: hits stun him instead of hurting him |
+| **Minotaur** | Hunts you through the maze, charges on sight, smashes the wall he hits | Contact, and more of it mid-charge | None in the maze, where hits only stun him; in the bastion he has HP and takes damage too |
 
 The two dark bosses are corrupted echoes of the Archer and the Knight: the
 archer's silhouette keeps a bow drawn on you, the knight's keeps a spear that
@@ -340,6 +342,10 @@ spent.
 Ten, and they empty the whole bestiary at you. One kind at a time for the first
 three, pairs from the fourth, and a boss folded in from the seventh. Wave ten
 brings two bosses at once, which has never happened anywhere else in the game.
+
+They share one health bar and one life. The bar carries both pools added
+together, either of them can be worn down to empty it, and when one falls the
+other falls with it.
 
 ### What you can lose
 

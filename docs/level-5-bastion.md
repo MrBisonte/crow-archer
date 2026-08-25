@@ -98,7 +98,7 @@ a row in every theme that has no tower in it.
 | 1-3 | One kind each: bats, then crows, then rats |
 | 4-6 | Pairs, each putting a known kind beside a new one |
 | 7-9 | Combinations with a boss folded in |
-| 10 | Everything, behind two bosses |
+| 10 | Everything, behind two bosses on one shared bar |
 
 A test asserts that every `EnemyKind` and every `BossKind` appears at least once
 across the ten, driven off the kind lists rather than a hand-written one — so
@@ -267,5 +267,18 @@ gaps the feature exposed rather than damage it did:
 - **`boss` had to hold two.** Wave 10 fields the minotaur and the commander at
   once, and `boss` is a single slot read in dozens of places that each assume
   one object or null. Extras ride in `siegeExtraBosses` and are ticked
-  alongside, so the slot keeps its meaning as "the boss the health bar is
-  about" — which is what every existing reader already wanted of it.
+  alongside, so the slot keeps its meaning for every existing reader.
+- **The pair share one bar and one life.** Wave 10's two are drawn as a single
+  bar carrying the sum of both pools — an even split, because the siege keeper
+  is given the commander's HP row — and when either goes down the other goes
+  with it. Two bars for two bosses was the other option and it is worse: the
+  slot only ever had one bar, so the second was invisible, and finishing one
+  left the player fighting a boss with no readout at all.
+- **The keeper had to be killable here.** `bossHpFor` gave the minotaur
+  `Infinity`, because the maze's keeper is the level's pressure rather than its
+  objective. Wave 10 fields him as one enemy inside a wave, and
+  `siegeWaveCleared` waits on every boss being dead — so the last wave of the
+  bastion could not be cleared by fighting it at all. His on-hit arm only
+  stunned, too, so even a pool would not have drained. Both are now conditional
+  on `siegeRun`: in the maze nothing changes, in a siege he has a pool and takes
+  damage, and he keeps the stun in both.

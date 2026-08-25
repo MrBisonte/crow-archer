@@ -2799,11 +2799,13 @@ describe('the siege loop', () => {
     }
     expect(g.state()).toBe('win');
     expect(siegeState().outcome).toBe('won');
-    // Waves 7, 8 and 9 field one boss each and wave 10 fields two, so a run
-    // that kills every one of them kills five. A count that drifts means the
-    // ladder changed shape and this test stopped covering what it claims to.
-    expect(killed).toHaveLength(5);
-    expect(killed.filter((k) => k.endsWith('extra'))).toHaveLength(1);
+    // Four deaths, not five. Waves 7, 8 and 9 field one boss each and wave 10
+    // fields two -- but the pair share one bar and one life, so the wave-ten
+    // kill takes both and the loop finds nothing left to kill after it. A
+    // count that drifts means the ladder changed shape and this test stopped
+    // covering what it claims to.
+    expect(killed).toHaveLength(4);
+    expect(killed.filter((k) => k.endsWith('extra'))).toHaveLength(0);
   });
 
   /**
@@ -2823,17 +2825,24 @@ describe('the siege loop', () => {
       [g.boss(), ...g.siegeBosses()].filter(Boolean) as { bstate: string }[];
     expect(onField(), 'wave ten should field two bosses').toHaveLength(2);
 
+    // Held by reference, because that is the only way to see the failure this
+    // test exists for. A displaced boss that is handed back to nobody is in
+    // neither g.boss() nor g.siegeBosses() -- it is alive, unticked, still
+    // drawn, and invisible to every accessor, so an assertion about the lists
+    // would pass while the bug was present. The reference outlives the lists.
+    const displaced = g.boss() as { bstate: string };
     expect(g.killSiegeBoss('extra')).toBe('extra');
     for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
     g.healHero();
     expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
 
-    // The one that was holding the slot has to still be on the field. Without
-    // the handover it is dropped on the floor: alive, unticked, invisible to
-    // the wave-clear check, and the wave can never end.
-    const left = onField();
-    expect(left, 'the displaced boss was dropped on the floor').toHaveLength(1);
-    expect(left[0]?.bstate, 'the survivor should not be the one that died').not.toBe('dead');
+    // One life between them, so the displaced one goes down too -- and it can
+    // only go down if the handover put it back where felledWithTheOther could
+    // find it.
+    expect(displaced.bstate, 'the displaced boss was orphaned, alive and untracked')
+      .toBe('dead');
+    expect(onField().filter((b) => b.bstate !== 'dead'), 'a boss outlived the pair')
+      .toHaveLength(0);
   });
 
   /**
@@ -2953,6 +2962,44 @@ describe('the siege loop', () => {
       .filter((b) => b.guard.kind !== 'priest')
       .map((b) => Math.hypot(b.x - foe.x, b.y - foe.y));
     expect(Math.min(...closest), 'nobody left their gate for the hero').toBeLessThan(reach * 2);
+  });
+
+  /**
+   * Wave ten could not be fought, and no test had noticed.
+   *
+   * It fields the minotaur, whose HP was Infinity because the maze's keeper
+   * cannot be killed -- and siegeWaveCleared waits on every boss being dead.
+   * So the last wave of the bastion was unclearable by any amount of damage.
+   * The ten-wave run above passed anyway, because its harness kills through
+   * startBossDeath, which never looks at hp: a test that reaches the end by a
+   * route the player does not have.
+   *
+   * This one goes through the real per-kind on-hit path, which is the route the
+   * player has.
+   */
+  it('lets wave ten be beaten by hitting it, not only by the harness', () => {
+    openSiege();
+    g.jumpToSiegeWave(SIEGE_WAVE_COUNT);
+    g.stepSim(1);
+    const opening = g.siegeBossBar() as { hp: number; hpMax: number; count: number };
+    expect(opening, 'no bar on wave ten').not.toBeNull();
+    expect(opening.count, 'wave ten should field two').toBe(2);
+    expect(Number.isFinite(opening.hpMax), 'the pool is not finite: nothing can empty it')
+      .toBe(true);
+
+    for (let i = 0; i < 400 && g.siegeBossBar(); i++) {
+      g.healHero();
+      g.hitBoss(1);
+      g.stepSim(2);
+    }
+    expect(g.siegeBossBar(), 'the pool never emptied: wave ten cannot be fought')
+      .toBeNull();
+
+    // And the pair went together, so nothing is left holding the wave open.
+    const alive = [g.boss(), ...g.siegeBosses()]
+      .filter((b): b is { bstate: string } => Boolean(b))
+      .filter((b) => b.bstate !== 'dead');
+    expect(alive, 'a boss outlived the shared pool').toHaveLength(0);
   });
 
   it('loses only when the hero dies, never when a tower falls', () => {
@@ -3773,7 +3820,15 @@ describe('a siege boss dying leaves the wave running', () => {
     expect(g.siege()).not.toBeNull();
   });
 
-  it('keeps the second boss of wave ten alive when the first one dies', () => {
+  /**
+   * Wave ten's pair share one bar and one life, by design: "they should share
+   * the same bar, just ensure its doubled in raw number, but 1 dies = both
+   * die." This test used to assert the opposite -- that the second survived --
+   * which was right while they had a health bar each and is wrong now that the
+   * bar shows one pool. A survivor standing in front of an empty bar is the
+   * state the change exists to prevent.
+   */
+  it('takes the second boss of wave ten down with the first', () => {
     g.setMode('siege');
     g.go('playing');
     g.stepSim(1);
@@ -3782,11 +3837,54 @@ describe('a siege boss dying leaves the wave running', () => {
     expect((g.boss() ? 1 : 0) + g.siegeBosses().length).toBe(2);
     g.killBoss();
     g.stepSim(180);
-    // One left, and it is still on the field rather than dropped on the floor
-    // where nothing ticks it and no wave-clear check can see it.
     const alive = (g.boss() && g.boss().bstate !== 'dead' ? 1 : 0)
       + g.siegeBosses().filter((b: { bstate: string }) => b && b.bstate !== 'dead').length;
-    expect(alive, 'the surviving boss was lost with the dead one').toBe(1);
+    expect(alive, 'a boss was left standing in front of an empty bar').toBe(0);
+  });
+
+  it('shows one bar for the pair, with both pools added together', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.jumpToSiegeWave(10);
+    g.stepSim(1);
+    const bodies = [g.boss(), ...g.siegeBosses()]
+      .filter(Boolean) as { hp: number; hpMax: number }[];
+    expect(bodies, 'wave ten should field two').toHaveLength(2);
+
+    const bar = g.siegeBossBar() as { hp: number; hpMax: number; count: number };
+    expect(bar, 'no bar while two bosses are on the field').not.toBeNull();
+    expect(bar.count).toBe(2);
+    // The doubled raw number: one bar carrying the sum, not one of the two.
+    expect(bar.hpMax).toBe(bodies[0]!.hpMax + bodies[1]!.hpMax);
+    expect(bar.hp).toBe(bodies[0]!.hp + bodies[1]!.hp);
+    expect(bar.hpMax).toBeGreaterThan(bodies[0]!.hpMax);
+  });
+
+  it('drains the shared bar when either one of the pair is hit', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.jumpToSiegeWave(10);
+    g.stepSim(1);
+    const before = (g.siegeBossBar() as { hp: number }).hp;
+    // The second of the pair, not the one holding the slot: a bar that only
+    // moved for the primary would look stuck while the player fought the twin.
+    const twin = g.siegeBosses()[0] as { hp: number };
+    twin.hp -= 1;
+    expect((g.siegeBossBar() as { hp: number }).hp, 'the bar ignored the twin')
+      .toBe(before - 1);
+  });
+
+  it('shows no bar once the pair is down', () => {
+    g.setMode('siege');
+    g.go('playing');
+    g.stepSim(1);
+    g.jumpToSiegeWave(10);
+    g.stepSim(1);
+    g.killBoss();
+    g.stepSim(180);
+    expect(g.siegeBossBar(), 'a bar outlived the bosses it was for').toBeNull();
   });
 });
 
