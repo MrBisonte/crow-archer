@@ -36,7 +36,7 @@ character.
 | Class | Kind type | Values today | Tables keyed on it | Cross-cuts |
 |---|---|---|---|---|
 | Character | `CharacterKind` | `archer \| wizard \| knight \| ranger \| sapper` | `PRIMARY`, `SILHOUETTES`, `PAINTERS`, `CHARACTER_STATS`, `CHARACTER_KEYS` | sim, render, net, ui |
-| Map | `MapKind` | `forest \| castle \| maze \| cavern` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
+| Map | `MapKind` | `forest \| castle \| maze \| cavern \| bastion` | `MAP_GEN`, `MAP_RULES`, `TILE_THEMES`, `ANIMATED_THEMES`, `MAP_KEYS` | sim, render, net, ui |
 | Pickup (multiplayer) | `PickupKind` | `shield \| fire` | `EFFECTS` | sim |
 | Skeleton (single-player) | plain string | `normal \| fire \| ice \| rat` | `SKELETON_PALETTES` | `src/legacy/game.js` only |
 | Boss | plain string, **HP tabled, behavior branched** | `crowking \| dark_archer \| dark_knight \| minotaur \| commander` | `BOSS_HP_KEY` (HP), `BOSS_ON_HIT`, `BOSS_HUNTS_WHILE_EXPLORING` (see [Boss: the deliberate exception](#boss-the-deliberate-exception)) | `src/legacy/game.js` only |
@@ -57,6 +57,7 @@ flowchart LR
     castle((castle))
     maze((maze))
     cavern((cavern))
+    bastion((bastion))
     next(("?, new")):::newKind
 
     subgraph GEN["MAP_GEN (one generator per tag)"]
@@ -64,6 +65,7 @@ flowchart LR
         gc["NoiseTerrain 0.5"]
         gm["MazeTerrain"]
         gv["CavernTerrain"]
+        gb["BastionTerrain"]
         g3["? generator"]:::newKind
     end
 
@@ -72,6 +74,7 @@ flowchart LR
         tc["castle painters"]
         tm["maze painters"]
         tv["cavern painters"]
+        tb["bastion painters"]
         t3["? painters"]:::newKind
     end
 
@@ -79,15 +82,17 @@ flowchart LR
     castle --> gc
     maze --> gm
     cavern --> gv
+    bastion --> gb
     next -.-> g3
     forest --> tf
     castle --> tc
     maze --> tm
     cavern --> tv
+    bastion --> tb
     next -.-> t3
 
-    gf & gc & gm & gv & g3 --> Terrain["Terrain.fromSeed(seed, mapKind)\nsrc/sim/arena-map.ts"]
-    tf & tc & tm & tv & t3 --> TileLayer["StaticTileLayer(painters)\nsrc/render/tiles.ts"]
+    gf & gc & gm & gv & gb & g3 --> Terrain["Terrain.fromSeed(seed, mapKind)\nsrc/sim/arena-map.ts"]
+    tf & tc & tm & tv & tb & t3 --> TileLayer["StaticTileLayer(painters)\nsrc/render/tiles.ts"]
     Terrain --> Sim["sim: passability, spawn points"]
     TileLayer --> Render["render: what a tile looks like"]
 ```
@@ -108,8 +113,10 @@ One table is not keyed on `MapKind` and is worth knowing about:
 Waves map-select panels, and *membership* of that screen is derived from
 `runsWaves(kind)` rather than listed. A map earns a panel by fielding a
 population that escalates on the wave timer, which is not the same thing as
-having crows: `MAP_RULES[kind].population` is one of `crows`, `soldiers` or
-`scripted`, and only the first two run waves. `MAP_PANELS` throws at load if
+having crows: `MAP_RULES[kind].population` is one of `crows`, `soldiers`,
+`scripted` or `siege`, and only the first two run waves. The last two are
+distinct rather than folded together because a scripted map has no wave count
+at all while a siege has exactly ten. `MAP_PANELS` throws at load if
 a map earns one and has no presentation row, so the half that cannot be
 derived fails early instead of drawing blank.
 
@@ -118,11 +125,18 @@ derived fails early instead of drawing blank.
 **Decision (2026-08-21):** map is a real, player-facing choice in exactly
 two places. Everywhere else it is fixed. Logged as ROADMAP.md decision 9.
 
+**Still two, after the bastion (2026-08-24).** Siege mode adds a third
+*context* but not a third free choice: its map is fixed, because a siege is a
+place rather than a setting — the towers, the barrier and the corridor are the
+mode, so offering it on the forest would be offering a different game under the
+same name. The decision holds as written.
+
 | Context | Map choice | Mechanism |
 |---|---|---|
 | Multiplayer lobby | **Free**, host-selected | `SET_MAP` → `Room.setMap()` → `MATCH_START` |
 | Single-player, Waves mode | **Free**, player-selected | mapselect screen (`MAP_PANELS`, filtered by `runsWaves`) → `selectedMapKind` → `initGame()` |
-| Single-player, Brawl mode | **Fixed** | `generateMap('castle')` fires once, hardcoded inside `updateBossDeath()` when the Crow King dies: a story beat, not a menu |
+| Single-player, Brawl mode | **Fixed** | `generateMap('castle')` when the Crow King dies, `'maze'` when the Dark Knight does, `'bastion'` through the maze door: story beats, not a menu |
+| Single-player, Siege mode | **Fixed** | `MODE_RULES.siege.fixedMap` is `'bastion'`, read by `initGame()`; the mapselect screen is skipped because it has nothing to ask |
 
 ```mermaid
 sequenceDiagram
@@ -142,11 +156,13 @@ sequenceDiagram
     Match->>Match: StaticTileLayer(TILE_THEMES[mapKind])
 ```
 
-Single-player's `gameMode` (`'brawl' | 'waves'`, `src/legacy/game.js:635`)
-is a different, older concept from multiplayer's `GameMode`
-(`'coop' | 'deathmatch'`, `src/net/protocol.ts:72`). Same name, unrelated
-values, picked at the main menu, not per-match. Worth not confusing the two
-when this gets built.
+Single-player's mode (`SinglePlayerMode`, `'brawl' | 'waves' | 'siege'`, in
+`src/sim/game-mode.ts`) is a different, older concept from multiplayer's
+`GameMode` (`'coop' | 'deathmatch'`, `src/net/protocol.ts`). Same word,
+unrelated values, picked at the main menu rather than per match. It was a bare
+string compared in eleven places inside the monolith until it became
+`MODE_RULES`; the rename to `SinglePlayerMode` is there so the two stop being
+confusable by name alone.
 
 ### Boss: the deliberate exception
 
@@ -205,17 +221,21 @@ const CHARACTER_STATS: Record<CharacterKind, CharacterStats>
 // rows are no longer identical; the figures are in docs/balance.md
 
 // src/sim/arena-map.ts
-type MapKind = 'forest' | 'castle' | 'maze' | 'cavern'
+type MapKind = 'forest' | 'castle' | 'maze' | 'cavern' | 'bastion'
 const MAP_GEN: Record<MapKind, MapGenerator>
 const MAP_RULES: Record<MapKind, {
-  destructibleTerrain: boolean; fogOfWar: boolean; crows: boolean
+  destructibleTerrain: boolean; fogOfWar: boolean; population: MapPopulation
+  enemySpeed: number
 }>
+type MapPopulation = 'crows' | 'soldiers' | 'scripted' | 'siege'
+const runsWaves: (kind: MapKind) => boolean
 
 // src/sim/map-generators.ts
 interface MapGenerator { generate(rows, cols, rng, noise): TileGrid }
-class NoiseTerrain  // thresholded noise: forest, castle
-class MazeTerrain   // recursive backtracker, braided
-class CavernTerrain // cellular automata, then joined into one region
+class NoiseTerrain   // thresholded noise: forest, castle
+class MazeTerrain    // recursive backtracker, braided
+class CavernTerrain  // cellular automata, then joined into one region
+class BastionTerrain // fixed layout, seeded scatter, reserved skeleton
 
 // src/render/tiles.ts
 const TILE_THEMES: Record<MapKind, Partial<Record<TileId, TilePainter>>>
@@ -237,9 +257,24 @@ const tilePassable = (t: TileId) =>
 // src/sim/regrowth.ts
 class Regrowth  // ash -> sapling -> tree, on destructibleTerrain maps only
 
+// src/sim/game-mode.ts
+type SinglePlayerMode = 'brawl' | 'waves' | 'siege'
+const MODE_RULES: Record<SinglePlayerMode, ModeRule>
+
+// src/sim/siege-run.ts, siege-waves.ts, guards.ts, towers.ts, bestiary.ts
+type SiegeOutcome = 'running' | 'won' | 'lost'
+type RecruitableGuardKind = 'archer' | 'foot_soldier' | 'knight'
+type UniqueGuardKind = 'priest'
+type GuardKind = RecruitableGuardKind | UniqueGuardKind
+const RECRUIT_WEIGHTS: Record<RecruitableGuardKind, number>  // a priest cannot have one
+const GUARD_STATS: Record<GuardKind, GuardStats>
+const SIEGE_WAVE_COUNT = 10
+const TOWER_MAX_HP = 20, TOWER_SPAN = 2, TOWER_DAMAGE = 2
+const BESTIARY: Record<EnemyKind, EnemyEntry>  // 9 critters, 5 bosses
+
 // src/legacy/game.js: single-player only, not compiler-checked
-let gameMode: 'brawl' | 'waves'
-const SKELETON_PALETTES: Record<'normal' | 'fire' | 'ice', Palette>
+let gameMode  // a SinglePlayerMode string; every rule read via MODE_RULES
+const SKELETON_PALETTES: Record<'normal' | 'fire' | 'ice' | 'rat', Palette>
 // boss.kind is a plain string; BossKind is this block's name for its five values
 type BossKind = 'crowking' | 'dark_archer' | 'dark_knight' | 'minotaur' | 'commander'
 const BOSS_HP_KEY: Record<Exclude<BossKind, 'minotaur'>, string>  // kind -> CONFIG key
@@ -302,5 +337,6 @@ A sound is therefore varied where every shape can hear it: `playSound` nudges vo
 
 - [Design patterns](design-patterns.md): composition over inheritance for character definitions
 - [Balance](balance.md): what every character and every boss is worth, and the one rule relating them
-- [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it
+- [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it. Historical — written before the maze existed
+- [Level 5: the bastion](level-5-bastion.md): the siege map, its retinue and its ladder, and why the whole feature gates on the map rather than the mode
 - [Design system](../.design-system/README.md): draw specs in pixels and hex, live preview cards, a playable UI kit demo
