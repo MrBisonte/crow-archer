@@ -301,7 +301,10 @@ function paintBakedBody(
 // ---------------------------------------------------------------------------
 
 function paintArcher(ctx: CanvasRenderingContext2D, p: Pose): void {
-  paintBakedBody(ctx, p, 'archer', ARCHER_SPRITE, buildArcherGrid(p.trim));
+  // Stride is 3 baked frames off walk phase (see buildArcherGrid), the same
+  // technique the ranger's cloak swings on.
+  const frame = animFrame3(p.walk);
+  paintBakedBody(ctx, p, `archer|${frame}`, ARCHER_SPRITE, buildArcherGrid(frame, p.trim));
   paintBow(ctx, p);
 }
 

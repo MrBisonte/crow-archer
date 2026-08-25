@@ -16,7 +16,7 @@ import {
   KNIGHT_SPRITE, buildKnightGrid,
   type KnightKind,
 } from './character-grids';
-import type { PixelGrid } from './pixel-grid';
+import { ANIM_FRAMES, type PixelGrid } from './pixel-grid';
 import { spriteCanvas, spriteFlashCanvas } from './pixel-sprite';
 import {
   countFilled, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
@@ -26,9 +26,6 @@ installStubCanvas();
 
 /** A caller-supplied trim colour, standing in for a team or a theme colour. */
 const TRIM = '#39FF14';
-
-/** Every frame the ranger's cloak sway is baked into (see animFrame3). */
-const RANGER_FRAMES = ['a', 'mid', 'b'] as const;
 
 /** Every palette the knight's grid is built against. */
 const KNIGHT_KINDS: readonly KnightKind[] = ['normal', 'fireSword'];
@@ -42,7 +39,9 @@ interface HeroCase {
 }
 
 const HEROES: readonly HeroCase[] = [
-  { name: 'archer', sprite: ARCHER_SPRITE, grid: buildArcherGrid(TRIM), before: 440 },
+  { name: 'archer|a', sprite: ARCHER_SPRITE, grid: buildArcherGrid('a', TRIM), before: 440 },
+  { name: 'archer|mid', sprite: ARCHER_SPRITE, grid: buildArcherGrid('mid', TRIM), before: 440 },
+  { name: 'archer|b', sprite: ARCHER_SPRITE, grid: buildArcherGrid('b', TRIM), before: 440 },
   { name: 'wizard', sprite: WIZARD_SPRITE, grid: buildWizardGrid(TRIM), before: 440 },
   { name: 'ranger|a', sprite: RANGER_SPRITE, grid: buildRangerGrid('a', TRIM), before: 374 },
   { name: 'ranger|mid', sprite: RANGER_SPRITE, grid: buildRangerGrid('mid', TRIM), before: 376 },
@@ -53,10 +52,13 @@ const HEROES: readonly HeroCase[] = [
 
 describe('hero pixel grids', () => {
   it('cover every frame and kind the renderers ask a builder for', () => {
-    // The table above is hand-written, so this is what stops a new ranger
+    // The table above is hand-written, so this is what stops a new stride
     // frame or knight palette from being added and simply never checked.
+    // ANIM_FRAMES is the builders' own frame list, not a copy of it, so a
+    // fourth frame would fail here rather than quietly go unchecked.
     const names = new Set(HEROES.map((h) => h.name));
-    for (const frame of RANGER_FRAMES) expect(names).toContain(`ranger|${frame}`);
+    for (const frame of ANIM_FRAMES) expect(names).toContain(`archer|${frame}`);
+    for (const frame of ANIM_FRAMES) expect(names).toContain(`ranger|${frame}`);
     for (const kind of KNIGHT_KINDS) expect(names).toContain(`knight|${kind}`);
   });
 

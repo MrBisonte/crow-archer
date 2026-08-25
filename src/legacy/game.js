@@ -865,7 +865,7 @@ const statPips = (value, peak) =>
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
-    preview: () => ({ grid: buildArcherGrid(SP_TRIM.archer), sprite: ARCHER_SPRITE, key: 'archer' }),
+    preview: (frame) => ({ grid: buildArcherGrid(frame, SP_TRIM.archer), sprite: ARCHER_SPRITE, key: `archer|${frame}` }),
     hook: 'Longbow and quiver', range: 5, damage: 3,
     skills: { main: 'Longbow, three arrows in flight',
               secondary: 'Dynamite, thrown further the longer held',
@@ -886,8 +886,6 @@ const CHAR_PANELS = [
               shift: 'Charge a dash, tap again to chain it' } },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
-    // The one animated preview: its cloak sway is a real 3-frame cycle, so the
-    // frame is a parameter rather than baked like every other row's.
     preview: (frame) => ({ grid: buildRangerGrid(frame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${frame}` }),
     hook: 'Fast skirmisher', range: 3, damage: 2,
     skills: { main: 'Crossbow burst of three weaker bolts',
@@ -7808,13 +7806,14 @@ function drawPlayer() {
   // grid rather than rotated with aim, matching the rest of the aim feedback
   // this game already draws (drawAimLine, the per-character reticle) rather
   // than duplicating it on the sprite itself.
-  const grid = buildArcherGrid(SP_TRIM.archer);
+  const aFrame = animFrame3(player.walkPhase || 0);
+  const grid = buildArcherGrid(aFrame, SP_TRIM.archer);
   const spriteScale = 1;
   const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
   const spriteDy = -22;
   const archerCanvas = flashOn
-    ? spriteFlashCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
-    : spriteCanvas(`archer|${SP_TRIM.archer}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
+    ? spriteFlashCanvas(`archer|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
+    : spriteCanvas(`archer|${SP_TRIM.archer}|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
   ctx.drawImage(archerCanvas, spriteDx, spriteDy);
 
   // Shield halo

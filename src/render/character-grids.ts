@@ -13,14 +13,15 @@
  * trim colour included.
  */
 
-import { makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, type PixelGrid } from './pixel-grid';
+import { makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, type AnimFrame, type PixelGrid } from './pixel-grid';
 
 export const ARCHER_SPRITE = { w: 24, h: 32 };
 
-/** Top-down 3/4, one fixed pose (facing the viewer) — callers only ever
- * mirror left/right, so there is no separate back pose. The bow is not
+/** Top-down 3/4, facing the viewer — callers only ever mirror left/right, so
+ * there is no separate back pose. Three baked stride frames off the walk
+ * phase, the same technique the ranger's cloak sway uses. The bow is not
  * baked in; both renderers draw it live, rotated to the real-time aim. */
-export function buildArcherGrid(trim: string): PixelGrid {
+export function buildArcherGrid(frame: AnimFrame, trim: string): PixelGrid {
   const C = {
     tunic: '#1F4A19', tunicHi: '#2C5A22', tunicSh: '#14330F',
     leather: '#1A2A1A', leatherHi: '#243424',
@@ -30,6 +31,21 @@ export function buildArcherGrid(trim: string): PixelGrid {
     outline: '#0A0F0A',
   };
   const g = makePixelGrid(ARCHER_SPRITE.w, ARCHER_SPRITE.h);
+
+  // Walk cycle. One boot lifts while the other stays planted, and the shin
+  // above it shortens by the same pixel, so the foot leaves the ground rather
+  // than the leg stretching to reach it.
+  //
+  // Nothing moves sideways, deliberately. The two legs stand two columns
+  // apart, and pixelOutline fills any empty cell orthogonally touching a
+  // filled one — at that spacing the gap is already entirely outline colour,
+  // so converging them even by a pixel welds the pair into one silhouette.
+  // Vertical travel is the only axis that stays legible at 24x32.
+  const lift = frame === 'a' ? 1 : 0;
+  const rLift = frame === 'b' ? 1 : 0;
+  // The cloak trails the step, the way the ranger's does off the same phase.
+  const sway = frame === 'a' ? -1 : frame === 'b' ? 1 : 0;
+
   // Quiver on back, three arrows alternating fletching colours so the bundle
   // reads as separate shafts instead of one block, plus a band round the case
   pixelEllipse(g, 5, 7, 2.1, 4, C.wood);
@@ -37,8 +53,8 @@ export function buildArcherGrid(trim: string): PixelGrid {
   pixelRect(g, 3, 9, 5, 1, C.leather);
   pixelRect(g, 4, 0, 1, 3, C.fletch); pixelRect(g, 5, 0, 1, 3, C.fletchAlt); pixelRect(g, 6, 1, 1, 3, C.fletch);
   // Cloak hanging off the far shoulder, behind everything else
-  pixelRect(g, 3, 12, 3, 6, C.leather);
-  pixelRect(g, 3, 12, 1, 5, C.leatherHi);
+  pixelRect(g, 3 + sway, 12, 3, 6, C.leather);
+  pixelRect(g, 3 + sway, 12, 1, 5, C.leatherHi);
   // Hood
   pixelEllipse(g, 12, 6, 5.5, 4.5, C.leather);
   pixelEllipse(g, 10, 4.5, 2.5, 2, C.leatherHi);
@@ -68,11 +84,13 @@ export function buildArcherGrid(trim: string): PixelGrid {
   pixelCurve(g, [18, 9], [23, 15], [19, 23], C.wood, 40);
   pixelCurve(g, [18, 10], [22.3, 15], [19.5, 22], C.woodHi, 40);
   setPixel(g, 19, 16, C.skin); setPixel(g, 20, 16, C.skin);
-  // Legs and boots, with a knee pad and a turned-down cuff at the boot top
-  pixelRect(g, 8, 22, 3, 5, C.leather); pixelRect(g, 13, 22, 3, 5, C.leather);
+  // Legs and boots, with a knee pad and a turned-down cuff at the boot top.
+  // Each side reads its own lift, so the pair is never at the same height on
+  // the two extreme frames and the stride is what the eye picks up.
+  pixelRect(g, 8, 22, 3, 5 - lift, C.leather); pixelRect(g, 13, 22, 3, 5 - rLift, C.leather);
   pixelRect(g, 8, 24, 3, 1, C.leatherHi); pixelRect(g, 13, 24, 3, 1, C.leatherHi);
-  pixelRect(g, 7, 27, 4, 3, C.leatherHi); pixelRect(g, 13, 27, 4, 3, C.leatherHi);
-  pixelRect(g, 7, 27, 4, 1, C.wood); pixelRect(g, 13, 27, 4, 1, C.wood);
+  pixelRect(g, 7, 27 - lift, 4, 3, C.leatherHi); pixelRect(g, 13, 27 - rLift, 4, 3, C.leatherHi);
+  pixelRect(g, 7, 27 - lift, 4, 1, C.wood); pixelRect(g, 13, 27 - rLift, 4, 1, C.wood);
   return pixelOutline(g, C.outline);
 }
 
