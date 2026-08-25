@@ -42,6 +42,7 @@ import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { Hitstop } from '../sim/hitstop';
 import { log, attachToEvents } from '../sim/log';
+import { SPANS, countingContext, trace } from '../render/trace';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
   featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
@@ -1496,6 +1497,15 @@ let shootPressed = false;
 // there is no document. Everything that reads them runs downstream of boot().
 let canvas = null;
 let ctx = null;
+/**
+ * The context as the canvas handed it over, before any tracing wrapper.
+ *
+ * Kept because `ctx` is replaced by the counting wrapper at the `ops` level,
+ * and wrapping is not idempotent: wrapping an already-wrapped context counts
+ * every call twice, which reads as a real regression and is not one. Every
+ * wrap starts from this.
+ */
+let rawCtx = null;
 let booted = false;
 
 function initAudio() {
@@ -11678,9 +11688,11 @@ function drawWizardReticle() {
 const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
 
 function render(t) {
+  trace.mark('hud');
   syncCursor();
   const gameVisible = GAME_VISIBLE_STATES.has(appState);
   if (gameVisible) {
+    trace.mark('tiles');
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
@@ -11691,6 +11703,7 @@ function render(t) {
     // The ice overlay goes on at the call site rather than inside each of the
     // three draw functions: it is the same rime over whatever was just drawn,
     // and one copy beats three that could drift.
+    trace.mark('bodies');
     for (const c of crows) if (litAt(c.x, c.y)) { drawCrow(c); drawFrozenOverlay(c); }
     for (const s of skeletons) if (litAt(s.x, s.y)) { drawSkeleton(s); drawFrozenOverlay(s); }
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
@@ -11703,8 +11716,10 @@ function render(t) {
     drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
+    trace.mark('fog');
     drawFog();
     ctx.restore();
+    trace.mark('vignette');
     drawEdgeTicks(); drawEdgeAlerts();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -11730,6 +11745,7 @@ function render(t) {
       ctx.shadowBlur = 0;
       ctx.restore();
     }
+    trace.mark('hud');
     drawHUD(t);
     FORESHADOW.drawBanner(); STREAK.draw(); BOUNTIES.draw();
     // Lightning storm flash overlay
@@ -11755,29 +11771,59 @@ function render(t) {
 
 // ── LOOP ──────────────────────────────────────────────────────────────────────
 
-// Frame-time probe, dev only. Enable with ?perf=1.
-// Tracks update and render cost separately over the last 120 frames.
-let PERF = null;
-const makePerf = () => ({
-  upd: new Float32Array(120), ren: new Float32Array(120), i: 0, n: 0,
-  push(u, r) {
-    this.upd[this.i] = u; this.ren[this.i] = r;
-    this.i = (this.i + 1) % 120; if (this.n < 120) this.n++;
-  },
-  stats(buf) {
-    let sum = 0, max = 0;
-    for (let k = 0; k < this.n; k++) { sum += buf[k]; if (buf[k] > max) max = buf[k]; }
-    return [sum / this.n, max];
-  },
-  draw() {
-    if (!this.n) return;
-    const [ua, um] = this.stats(this.upd), [ra, rm] = this.stats(this.ren);
-    ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillStyle = '#39FF14';
-    ctx.fillText(`UPD AVG ${ua.toFixed(2)} MAX ${um.toFixed(2)}`, 4, CONFIG.canvasH - 24);
-    ctx.fillText(`REN AVG ${ra.toFixed(2)} MAX ${rm.toFixed(2)}`, 4, CONFIG.canvasH - 13);
-  }
-});
+/**
+ * The tracer's readout, one row per section, drawn after the frame is filed so
+ * it never counts itself.
+ *
+ * Deliberately not part of `render()`: the thing measuring the render pass
+ * cannot also be inside it. `trace` holds the numbers (see src/render/trace.ts)
+ * and formats the rows; this only puts them on the canvas.
+ */
+/**
+ * Sets the trace level and puts the right context behind `ctx`.
+ *
+ * The only place the counting wrapper is installed or removed, so the two
+ * callers (the ?perf switch at boot and devHooks.setTrace) cannot disagree
+ * about it, and so re-entering `ops` rewraps the raw context rather than the
+ * wrapper it installed last time.
+ */
+function applyTraceLevel(level) {
+  trace.setLevel(level);
+  if (rawCtx !== null) ctx = trace.level() === 'ops' ? countingContext(rawCtx, trace.counters) : rawCtx;
+  return trace.level();
+}
+
+function drawTraceOverlay() {
+  if (!trace.frames()) return;
+  const rows = trace.lines();
+  const top = CONFIG.canvasH - 11 * (rows.length + 1) - 4;
+  ctx.save();
+  ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(2, top - 2, 420, 11 * (rows.length + 1) + 4);
+  ctx.fillStyle = '#39FF14';
+  ctx.fillText(`TRACE ${trace.level()}  ${trace.frames()} frames`, 4, top);
+  rows.forEach((row, i) => ctx.fillText(row, 4, top + 11 * (i + 1)));
+  ctx.restore();
+}
+
+/**
+ * Mirrors the same rows into the diagnostic log once a second, so a playtest
+ * bug report carries the numbers without the reporter having had the overlay
+ * open. Gated on the log's own level, so it costs nothing below `debug`.
+ */
+let traceLoggedAt = 0;
+function logTraceSummary(ts) {
+  if (trace.level() === 'off' || log.currentLevel() !== 'debug') return;
+  if (ts - traceLoggedAt < 1000) return;
+  traceLoggedAt = ts;
+  const summary = trace.summary();
+  log.debug('trace', `${trace.frames()} frames`, {
+    map: mapKind,
+    rows: trace.lines(),
+    worst: SPANS.reduce((a, b) => (summary[a].ms >= summary[b].ms ? a : b)),
+  });
+}
 
 let lastTs = 0, loopT = 0;
 
@@ -11981,7 +12027,10 @@ function loop(ts) {
 
   if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
 
-  const _pt0 = PERF ? performance.now() : 0;
+  // The frame's own boundaries. render() marks the rest: its first mark closes
+  // `sim`, so the accumulator below needs no closing call of its own.
+  trace.beginFrame();
+  trace.mark('sim');
   accumulator += frameTime;
   let steps = 0;
   while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
@@ -11990,11 +12039,10 @@ function loop(ts) {
     steps++;
   }
   if (steps === MAX_STEPS) accumulator = 0;   // discard backlog after the cap
-  const _updMs = PERF ? performance.now() - _pt0 : 0;
 
-  const _pt1 = PERF ? performance.now() : 0;
   render(loopT);
-  if (PERF) { PERF.push(_updMs, performance.now() - _pt1); PERF.draw(); }
+  trace.endFrame();
+  if (trace.level() !== 'off') { drawTraceOverlay(); logTraceSummary(ts); }
   if (liveLoop) requestAnimationFrame(loop);
 }
 
@@ -12056,6 +12104,13 @@ export const devHooks = {
   holdFrames(n) { hitstop.trigger(n); },
   hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
+  /**
+   * The frame tracer, for a headless run that wants the numbers rather than
+   * the overlay. `level` takes the same values ?perf does; 'ops' installs the
+   * counting wrapper, which a booted page needs a canvas for.
+   */
+  trace: () => ({ level: trace.level(), frames: trace.frames(), spans: trace.summary() }),
+  setTrace(level) { trace.reset(); return applyTraceLevel(level); },
   // The live key map and the one-shot fire latch, so a test can drive the same
   // input path a real keyboard does instead of a parallel one.
   keys: () => keys,
@@ -12442,13 +12497,18 @@ export function boot() {
 
   canvas = document.getElementById('game');
   canvas.width = CONFIG.canvasW; canvas.height = CONFIG.canvasH;
-  ctx = canvas.getContext('2d');
+  rawCtx = canvas.getContext('2d');
+  ctx = rawCtx;
 
   tileLayer      = new StaticTileLayer(tileMap, tileLayout);
   tileOverlay    = new AnimatedTileOverlay(tileMap, tileLayout);
   vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
 
-  if (query.has('perf')) PERF = makePerf();
+  // ?perf=1 times the six sections; ?perf=ops also counts canvas calls and
+  // fill area, which needs every call routed through a wrapper and is for
+  // verifying a change rather than for playing. Off, a span is one comparison.
+  const perf = query.get('perf');
+  if (perf !== null) applyTraceLevel(perf === 'ops' ? 'ops' : 'time');
 
   // ?log=debug (or info/warn/error) for a human testing session; omitted,
   // the logger stays at its default 'warn' floor so real play pays for
