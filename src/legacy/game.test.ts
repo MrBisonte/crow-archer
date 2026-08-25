@@ -23,7 +23,7 @@ import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
-import { TILE, tilePassable } from '../sim/tilemap';
+import { TILE, tilePassable, type TileId } from '../sim/tilemap';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -4312,19 +4312,90 @@ describe('the retinue holds the barrier gates', () => {
     const body = g.guards()[0];
     // Drag it off, the way chasing something would.
     body.x += 120; body.y += 60;
+    const dropped = { x: body.x, y: body.y };
     g.clearSiegeWave();
     g.stepSim(600);
     // Quiet before asking, for the reason the resting-formation test above is:
-    // clearing a wave advances the run and spawns the next one, and a guard
-    // that has gone to meet something standing on the hero has not failed to
-    // come home -- it is answering. This test is about the walk back, so the
-    // field has to be empty when the question is put. Flaked 1 run in 10
-    // without it.
-    g.clearSiegeWave();
-    g.stepSim(240);
-    let best = Infinity;
+    // a guard that has gone to meet something standing on the hero has not
+    // failed to come home -- it is answering. This test is about the walk
+    // back, so the field has to be empty when the question is put.
+    //
+    // Cleared repeatedly rather than once, because clearing a wave ADVANCES
+    // the run and spawns the next one. A single clear plus a long settle gives
+    // the new wave the whole settle to cross the map and reach the hero, and
+    // then a guard is legitimately at his side rather than at its gate. One
+    // clear flaked 1 run in 10, then landed at 170.14 against a limit of 170.
+    // Short steps between clears keep the field empty for the whole walk.
+    // Six clears at two seconds apart: long enough for the walk home even on a
+    // map seed that scatters cover across the route, and frequent enough that
+    // the wave each clear spawns never crosses the map to reach the hero. The
+    // map seed is Math.random, so the route length varies run to run -- 320
+    // frames was enough on some seeds and left the guard still walking at
+    // 175px on others, which is what failed 4 runs in 20.
+    for (let i = 0; i < 6; i++) { g.clearSiegeWave(); g.stepSim(120); }
+    // Two claims, and the first is the one that matters.
+    //
+    // It MOVED. The old assertion was "within guardPostLeash of a gate", and
+    // the drag is 134 against a leash of 170 -- so it was satisfied by a guard
+    // that had not moved a single pixel, which is exactly what was happening.
+    // +120,+60 landed the body inside a rock, moveGuard refused both halves of
+    // every step, and it sat there entombed for the whole settle while the test
+    // reported success. Distance from where it was dropped is the question that
+    // catches that; distance from a gate is not.
+    const travelled = Math.hypot(body.x - dropped.x, body.y - dropped.y);
+    expect(travelled, 'the guard never moved: it is stuck where it was put')
+      .toBeGreaterThan(20);
+
+    // And it is somewhere it belongs -- its gate or its hero. Not "at its
+    // post", because waves keep arriving through this settle and a guard that
+    // has gone to meet one has not failed to come home.
+    const hero = g.player() as { x: number; y: number };
+    let best = Math.hypot(body.x - hero.x, body.y - hero.y);
     for (const post of gates()) best = Math.min(best, Math.hypot(body.x - post.x, body.y - post.y));
-    expect(best, 'the guard never went back to a gate').toBeLessThan(g.config().guardPostLeash);
+    expect(best, 'the guard is neither on a gate nor with the hero')
+      .toBeLessThan(g.config().guardPostLeash);
+  });
+
+  /**
+   * A guard pushed inside terrain has to be able to walk out.
+   *
+   * moveGuard checks the DESTINATION tile, so a body already standing in rock
+   * has both halves of every step refused and never moves again: it cannot
+   * fight, cannot go home, and nothing frees it. The player has a way out of
+   * this and has just been given a key for it; a guard had none.
+   *
+   * Placed deliberately rather than nudged. The walk-home test above drags a
+   * guard by a fixed offset and only lands it in rock on some map seeds -- it
+   * passed with this rule deleted, because most seeds leave the drop on open
+   * ground. This one goes looking for a solid tile, so it fails every time.
+   */
+  it('walks out of terrain it was pushed into', () => {
+    openSiege();
+    const ts = g.config().tileSize as number;
+    const tiles = g.tiles() as { get(r: number, c: number): TileId };
+    const rows = g.config().rows as number;
+    const cols = g.config().cols as number;
+
+    let solid: { row: number; col: number } | null = null;
+    for (let r = 2; r < rows - 2 && !solid; r++) {
+      for (let c = 2; c < cols - 2; c++) {
+        if (!tilePassable(tiles.get(r, c))) { solid = { row: r, col: c }; break; }
+      }
+    }
+    if (!solid) throw new Error('the bastion has no solid tile to test with');
+
+    const body = g.guards()[0] as { x: number; y: number };
+    body.x = (solid.col + 0.5) * ts;
+    body.y = (solid.row + 0.5) * ts;
+    const from = { x: body.x, y: body.y };
+
+    g.stepSim(240);
+
+    const travelled = Math.hypot(body.x - from.x, body.y - from.y);
+    expect(travelled, 'entombed: the guard never moved out of the rock')
+      .toBeGreaterThan(8);
+    const nowOn = tiles.get(Math.floor(body.y / ts), Math.floor(body.x / ts));
+    expect(tilePassable(nowOn), 'the guard is still standing inside terrain').toBe(true);
   });
 
   it('ignores an enemy that is nowhere near any gate', () => {
@@ -4490,6 +4561,61 @@ describe('allies are visibly the hero\u2019s', () => {
     // must not be the hero's, and this is where that would be caught.
     for (const sk of g.skeletons()) expect(sk.team ?? Team.ENEMY).not.toBe(hero.team);
     for (const so of g.soldiers()) expect(so.team ?? Team.ENEMY).not.toBe(hero.team);
+  });
+});
+
+// ── THE RETICLE IS THE AIM POINT ─────────────────────────────────────────────
+//
+// Playtest: "playing with the archer and aiming at a creep with the mouse makes
+// me fail the shot."
+//
+// The OS cursor is hidden in game (syncCursor), so the reticle is the only
+// aiming reference the player has. drawReticle translated to
+// `mouse.y + hudHeight` while the aim ray used `mouse.y - hudHeight`, which put
+// the reticle a full 48px below the point the arrow flew at. Lining the reticle
+// up on a crow shot a clean 48px over its head, on a target 16 pixels tall.
+describe('the reticle sits where the shot goes', () => {
+  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+
+  const MOUSE_POINTS = [
+    { x: 100, y: 100 }, { x: 528, y: 360 }, { x: 900, y: 640 }, { x: 0, y: 48 },
+  ];
+
+  it('draws the reticle at the point the aim ray is pointed at', () => {
+    const hud = g.config().hudHeight as number;
+    const mouse = g.mouse() as { x: number; y: number };
+    for (const at of MOUSE_POINTS) {
+      mouse.x = at.x; mouse.y = at.y;
+      const reticle = g.reticleAt() as { x: number; y: number };
+      const world = g.aimWorld() as { x: number; y: number };
+      // World space is drawn hudHeight further down, so the aim point in canvas
+      // pixels is world.y + hudHeight. The reticle has to be there.
+      expect(reticle.x, `x at ${at.x},${at.y}`).toBe(world.x);
+      expect(reticle.y, `reticle is not on the aim point at ${at.x},${at.y}`)
+        .toBe(world.y + hud);
+    }
+  });
+
+  it('sends the arrow at what the reticle is on', () => {
+    g.setMode('brawl');
+    g.go('playing');
+    g.stepSim(1);
+    const hero = g.player() as { x: number; y: number };
+    const mouse = g.mouse() as { x: number; y: number };
+
+    // A target dead level with the hero and to his right: aiming at it should
+    // give a heading of 0, and the 48px error showed up as a heading that was
+    // visibly tilted.
+    const target = { x: hero.x + 200, y: hero.y };
+    const reticle = g.reticleAt() as { x: number; y: number };
+    // Put the RETICLE on the target, which is what the player does.
+    mouse.x = target.x + (mouse.x - reticle.x);
+    mouse.y = target.y + g.config().hudHeight + (mouse.y - reticle.y);
+
+    const world = g.aimWorld() as { x: number; y: number };
+    const off = Math.hypot(world.x - target.x, world.y - target.y);
+    expect(off, 'the shot is aimed away from where the reticle is sitting')
+      .toBeLessThan(1);
   });
 });
 
