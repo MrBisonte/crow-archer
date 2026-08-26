@@ -17,9 +17,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { clearArena } from './arena-testkit';
 import { devHooks as g } from './game.js';
 
-interface Focus { points: number; fill: number; max: number; melee: string }
+/**
+ * `points` is a real number — Focus climbs a little every frame rather than
+ * jumping a whole pip every two seconds — and `spendable` is what that buys,
+ * which is the figure most of these assertions want.
+ */
+interface Focus { points: number; spendable: number; max: number; melee: string }
 
-const focus = (): Focus => g.focus() as Focus;
+const focus = (): Focus => g.focus() as unknown as Focus;
 
 /** Sets the pool to an exact number of points, so a spend reads as a subtraction. */
 function setFocus(points: number): void {
@@ -53,12 +58,12 @@ describe('the wizard opens with a full pool', () => {
     expect(focus().max).toBe(g.config().wizFocusMax);
   });
 
-  it('banks no part-point while the pool is already full', () => {
-    // Otherwise topping up quietly stores a point that lands the instant he
-    // spends one, and the pool is effectively one larger than it says.
-    g.stepSim(120);
+  it('banks nothing past the maximum', () => {
+    // Otherwise a full pool quietly stores an overflow point that lands the
+    // instant he spends one, and the pool is effectively one larger than it
+    // says on the HUD.
+    g.stepSim(600);
     expect(focus().points).toBe(focus().max);
-    expect(focus().fill).toBe(0);
   });
 });
 
@@ -89,7 +94,10 @@ describe('what a cast costs', () => {
     setFocus(2);
     g.secondary();
     g.stepSim(1);
-    expect(focus().points, 'storm keeps its own cooldown and costs no Focus').toBe(2);
+    // Compared against what he can spend rather than the raw pool: the step
+    // that resolves the cast also regenerates a sliver, so an exact equality
+    // here would be asserting that the clock stopped.
+    expect(focus().spendable, 'storm keeps its own cooldown and costs no Focus').toBe(2);
   });
 });
 
@@ -127,7 +135,8 @@ describe('running dry', () => {
   it('never takes the pool below zero', () => {
     setFocus(0);
     for (let i = 0; i < 5; i++) cast();
-    expect(focus().points).toBe(0);
+    expect(focus().points).toBeGreaterThanOrEqual(0);
+    expect(focus().spendable).toBe(0);
   });
 
   it('gives the broom a longer cooldown than the pitchfork it copies', () => {
@@ -138,14 +147,30 @@ describe('running dry', () => {
 });
 
 describe('regeneration', () => {
-  it('refills a point after the configured interval, and only then', () => {
+  it('climbs steadily rather than jumping a whole point at a time', () => {
+    // The bar used to sit still for two seconds and then jump a pip, which
+    // reads as the HUD being stuck. What matters is that it moves *and* that
+    // moving smoothly did not change when a cast becomes affordable.
+    setFocus(0);
+    const readings = [];
+    for (let i = 0; i < 5; i++) { g.stepSim(6); readings.push(focus().points); }
+    for (let i = 1; i < readings.length; i++) {
+      expect(readings[i], 'the pool is higher every tenth of a second')
+        .toBeGreaterThan(readings[i - 1]!);
+    }
+    expect(readings.at(-1), 'and none of that is castable yet').toBeLessThan(1);
+  });
+
+  it('becomes spendable at the same moment it always did', () => {
+    // The guarantee behind the change: smoother display, identical pacing.
+    // Accumulating 1/wizFocusRegenSecs per second crosses 1.0 on the same frame
+    // granting a whole point every wizFocusRegenSecs did.
     setFocus(0);
     const secs = g.config().wizFocusRegenSecs;
-    // A hair under the interval: still nothing.
     g.stepSim(Math.floor(secs * 60) - 2);
-    expect(focus().points).toBe(0);
+    expect(focus().spendable, 'a hair under the interval buys nothing').toBe(0);
     g.stepSim(4);
-    expect(focus().points).toBe(1);
+    expect(focus().spendable).toBe(1);
   });
 
   it('keeps refilling while he casts, not only while he is idle', () => {
@@ -172,5 +197,17 @@ describe('regeneration', () => {
     setFocus(0);
     g.stepSim(60 * 60);
     expect(focus().points).toBe(focus().max);
+  });
+
+  it('carries the remainder across a spend instead of dropping it', () => {
+    // A whole-point grant threw away whatever fraction was banked when it
+    // fired. Holding the pool as a real number keeps it, which is both simpler
+    // and slightly kinder: a cast at 1.4 leaves 0.4 toward the next one.
+    setFocus(0);
+    g.stepSim(Math.ceil(g.config().wizFocusRegenSecs * 60) + 12);
+    const before = focus().points;
+    expect(before).toBeGreaterThan(1);
+    cast();
+    expect(focus().points).toBeCloseTo(before - g.config().wizFocusBolt + 1 / 60 / g.config().wizFocusRegenSecs, 3);
   });
 });

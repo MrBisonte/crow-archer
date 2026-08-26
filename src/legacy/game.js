@@ -1162,16 +1162,16 @@ let sapperBarrageCD = 0, sapperShotCD = 0;
 // short mercy window on arrival, without which blinking out of a swarm still
 // takes the hit you blinked away from.
 let wizBlinkCD = 0, wizBlinkIFrame = 0;
-/**
- * Seconds banked toward the next point of Focus.
- *
- * Focus itself is a whole number in `inv.focus`, so the HUD can draw it as
- * three pips and a spend is a subtraction rather than a comparison against a
- * fraction. The part-filled point lives here instead, out of the inventory,
- * because nothing else in the game has a pool that fills itself and the pool
- * renderer has no way to show half a pip.
- */
-let wizFocusFill = 0;
+// Focus is the one pool in the game that fills itself, so unlike every other
+// entry in `inv` it is a real number rather than a count. It climbs a little
+// every frame and the HUD's cell track draws the part-filled point, which is
+// what a regenerating resource should look like -- it used to sit still for two
+// seconds and then jump a whole pip, which reads as the bar being broken.
+//
+// Nothing about the pacing changes. Accumulating 1/wizFocusRegenSecs per second
+// crosses 1.0 at exactly the same moment granting a whole point every
+// wizFocusRegenSecs did, and the spend guards compare against the same figures,
+// so the frame a cast becomes affordable is unchanged.
 
 /**
  * Which fallback weapon is mid-swing.
@@ -3311,9 +3311,7 @@ function initGame() {
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
-  // resetInv has already put inv.focus at its maximum; this is the part-point
-  // on top of it, which a new run must not inherit from the last one.
-  wizFocusFill = 0;
+
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
   rangerMomentum = 0;
@@ -3630,15 +3628,7 @@ function updatePlayer(dt) {
   // hidden cooldown, and two rates interacting is a balance problem with no
   // single dial to turn.
   if (selectedChar === 'wizard' && inv.focus < CONFIG.wizFocusMax) {
-    wizFocusFill += dt;
-    if (wizFocusFill >= CONFIG.wizFocusRegenSecs) {
-      wizFocusFill -= CONFIG.wizFocusRegenSecs;
-      inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + 1);
-    }
-  } else if (inv.focus >= CONFIG.wizFocusMax) {
-    // Held at zero while full, so topping up does not bank a free point that
-    // lands the instant he spends one.
-    wizFocusFill = 0;
+    inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + dt / CONFIG.wizFocusRegenSecs);
   }
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
@@ -11328,7 +11318,11 @@ function drawActivePool(key) {
 
   ctx.font = 'bold 12px "Courier New", monospace';
   ctx.textAlign = 'right'; ctx.fillStyle = col;
-  ctx.fillText(max > 0 ? cur + '/' + max : String(cur), 504, 17);
+  // Floored, because Focus is a real number and the others are counts: a pool
+  // mid-refill holds 2.4 points and can spend 2 of them, so 2 is what the
+  // number beside it has to say. Every other pool is already whole and is
+  // unaffected.
+  ctx.fillText(max > 0 ? Math.floor(cur) + '/' + max : String(Math.floor(cur)), 504, 17);
 }
 
 function drawReservePool(key, x) {
@@ -12835,7 +12829,8 @@ export const devHooks = {
                       connected: knightSpearConnected, cooldown: knightSpearCD }),
   /** The wizard's pool, the part-point banked toward the next one, and which
    *  fallback weapon is mid-swing. Enough to check a spend without guessing. */
-  focus: () => ({ points: inv.focus, fill: wizFocusFill, max: CONFIG.wizFocusMax, melee: pfKind }),
+  focus: () => ({ points: inv.focus, spendable: Math.floor(inv.focus),
+                  max: CONFIG.wizFocusMax, melee: pfKind }),
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.
