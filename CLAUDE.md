@@ -8,6 +8,20 @@ reasoning and nothing makes you read it before writing a draw function —
 which is how the rule at its line 216 was broken by the person who had
 just read it.
 
+## Coordination — do this before your first commit
+
+- **Starting work in this repo?** Add your row to `COORDINATION.md` before
+  you commit anything, and update it on every commit after that. Several
+  sessions share these branches and a branch nobody logged is a branch that
+  gets clobbered.
+- **Pushing anything?** Only `integration/round-4` may push to `origin`, and
+  `master` moves only by a merged PR. Everything else reaches the remote
+  through the integration branch.
+- **Colliding with another branch?** Merger is the coordinating session and
+  decides merge order; it can ask any session in the ledger to update its row
+  or resolve a gap. A structural collision is resolved by the author of the
+  branch that caused it, with both diffs open — not by whoever merges last.
+
 ## What is enforced mechanically, and what is not
 
 | Rule | Enforced by |
