@@ -972,7 +972,8 @@ const CHAR_PANELS = [
     hook: 'Longbow and quiver', range: 5, damage: 3,
     skills: { main: 'Longbow, three arrows in flight',
               secondary: 'Dynamite, thrown further the longer held',
-              shift: 'Draw a power shot that pierces' } },
+              shift: 'Draw a power shot that pierces',
+              passive: 'Brace: stand still, boss hits land 1.8x' } },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
     preview: (frame) => ({ grid: buildWizardGrid(frame, SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: `wizard|${frame}` }),
@@ -982,28 +983,32 @@ const CHAR_PANELS = [
     hook: 'Homing glass cannon', range: 4, damage: 5,
     skills: { main: 'Homing bolts that seek the nearest target',
               secondary: 'Lightning storm across a wide area',
-              shift: 'Blink, tap again to chain a second hop' } },
+              shift: 'Blink, tap again to chain a second hop',
+              passive: 'Focus: 3 points buy your bolts and blinks' } },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
     preview: (frame) => ({ grid: buildKnightGrid('normal', frame, SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: `knight|normal|${frame}` }),
     hook: 'Armoured brawler', range: 1, damage: 3,
     skills: { main: 'Long spear at melee reach, hits twice',
               secondary: 'Whirlwind that breaks the tiles around you',
-              shift: 'Charge a dash, tap again to chain it' } },
+              shift: 'Charge a dash, tap again to chain it',
+              passive: 'Bloodlust: 3 hits stack +30% damage/speed' } },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
     preview: (frame) => ({ grid: buildRangerGrid(frame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${frame}` }),
     hook: 'Fast skirmisher', range: 3, damage: 2,
     skills: { main: 'Crossbow burst of three weaker bolts',
               secondary: 'Satchel charge: throw, then click to arm',
-              shift: 'Throw a net that holds what it catches' } },
+              shift: 'Throw a net that holds what it catches',
+              passive: 'Momentum: keep moving for up to +30%' } },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
     preview: (frame) => ({ grid: buildSapperGrid(frame, SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: `sapper|${frame}` }),
     hook: 'Bombs and pitchfork', range: 2, damage: 3,
     skills: { main: 'Ten bombs, pitchfork when the pouch empties',
               secondary: 'Five-bomb barrage in a wide fan',
-              shift: 'Piercing triple shot, sets off your bombs' } },
+              shift: 'Piercing triple shot, sets off your bombs',
+              passive: 'Bombs set off bombs; hold to place three' } },
 ].map((p) => {
   const stats = CHARACTER_STATS[p.char];
   // Loud at load rather than a panel with two blank bars. A character with a
@@ -1046,14 +1051,23 @@ function assertPanelDamageOrder(panels) {
 assertPanelDamageOrder(CHAR_PANELS);
 
 /**
- * The three ability slots a selected panel lists, as [heading, row key], in
- * the order they appear. One list rather than three repeated draw calls, so
- * the headings and the keys they read cannot drift apart, and the slots are
- * the real ones: `main` is the shoot key, `secondary` is startCharge(), and
- * `shift` is the snipe key — which is sniper mode for the archer and ranger
- * and a distinct ability for the other three.
+ * The ability slots a selected panel lists, as [heading, row key], in the order
+ * they appear. One list rather than repeated draw calls, so the headings and
+ * the keys they read cannot drift apart.
+ *
+ * The first three are the bound ones: `main` is the shoot key, `secondary` is
+ * startCharge(), and `shift` is the snipe key — sniper mode for the archer and
+ * ranger, a distinct ability for the other three.
+ *
+ * `passive` is the fourth and it has no key at all, which is exactly why it had
+ * to be added. Every hero gained something unbound — Brace, Focus, Bloodlust,
+ * Momentum, chained bombs — and the pick screen is where a player decides what
+ * to play, so an ability that only appears in the manual is an ability most
+ * players never learn they have.
  */
-const SKILL_SLOTS = [['MAIN', 'main'], ['SECONDARY', 'secondary'], ['SHIFT', 'shift']];
+const SKILL_SLOTS = [
+  ['MAIN', 'main'], ['SECONDARY', 'secondary'], ['SHIFT', 'shift'], ['PASSIVE', 'passive'],
+];
 
 /**
  * The map-select screen shown between character-select and the run, Waves
@@ -11894,8 +11908,13 @@ function drawCharSelect(t) {
 
     if (sel) {
       p.statBars.forEach((bar, i) => _drawStatBar(px+pad, py+186+i*19, innerW, bar, p.color));
+      // Pitch derived from the slot count rather than fixed at 40, so a fifth
+      // slot tightens the rows instead of writing the last one off the bottom
+      // of the panel. The upgrades screen sizes its rows the same way.
+      const slotTop = py + 276, slotFoot = py + selH - 20;
+      const slotPitch = Math.min(40, Math.floor((slotFoot - slotTop) / SKILL_SLOTS.length));
       SKILL_SLOTS.forEach(([label, slot], i) => {
-        const sy = py + 276 + i * 40;
+        const sy = slotTop + i * slotPitch;
         ctx.textAlign='left';
         ctx.font='9px "Courier New",monospace';
         ctx.fillStyle = PANEL_LABEL_COLOR;

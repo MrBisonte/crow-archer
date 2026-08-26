@@ -1991,7 +1991,7 @@ interface CharPanel {
   hook: string;
   /** The authored DAMAGE bar, checked against bossDamageMult's ordering. */
   damage: number;
-  skills: { main: string; secondary: string; shift: string };
+  skills: { main: string; secondary: string; shift: string; passive: string };
   statBars: ReadonlyArray<{ label: string; pips: number }>;
   preview: (frame: 'a' | 'mid' | 'b') => { grid: PixelGrid; sprite: { w: number; h: number }; key: string };
 }
@@ -2006,7 +2006,7 @@ describe('character-select panel data', () => {
   it('gives every panel a hook and all three skill lines', () => {
     for (const p of charPanels()) {
       expect(p.hook, p.char).toBeTruthy();
-      for (const slot of ['main', 'secondary', 'shift'] as const) {
+      for (const slot of ['main', 'secondary', 'shift', 'passive'] as const) {
         expect(p.skills?.[slot], `${p.char}.${slot}`).toBeTruthy();
         // A budget, not a style rule. The selected panel is 350px wide less
         // 12px padding a side, and Courier New advances 0.6em, so at 10.5px
