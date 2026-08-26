@@ -289,8 +289,16 @@ export const WIZARD_SPRITE = { w: 24, h: 32 };
 const WIZARD_STANCE_BACK = 7;
 const WIZARD_STANCE_FRONT = 16;
 
-/** Where the robe's hem falls. Above the boots, or the walk has nothing to show. */
-const WIZARD_HEM_ROW = 25;
+/**
+ * Where the robe's hem falls: one row above the boots, and no lower.
+ *
+ * A wizard's robe reaches the floor, so it is set as low as it can go while
+ * still leaving the boots to show under it. That means the legs are hidden for
+ * the whole cycle and the walk is carried by two boots parting beneath a
+ * swinging hem — but the legs still have to be there, because they are what
+ * puts the boots where they go.
+ */
+const WIZARD_HEM_ROW = BOOT_ROW - 1;
 
 /**
  * The wizard in profile, facing +x, three baked stride frames off walk phase.
@@ -333,19 +341,28 @@ export function buildWizardGrid(frame: AnimFrame, trim: string): PixelGrid {
 
   // ---- robe ----------------------------------------------------------------
 
-  // Shoulders down to the waist, then a skirt flaring to the hem and swaying
-  // against the step. The back edge carries the sway; the front stays under
-  // the beard, because a hem that swung forward would swing through it.
+  // Shoulders down to the waist, then a skirt flaring the whole way to the
+  // boots. The back edge carries the full sway and the front takes half of it:
+  // loose at the back and pinned at the front reads as a flag rather than as
+  // cloth being walked in, and a front edge on the full sway swings into the
+  // beard.
   pixelRect(g, 9, 13, 8, 7, C.robe);
   pixelRect(g, 9, 13, 8, 2, C.robeHi);
   pixelRect(g, 9, 15, 2, 5, C.robeSh);
   for (let y = 20; y < WIZARD_HEM_ROW; y++) {
     const t = (y - 20) / (WIZARD_HEM_ROW - 20);
-    const back = Math.round(9 - 3 * t) + sway;
-    const front = Math.round(17 + 2 * t);
+    const back = Math.round(8 - 4 * t) + sway;
+    const front = Math.round(17 + 3 * t) + (sway > 0 ? 1 : 0);
     pixelRect(g, back, y, front - back, 1, C.robe);
     setPixel(g, back, y, C.robeSh);
     setPixel(g, front - 1, y, C.robeHi);
+    // Two folds running the length of the skirt, carried by the sway rather
+    // than pinned to a column: a fold at a fixed x slides across the garment
+    // as it swings, which reads as the pattern moving and not the cloth.
+    if (y > 21) {
+      setPixel(g, Math.round(11 + t) + sway, y, C.robeSh);
+      setPixel(g, Math.round(15 + 2 * t), y, C.robeSh);
+    }
   }
   // Sleeve out to where the live staff starts, so the weapon leaves a hand.
   pixelRect(g, 16, 15, 4, 3, C.robe);
@@ -353,11 +370,15 @@ export function buildWizardGrid(frame: AnimFrame, trim: string): PixelGrid {
   setPixel(g, 20, 17, C.skin);
   setPixel(g, 20, 16, C.skin);
 
-  // Fold shadows down the skirt, and the stars that say what he is.
-  pixelRect(g, 12, 20, 1, 5, C.robeSh);
-  setPixel(g, 11, 17, C.star); setPixel(g, 15, 22, C.star); setPixel(g, 10, 22, C.star);
+  // The stars that say what he is, spread down the longer skirt. The low ones
+  // ride the sway so they travel with the cloth they are stitched to.
+  setPixel(g, 11, 17, C.star);
+  setPixel(g, 16, 22, C.star);
+  setPixel(g, 9 + sway, 24, C.star);
+  setPixel(g, 13 + sway, 27, C.star);
 
-  // Hem trim, the one team-readable stripe, and low enough to clear the beard.
+  // Hem trim, the one team-readable stripe. It rides the hem, which makes it
+  // the clearest single thing on him saying the robe is in motion.
   pixelRect(g, 6 + sway, WIZARD_HEM_ROW - 1, 13, 1, trim);
 
   // ---- head ----------------------------------------------------------------
@@ -548,12 +569,83 @@ export const KNIGHT_SPRITE = { w: 30, h: 36 };
  * daylight. `strideOf` is given the width so it checks against the legs that
  * actually get drawn.
  */
-const KNIGHT_STANCE_BACK = 10;
-const KNIGHT_STANCE_FRONT = 21;
-const KNIGHT_SHIN_W = 3;
+const KNIGHT_STANCE_BACK = 9;
+const KNIGHT_STANCE_FRONT = 22;
+const KNIGHT_SHIN_W = 4;
 
 /** The knight is four rows taller than the others, so his boots land lower. */
 const KNIGHT_BOOT_ROW = 34;
+
+/**
+ * One armoured leg: cuisse, knee cop, greave, in three plates rather than one
+ * tapering run.
+ *
+ * `paintLeg` deliberately does not do this job. It draws a leg the way cloth
+ * hangs — two or three columns narrowing evenly from hip to ankle — and a
+ * knight drawn with it is the archer's leg in a different colour, which is
+ * exactly what it looked like. Plate is not a taper: it is a stack of separate
+ * pieces, each wider than the joint below it, and the knee is the widest thing
+ * on the leg rather than a patch of highlight on the way past.
+ *
+ * A new implementation rather than a flag on the shared one, per CLAUDE.md: a
+ * parameter that switched between "cloth" and "plate" would be two functions
+ * sharing a name.
+ */
+function paintPlateLeg(
+  g: PixelGrid, s: Stride, hipX: number, footX: number, topY: number, bootRow: number,
+  plate: string, lit: string, dark: string,
+): void {
+  const span = bootRow - 1 - topY;
+  /** The leg's centre at a row, walking from the hip across to the foot. */
+  const at = (y: number): number => Math.round(hipX + (footX - hipX) * ((y - topY) / span));
+  const half = Math.floor(s.shin / 2);
+  // The knee sits three rows down, leaving four for the greave below it. The
+  // first attempt put it at four and left two, so the shin ran out above the
+  // sabaton and the foot read as a ski hung off nothing.
+  const kneeY = topY + 3;
+
+  // Cuisse: the thigh plate, widest at the top where it meets the tasset.
+  for (let y = topY; y < kneeY; y++) {
+    const w = s.shin + (y === topY ? 2 : 1);
+    pixelRect(g, at(y) - Math.floor(w / 2), y, w, 1, plate);
+    setPixel(g, at(y) - Math.floor(w / 2), y, lit);
+    setPixel(g, at(y) - Math.floor(w / 2) + w - 1, y, dark);
+  }
+  // Knee cop: a rounded plate standing proud of both thigh and shin. It is the
+  // joint, so it is the one place an armoured leg gets *wider* going down —
+  // which is the whole difference from a leg that just tapers to an ankle.
+  pixelRect(g, at(kneeY) - half - 1, kneeY, s.shin + 2, 2, plate);
+  pixelRect(g, at(kneeY) - half - 1, kneeY, s.shin, 1, lit);
+  setPixel(g, at(kneeY) + half + 1, kneeY + 1, dark);
+  // Greave: the shin, straight-sided rather than tapering, with a lit near
+  // edge and a shadow down the far one so it reads as a tube, not a bar.
+  for (let y = kneeY + 2; y < bootRow; y++) {
+    const x = at(y) - half;
+    pixelRect(g, x, y, s.shin, 1, plate);
+    pixelRect(g, x, y, 2, 1, lit);
+    setPixel(g, x + s.shin - 1, y, dark);
+  }
+}
+
+/**
+ * Sabatons: the armoured foot, which is a different shape from a boot.
+ *
+ * `paintBoots` hangs a rectangle entirely outside the ankle, which is right for
+ * cloth — it buys back the column of daylight the legs need. A sabaton is
+ * longer than the shin and comes to a point in front, so it has to sit *under*
+ * the greave as well as ahead of it, or the foot reads as detached.
+ */
+function paintSabatons(
+  g: PixelGrid, s: Stride, bootRow: number, plate: string, lit: string,
+): void {
+  const foot = (x: number, toe: number): void => {
+    pixelRect(g, x, bootRow - 1, 6, 2, plate);
+    pixelRect(g, x, bootRow - 1, 6, 1, lit);
+    setPixel(g, toe, bootRow, plate);
+  };
+  foot(s.back - 4, s.back - 5);
+  foot(s.front - 2, s.front + 4);
+}
 
 const KNIGHT_KIND_PALETTE = {
   // Reads as metal, not cloth: a genuine value jump from armorShadow to
@@ -616,7 +708,7 @@ export function buildKnightGrid(kind: KnightKind, frame: AnimFrame, trim: string
   // and he reads as the front-facing machine he was.
   pixelEllipse(g, 12, 18, 3.4, 4, C.armorShadow);
   pixelRect(g, 10, 21, 3, 6, C.armorShadow);
-  paintLeg(g, s, 13, s.back, 27, KNIGHT_BOOT_ROW, C.armorShadow, C.pauldron);
+  paintPlateLeg(g, s, 12, s.back, 26, KNIGHT_BOOT_ROW, C.pauldron, C.armor, C.armorShadow);
 
   // ---- body ----------------------------------------------------------------
 
@@ -640,9 +732,9 @@ export function buildKnightGrid(kind: KnightKind, frame: AnimFrame, trim: string
   // Sword belt, and the tassets hanging off it over the hips.
   pixelRect(g, 9, 25, 13, 2, C.strap);
   pixelRect(g, 14, 25, 3, 2, C.rivet);
-  pixelRect(g, 11, 27, 9, 4, C.pauldron);
-  pixelRect(g, 11, 27, 9, 1, C.pauldronHi);
-  pixelRect(g, 11, 30, 9, 1, C.armorShadow);
+  pixelRect(g, 10, 27, 11, 3, C.pauldron);
+  pixelRect(g, 10, 27, 11, 1, C.pauldronHi);
+  pixelRect(g, 10, 29, 11, 1, C.armorShadow);
 
   // Near pauldron over the chest: the biggest plate on the body, and the one
   // that says which shoulder is nearer. Its rim is the light value so it reads
@@ -659,10 +751,8 @@ export function buildKnightGrid(kind: KnightKind, frame: AnimFrame, trim: string
 
   // Leading greave, then sabatons in the light value — a foot that vanishes
   // into the ground takes the stride with it.
-  paintLeg(g, s, 17, s.front, 27, KNIGHT_BOOT_ROW, C.leg, C.legHi);
-  pixelEllipse(g, s.back + 0.5, 30, 2, 1.4, C.pauldron);
-  pixelEllipse(g, s.front + 0.5, 30, 2, 1.4, C.legHi);
-  paintBoots(g, s, KNIGHT_BOOT_ROW, C.pauldron, C.pauldronHi, 4);
+  paintPlateLeg(g, s, 18, s.front, 26, KNIGHT_BOOT_ROW, C.leg, C.legHi, C.armorShadow);
+  paintSabatons(g, s, KNIGHT_BOOT_ROW, C.pauldron, C.pauldronHi);
 
   // ---- helm ----------------------------------------------------------------
 
