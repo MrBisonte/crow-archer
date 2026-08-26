@@ -32,6 +32,10 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   and a source-text test fails by name.
 - **Changing a stride?** Four separate legs on every frame. Pairs two
   columns apart fuse under the outline pass for exactly one frame.
+- **Rebuilding a character?** Read `docs/character-rebuild-playbook.md`
+  first. It is what the archer's rebuild cost: the profile convention,
+  the outline gap that welds legs, the two render paths plus the
+  select-screen preview, and the harness traps that eat an hour each.
 
 ## Events
 
