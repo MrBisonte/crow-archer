@@ -2075,6 +2075,73 @@ function releaseArcherDraw() {
  * and forcing both through a seconds-based rate would mean converting one of
  * them back at every call site.
  */
+/**
+ * Per-frame meter upkeep for the heroes who carry one, keyed by character.
+ *
+ * A table rather than a chain of `selectedChar ===` arms inside the movement
+ * loop, which is what this was and what `docs/design-patterns.md` opens by
+ * arguing against: behaviour attaches to the tag from the outside, so a third
+ * hero with a meter is a row here rather than another branch in a loop every
+ * hero runs every frame.
+ *
+ * Each takes the seconds elapsed and the distance the body actually covered.
+ * Both are needed because the two meters disagree about which one drives them:
+ * Brace fills on the clock while he is still, Momentum fills on the ground he
+ * covers. Passing both and letting the row choose is cheaper than two tables.
+ */
+/**
+ * Per-frame upkeep that belongs to exactly one character, keyed by that
+ * character. Runs alongside the cooldown timers rather than in the movement
+ * loop -- see MOVEMENT_METERS for the two that need the distance covered.
+ *
+ * A table for the reason `docs/design-patterns.md` opens with: a sixth hero
+ * with something to tick every frame is a row here, not another
+ * `selectedChar ===` guard bolted onto a block every hero runs.
+ */
+const HERO_UPKEEP = {
+  // Focus refills at a constant rate whether or not he is casting. Deliberate:
+  // a regeneration that paused while acting would make the pool a second,
+  // hidden cooldown, and two rates interacting is a balance problem with no
+  // single dial to turn.
+  wizard: (dt) => {
+    if (inv.focus >= CONFIG.wizFocusMax) return;
+    inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + dt / CONFIG.wizFocusRegenSecs);
+  },
+  sapper: (dt) => tickSapperBurst(dt),
+};
+
+const MOVEMENT_METERS = {
+  archer: (dt, movedPx) => {
+    const was = braceLevel;
+    braceLevel = tickMeter(braceLevel, movedPx <= MOVED_EPSILON,
+      dt / CONFIG.braceFillSecs,
+      (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
+    if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
+  },
+  ranger: (dt, movedPx) => {
+    const was = rangerMomentum;
+    // Filled by distance and drained by time, which is not a symmetry worth
+    // forcing: ground covered is what the bonus is *for*, and a hero who has
+    // stopped is covering none of it, so there is nothing to measure a decay
+    // against but the clock.
+    rangerMomentum = tickMeter(rangerMomentum, movedPx > MOVED_EPSILON,
+      movedPx / CONFIG.rangerMomentumFullPx,
+      dt / CONFIG.rangerMomentumDecaySecs);
+    if (was < 1 && rangerMomentum >= 1) {
+      events.emit({ type: 'RANGER_MOMENTUM', x: player.x, y: player.y });
+    }
+  },
+};
+
+/**
+ * Below this, a body has not moved.
+ *
+ * Not zero: the movement path writes a float every frame and floating point
+ * leaves a residue on a body that is standing still, which is enough to keep a
+ * meter that tests `> 0` permanently draining.
+ */
+const MOVED_EPSILON = 0.01;
+
 function tickMeter(level, filling, fillDelta, drainDelta) {
   return filling ? Math.min(1, level + fillDelta) : Math.max(0, level - drainDelta);
 }
@@ -3571,28 +3638,9 @@ function updatePlayer(dt) {
     // paper -- which is the exact "earn a stance by leaning on terrain" this
     // comment claimed was prevented, and was not.
     const movedPx = Math.hypot(player.x - fromX, player.y - fromY);
-    const moved = movedPx > 0.01;
-    if (selectedChar === 'archer') {
-      const was = braceLevel;
-      braceLevel = tickMeter(braceLevel, !moved,
-        dt / CONFIG.braceFillSecs,
-        (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
-      if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
-    } else if (selectedChar === 'ranger') {
-      const was = rangerMomentum;
-      // Filled by distance and drained by time, which is not a symmetry worth
-      // forcing: ground covered is what the bonus is *for*, and a hero who has
-      // stopped is covering none of it, so there is nothing to measure a decay
-      // against but the clock.
-      rangerMomentum = tickMeter(rangerMomentum, moved,
-        movedPx / CONFIG.rangerMomentumFullPx,
-        dt / CONFIG.rangerMomentumDecaySecs);
-      if (was < 1 && rangerMomentum >= 1) {
-        events.emit({ type: 'RANGER_MOMENTUM', x: player.x, y: player.y });
-      }
-    } else {
-      braceLevel = 0;
-    }
+    const meter = MOVEMENT_METERS[selectedChar];
+    if (meter) meter(dt, movedPx);
+    else braceLevel = 0;
     // A dash terrain has interfered with at all is over. Any blocked axis
     // counts, not just a dead stop: a dash clipping a wall used to slide along
     // it for the rest of its second and a half, moving the player on one axis
@@ -3647,18 +3695,11 @@ function updatePlayer(dt) {
   if (blockedFlash > 0) blockedFlash = Math.max(0, blockedFlash - dt);
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
-  if (selectedChar === 'sapper') tickSapperBurst(dt);
+  HERO_UPKEEP[selectedChar]?.(dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
   if (sapperShotCD        > 0) sapperShotCD       = Math.max(0, sapperShotCD       - dt);
-  // Focus refills at a constant rate whether or not he is casting. Deliberate:
-  // a regeneration that paused while acting would make the pool a second,
-  // hidden cooldown, and two rates interacting is a balance problem with no
-  // single dial to turn.
-  if (selectedChar === 'wizard' && inv.focus < CONFIG.wizFocusMax) {
-    inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + dt / CONFIG.wizFocusRegenSecs);
-  }
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
