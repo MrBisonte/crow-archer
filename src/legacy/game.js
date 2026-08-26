@@ -7810,7 +7810,10 @@ function drawPlayer() {
   const grid = buildArcherGrid(aFrame, SP_TRIM.archer);
   const spriteScale = 1;
   const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
-  const spriteDy = -22;
+  // The body rises as the legs pass and drops on each contact, twice a stride.
+  // Whole pixels: a sprite on a half pixel is a sprite with a blurred edge.
+  const aBob = Math.abs(Math.sin(player.walkPhase || 0)) > 0.5 ? 0 : -1;
+  const spriteDy = -22 + aBob;
   const archerCanvas = flashOn
     ? spriteFlashCanvas(`archer|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
     : spriteCanvas(`archer|${SP_TRIM.archer}|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);

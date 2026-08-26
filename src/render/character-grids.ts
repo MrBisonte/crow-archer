@@ -167,10 +167,14 @@ export function buildArcherGrid(frame: AnimFrame, trim: string): PixelGrid {
 
   // ---- arms and bow --------------------------------------------------------
 
-  // Trailing arm tucked to the ribs, drawing hand at the belt.
-  pixelRect(g, 11, 13, 3, 4, C.tunicHi);
-  setPixel(g, 12, 17, C.skin);
-  setPixel(g, 13, 17, C.skin);
+  // Trailing arm swings against the legs — opposite the foot on its own side,
+  // which is what an arm does and what stops the walk reading as a shuffle.
+  // The bow arm deliberately does not swing: it is holding a bow at a target,
+  // and an archer whose aim wandered with his stride would be lying about it.
+  const armSwing = -swing;
+  pixelRect(g, 11 + armSwing, 13, 3, 4, C.tunicHi);
+  setPixel(g, 12 + armSwing, 17, C.skin);
+  setPixel(g, 13 + armSwing, 17, C.skin);
   // Leading arm out to the bow, bracer over the forearm.
   pixelRect(g, 16, 13, 3, 2, C.tunic);
   pixelRect(g, 18, 13, 2, 3, C.leatherHi);
