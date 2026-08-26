@@ -2080,6 +2080,33 @@ describe('character-select panel data', () => {
       }
     }
   });
+
+  it('moves every hero’s feet between stride frames, not just their cloth', () => {
+    // Deliberately the *boot rows* and not the whole grid. Comparing whole
+    // grids passes on a hero whose only moving part is a hem: the ranger
+    // shipped three frames that differed by a one-column cloak sway over a
+    // floor-length skirt, and read as a stuck sprite for exactly that reason.
+    // Pinning the wizard's legs to one frame still leaves his robe swaying,
+    // so a whole-grid check goes green on the bug it exists to catch.
+    for (const p of charPanels()) {
+      const feet = ANIM_FRAMES.map((f) => {
+        const { grid } = p.preview(f);
+        return JSON.stringify(grid.slice(grid.length - 4));
+      });
+      expect(new Set(feet).size, `${p.char} plants the same feet every frame`).toBe(3);
+    }
+  });
+
+  it('caches each stride frame under its own key', () => {
+    // The sprite cache hands back a canvas *without* calling the painter, so a
+    // key that does not name the frame pins the whole walk to whichever frame
+    // was drawn first. Three grids behind one key is a hero frozen mid-step,
+    // and nothing else in the suite would see it.
+    for (const p of charPanels()) {
+      const keys = new Set(ANIM_FRAMES.map((f) => p.preview(f).key));
+      expect(keys.size, `${p.char} reuses a cache key across frames`).toBe(3);
+    }
+  });
 });
 
 describe('the wizard blink arrival pulse', () => {

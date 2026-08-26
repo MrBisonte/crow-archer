@@ -65,6 +65,7 @@ import {
   SPRITE_ORIGIN_ROW,
 } from '../render/character-grids';
 import { paintArcherBow } from '../render/archer-bow';
+import { paintWizardStaff } from '../render/wizard-staff';
 
 /**
  * The ground disc that says whose side a body is on.
@@ -881,20 +882,27 @@ const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
     preview: (frame) => ({ grid: buildArcherGrid(frame, SP_TRIM.archer), sprite: ARCHER_SPRITE, key: `archer|${frame}` }),
+    paintWeapon: (c, v) => paintArcherBow(c, {
+      aim: v.aim, draw: v.act ? v.act.draw : 0, recoil: v.act ? v.act.recoil : 0,
+      trim: SP_TRIM.archer, wash: (colour) => colour,
+    }),
     hook: 'Longbow and quiver', range: 5, damage: 3,
     skills: { main: 'Longbow, three arrows in flight',
               secondary: 'Dynamite, thrown further the longer held',
               shift: 'Draw a power shot that pierces' } },
   { char:'wizard', key:'W', color:'#8888FF', bg:'rgba(100,80,255,0.10)', dim:'#1a1a6a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.extraHard,
-    preview: () => ({ grid: buildWizardGrid(SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: 'wizard' }),
+    preview: (frame) => ({ grid: buildWizardGrid(frame, SP_TRIM.wizard), sprite: WIZARD_SPRITE, key: `wizard|${frame}` }),
+    paintWeapon: (c, v) => paintWizardStaff(c, {
+      aim: v.aim, t: v.t, cooldown: null, wash: (colour) => colour,
+    }),
     hook: 'Homing glass cannon', range: 4, damage: 5,
     skills: { main: 'Homing bolts that seek the nearest target',
               secondary: 'Lightning storm across a wide area',
               shift: 'Blink, tap again to chain a second hop' } },
   { char:'knight', key:'K', color:'#C8C8E8', bg:'rgba(150,160,200,0.10)',dim:'#2a2a4a',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.hard,
-    preview: () => ({ grid: buildKnightGrid('normal', SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: 'knight|normal' }),
+    preview: (frame) => ({ grid: buildKnightGrid('normal', frame, SP_TRIM.knightNormal), sprite: KNIGHT_SPRITE, key: `knight|normal|${frame}` }),
     hook: 'Armoured brawler', range: 1, damage: 3,
     skills: { main: 'Long spear at melee reach, hits twice',
               secondary: 'Whirlwind that breaks the tiles around you',
@@ -908,7 +916,7 @@ const CHAR_PANELS = [
               shift: 'Throw a net that holds what it catches' } },
   { char:'sapper', key:'S', color:'#FF7A1A', bg:'rgba(255,122,26,0.10)', dim:'#7a3300',  dimBg:'rgba(255,255,255,0.025)', newBadge:true,
     difficulty: DIFFICULTY.hard,
-    preview: () => ({ grid: buildSapperGrid(SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: 'sapper' }),
+    preview: (frame) => ({ grid: buildSapperGrid(frame, SP_TRIM.sapper), sprite: SAPPER_SPRITE, key: `sapper|${frame}` }),
     hook: 'Bombs and pitchfork', range: 2, damage: 3,
     skills: { main: 'Ten bombs, pitchfork when the pouch empties',
               secondary: 'Five-bomb barrage in a wide fan',
@@ -7809,36 +7817,32 @@ function drawWizard() {
   }
 
   ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+  const wLocalAngle = f === 1 ? player.aimAngle : Math.PI - player.aimAngle;
   const flashOn = playerHitFlash > 0 && Math.floor(playerHitFlash*20)%2===0;
 
   // Ground shadow
   ctx.fillStyle='rgba(0,0,0,0.40)';
   ctx.beginPath(); ctx.ellipse(0,10,10,2.5,0,0,Math.PI*2); ctx.fill();
 
-  // Pixel-art body (see buildWizardGrid). Staff and orb are baked into the
-  // pose rather than rotated with aim, same reasoning as the archer's bow:
-  // the purple aim line above already shows aim direction.
-  const wgrid = buildWizardGrid(SP_TRIM.wizard);
-  const wSpriteDx = -(WIZARD_SPRITE.w) / 2, wSpriteDy = -22;
+  // Pixel-art body (see buildWizardGrid), three stride frames off walk phase.
+  const wFrame = animFrame3(player.walkPhase || 0);
+  const wgrid = buildWizardGrid(wFrame, SP_TRIM.wizard);
+  const wBob = Math.abs(Math.sin(player.walkPhase || 0)) > 0.5 ? 0 : -1;
+  const wSpriteDx = -(WIZARD_SPRITE.w) / 2, wSpriteDy = -22 + wBob;
   const wCanvas = flashOn
-    ? spriteFlashCanvas('wizard', wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h, '#ffffff')
-    : spriteCanvas(`wizard|${SP_TRIM.wizard}`, wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h);
+    ? spriteFlashCanvas(`wizard|${wFrame}`, wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h, '#ffffff')
+    : spriteCanvas(`wizard|${SP_TRIM.wizard}|${wFrame}`, wgrid, WIZARD_SPRITE.w, WIZARD_SPRITE.h);
   ctx.drawImage(wCanvas, wSpriteDx, wSpriteDy);
 
-  // Orb glow pulse + bolt cooldown ring, at the orb's fixed position in the sprite
-  const ox = 20 + wSpriteDx, oy = 16 + wSpriteDy;
-  const op = loopT*4.5;
-  ctx.shadowColor='#8888FF'; ctx.shadowBlur=8+3*Math.sin(op);
-  ctx.fillStyle=`rgba(136,136,255,${(0.35+0.15*Math.sin(op)).toFixed(2)})`;
-  ctx.beginPath(); ctx.arc(ox,oy,4+0.5*Math.sin(op),0,Math.PI*2); ctx.fill();
-  ctx.shadowBlur=0;
-  if (wizBoltCD > 0) {
-    const fill = 1 - wizBoltCD/3.0;
-    ctx.save(); ctx.globalAlpha=0.65;
-    ctx.strokeStyle='#8888FF'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.arc(ox,oy,7,-Math.PI/2,-Math.PI/2+fill*Math.PI*2); ctx.stroke();
-    ctx.restore();
-  }
+  // The staff is not part of the body grid: it turns to the aim, and the orb
+  // on its end is where the bolt cooldown is reported. One painter, shared
+  // with the multiplayer renderer, so the two cannot drift.
+  paintWizardStaff(ctx, {
+    aim: wLocalAngle,
+    t: loopT,
+    cooldown: wizBoltCD > 0 ? 1 - wizBoltCD / CONFIG.wizBoltCooldown : null,
+    wash: (c) => c,
+  });
 
   // Shield halo
   if (playerShield) {
@@ -8257,13 +8261,15 @@ function drawSapper() {
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath(); ctx.ellipse(0, 10, 11, 3, 0, 0, Math.PI*2); ctx.fill();
 
-  // 2. Pixel-art keg/apron/helm (see buildSapperGrid). One fixed pose, no walk
-  // frames: the sapper's silhouette carries no cloak to sway.
-  const sGrid = buildSapperGrid(SP_TRIM.sapper);
-  const sDx = -(SAPPER_SPRITE.w) / 2, sDy = -22;
+  // 2. Pixel-art keg/apron/helm (see buildSapperGrid), three stride frames off
+  // walk phase, with the body bobbing twice a stride as the archer's does.
+  const sFrame = animFrame3(player.walkPhase || 0);
+  const sGrid = buildSapperGrid(sFrame, SP_TRIM.sapper);
+  const sBob = Math.abs(Math.sin(player.walkPhase || 0)) > 0.5 ? 0 : -1;
+  const sDx = -(SAPPER_SPRITE.w) / 2, sDy = -22 + sBob;
   const sCanvas = flashOn
-    ? spriteFlashCanvas('sapper', sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h, '#ffffff')
-    : spriteCanvas(`sapper|${SP_TRIM.sapper}`, sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h);
+    ? spriteFlashCanvas(`sapper|${sFrame}`, sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h, '#ffffff')
+    : spriteCanvas(`sapper|${SP_TRIM.sapper}|${sFrame}`, sGrid, SAPPER_SPRITE.w, SAPPER_SPRITE.h);
   ctx.drawImage(sCanvas, sDx, sDy);
 
   // 3. Shield halo
@@ -8463,9 +8469,10 @@ function drawKnight() {
   // the sprite blit stays on-grid instead of a blurred sub-pixel position.
   const kKind = fsActive ? 'fireSword' : 'normal';
   const kTrim = fsActive ? SP_TRIM.knightFireSword : SP_TRIM.knightNormal;
-  const kgrid = buildKnightGrid(kKind, kTrim);
+  const kFrame = animFrame3(player.walkPhase || 0);
+  const kgrid = buildKnightGrid(kKind, kFrame, kTrim);
   const kSpriteDx = -(KNIGHT_SPRITE.w) / 2, kSpriteDy = -22 + Math.round(bob);
-  const kCanvas = spriteCanvas(`knight|${kKind}|${kTrim}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
+  const kCanvas = spriteCanvas(`knight|${kKind}|${kTrim}|${kFrame}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
 
   // ── Weapon ───────────────────────────────────────────────────────────────
@@ -11312,18 +11319,22 @@ function _drawCharPreview(cx, cy, panel, t) {
     spriteCanvas(`preview|${key}`, grid, sprite.w, sprite.h, scale),
     -(sprite.w * scale) / 2, -(sprite.h * scale) / 2,
   );
-  // A live weapon on a baked body. The bow left the grid when it had to start
-  // moving, so without this the archer stands in the shop window empty-handed.
-  // Everything the painter draws is relative to the body's origin, which sits
-  // SPRITE_ORIGIN_ROW down from the sprite's top edge.
-  if (act && panel.char === 'archer') {
+  // A live weapon on a baked body. A weapon that has to move leaves the grid
+  // for a painter, and without this the hero stands in the shop window empty
+  // handed — which is exactly what happened to the archer when the bow came
+  // out, and would have happened again to the wizard's staff.
+  //
+  // The panel carries its own painter rather than this function branching on
+  // the character: a hero whose weapon comes out of the grid is a new row in
+  // CHAR_PANELS, not another arm on a chain here.
+  if (panel.paintWeapon) {
     ctx.save();
     ctx.translate(0, -(sprite.h * scale) / 2 + SPRITE_ORIGIN_ROW * scale);
     ctx.scale(scale, scale);
-    paintArcherBow(ctx, {
-      aim: act.aim, draw: act.draw, recoil: act.recoil,
-      trim: SP_TRIM.archer, wash: (colour) => colour,
-    });
+    // No routine means no aim to follow, and forward is the only safe default:
+    // a hero must face the side he is aiming at, and this surface does not
+    // mirror the body. See docs/character-rebuild-playbook.md.
+    panel.paintWeapon(ctx, { act, t, aim: act ? act.aim : 0 });
     ctx.restore();
   }
   ctx.restore();
