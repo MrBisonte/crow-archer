@@ -1101,6 +1101,26 @@ let charge = { on: false, t0: 0 };
 // The archer's draw, on the key that means sniper mode for the sapper. Same
 // shape as `charge` above, and deliberately so: the hand already knows it.
 let archerDraw = { on: false, t0: 0 };
+/**
+ * Ground a full stride cycle covers, in pixels. The walk phase is derived from
+ * it rather than ticking at a fixed rate.
+ *
+ * A flat `walkPhase += 8 * dt` meant one cycle per 157px at the base speed —
+ * two steps to cross five body widths, so the hero skated and the legs
+ * shuffled. Sixty-four is a stride of about one body height per step, which is
+ * what a walk looks like.
+ *
+ * Deriving it from speed also means the swiftness upgrade and a poison slow
+ * both reach the legs. At a fixed rate a hero bought up to 260px/s kept the
+ * cadence of one at 200 and skated further with every level.
+ */
+const WALK_CYCLE_PX = 64;
+
+/** Radians of walk phase for a distance travelled. */
+function walkPhaseFor(distancePx) {
+  return (distancePx / WALK_CYCLE_PX) * Math.PI * 2;
+}
+
 let archerPowerCD = 0;
 /**
  * Seconds left of the snap forward after a shot leaves, counting down.
@@ -3195,11 +3215,11 @@ function updatePlayer(dt) {
       const spd = FEATHERS.speed() * dashMult * dt;
       vx = Math.cos(knightDash.angle) * spd;
       vy = Math.sin(knightDash.angle) * spd;
-      player.walkPhase += 8 * dt;
+      player.walkPhase += walkPhaseFor(Math.hypot(vx, vy));
     } else {
       vx = wantX; vy = wantY;
       const len = Math.hypot(vx, vy);
-      if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
+      if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += walkPhaseFor(Math.hypot(vx, vy)); }
     }
     const fromX = player.x, fromY = player.y;
     const nx = player.x + vx;
@@ -11117,7 +11137,9 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
  * built per panel per frame instead of all five: the lookup this replaced was
  * a table literal, so every call rebuilt every character's grid to use one. */
 function _drawCharPreview(cx, cy, panel, t) {
-  const { grid, sprite, key } = panel.preview(animFrame3(t * 1.5));
+  // Roughly the cadence the hero walks at in play. At the old 1.5 the preview
+  // took four seconds a cycle, which read as a stuck sprite rather than a walk.
+  const { grid, sprite, key } = panel.preview(animFrame3(t * 10));
   const scale = 1.4;
   const bob = Math.round(1.5 * Math.sin(t * 2));
   ctx.save(); ctx.translate(cx, cy + bob);

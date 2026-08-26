@@ -34,9 +34,19 @@ const PULL = 8;
  */
 const BEND = 2.5;
 
-/** Colours. The string takes the trim so a side is readable off the weapon. */
-const STAVE = '#8A6028';
-const STAVE_LIT = '#A07828';
+/**
+ * Colours. A bow is wood and hemp, and it is painted as wood and hemp.
+ *
+ * The string used to take the team trim with a glow behind it, which on the
+ * archer's phosphor green made a lit bar he appeared to be holding — a
+ * lightsaber, not a bow. Team readability does not need the string: the body
+ * already carries the trim on its sash, and the grip binding below carries a
+ * little more, unlit and at two pixels.
+ */
+const STAVE = '#7A5322';
+const STAVE_LIT = '#9A6C30';
+const STRING = '#CFC3A4';
+const STRING_TAUT = '#EDE3C6';
 const SHAFT = '#D9B98A';
 const HEAD = '#C8CEDA';
 
@@ -51,7 +61,7 @@ export interface BowPose {
    * the string overshoots past rest and settles, which is what sells a loose.
    */
   readonly recoil: number;
-  /** This side's trim colour, used for the string. */
+  /** This side's trim colour. Binds the grip; the string is hemp. */
   readonly trim: string;
   /** Applied to the stave and shaft so a hit flash or a downed body washes it. */
   readonly wash: (colour: string) => string;
@@ -118,16 +128,23 @@ export function paintArcherBow(ctx: CanvasRenderingContext2D, p: BowPose): void 
     ctx.fill();
   }
 
-  // String last, over the stave, and glowing so the draw is legible against a
-  // dark map. Trim-coloured: the one part of the weapon that says whose it is.
-  ctx.shadowColor = p.trim;
-  ctx.shadowBlur = p.draw > 0.05 ? 4 + p.draw * 4 : 4;
-  ctx.strokeStyle = p.trim;
+  // Grip binding: two pixels of trim at the handle, which is where the side is
+  // read off the weapon now that the string is hemp.
+  ctx.strokeStyle = p.wash(p.trim);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(gx + px, gy + py);
+  ctx.lineTo(gx - px, gy - py);
+  ctx.stroke();
+
+  // String last, over the stave. Hemp, and it pales as it comes under tension
+  // rather than lighting up — a drawn string catches more light, it does not
+  // start glowing.
+  ctx.strokeStyle = p.wash(p.draw > 0.35 ? STRING_TAUT : STRING);
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(tipAx, tipAy);
   ctx.lineTo(nx, ny);
   ctx.lineTo(tipBx, tipBy);
   ctx.stroke();
-  ctx.shadowBlur = 0;
 }
