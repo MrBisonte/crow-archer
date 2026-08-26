@@ -14,9 +14,16 @@ just read it.
   you commit anything, and update it on every commit after that. Several
   sessions share these branches and a branch nobody logged is a branch that
   gets clobbered.
-- **Pushing anything?** Only `integration/round-4` may push to `origin`, and
-  `master` moves only by a merged PR. Everything else reaches the remote
-  through the integration branch.
+- **Cutting a branch?** Fetch and fast-forward `master` first, every time —
+  `git -C <clone> fetch origin --prune --tags && git -C <clone> fetch origin
+  master:master`. The local ref goes stale silently and a branch cut from it
+  starts a release behind. Two clones of this repo sit on disk and both were
+  stale at the end of round 4. `master:master` refuses a non-fast-forward,
+  which is the guard you want; `git pull` on a checked-out `master` merges.
+- **Pushing anything?** Only the current integration branch may push to
+  `origin`, and `master` moves only by a merged PR. `COORDINATION.md` names
+  that branch — it is the one home for the round number — and everything
+  else reaches the remote through it.
 - **Colliding with another branch?** Merger is the coordinating session and
   decides merge order; it can ask any session in the ledger to update its row
   or resolve a gap. A structural collision is resolved by the author of the
