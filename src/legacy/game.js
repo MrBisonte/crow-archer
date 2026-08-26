@@ -42,6 +42,7 @@ import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { Hitstop } from '../sim/hitstop';
 import { log, attachToEvents } from '../sim/log';
+import { DEFAULT_POP, panelAt, panelSlots } from '../render/panel-row';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
   featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
@@ -822,11 +823,14 @@ let controlsSelection = 0, remapTarget = null;
 // Rendered at full brightness regardless of panel selection (unlike
 // everything else in a dimmed panel) so all four are scannable at a glance.
 const DIFFICULTY = {
-  easy:      { label: 'EASY',       color: '#39FF14' },
-  medium:    { label: 'MEDIUM',     color: '#CCAA00' },
-  hard:      { label: 'HARD',       color: '#FF8C00' },
-  extraHard: { label: 'EXTRA HARD', color: '#FF3B30' },
+  easy:      { label: 'EASY',       color: '#39FF14', order: 1 },
+  medium:    { label: 'MEDIUM',     color: '#CCAA00', order: 2 },
+  hard:      { label: 'HARD',       color: '#FF8C00', order: 3 },
+  extraHard: { label: 'EXTRA HARD', color: '#FF3B30', order: 4 },
 };
+
+/** Steps the difficulty meter draws, which is every row of DIFFICULTY. */
+const DIFFICULTY_STEPS = Object.keys(DIFFICULTY).length;
 /** How many pips a stat row draws, so the rating scale and the art agree. */
 const STAT_SCALE = 5;
 
@@ -909,7 +913,7 @@ const CHAR_PANELS = [
   return { ...p, statBars: [
     { label: 'RANGE',  pips: p.range },
     { label: 'DAMAGE', pips: p.damage },
-    { label: 'HP',     pips: statPips(stats.maxHp, STAT_PEAKS.maxHp) },
+    { label: 'HP',     pips: statPips(stats.maxHp, STAT_PEAKS.maxHp), value: stats.maxHp },
     { label: 'SPEED',  pips: statPips(stats.speed, STAT_PEAKS.speed) },
   ] };
 });
@@ -1498,12 +1502,57 @@ const inGame = () => appState === 'playing' || appState === 'boss_fight';
  * A style write is cheap but not free, so this only fires on the frame
  * inGame() actually flips rather than every frame.
  */
-let cursorHidden = false;
+let cursorStyle = 'crosshair';
+/** Whether the pointer is over something a click would act on. */
+function _overClickable() {
+  if (appState !== 'charselect') return false;
+  const { slots, selected } = charSelectLayout();
+  return panelAt(slots, selected, mouse.x, mouse.y) !== null;
+}
+
+/** Where a mouse event landed, in canvas pixels, or null before layout. */
+function _canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  if (r.width === 0 || r.height === 0) return null;
+  return {
+    x: (e.clientX - r.left) * (CONFIG.canvasW / r.width),
+    y: (e.clientY - r.top) * (CONFIG.canvasH / r.height),
+  };
+}
+
+/**
+ * Click a panel to pick it; click the picked one to confirm.
+ *
+ * Two clicks to start a run rather than one, deliberately. A single click that
+ * both picked and confirmed would commit the player to whichever hero they
+ * touched first, with the stats they came here to read still unread — and the
+ * panels are close enough together that a misclick would start the wrong run.
+ *
+ * Reads the same rects the draw does, so a panel is clickable exactly where it
+ * looks clickable.
+ */
+function _clickCharSelect(e) {
+  const at = _canvasPoint(e);
+  if (at === null) return;
+  const { slots, selected } = charSelectLayout();
+  const hit = panelAt(slots, selected, at.x, at.y);
+  if (hit === null) return;
+  if (hit === selected) {
+    transitionTo(picksItsMap(gameMode) ? 'mapselect' : 'playing');
+    return;
+  }
+  selectedChar = CHAR_PANELS[hit].char;
+}
+
 function syncCursor() {
-  const hide = inGame();
-  if (hide === cursorHidden) return;
-  cursorHidden = hide;
-  canvas.style.cursor = hide ? 'none' : 'crosshair';
+  // Three answers now, not two, so the flag became the value itself: hidden in
+  // a run, a pointer over something a click would act on, a crosshair
+  // otherwise. A panel that looks clickable and shows a crosshair is the same
+  // lie as one that is not clickable at all.
+  const want = inGame() ? 'none' : _overClickable() ? 'pointer' : 'crosshair';
+  if (want === cursorStyle) return;
+  cursorStyle = want;
+  canvas.style.cursor = want;
 }
 
 /** How far the in-progress windup has filled, 0 to 1. Read by the release, the
@@ -2214,6 +2263,7 @@ function installInput() {
 
   canvas.addEventListener('click', e => {
     initAudio();
+    if (appState === 'charselect') { _clickCharSelect(e); return; }
     if (appState !== 'controls') return;
     const r  = canvas.getBoundingClientRect();
     const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
@@ -11054,11 +11104,30 @@ function _panelFrame(px, py, w, h, sel, p) {
 const PANEL_LABEL_COLOR = '#8a8a8a';
 
 /**
- * One `LABEL ●●●○○` row, label left and pips right-aligned to `maxW`.
+ * Width kept clear to the right of every pip row for a stat's real figure.
+ *
+ * Reserved on all four rows and filled on the one that has a figure, so the
+ * pip columns line up down the panel. Filling only the rows that carry a
+ * number and letting the others reach further right would step the pips and
+ * read as a layout fault rather than as the distinction it is.
+ */
+const STAT_VALUE_W = 20;
+
+/**
+ * One `LABEL ●●●○○ 9` row: label left, pips right-aligned inside `maxW`, and
+ * the figure, where there is one, in a column reserved past them.
  *
  * Pips are drawn as rectangles rather than written as characters so the row's
  * width is arithmetic instead of a font measurement — a star-string would be
  * one more thing that fits at five panels and not at six.
+ *
+ * Only HP carries a figure, and that is not an oversight. `statPips` is a
+ * ceiling against the roster's best, so with the current spread every derived
+ * pip lands between three and five and a 7 HP hero draws the same three pips
+ * whatever else changes; the number is what separates them. The other three
+ * rows have nothing honest to print — RANGE and DAMAGE are authored
+ * impressions of a whole kit with no unit behind them, and SPEED is world
+ * units per second, which tells a player nothing.
  */
 function _drawStatBar(lx, ly, maxW, bar, color) {
   ctx.textAlign = 'left';
@@ -11068,7 +11137,7 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
 
   const pipW = 7, pipGap = 3, pipH = 7;
   const rowW = STAT_SCALE * pipW + (STAT_SCALE - 1) * pipGap;
-  const x0 = lx + maxW - rowW, top = ly - pipH / 2;
+  const x0 = lx + maxW - STAT_VALUE_W - rowW, top = ly - pipH / 2;
   for (let i = 0; i < STAT_SCALE; i++) {
     const px = x0 + i * (pipW + pipGap);
     if (i < bar.pips) {
@@ -11079,6 +11148,36 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
       ctx.strokeRect(px + 0.5, top + 0.5, pipW - 1, pipH - 1);
     }
   }
+
+  if (bar.value !== undefined) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = color;
+    ctx.fillText(String(bar.value), lx + maxW, ly);
+    ctx.textAlign = 'left';
+  }
+}
+
+/**
+ * Difficulty as a length as well as a hue.
+ *
+ * The ramp runs #39FF14 green to #FF3B30 red, which is the axis most
+ * colour-blind players lose, and on an unpicked panel the word was the
+ * brightest thing on it — the one element that is an opinion outranking the
+ * four that are facts. A filled-step meter says the same thing in a channel
+ * that survives, and lets the word sit down.
+ */
+function _drawDifficultyMeter(lx, ly, w, diff, sel) {
+  const gap = 3;
+  const stepW = (w - gap * (DIFFICULTY_STEPS - 1)) / DIFFICULTY_STEPS;
+  for (let i = 0; i < DIFFICULTY_STEPS; i++) {
+    ctx.fillStyle = i < diff.order ? (sel ? diff.color : '#4a5a48') : '#20281f';
+    ctx.fillRect(lx + i * (stepW + gap), ly, stepW, 4);
+  }
+  ctx.textAlign = 'center';
+  ctx.font = '9.5px "Courier New",monospace';
+  ctx.fillStyle = sel ? diff.color : '#93a08f';
+  ctx.fillText(diff.label, lx + w / 2, ly + 16);
+  ctx.textAlign = 'left';
 }
 
 /** Reuses the same cached grids gameplay draws from — one real sprite per
@@ -11090,17 +11189,23 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
  * the row being drawn (see CHAR_PANELS.preview). That also means one grid is
  * built per panel per frame instead of all five: the lookup this replaced was
  * a table literal, so every call rebuilt every character's grid to use one. */
-function _drawCharPreview(cx, cy, panel, t) {
+function _drawCharPreview(cx, cy, panel, t, scale) {
   const { grid, sprite, key } = panel.preview(animFrame3(t * 1.5));
-  const scale = 1.4;
   const bob = Math.round(1.5 * Math.sin(t * 2));
   ctx.save(); ctx.translate(cx, cy + bob);
   ctx.drawImage(
-    spriteCanvas(`preview|${key}`, grid, sprite.w, sprite.h, scale),
+    // The scale is part of the cache key, not just of the draw. spriteCanvas
+    // caches on the key alone, so two scales sharing one key would both get
+    // whichever was rendered first — invisible until a panel is picked.
+    spriteCanvas(`preview|${key}|${scale}`, grid, sprite.w, sprite.h, scale),
     -(sprite.w * scale) / 2, -(sprite.h * scale) / 2,
   );
   ctx.restore();
 }
+
+/** How much bigger the picked hero is drawn than the four beside it. */
+const PREVIEW_SCALE_PICKED = 4;
+const PREVIEW_SCALE_REST = 3;
 
 /**
  * Shared backdrop for the charselect/mapselect panel screens: the black
@@ -11120,85 +11225,154 @@ function _selectionScreenBackdrop(title, subtitle) {
   ctx.fillStyle='#39FF14'; ctx.font='22px "Courier New",monospace';
   ctx.fillText(title, CONFIG.canvasW/2, 65);
   ctx.shadowBlur=0;
-  ctx.font='12px "Courier New",monospace'; ctx.fillStyle='#1a7a08';
+  // #1a7a08 measured 3.8:1 against black, under the 4.5:1 floor, on the line
+  // that names the mode — which decides what the whole run is. #6f8a6c is
+  // 5.5:1 and is the same shade the key hint uses, so the two lines that tell
+  // the player where they are now read as a pair.
+  ctx.font='12px "Courier New",monospace'; ctx.fillStyle='#6f8a6c';
   ctx.fillText(subtitle, CONFIG.canvasW/2, 100);
+}
+
+/**
+ * Where everything on the char-select screen lives.
+ *
+ * One function, read by the draw and by the click handler, so what is painted
+ * and what is clickable cannot drift apart. Computing the rects twice is the
+ * same bug class as a character with a panel and no portrait, in geometry
+ * instead of in data.
+ *
+ * Every figure derives from the canvas. The row this replaces was sized from a
+ * literal 1000 whatever the canvas was, which is 94% of the shipped width and
+ * a little over half of a wider one.
+ */
+function charSelectLayout() {
+  const H = CONFIG.canvasH;
+  const hintY = H - 34;
+  const stripH = Math.round(H * 0.247);
+  const stripTop = hintY - 36 - stripH;
+  const bandTop = Math.round(H * 0.122) + 26;
+  const bandBot = stripTop - 20;
+  // Clamped so a tall canvas gives height to the detail rather than growing
+  // panels into columns.
+  const restH = Math.max(200, Math.min(420, Math.round((bandBot - bandTop) * 0.84)));
+  const selected = CHAR_PANELS.findIndex((p) => p.char === selectedChar);
+  return {
+    selected,
+    stripTop,
+    hintY,
+    slots: panelSlots({
+      count: CHAR_PANELS.length,
+      canvasW: CONFIG.canvasW,
+      sideMargin: 56,
+      bandMidY: (bandTop + bandBot) / 2,
+      restH,
+      pop: DEFAULT_POP,
+    }, selected),
+  };
+}
+
+/**
+ * One hero's panel.
+ *
+ * Every panel carries its four stat rows now, picked or not. Four of the five
+ * used to show a name, one hook line and a difficulty word, which meant
+ * comparing two heroes was done by cycling between them and remembering — the
+ * one job a selection screen exists to do for the player.
+ */
+function _drawCharPanel(slot, p, sel, t) {
+  const { x, y, w, h } = slot;
+  const pad = 12, innerW = w - pad * 2, cx = x + w / 2;
+  _panelFrame(x, y, w, h, sel, p);
+
+  // Selection reads as a bar above the panel rather than only as the hero's
+  // own colour: the archer's #39FF14 is also the screen's accent, so an archer
+  // picked in its own green reads as chrome rather than as a choice.
+  if (sel) {
+    ctx.save();
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#39FF14';
+    ctx.fillRect(x, y - 7, w, 4);
+    ctx.restore();
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = sel ? p.color : '#8f9a8c';
+  ctx.font = `${sel ? 17 : 15}px "Courier New",monospace`;
+  ctx.fillText(_fitText(`[${p.key}] ${p.char.toUpperCase()}`, innerW), cx, y + 21);
+  if (p.newBadge) {
+    ctx.font = 'bold 10px "Courier New",monospace';
+    ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 7;
+    ctx.fillStyle = '#FFB400'; ctx.fillText('[ NEW ]', cx, y + 38);
+    ctx.shadowBlur = 0;
+  }
+
+  _drawCharPreview(cx, y + h * 0.38, p, t, sel ? PREVIEW_SCALE_PICKED : PREVIEW_SCALE_REST);
+
+  ctx.font = '10.5px "Courier New",monospace';
+  ctx.fillStyle = '#93a08f';
+  ctx.fillText(_fitText(p.hook, innerW), cx, y + h * 0.60);
+
+  const pitch = sel ? 19 : 17;
+  const barsBottom = y + h - 44;
+  p.statBars.forEach((bar, i) => _drawStatBar(
+    x + pad, barsBottom - (p.statBars.length - 1 - i) * pitch, innerW, bar,
+    sel ? p.color : '#5c6b59',
+  ));
+
+  _drawDifficultyMeter(x + pad, y + h - 30, innerW, p.difficulty, sel);
+}
+
+/**
+ * The picked hero's three abilities, under the row.
+ *
+ * They used to be inside the picked panel, which is why it had to be 2.33x the
+ * width of the others — and why the other four had no room for anything. The
+ * band below the panels was empty: 160px on the shipped canvas and 544 on a
+ * taller one. Putting the detail there pays for the stats above.
+ */
+function _drawCharDetail(p, top) {
+  const left = 56, right = CONFIG.canvasW - 56;
+  ctx.strokeStyle = '#1d2a1d'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(left, top + 0.5); ctx.lineTo(right, top + 0.5); ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.font = '10px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText('SELECTED', left, top + 26);
+  ctx.font = '20px "Courier New",monospace';
+  ctx.fillStyle = p.color;
+  ctx.fillText(p.char.toUpperCase(), left, top + 50);
+  ctx.font = '11px "Courier New",monospace';
+  ctx.fillStyle = '#7d8a79';
+  ctx.fillText(_fitText(p.hook, 190), left, top + 72);
+
+  const colX = left + 234;
+  const colW = Math.floor((right - colX - 52) / SKILL_SLOTS.length);
+  SKILL_SLOTS.forEach(([label, slot], i) => {
+    const sx = colX + i * (colW + 26);
+    ctx.font = '9px "Courier New",monospace';
+    ctx.fillStyle = PANEL_LABEL_COLOR;
+    ctx.fillText(label, sx, top + 26);
+    ctx.font = '11.5px "Courier New",monospace';
+    ctx.fillStyle = '#C8D0C4';
+    ctx.fillText(_fitText(p.skills[slot], colW), sx, top + 48);
+  });
 }
 
 function drawCharSelect(t) {
   _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
+  const { slots, selected, stripTop, hintY } = charSelectLayout();
 
-  // The selected panel takes a fixed share of the row and the rest split what
-  // is left. Five equal panels could not hold five description lines without
-  // spilling over their own borders, and narrowing them further for a sixth
-  // character only made that worse; giving the detail to one panel at a time
-  // means the text that has to fit lives somewhere that has room for it, and
-  // a new character narrows the four minimal panels rather than that one.
-  const gapX = 12, panelY = 118, selW = Math.floor(1000 * 0.35), selH = 420, restH = 230;
-  const others = CHAR_PANELS.length - 1;
-  // Guarded and then summed rather than computed in closed form: a one-row
-  // roster would divide by zero here, and Infinity * 0 is NaN, which reaches
-  // every fillRect on the screen and draws nothing at all.
-  const restW = others > 0 ? Math.floor((1000 - selW - gapX * others) / others) : 0;
-  const widths = CHAR_PANELS.map((p) => (selectedChar === p.char ? selW : restW));
-  const totalW = widths.reduce((sum, w) => sum + w, 0) + gapX * others;
-  // Panels are centred on one line so the selected one expands about its own
-  // middle instead of growing downward out of the row.
-  const midY = panelY + selH / 2;
+  CHAR_PANELS.forEach((p, i) => _drawCharPanel(slots[i], p, i === selected, t));
+  _drawCharDetail(CHAR_PANELS[selected] ?? CHAR_PANELS[0], stripTop);
 
-  let px = Math.round(CONFIG.canvasW / 2 - totalW / 2);
-  CHAR_PANELS.forEach((p, idx) => {
-    const sel = selectedChar === p.char;
-    const w = widths[idx], h = sel ? selH : restH;
-    const py = Math.round(midY - h / 2);
-    const pad = 12, innerW = w - pad * 2, cx = px + w / 2;
-
-    _panelFrame(px, py, w, h, sel, p);
-
-    ctx.textAlign='center';
-    ctx.fillStyle = sel ? p.color : p.dim;
-    ctx.font='19px "Courier New",monospace';
-    ctx.fillText(_fitText(`[${p.key}] ${p.char.toUpperCase()}`, innerW), cx, py+28);
-    if (p.newBadge) {
-      ctx.font='bold 10px "Courier New",monospace';
-      ctx.shadowColor='#FFB400'; ctx.shadowBlur=7;
-      ctx.fillStyle='#FFB400'; ctx.fillText('[ NEW ]', cx, py+48);
-      ctx.shadowBlur=0;
-    }
-    _drawCharPreview(cx, py+108, p, t);
-
-    // The one line every panel carries, selected or not.
-    ctx.font='10.5px "Courier New",monospace';
-    ctx.fillStyle = sel ? p.color : p.dim;
-    ctx.fillText(_fitText(p.hook, innerW), cx, py+160);
-
-    if (sel) {
-      p.statBars.forEach((bar, i) => _drawStatBar(px+pad, py+186+i*19, innerW, bar, p.color));
-      SKILL_SLOTS.forEach(([label, slot], i) => {
-        const sy = py + 276 + i * 40;
-        ctx.textAlign='left';
-        ctx.font='9px "Courier New",monospace';
-        ctx.fillStyle = PANEL_LABEL_COLOR;
-        ctx.fillText(label, px+pad, sy);
-        ctx.font='10.5px "Courier New",monospace';
-        ctx.fillStyle = p.color;
-        ctx.fillText(_fitText(p.skills[slot], innerW), px+pad, sy+15);
-      });
-      ctx.textAlign='center';
-    }
-
-    ctx.font='11px "Courier New",monospace';
-    ctx.shadowColor = p.difficulty.color; ctx.shadowBlur = 6;
-    ctx.fillStyle = p.difficulty.color;
-    const diff = sel ? `DIFFICULTY: ${p.difficulty.label}` : p.difficulty.label;
-    ctx.fillText(_fitText(diff, innerW), cx, py+h-24);
-    ctx.shadowBlur = 0;
-
-    px += w + gapX;
-  });
-
-  ctx.fillStyle='#0d4d04'; ctx.font='14px "Courier New",monospace';
-  const keyHint = CHAR_PANELS.map(p => `[${p.key}]`).join(' ');
-  ctx.fillText(`← →  /  ${keyHint}  SWITCH    ENTER  CONFIRM`, CONFIG.canvasW/2, CONFIG.canvasH-22);
+  // Lifted out of #0d4d04, which is 2.1:1 against black and was the only place
+  // ENTER was ever named. ESC has always worked here and drawMapSelect already
+  // says so, which made this screen the inconsistent one.
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
+  ctx.fillText('CLICK OR ← →  SWITCH    ENTER  CONFIRM    ESC  BACK',
+    CONFIG.canvasW / 2, hintY);
 }
 
 /** Waves-only screen between charselect and the run. Same layout family as
@@ -12011,6 +12185,11 @@ export const devHooks = {
   holdFrames(n) { hitstop.trigger(n); },
   hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
+  // The char-select rects, so a headless check can ask where a panel is
+  // rather than re-deriving geometry the screen owns — which is the same
+  // second copy this layout exists to remove.
+  charSelect: () => charSelectLayout(),
+  selectChar(name) { selectedChar = name; return selectedChar; },
   // The live key map and the one-shot fire latch, so a test can drive the same
   // input path a real keyboard does instead of a parallel one.
   keys: () => keys,
