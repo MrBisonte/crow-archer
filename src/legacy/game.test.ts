@@ -24,6 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
+import { clearArena } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -1058,13 +1059,6 @@ describe('the sapper', () => {
  * about the rule, not the map, so they lay their own walls where they want
  * them and leave the rest empty.
  */
-function clearArena(): void {
-  const c = g.config();
-  const tiles = g.tiles();
-  for (let row = 1; row < c.rows - 1; row++)
-    for (let col = 1; col < c.cols - 1; col++) tiles.set(row, col, TILE.EMPTY);
-}
-
 /** Puts the wizard at a tile centre, aiming due east, on open ground. */
 function wizardAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
   g.pick('wizard');

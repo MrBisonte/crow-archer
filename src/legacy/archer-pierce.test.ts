@@ -16,6 +16,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { clearArena } from './arena-testkit';
 import { devHooks as g } from './game.js';
 
 /** Bodies in a line along +x from the hero, closer together than the arrow's reach. */
@@ -44,6 +45,11 @@ beforeEach(() => {
   g.pick('archer');
   g.go('playing');
   g.generateMap('forest');
+  // Open ground, or the shot is a question about where the generator put its
+  // trees: a power arrow spends a pierce charge on the first thing it meets,
+  // and a trunk in the lane makes three bodies short of five read as two. This
+  // flaked about one run in five before the clear.
+  clearArena();
   g.healHero();
   (g.skeletons() as unknown[]).length = 0;
   (g.arrows() as unknown[]).length = 0;
