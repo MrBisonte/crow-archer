@@ -39,14 +39,16 @@ interface HeroCase {
 }
 
 const HEROES: readonly HeroCase[] = [
-  // The archer's three are 415, not the 440 the rest carry, and the drop is the
-  // re-pose rather than a flattening: he was redrawn from a front-facing 3/4
-  // into profile, and a body seen edge-on is simply narrower than one seen
-  // face-on. The ratchet's premise — same pose, more detail — does not survive
-  // a change of pose, so the baseline is re-cut here and guards from there.
-  { name: 'archer|a', sprite: ARCHER_SPRITE, grid: buildArcherGrid('a', TRIM), before: 415 },
-  { name: 'archer|mid', sprite: ARCHER_SPRITE, grid: buildArcherGrid('mid', TRIM), before: 415 },
-  { name: 'archer|b', sprite: ARCHER_SPRITE, grid: buildArcherGrid('b', TRIM), before: 415 },
+  // The archer's three are 340, not the 440 the rest carry, and the gap is two
+  // deliberate changes rather than a flattening. He was redrawn from a
+  // front-facing 3/4 into profile, and a body edge-on is narrower than the same
+  // body face-on. Then the bow came out of the grid entirely — it has to swing
+  // to the aim and bend through a draw, so render/archer-bow.ts paints it live.
+  // The ratchet's premise is "same pose, more detail"; neither survives a
+  // change of pose or a part moving to another module, so it is re-cut here.
+  { name: 'archer|a', sprite: ARCHER_SPRITE, grid: buildArcherGrid('a', TRIM), before: 340 },
+  { name: 'archer|mid', sprite: ARCHER_SPRITE, grid: buildArcherGrid('mid', TRIM), before: 340 },
+  { name: 'archer|b', sprite: ARCHER_SPRITE, grid: buildArcherGrid('b', TRIM), before: 340 },
   { name: 'wizard', sprite: WIZARD_SPRITE, grid: buildWizardGrid(TRIM), before: 440 },
   { name: 'ranger|a', sprite: RANGER_SPRITE, grid: buildRangerGrid('a', TRIM), before: 374 },
   { name: 'ranger|mid', sprite: RANGER_SPRITE, grid: buildRangerGrid('mid', TRIM), before: 376 },

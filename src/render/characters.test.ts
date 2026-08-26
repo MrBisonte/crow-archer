@@ -375,12 +375,17 @@ describe('drawCharacter', () => {
     expect(striding.points).not.toEqual(standing.points);
   });
 
-  it('swings the archer bow arc onto the aim', () => {
+  it('swings the archer bow onto the aim', () => {
+    // Aiming straight down, so the grip is directly below the body and the
+    // stave lies across it: one limb tip to the left, the other to the right.
     const rec = draw({ character: 'archer', aimAngle: Math.PI / 2 });
-    const bow = rec.calls.find((c) => c.name === 'arc' && c.args[2] === 7);
-    expect(bow).toBeDefined();
-    // Bow hand 8 px out along the aim, which points straight down here.
-    expect(bow?.args.slice(0, 2).map((n) => Math.round(Number(n)))).toEqual([0, 8]);
+    const stave = rec.calls.find((c) => c.name === 'quadraticCurveTo');
+    expect(stave).toBeDefined();
+    const [cpx, cpy, tipX, tipY] = (stave?.args ?? []).map((n) => Math.round(Number(n)));
+    // Control point sits beyond the grip along the aim: the belly of the bow.
+    expect([cpx, cpy]).toEqual([0, 13]);
+    // Far tip is out to the side at grip depth, not along the aim.
+    expect([tipX, tipY]).toEqual([8, 9]);
   });
 
   it('draws every combination of kind, facing and state without throwing', () => {

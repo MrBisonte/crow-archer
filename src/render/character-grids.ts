@@ -45,9 +45,9 @@ const STANCE_FRONT = 15;
  * render/characters.ts and `player.facing` in the legacy renderer, both of
  * which already flip on the sign of the aim.
  *
- * The bow is baked because it is the silhouette: an archer read across the
- * arena is a bent stave with a man behind it, and the live bow the multiplayer
- * painter rotates onto him is aim feedback, not the body.
+ * The bow is not baked: it swings to the aim, bends through a held power shot
+ * and snaps forward on release, which no fixed number of frames can carry.
+ * render/archer-bow.ts draws it, and both renderers call that one painter.
  */
 export function buildArcherGrid(frame: AnimFrame, trim: string): PixelGrid {
   const C = {
@@ -180,20 +180,6 @@ export function buildArcherGrid(frame: AnimFrame, trim: string): PixelGrid {
   pixelRect(g, 18, 13, 2, 3, C.leatherHi);
   setPixel(g, 19, 15, C.skin);
 
-  // The stave, bent away from the body so the draw shows in silhouette and not
-  // only in colour, with the string running the chord of it.
-  for (let y = 6; y <= 25; y++) {
-    const t = (y - 6) / 19;
-    const belly = Math.sin(t * Math.PI);
-    const x = 19 + Math.round(belly * 2);
-    pixelRect(g, x, y, 1, 1, C.wood);
-    if (y > 8 && y < 23) setPixel(g, x, y, C.woodHi);
-  }
-  // String on the chord, and the grip closed round the stave at hand height so
-  // the bow is held rather than standing beside him.
-  pixelRect(g, 19, 7, 1, 18, C.fletchAlt);
-  pixelRect(g, 19, 14, 3, 2, C.skinSh);
-  setPixel(g, 20, 14, C.skin);
 
   // Trim last, over everything on the torso: it is the one marker a player
   // reads a side off, and anything painted after it could bury it.

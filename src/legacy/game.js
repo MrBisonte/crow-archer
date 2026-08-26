@@ -63,6 +63,7 @@ import {
   KNIGHT_SPRITE, buildKnightGrid,
   SAPPER_SPRITE, buildSapperGrid,
 } from '../render/character-grids';
+import { paintArcherBow } from '../render/archer-bow';
 
 /**
  * The ground disc that says whose side a body is on.
@@ -1101,6 +1102,16 @@ let charge = { on: false, t0: 0 };
 // shape as `charge` above, and deliberately so: the hand already knows it.
 let archerDraw = { on: false, t0: 0 };
 let archerPowerCD = 0;
+/**
+ * Seconds left of the snap forward after a shot leaves, counting down.
+ *
+ * Not a cooldown and deliberately not near one: nothing is gated on it, it
+ * only tells the bow painter how far through a release it is. An ordinary
+ * arrow has no windup at all, so this is the only thing that makes loosing one
+ * look like anything.
+ */
+let archerLoose = 0;
+const ARCHER_LOOSE_SECS = 0.12;
 // The ranger's net, the same draw-and-release shape as the archer's bow. He is
 // not rooted while he draws: it is a throw rather than an aimed shot, and the
 // skirmisher is the one character whose whole identity is not standing still.
@@ -1831,6 +1842,7 @@ function releaseArcherDraw() {
     power: true,
     pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
     dmgMult: 1 + drawn * (CONFIG.archerPowerBossMult - 1) });
+  archerLoose = ARCHER_LOOSE_SECS;
   events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
 }
 
@@ -2977,7 +2989,7 @@ function initGame() {
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
   knightChainTimer = 0;
-  archerDraw.on = false; archerPowerCD = 0;
+  archerDraw.on = false; archerPowerCD = 0; archerLoose = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -3256,6 +3268,7 @@ function updatePlayer(dt) {
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
   if (archerPowerCD       > 0) archerPowerCD      = Math.max(0, archerPowerCD      - dt);
+  if (archerLoose         > 0) archerLoose        = Math.max(0, archerLoose        - dt);
   if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
@@ -3448,6 +3461,7 @@ function tryShoot() {
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: CONFIG.arrowSpeed,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0 });
+  archerLoose = ARCHER_LOOSE_SECS;
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
 }
 
@@ -7818,6 +7832,16 @@ function drawPlayer() {
     ? spriteFlashCanvas(`archer|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
     : spriteCanvas(`archer|${SP_TRIM.archer}|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
   ctx.drawImage(archerCanvas, spriteDx, spriteDy);
+  // The bow is not part of the body grid: it swings to the aim, bends through a
+  // held power shot and snaps forward on release. One painter, shared with the
+  // multiplayer renderer, so the two cannot drift.
+  paintArcherBow(ctx, {
+    aim: localAngle,
+    draw: archerDrawFrac(),
+    recoil: archerLoose / ARCHER_LOOSE_SECS,
+    trim: SP_TRIM.archer,
+    wash: (colour) => (flashOn ? '#ffffff' : colour),
+  });
 
   // Shield halo
   if (playerShield) {
