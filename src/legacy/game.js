@@ -2852,6 +2852,18 @@ events.on(e => {
       });
       break;
 
+    case 'ARCHER_POWER_HIT': {
+      // Weight on the body, not on the bow: a shake and a spray at the point of
+      // contact, easing off as the shot spends what it has left to give.
+      const bite = 0.4 + 0.2 * e.left;
+      triggerShake(2 + 2 * bite, 90 + 60 * bite);
+      burst(e.x, e.y, {
+        count: 5 + 3 * e.left, colors: ['#EAFF6A', '#FFFFFF'],
+        speedMin: 50, speedMax: 120 + 40 * e.left, decay: 2.8, shape: 'spark',
+        shadowBlur: 5, shadowColor: '#EAFF6A',
+      });
+      break;
+    }
     case 'ARCHER_BRACED':
       // Quiet and short: a confirmation, not an alarm. He is standing still to
       // hear it, so it does not have to compete with anything.
@@ -4006,14 +4018,14 @@ function updateArrows(dt) {
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
         damageCrow(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
-        arrows.splice(i, 1); hit = true; break;
+        if (spendArrowPierce(a, i)) { hit = true; break; }
       }
     }
     if (hit) continue;
     for (let j = skeletons.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, skeletons[j].x, skeletons[j].y) < hitR*hitR) {
         damageSkeleton(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
-        arrows.splice(i, 1); hit = true; break;
+        if (spendArrowPierce(a, i)) { hit = true; break; }
       }
     }
     if (hit) continue;
@@ -4137,6 +4149,28 @@ function hitKnockOffset(e) {
   return { x: e.knock.x * d, y: e.knock.y * d };
 }
 const ZERO_KNOCK = { x: 0, y: 0 };
+
+/**
+ * Spends one body of an arrow's pierce budget, and says whether it is finished.
+ *
+ * `pierceLeft` was set on every power shot and read by nothing but the
+ * renderer: the javelin's hit path honoured it, the ordinary arrow path spliced
+ * on first contact, and a power arrow goes down the ordinary path. So a third
+ * of what the hold bought never existed.
+ *
+ * An arrow with no pierce is finished by its first contact, which is why this
+ * is one shape for both rather than a branch at each hit site.
+ */
+function spendArrowPierce(a, i) {
+  // Emitted per body, including the last, so a shot that goes through three
+  // enemies reads as three hits rather than as one arrow disappearing.
+  if (a.power) {
+    events.emit({ type: 'ARCHER_POWER_HIT', x: a.x, y: a.y, left: Math.max(0, (a.pierceLeft || 1) - 1) });
+  }
+  if (a.pierceLeft > 1) { a.pierceLeft--; return false; }
+  arrows.splice(i, 1);
+  return true;
+}
 
 function knockFrom(vx, vy) {
   const m = Math.hypot(vx, vy);
