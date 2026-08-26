@@ -62,6 +62,7 @@ import {
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
   SAPPER_SPRITE, buildSapperGrid,
+  SPRITE_ORIGIN_ROW,
 } from '../render/character-grids';
 import { paintArcherBow } from '../render/archer-bow';
 
@@ -11235,10 +11236,54 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
  * the row being drawn (see CHAR_PANELS.preview). That also means one grid is
  * built per panel per frame instead of all five: the lookup this replaced was
  * a table literal, so every call rebuilt every character's grid to use one. */
+/**
+ * The archer's shop window: walk, plant and draw a power shot, loose it, then
+ * two quick ones over his shoulder before turning back.
+ *
+ * A routine rather than a loop of the walk, because the panel is where someone
+ * decides which hero to be and the walk alone says nothing about him. Every
+ * pose in it is one the game already computes — a stride frame, a draw
+ * fraction, a release — so this schedules them rather than drawing anything
+ * new. The shoulder shots are the reason he is worth picking: he is the one
+ * hero whose whole bargain is never having to be near.
+ *
+ * Times are absolute seconds through one cycle, so reading the ladder top to
+ * bottom is reading the performance in order.
+ */
+function _archerPreviewAct(t) {
+  const u = t % 5.6;
+  // Walking in, bow down, aim ahead.
+  if (u < 1.8) return { walking: true, draw: 0, recoil: 0, aim: 0 };
+  // Planted, drawing the power shot over a full second.
+  if (u < 3.0) return { walking: false, draw: (u - 1.8) / 1.2, recoil: 0, aim: 0 };
+  // Loosed. The recoil decays over the same window the game gives it.
+  if (u < 3.3) return { walking: false, draw: 0, recoil: 1 - (u - 3.0) / 0.3, aim: 0 };
+  // Turning to look back, still walking, and two snapped shots behind him.
+  //
+  // The sweep goes negative, which is up and over his head. Positive is the
+  // same arc the other way round and drags the bow down through his own legs
+  // on the way past — the grip rides a circle about the bow hand, so a quarter
+  // turn downward puts it below the body's origin, at his feet.
+  const BACK = -Math.PI * 0.85;
+  if (u < 3.9) return { walking: true, draw: 0, recoil: 0, aim: BACK * ((u - 3.3) / 0.6) };
+  if (u < 4.2) return { walking: true, draw: (u - 3.9) / 0.3 * 0.5, recoil: 0, aim: BACK };
+  if (u < 4.4) return { walking: true, draw: 0, recoil: 1 - (u - 4.2) / 0.2, aim: BACK };
+  if (u < 4.7) return { walking: true, draw: (u - 4.4) / 0.3 * 0.5, recoil: 0, aim: BACK };
+  if (u < 4.9) return { walking: true, draw: 0, recoil: 1 - (u - 4.7) / 0.2, aim: BACK };
+  // Turning back to face the way he is going, over the top the same way.
+  return { walking: true, draw: 0, recoil: 0, aim: BACK * (1 - (u - 4.9) / 0.7) };
+}
+
+/** What each panel is doing in its window. Absent means "just walk". */
+const PREVIEW_ACTS = { archer: _archerPreviewAct };
+
 function _drawCharPreview(cx, cy, panel, t) {
+  const act = PREVIEW_ACTS[panel.char] ? PREVIEW_ACTS[panel.char](t) : null;
   // Roughly the cadence the hero walks at in play. At the old 1.5 the preview
   // took four seconds a cycle, which read as a stuck sprite rather than a walk.
-  const { grid, sprite, key } = panel.preview(animFrame3(t * 10));
+  // A hero mid-routine holds his stride still while he is planted.
+  const walking = !act || act.walking;
+  const { grid, sprite, key } = panel.preview(walking ? animFrame3(t * 10) : 'mid');
   const scale = 1.4;
   const bob = Math.round(1.5 * Math.sin(t * 2));
   ctx.save(); ctx.translate(cx, cy + bob);
@@ -11246,6 +11291,20 @@ function _drawCharPreview(cx, cy, panel, t) {
     spriteCanvas(`preview|${key}`, grid, sprite.w, sprite.h, scale),
     -(sprite.w * scale) / 2, -(sprite.h * scale) / 2,
   );
+  // A live weapon on a baked body. The bow left the grid when it had to start
+  // moving, so without this the archer stands in the shop window empty-handed.
+  // Everything the painter draws is relative to the body's origin, which sits
+  // SPRITE_ORIGIN_ROW down from the sprite's top edge.
+  if (act && panel.char === 'archer') {
+    ctx.save();
+    ctx.translate(0, -(sprite.h * scale) / 2 + SPRITE_ORIGIN_ROW * scale);
+    ctx.scale(scale, scale);
+    paintArcherBow(ctx, {
+      aim: act.aim, draw: act.draw, recoil: act.recoil,
+      trim: SP_TRIM.archer, wash: (colour) => colour,
+    });
+    ctx.restore();
+  }
   ctx.restore();
 }
 

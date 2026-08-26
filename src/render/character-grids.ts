@@ -17,6 +17,17 @@ import { makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutl
 
 export const ARCHER_SPRITE = { w: 24, h: 32 };
 
+/**
+ * Which row of a hero grid sits on the body's origin — the ground between the
+ * feet, which is the point the world positions them by.
+ *
+ * Both renderers drew the sprite at a literal `dy = -22`, and the
+ * character-select preview needed the same number to put a live weapon in a
+ * baked hand. Three copies of an offset is how a weapon ends up at an ankle,
+ * so it is stated once here.
+ */
+export const SPRITE_ORIGIN_ROW = 22;
+
 /** The row the boots land on, and the row the two legs have to read as two. */
 const BOOT_ROW = 30;
 

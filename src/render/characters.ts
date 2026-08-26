@@ -23,7 +23,7 @@ import { animFrame3, type PixelGrid } from './pixel-grid';
 import { paintArcherBow } from './archer-bow';
 import { spriteCanvas, spriteFlashCanvas } from './pixel-sprite';
 import {
-  ARCHER_SPRITE, buildArcherGrid,
+  ARCHER_SPRITE, SPRITE_ORIGIN_ROW, buildArcherGrid,
   WIZARD_SPRITE, buildWizardGrid,
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
@@ -289,7 +289,7 @@ function paintBakedBody(
   grid: PixelGrid,
   extraDy = 0,
 ): void {
-  const dx = -sprite.w / 2, dy = -22 + extraDy;
+  const dx = -sprite.w / 2, dy = -SPRITE_ORIGIN_ROW + extraDy;
   const canvas =
     p.white > 0 ? spriteFlashCanvas(key, grid, sprite.w, sprite.h, WHITE)
     : p.grey > 0 ? spriteFlashCanvas(key, grid, sprite.w, sprite.h, CORPSE_GREY)
