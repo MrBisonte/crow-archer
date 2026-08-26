@@ -2173,39 +2173,55 @@ function braceBossMult() {
 }
 
 /**
- * Is there anything in the quiver to loose?
+ * A set of pools that stand in for one another, dearest first.
  *
- * Five callers and three of them are art: the pitchfork fallback is drawn off
- * the same fact the shot is refused by, so one reading is what keeps the
- * picture and the rule from disagreeing about whether he is out.
+ * Two kits work this way and it is one rule, so it is written once and each kit
+ * supplies its own row order. Special kinds first and plain last, because a
+ * pickup is worth more than a plain one and nobody wants to burn their fire
+ * arrows holding the button after the fight is over.
+ *
+ * Each row is [inventory key, what leaves the hand].
  */
-function hasShaft() {
-  return inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+const QUIVER = [['fireArrows', 'fire'], ['ricochetArrows', 'ricochet'], ['arrows', 'normal']];
+const POUCH  = [['fireBombs', 'fire'], ['iceBombs', 'ice'], ['bombs', 'none']];
+
+/** Whether any pool in the set still holds something. */
+function anyLeft(pools) {
+  return pools.some(([key]) => inv[key] > 0);
 }
 
 /**
- * Takes one shaft out of the quiver and says which kind left it.
+ * Spends one unit from the first non-empty pool and says which kind left.
  *
- * Special kinds first and plain last, because a pickup is worth more than a
- * plain shaft and nobody wants to burn their fire arrows holding the button
- * after the fight is over.
- *
- * Deliberately not per character. The archer and the ranger draw on the same
- * three pools by design — the manual calls it "the same quiver" — and what
- * separates them is what leaves the string, one arrow against three lighter
- * bolts in a spread. This spend ran as three identical copies, one per firing
- * path, which is exactly how two characters come to disagree about which kind
- * is spent first without anyone deciding they should.
- *
- * Returns null on an empty quiver. Every caller checks `hasShaft()` first, so
- * that is a guard against a fourth firing path forgetting to, not a case.
+ * Null on an empty set, which is the caller's cue to swing something instead.
+ * This spend ran as three identical copies for the quiver alone, one per firing
+ * path, which is exactly how two characters come to disagree about what is
+ * spent first without anyone deciding they should. The sapper's pouch was a
+ * fourth copy of the same rule.
  */
-function spendShaft() {
-  if (inv.fireArrows > 0)     { inv.fireArrows--;     return 'fire'; }
-  if (inv.ricochetArrows > 0) { inv.ricochetArrows--; return 'ricochet'; }
-  if (inv.arrows > 0)         { inv.arrows--;         return 'normal'; }
+function spendFirst(pools) {
+  for (const [key, label] of pools) {
+    if (inv[key] > 0) { inv[key]--; return label; }
+  }
   return null;
 }
+
+/**
+ * The archer's and the ranger's quiver.
+ *
+ * Deliberately not per character. They draw on the same three pools by design
+ * -- the manual calls it "the same quiver" -- and what separates them is what
+ * leaves the string: one arrow against three lighter bolts in a spread.
+ *
+ * `hasShaft` has five callers and three of them are art: the pitchfork fallback
+ * is drawn off the same fact the shot is refused by, so one reading is what
+ * keeps the picture and the rule from disagreeing about whether he is out.
+ */
+function hasShaft()   { return anyLeft(QUIVER); }
+function spendShaft() { return spendFirst(QUIVER); }
+
+/** The sapper's pouch: his own three kinds, the same rule. See POUCH. */
+function hasBomb()    { return anyLeft(POUCH); }
 
 /** How far the net has been drawn, 0 to 1. */
 function rangerNetFrac() {
@@ -4082,23 +4098,12 @@ function throwDynamite(chargeFrac) {
  * pitchfork the archer and ranger swing when the quiver is empty, rather
  * than standing there with nothing at all.
  */
-/** Whether the sapper still has anything in the pouch to throw. */
-function hasBomb() {
-  return inv.bombs > 0 || inv.fireBombs > 0 || inv.iceBombs > 0;
-}
 
-/**
- * Throws one charge out of the pouch, best kind first.
- *
- * The spend order matches the quiver's for the same reason: the elemental ones
- * are the scarce ones, so they go first and the plain ones are what he is left
- * holding. See spendShaft.
- */
+
+/** Throws one charge out of the pouch, dearest kind first. See POUCH. */
 function throwOneCharge() {
-  let element = 'none';
-  if      (inv.fireBombs > 0) { inv.fireBombs--; element = 'fire'; }
-  else if (inv.iceBombs  > 0) { inv.iceBombs--;  element = 'ice';  }
-  else                        { inv.bombs--;                       }
+  const element = spendFirst(POUCH);
+  if (element === null) return;
   launchCharge(CONFIG.sapperBombSpeed, 'bomb', element);
   events.emit({ type: 'WEAPON_FIRED', kind: 'charge' });
 }
@@ -5103,6 +5108,32 @@ function chainOne(from, other, link, r2) {
   other.life = Math.min(other.life, CONFIG.sapperChainDelaySecs);
 }
 
+/**
+ * Flattens the destructible cover a blast reaches: rock, trees and huts.
+ *
+ * Its own function because it is its own responsibility and it is the bulk of
+ * what a blast used to be -- a nested scan over a tile window, next to the
+ * damage and the fire, in one 47-line body. On some maps terrain does not break
+ * at all (`terrainDestructible`), which is a rule about the world rather than
+ * about explosives and reads better standing alone.
+ */
+function clearTilesInBlast(x, y, radius) {
+  if (!terrainDestructible()) return;
+  const r2 = radius ** 2;
+  const tileR = Math.ceil(radius / CONFIG.tileSize);
+  const tc = Math.floor(x / CONFIG.tileSize), tr = Math.floor(y / CONFIG.tileSize);
+  for (let dr = -tileR; dr <= tileR; dr++) {
+    for (let dc = -tileR; dc <= tileR; dc++) {
+      const row = tr + dr, col = tc + dc;
+      if (row < 0 || row >= CONFIG.rows || col < 0 || col >= CONFIG.cols) continue;
+      const t = tileMap.get(row, col);
+      if (t !== TILE.ROCK && t !== TILE.TREE && t !== TILE.HUT) continue;
+      const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
+      if (dist2(x, y, wx, wy) < r2) tileMap.set(row, col, TILE.EMPTY);
+    }
+  }
+}
+
 function explodeExplosive(d, source, opts = {}) {
   // A bomb carries its own radius multiplier so a chain inherits it. The shift
   // shot detonates one bomb wider than usual, and the point of the ability is
@@ -5114,19 +5145,7 @@ function explodeExplosive(d, source, opts = {}) {
   events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1 });
   const r2 = radius ** 2;
 
-  // Destroy ROCK and TREE tiles within blast radius
-  const tileR = Math.ceil(radius / CONFIG.tileSize);
-  const tc = Math.floor(d.x / CONFIG.tileSize), tr = Math.floor(d.y / CONFIG.tileSize);
-  for (let dr = -tileR; dr <= tileR; dr++) {
-    for (let dc = -tileR; dc <= tileR; dc++) {
-      const row = tr + dr, col = tc + dc;
-      if (row < 0 || row >= CONFIG.rows || col < 0 || col >= CONFIG.cols) continue;
-      const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
-      const t = tileMap.get(row, col);
-      if (dist2(d.x, d.y, wx, wy) < r2 && (t === TILE.ROCK || t === TILE.TREE || t === TILE.HUT))
-        if (terrainDestructible()) tileMap.set(row, col, TILE.EMPTY);
-    }
-  }
+  clearTilesInBlast(d.x, d.y, radius);
 
   const baseBossDamage = source === 'satchel' ? CONFIG.satchelBossDamage
               : source === 'barrage' ? CONFIG.sapperBarrageDamage
