@@ -455,6 +455,11 @@ const CONFIG = {
   netSpeed: 420,
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
+  // The broom is the wizard's pitchfork: the same swing on a cooldown half
+  // again as long. It is what he has left with Focus empty, and it is meant to
+  // be a rare save rather than a way to fight — a wizard who can hold his own
+  // in melee is not a glass cannon.
+  broomCooldownMult: 1.5,
 
   // Sapper. The powder charge is thrown on the primary and costs nothing but
   // time, so this cooldown is the whole of its ammo economy: there is no
@@ -539,6 +544,20 @@ const CONFIG = {
   // "once in a while" buttons and neither should be the answer twice in a row.
   // The refusal threshold keeps a blink into a wall from costing five seconds
   // for two pixels of travel.
+  // Focus: the wizard's own resource, and the only spent one on the roster —
+  // everything else is a cooldown or a pool that has to be picked up. Three
+  // points buy a bolt and a blink, or three bolts, so casting and escaping
+  // draw on one budget and the escape button stops quietly cancelling out his
+  // being the most fragile hero in the game.
+  //
+  // The regeneration rate is deliberately slower than the bolt cooldown: at
+  // 1.2 s a cooldown-gated wizard fires forever, and a resource that refills
+  // faster than it is spent is not a resource. Below that rate Focus, not the
+  // cooldown, is what actually paces him.
+  wizFocusMax: 3,
+  wizFocusRegenSecs: 2,
+  wizFocusBolt: 1,
+  wizFocusBlink: 2,
   wizBlinkDistance: 160, wizBlinkCooldown: 6, wizBlinkIFrames: 0.3,
   wizBlinkMinDistance: 32,
   // A blink may be chained once, into a second hop, if the key comes down
@@ -597,7 +616,12 @@ const CONFIG = {
     // The sapper's own pouch. A pickup is worth one bomb, not a refill to
     // full, so a run's supply is the ten it opened with plus whatever it
     // picks up one at a time — the cooldown paces the throwing, this caps it.
-    bombs:     { max: 10, restore: 1, color: '#FF7A1A', dim: '#2d2d2d', icon: '●', spacing: 13 }
+    bombs:     { max: 10, restore: 1, color: '#FF7A1A', dim: '#2d2d2d', icon: '●', spacing: 13 },
+    // Focus regenerates on a timer rather than off the ground, so its restore
+    // is zero: the pickup loop that tops the other pools up runs only for the
+    // three heroes with a quiver, and a restore above zero here would hand the
+    // wizard free casts the moment that ever changed.
+    focus:     { max: 3, restore: 0, color: '#8888FF', dim: '#2d2d2d', icon: '◆', spacing: 13 }
   },
 
   audio: true,
@@ -1090,6 +1114,27 @@ let sapperBarrageCD = 0, sapperShotCD = 0;
 // short mercy window on arrival, without which blinking out of a swarm still
 // takes the hit you blinked away from.
 let wizBlinkCD = 0, wizBlinkIFrame = 0;
+/**
+ * Seconds banked toward the next point of Focus.
+ *
+ * Focus itself is a whole number in `inv.focus`, so the HUD can draw it as
+ * three pips and a spend is a subtraction rather than a comparison against a
+ * fraction. The part-filled point lives here instead, out of the inventory,
+ * because nothing else in the game has a pool that fills itself and the pool
+ * renderer has no way to show half a pip.
+ */
+let wizFocusFill = 0;
+
+/**
+ * Which fallback weapon is mid-swing.
+ *
+ * The swing itself is one piece of code for every hero who runs dry (see
+ * tryFallbackMelee), so the weapon has to be remembered rather than derived:
+ * `selectedChar` would work today only because exactly one hero swings a
+ * broom, and would quietly pick the wrong art the moment a second one did.
+ */
+/** @type {import('../sim/events').WeaponKind & ('pitchfork' | 'broom')} */
+let pfKind = 'pitchfork';
 // Hops still available in the current chain, and the window they must be
 // taken in. The window is what makes a chain a rhythm rather than a stored
 // charge: let it lapse and the ability is back to its plain cooldown.
@@ -1812,6 +1857,14 @@ function tryWizardBlink() {
   // cooldown the first one started; anything else has to wait it out.
   const chaining = wizBlinkHops > 0 && wizBlinkChainTimer > 0;
   if (!chaining && wizBlinkCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // The first hop costs Focus; the chained one does not. It is already paid
+  // for in skill — a 1.1 s window and a fresh angle to aim — and charging for
+  // it twice would make the chain the thing you can never afford, which is the
+  // half of the ability with anything to learn in it.
+  if (!chaining && inv.focus < CONFIG.wizFocusBlink) {
+    events.emit({ type: 'ACTION_BLOCKED' });
+    return;
+  }
 
   const hop = probeAhead(player.x, player.y, player.aimAngle, CONFIG.wizBlinkDistance);
 
@@ -1825,6 +1878,10 @@ function tryWizardBlink() {
   }
 
   const fromX = player.x, fromY = player.y;
+  // Spent here and not at the guard above, so a hop refused for want of room
+  // costs nothing — the same reasoning that already keeps a blocked hop off
+  // the cooldown.
+  if (!chaining) inv.focus -= CONFIG.wizFocusBlink;
   player.x = hop.x; player.y = hop.y;
   wizBlinkHops       = chaining ? wizBlinkHops - 1 : CONFIG.wizBlinkMaxHops - 1;
   wizBlinkChainTimer = CONFIG.shiftChainSecs;
@@ -2508,6 +2565,9 @@ const BOSS_HIT_FX = {
   // in 5 archer hits, 14 wizard bolts. Ranged sources used to be silent here,
   // so a knight felt every hit on the boss and an archer felt none.
   pitchfork: [6, 200], spear: [5, 200], javelin: [5, 180], arrow: [4, 140],
+  // Softer than the pitchfork it copies. A broom hitting a boss for the same
+  // two points should not feel like the same weapon doing it.
+  broom: [3, 150],
   // Still null, because each already shakes through its own event and would
   // otherwise fire twice for one action, or many times for one cast:
   // dynamite and satchel via EXPLOSION, storm via STORM_CAST, and whirlwind
@@ -2521,6 +2581,9 @@ const WEAPON_FX = {
   bolt:      { sound: () => sndWizBolt,   shake: null },
   crossbow:  { sound: () => sndCrossbow,  shake: null },
   pitchfork: { sound: () => sndPitchfork, shake: [3, 90] },
+  // The wizard's fallback, on the charge whoosh rather than the pitchfork's
+  // clang: straw through the air, not iron on stone.
+  broom:     { sound: () => sndChargeWhoosh, shake: [2, 60] },
   spear:     { sound: () => sndPitchfork, shake: [2, 70] },
   javelin:   { sound: () => sndPitchfork, shake: [3, 80] },
   // The sapper's lob. Reuses the knight charge's whoosh rather than the bow's
@@ -2751,6 +2814,14 @@ events.on(e => {
         burst(e.x, e.y, { count: 12, colors: ['#FFFFFF','#39FF14','#D9D9D9'],
           speedMin: 90, speedMax: 160, decay: 3.0, shape: 'spark',
           gravity: 60, damping: 0.8, shadowBlur: 6, shadowColor: '#39FF14', pri: PRI.IMPACT });
+      } else if (e.kind === 'broom') {
+        // Straw, not iron: fewer motes, slower, and falling rather than
+        // sparking off. It does the pitchfork's damage and should look like
+        // it barely deserves to.
+        impact('meleeHit');
+        burst(e.x, e.y, { count: 9, colors: ['#C8A860','#E0CC90','#8A7038'],
+          speedMin: 30, speedMax: 80, decay: 2.4, shape: 'spark',
+          gravity: 90, damping: 0.86, shadowBlur: 2, shadowColor: '#C8A860', pri: PRI.IMPACT });
       } else {
         impact('meleeHit');
         burst(e.x, e.y, { count: 8, colors: ['#A0A0B0','#D0D0E0','#ffffff'],
@@ -3099,6 +3170,9 @@ function initGame() {
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
+  // resetInv has already put inv.focus at its maximum; this is the part-point
+  // on top of it, which a new run must not inherit from the last one.
+  wizFocusFill = 0;
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = [];
@@ -3388,6 +3462,21 @@ function updatePlayer(dt) {
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
   if (sapperShotCD        > 0) sapperShotCD       = Math.max(0, sapperShotCD       - dt);
+  // Focus refills at a constant rate whether or not he is casting. Deliberate:
+  // a regeneration that paused while acting would make the pool a second,
+  // hidden cooldown, and two rates interacting is a balance problem with no
+  // single dial to turn.
+  if (selectedChar === 'wizard' && inv.focus < CONFIG.wizFocusMax) {
+    wizFocusFill += dt;
+    if (wizFocusFill >= CONFIG.wizFocusRegenSecs) {
+      wizFocusFill -= CONFIG.wizFocusRegenSecs;
+      inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + 1);
+    }
+  } else if (inv.focus >= CONFIG.wizFocusMax) {
+    // Held at zero while full, so topping up does not bank a free point that
+    // lands the instant he spends one.
+    wizFocusFill = 0;
+  }
   if (wizBlinkCD          > 0) wizBlinkCD         = Math.max(0, wizBlinkCD         - dt);
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
@@ -3428,7 +3517,7 @@ function updatePlayer(dt) {
             pfHitFlash = true;
             const tipX = player.x + Math.cos(player.aimAngle) * 44;
             const tipY = player.y + Math.sin(player.aimAngle) * 44;
-            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: 'pitchfork', fire: false });
+            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: pfKind, fire: false });
           }
         }
       }
@@ -3439,14 +3528,14 @@ function updatePlayer(dt) {
             pfHitFlash = true;
             const tipX = player.x + Math.cos(player.aimAngle) * 44;
             const tipY = player.y + Math.sin(player.aimAngle) * 44;
-            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: 'pitchfork', fire: false });
+            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: pfKind, fire: false });
           }
         }
       }
       if (!pfBossHit && bossInPlay() && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
         pfBossHit = true;
-        damageBoss(CONFIG.pitchforkBossDamage, player.x, player.y, 'pitchfork', 0.25);
+        damageBoss(CONFIG.pitchforkBossDamage, player.x, player.y, pfKind, 0.25);
       }
     }
   }
@@ -3616,7 +3705,14 @@ function tryCrossbowBolt() {
 
 function tryWizardBolt() {
   if (wizBoltCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (inv.focus < CONFIG.wizFocusBolt) { tryBroom(); return; }
+  // Out of Focus he cannot cast at all, and swings a broom instead. Checked
+  // before the in-flight cap so an empty pool always produces the swing rather
+  // than sometimes producing nothing: a press that does nothing at all reads
+  // as the button being broken.
+
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  inv.focus -= CONFIG.wizFocusBolt;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
@@ -3639,14 +3735,31 @@ function tryWizardBolt() {
   events.emit({ type: 'WEAPON_FIRED', kind: 'bolt' });
 }
 
-function tryPitchfork() {
+/**
+ * The out-of-ammo melee swing, for whichever hero is out of whatever they
+ * spend.
+ *
+ * `kind` picks the weapon rather than the behaviour: the archer, ranger and
+ * sapper swing a pitchfork on an empty quiver and the wizard swings a broom on
+ * empty Focus, and the only thing that differs between them is the art and how
+ * long the cooldown runs. A separate function per weapon would be two copies
+ * of a swing, which is how the two of them come to disagree about reach.
+ */
+function tryFallbackMelee(kind) {
   if (pfCooldown > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  pfCooldown = CONFIG.pitchforkCooldown;
+  pfKind     = kind;
+  pfCooldown = CONFIG.pitchforkCooldown * (kind === 'broom' ? CONFIG.broomCooldownMult : 1);
   pfSwing    = CONFIG.pitchforkSwingDuration;
   pfBossHit  = false;
   pfHitFlash = false;
-  events.emit({ type: 'WEAPON_FIRED', kind: 'pitchfork' });
+  events.emit({ type: 'WEAPON_FIRED', kind });
 }
+
+/** The three quiver heroes' fallback. See tryFallbackMelee. */
+function tryPitchfork() { tryFallbackMelee('pitchfork'); }
+
+/** The wizard's, on a cooldown half again as long. See tryFallbackMelee. */
+function tryBroom() { tryFallbackMelee('broom'); }
 
 function tryKnightAttack() {
   // Javelin throw when stocked — ranged piercing projectile
@@ -10537,6 +10650,13 @@ function drawCellTrack(x, y, cells, pitch, body, h, cur, max, colOn, colDim) {
  * share #FF7A1F and differ only in outline.
  */
 const GLYPH = {
+  // Focus: a four-pointed diamond, which is the one shape in this table that
+  // is not a weapon. It should not — a point of Focus is not a projectile, it
+  // is what a projectile is bought with.
+  focus: (s) => { const m = s/2;
+    ctx.beginPath();
+    ctx.moveTo(m, s*0.08); ctx.lineTo(s*0.88, m); ctx.lineTo(m, s*0.92); ctx.lineTo(s*0.12, m);
+    ctx.closePath(); ctx.fill(); },
   arrow: (s) => { const m = s/2;
     ctx.beginPath(); ctx.moveTo(s*0.95, m); ctx.lineTo(s*0.5, m-s*0.3); ctx.lineTo(s*0.5, m+s*0.3); ctx.closePath(); ctx.fill();
     ctx.fillRect(s*0.08, m-s*0.07, s*0.45, s*0.14); },
@@ -10627,6 +10747,7 @@ const POOL = {
   knightJavelins: { glyph: 'javelin',   color: '#D9B98A' },
   laserStreams:   { glyph: 'laser',     color: '#39E0FF' },
   fireBolts:      { glyph: 'fireBolt',  color: '#FF7A1F' },
+  focus:          { glyph: 'focus',     color: '#8888FF' },
 };
 
 /**
@@ -10641,7 +10762,9 @@ const LANE_B = {
   archer: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'dynamites'] },
   ranger: { active: 'arrows', reserve: ['ricochetArrows', 'fireArrows', 'satchels'] },
   knight: { active: null,     reserve: ['knightJavelins'] },
-  wizard: { active: null,     reserve: ['laserStreams', 'fireBolts'] },
+  // Focus is the wizard's active pool now. The note above about him having no
+  // countable primary was true right up until a bolt started costing something.
+  wizard: { active: 'focus',  reserve: ['laserStreams', 'fireBolts'] },
   // A pouch like the archer's now rather than nothing: the bombs being thrown,
   // then the two elemental kinds in reserve.
   sapper: { active: 'bombs',  reserve: ['fireBombs', 'iceBombs'] },
@@ -12415,12 +12538,23 @@ export const devHooks = {
   blink() { tryWizardBlink(); },
   wizBlink: () => ({ cd: wizBlinkCD, iframe: wizBlinkIFrame,
                      hops: wizBlinkHops, chainWindow: wizBlinkChainTimer }),
+  // The secondary-attack path, which is the F key and the right mouse button
+  // in play. Exposed for the same reason shift() is: every character routes
+  // something different through it -- the wizard's storm, the knight's
+  // whirlwind, the ranger's satchel, the sapper's barrage, the archer's
+  // dynamite charge -- and a test that called one of those directly would not
+  // be exercising the routing that picks it.
+  secondary() { startCharge(); },
+  secondaryUp() { releaseCharge(); },
   // The whole sniper-key path, so a test exercises the same routing the
   // keyboard does rather than calling one ability directly.
   shift() { pressShift(); },
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
   brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
+  /** The wizard's pool, the part-point banked toward the next one, and which
+   *  fallback weapon is mid-swing. Enough to check a spend without guessing. */
+  focus: () => ({ points: inv.focus, fill: wizFocusFill, max: CONFIG.wizFocusMax, melee: pfKind }),
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.

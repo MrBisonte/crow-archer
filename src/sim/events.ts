@@ -17,6 +17,10 @@ export type HitSource =
   | 'arrow'
   | 'javelin'
   | 'pitchfork'
+  // The wizard's out-of-Focus fallback. It hits a boss for exactly what the
+  // pitchfork does, but it is its own source rather than a re-used one so the
+  // feedback matches the weapon: straw whooshes, iron clangs.
+  | 'broom'
   | 'spear'
   | 'whirlwind'
   | 'storm'
@@ -30,6 +34,7 @@ export type WeaponKind =
   | 'bolt'
   | 'crossbow'
   | 'pitchfork'
+  | 'broom'
   | 'spear'
   | 'javelin'
   | 'charge'
@@ -59,7 +64,7 @@ export type GameEvent =
   | { type: 'FIRE_SKELETON_BLAST'; x: number; y: number }
   | { type: 'ICE_BOLT_FIRED'; x: number; y: number }
   | { type: 'PLAYER_FROZEN'; x: number; y: number }
-  | { type: 'MELEE_HIT'; x: number; y: number; kind: 'pitchfork' | 'spear'; fire: boolean }
+  | { type: 'MELEE_HIT'; x: number; y: number; kind: 'pitchfork' | 'broom' | 'spear'; fire: boolean }
   | { type: 'BOSS_HIT'; source: HitSource }
   | { type: 'ARROW_MISS' }
   | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
