@@ -1864,12 +1864,8 @@ function releaseArcherDraw() {
 
   // A power shot spends one unit of whatever is queued, exactly as an ordinary
   // shot does, so a fully drawn fire arrow is a fire arrow that also pierces.
-  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
-  if (!hasArrows) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  let type = 'normal';
-  if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
-  else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
-  else                             { inv.arrows--;                             }
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  const type = spendShaft();
 
   archerPowerCD = CONFIG.archerPowerCooldown;
   const spd = CONFIG.arrowSpeed * (1 + drawn * (CONFIG.archerPowerSpeedMult - 1));
@@ -1898,6 +1894,41 @@ function releaseArcherDraw() {
  */
 function braceBossMult() {
   return 1 + braceLevel * (CONFIG.braceBossMult - 1);
+}
+
+/**
+ * Is there anything in the quiver to loose?
+ *
+ * Five callers and three of them are art: the pitchfork fallback is drawn off
+ * the same fact the shot is refused by, so one reading is what keeps the
+ * picture and the rule from disagreeing about whether he is out.
+ */
+function hasShaft() {
+  return inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+}
+
+/**
+ * Takes one shaft out of the quiver and says which kind left it.
+ *
+ * Special kinds first and plain last, because a pickup is worth more than a
+ * plain shaft and nobody wants to burn their fire arrows holding the button
+ * after the fight is over.
+ *
+ * Deliberately not per character. The archer and the ranger draw on the same
+ * three pools by design — the manual calls it "the same quiver" — and what
+ * separates them is what leaves the string, one arrow against three lighter
+ * bolts in a spread. This spend ran as three identical copies, one per firing
+ * path, which is exactly how two characters come to disagree about which kind
+ * is spent first without anyone deciding they should.
+ *
+ * Returns null on an empty quiver. Every caller checks `hasShaft()` first, so
+ * that is a guard against a fourth firing path forgetting to, not a case.
+ */
+function spendShaft() {
+  if (inv.fireArrows > 0)     { inv.fireArrows--;     return 'fire'; }
+  if (inv.ricochetArrows > 0) { inv.ricochetArrows--; return 'ricochet'; }
+  if (inv.arrows > 0)         { inv.arrows--;         return 'normal'; }
+  return null;
 }
 
 /** How far the net has been drawn, 0 to 1. */
@@ -3533,13 +3564,9 @@ function tryShoot() {
   if (selectedChar === 'knight') { tryKnightAttack(); return; }
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   if (selectedChar === 'sapper') { trySapperCharge(); return; }
-  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
-  if (!hasArrows) { tryPitchfork(); return; }
+  if (!hasShaft()) { tryPitchfork(); return; }
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  let type = 'normal';
-  if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
-  else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
-  else                             { inv.arrows--;                             }
+  const type = spendShaft();
   arrows.push({ x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * CONFIG.arrowSpeed,
     vy: Math.sin(player.aimAngle) * CONFIG.arrowSpeed,
@@ -3558,15 +3585,11 @@ function tryShoot() {
  * bolts in a narrow spread instead of one full-strength arrow.
  */
 function tryCrossbowBolt() {
-  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
-  if (!hasArrows) { tryPitchfork(); return; }
+  if (!hasShaft()) { tryPitchfork(); return; }
   // Reserve room for the whole burst up front — a partial push would let
   // arrows.length overshoot maxArrowsInFlight and stall the next press.
   if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  let type = 'normal';
-  if      (inv.fireArrows     > 0) { inv.fireArrows--;     type = 'fire';     }
-  else if (inv.ricochetArrows > 0) { inv.ricochetArrows--; type = 'ricochet'; }
-  else                             { inv.arrows--;                             }
+  const type = spendShaft();
   const half = (CONFIG.crossbowBoltCount - 1) / 2;
   for (let i = 0; i < CONFIG.crossbowBoltCount; i++) {
     const boltAngle = player.aimAngle + (i - half) * CONFIG.crossbowSpreadRadians;
@@ -7961,7 +7984,7 @@ function drawPlayer() {
     ctx.shadowBlur = 0;
   }
 
-  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+  const hasArrows = hasShaft();
   if (!hasArrows) drawPitchfork(localAngle);
   ctx.restore();
 
@@ -8180,7 +8203,7 @@ function drawRanger() {
     ctx.shadowBlur = 0;
   }
 
-  const hasArrows = inv.arrows > 0 || inv.ricochetArrows > 0 || inv.fireArrows > 0;
+  const hasArrows = hasShaft();
   if (hasArrows) {
     // 6. Crossbow arm
     const gx = Math.cos(localAngle) * 8, gy = Math.sin(localAngle) * 8;
