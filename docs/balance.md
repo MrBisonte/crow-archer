@@ -85,6 +85,13 @@ a power-shot root together. `CHAR_PANELS` throws at load if an authored
 DAMAGE bar disagrees with the ordering `bossDamageMult` gives, so the two
 cannot drift apart silently even though they are written in two places.
 
+This table is a second copy of those bars, so it is checked the same way:
+`src/legacy/balance-doc.test.ts` parses it and compares every cell with what
+`charPanels()` builds. The derived columns need that more than the authored
+ones do — a pip is scaled against the roster's best row, so raising one
+character's speed re-scales rows nobody edited, and the commit that breaks
+this table never touches it.
+
 | Character | RANGE | DAMAGE | HP | SPEED |
 |---|---|---|---|---|
 | Archer | 5 | 3 | 4 | 4 |
