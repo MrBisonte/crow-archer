@@ -66,6 +66,8 @@ import {
 } from '../render/character-grids';
 import { paintArcherBow } from '../render/archer-bow';
 import { paintWizardStaff } from '../render/wizard-staff';
+import { paintWizardBroom } from '../render/wizard-broom';
+import { bloodlustStacks, paintBloodlust } from '../render/bloodlust';
 
 /**
  * The ground disc that says whose side a body is on.
@@ -500,6 +502,18 @@ const CONFIG = {
   // roster's unit of damage — which is precisely what the deleted
   // bossHPKnight column existed to absorb.
   knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
+  // Bloodlust: the knight's passive, and the only per-character mechanic on
+  // the roster with no key at all. Every swing that connects stacks it and a
+  // swing that hits nothing empties it, so what it pays for is staying in
+  // contact rather than reaching contact once — which is the thing that is
+  // genuinely hard about being the slowest hero who must be within 80 px to
+  // do anything.
+  //
+  // One figure for both halves on purpose. Damage and attack speed multiply
+  // each other, so three stacks is 1.3 x 1.3 = 1.69 times the damage per
+  // second, and splitting them into two dials would hide that behind
+  // arithmetic nobody does at the balance table.
+  knightBloodlustMax: 3, knightBloodlustPer: 0.10,
   knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 6,
   knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
@@ -1146,6 +1160,17 @@ let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
 
 // Knight combat state
 let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false, knightSpearPhase2Hit = false;
+/** Stacks held, 0..knightBloodlustMax. See CONFIG.knightBloodlustMax. */
+let knightBloodlust = 0;
+/**
+ * Whether the swing in progress has touched anything yet.
+ *
+ * Latched across the whole swing rather than read at the end, because the
+ * thrust sweeps: the crow it catches at full reach is long gone from the hit
+ * test by the time the recovery frames run, and asking "is anything in range
+ * now" would empty the stacks on a swing that plainly connected.
+ */
+let knightSpearConnected = false;
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
 // Counts down to the next free Block charge while no shield is banked (see
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
@@ -1957,6 +1982,29 @@ function releaseArcherDraw() {
  * One home, because both the ordinary shot and the power shot read it and a
  * second copy is how they come to disagree about what standing still buys.
  */
+/**
+ * What Bloodlust is worth right now, as one multiplier applied to both halves.
+ *
+ * Damage and attack speed take the same figure, so three stacks is 1.3 on each
+ * and 1.69 times the damage per second between them. See CONFIG.
+ */
+/**
+ * What one of the spear's two boss hits is worth.
+ *
+ * The figure was written out identically at both hit sites, which is how the
+ * two halves of a swing come to disagree about a multiplier: Bloodlust would
+ * have had to be added in two places, and the fire sword already was.
+ */
+function knightSpearDamage(fireSword) {
+  return CONFIG.knightSpearBossDamage
+    * (fireSword ? CONFIG.knightFireSwordDamageMult : 1)
+    * knightBloodlustMult();
+}
+
+function knightBloodlustMult() {
+  return 1 + knightBloodlust * CONFIG.knightBloodlustPer;
+}
+
 function braceBossMult() {
   return 1 + braceLevel * (CONFIG.braceBossMult - 1);
 }
@@ -2975,6 +3023,22 @@ events.on(e => {
       });
       break;
     }
+    case 'KNIGHT_BLOODLUST':
+      // Two different things wearing one event. Gaining is a short wet tick
+      // that climbs with the stack, so the third one is audibly the payoff;
+      // losing is the pickup sound played low, because a reset is information
+      // he needs immediately and cannot see while he is looking at the enemy.
+      if (e.stacks > 0) {
+        playSound(sndPitchfork);
+        burst(e.x, e.y - 26, {
+          count: 3 + e.stacks * 2, colors: ['#D6193C', '#8A1010'],
+          speedMin: 12, speedMax: 26 + e.stacks * 10, decay: 2.6, shape: 'spark',
+          gravity: 120, shadowBlur: 4, shadowColor: '#D6193C', pri: PRI.IMPACT,
+        });
+      } else {
+        playSound(sndMiss);
+      }
+      break;
     case 'ARCHER_BRACED':
       // Quiet and short: a confirmation, not an alarm. He is standing still to
       // hear it, so it does not have to compete with anything.
@@ -3157,6 +3221,7 @@ function initGame() {
   generateMap(modeRule(gameMode).fixedMap ?? selectedMapKind);
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0; waveAnnounceText = '';
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
+  knightBloodlust = 0; knightSpearConnected = false;
   knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
   knightBlockCD = 0;
   knightCharge.on = false; knightDash.timer = 0; knightDash.bossHit = false; knightDash.chained = false;
@@ -3544,6 +3609,7 @@ function updatePlayer(dt) {
   // Double-strike spear swing: two quick hits, one in each half of the animation.
   // Check both the tip and a mid-point so a crow can't slip through the shaft.
   if (selectedChar === 'knight' && knightSpearSwing > 0) {
+    const swingWas = knightSpearSwing;
     knightSpearSwing = Math.max(0, knightSpearSwing - dt);
     const fsActive   = inv.knightFireSwordTimer > 0;
     const baseRange  = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
@@ -3563,6 +3629,7 @@ function updatePlayer(dt) {
       if (dist2(tipX, tipY, c.x, c.y) < hitR2 || dist2(midX, midY, c.x, c.y) < hitR2) {
         if (fsActive) spawnFire(c.x, c.y);
         damageCrow(j);
+        knightSpearConnected = true;
         events.emit({ type: 'MELEE_HIT', x: c.x, y: c.y, kind: 'spear', fire: fsActive });
       }
     }
@@ -3571,6 +3638,7 @@ function updatePlayer(dt) {
       if (dist2(tipX, tipY, s.x, s.y) < hitR2 || dist2(midX, midY, s.x, s.y) < hitR2) {
         if (fsActive) spawnFire(s.x, s.y);
         damageSkeleton(j);
+        knightSpearConnected = true;
         events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: fsActive });
       }
     }
@@ -3581,12 +3649,27 @@ function updatePlayer(dt) {
 
     if (phase2 && knightSpearPhase2Hit === false && canHitBoss) {
       knightSpearPhase2Hit = true;
-      const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
-      damageBoss(dmg, player.x, player.y, 'spear', 0.15);
+      knightSpearConnected = true;
+      damageBoss(knightSpearDamage(fsActive), player.x, player.y, 'spear', 0.15);
     } else if (!phase2 && !knightSpearBossHit && canHitBoss) {
       knightSpearBossHit = true;
-      const dmg = CONFIG.knightSpearBossDamage * (fsActive ? CONFIG.knightFireSwordDamageMult : 1);
-      damageBoss(dmg, player.x, player.y, 'spear', 0.2);
+      knightSpearConnected = true;
+      damageBoss(knightSpearDamage(fsActive), player.x, player.y, 'spear', 0.2);
+    }
+
+    // The swing has just ended: bank a stack for a hit, empty him for a miss.
+    // Settled here rather than at the next press, so a knight who swings at
+    // nothing and then walks away has already lost it -- the price is leaving
+    // the fight, and waiting for his next attack to charge it would mean he
+    // never pays while disengaged.
+    if (swingWas > 0 && knightSpearSwing === 0) {
+      const was = knightBloodlust;
+      knightBloodlust = knightSpearConnected
+        ? Math.min(CONFIG.knightBloodlustMax, knightBloodlust + 1)
+        : 0;
+      if (knightBloodlust !== was) {
+        events.emit({ type: 'KNIGHT_BLOODLUST', stacks: knightBloodlust, x: player.x, y: player.y });
+      }
     }
   }
 
@@ -3779,9 +3862,17 @@ function tryKnightAttack() {
   }
   // Melee spear thrust
   if (knightSpearCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  knightSpearCD       = CONFIG.knightSpearCooldown;
+  // Divided, not subtracted: "+10% attack speed" is a rate, so three stacks
+  // is 1.0 / 1.3 = 0.77 s between swings rather than 0.70.
+  knightSpearCD       = CONFIG.knightSpearCooldown / knightBloodlustMult();
   knightSpearSwing    = CONFIG.knightSpearSwingDuration;
   knightSpearBossHit  = false;
+  // Reset per swing, both of them. knightSpearPhase2Hit was reset only at the
+  // start of a run, so the second of the spear's two boss hits -- the half the
+  // manual sells as "hits twice" and the balance table prices a swing at --
+  // landed on the first swing of a run and never again.
+  knightSpearPhase2Hit = false;
+  knightSpearConnected = false;
   events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
 }
 
@@ -7950,12 +8041,24 @@ function drawWizard() {
   // The staff is not part of the body grid: it turns to the aim, and the orb
   // on its end is where the bolt cooldown is reported. One painter, shared
   // with the multiplayer renderer, so the two cannot drift.
-  paintWizardStaff(ctx, {
-    aim: wLocalAngle,
-    t: loopT,
-    cooldown: wizBoltCD > 0 ? 1 - wizBoltCD / CONFIG.wizBoltCooldown : null,
-    wash: (c) => c,
-  });
+  // Broom or staff, never both: with the pool dry the staff is inert and the
+  // broom is what he is actually swinging, so showing the orb would promise a
+  // bolt he cannot cast.
+  if (pfSwing > 0 || inv.focus < CONFIG.wizFocusBolt) {
+    paintWizardBroom(ctx, {
+      aim: wLocalAngle,
+      swing: pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : -1,
+      readiness: pfCooldown > 0 ? 'recharging' : 'ready',
+      wash: (c) => c,
+    });
+  } else {
+    paintWizardStaff(ctx, {
+      aim: wLocalAngle,
+      t: loopT,
+      cooldown: wizBoltCD > 0 ? 1 - wizBoltCD / CONFIG.wizBoltCooldown : null,
+      wash: (c) => c,
+    });
+  }
 
   // Shield halo
   if (playerShield) {
@@ -8587,6 +8690,16 @@ function drawKnight() {
   const kSpriteDx = -(KNIGHT_SPRITE.w) / 2, kSpriteDy = -22 + Math.round(bob);
   const kCanvas = spriteCanvas(`knight|${kKind}|${kTrim}|${kFrame}`, kgrid, KNIGHT_SPRITE.w, KNIGHT_SPRITE.h);
   ctx.drawImage(kCanvas, kSpriteDx, kSpriteDy);
+
+  // Bloodlust, over the helm. Painted inside the mirrored transform, which is
+  // safe only because the badge is symmetric about the body's centre — an
+  // asymmetric tell here would flip with his heading and read as part of the
+  // aim rather than as a status.
+  paintBloodlust(ctx, {
+    stacks: bloodlustStacks(knightBloodlust),
+    t: loopT,
+    wash: (c) => c,
+  });
 
   // ── Weapon ───────────────────────────────────────────────────────────────
   const spearAng = mirrorAngle(player.aimAngle, f);
@@ -12552,6 +12665,11 @@ export const devHooks = {
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
   brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
+  /** Bloodlust's stacks, what they multiply, and whether the swing in progress
+   *  has touched anything yet. Enough to check a stack or a reset without
+   *  reconstructing the swing. */
+  bloodlust: () => ({ stacks: knightBloodlust, mult: knightBloodlustMult(),
+                      connected: knightSpearConnected, cooldown: knightSpearCD }),
   /** The wizard's pool, the part-point banked toward the next one, and which
    *  fallback weapon is mid-swing. Enough to check a spend without guessing. */
   focus: () => ({ points: inv.focus, fill: wizFocusFill, max: CONFIG.wizFocusMax, melee: pfKind }),

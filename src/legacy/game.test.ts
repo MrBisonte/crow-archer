@@ -24,7 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
-import { clearArena } from './arena-testkit';
+import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -33,24 +33,6 @@ import {
   filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
 } from '../render/grid-testkit';
 
-/** One second of simulation, at the fixed 60 Hz step the loop uses. */
-const ONE_SECOND = 60;
-
-/**
- * Advances the simulation by exactly `n` fixed steps, riding out any impact
- * freeze on the way.
- *
- * `stepSim(n)` is n *frames* of the loop, and hitstop can spend some of them
- * holding the world still (see the HITSTOP ladder in game.js), so a test
- * waiting out a cooldown has to count sim steps rather than frames or it comes
- * up short by however heavily the run happened to land.
- */
-function stepPast(n: number): void {
-  for (let i = 0; i < n; i++) {
-    while (g.hitstop() > 0) g.stepSim(1);
-    g.stepSim(1);
-  }
-}
 
 /**
  * The maps the mapselect screen offers, derived the same way MAP_PANELS

@@ -93,6 +93,10 @@ export type GameEvent =
    * the trade pays off, and a cue that repeated would be a hum rather than a
    * confirmation.
    */
+  // Carries the stack count *after* the change, and fires on the way down as
+  // well as up: a knight who whiffs and empties needs to hear that as much as
+  // he needs to hear a stack land, and zero is the more expensive of the two.
+  | { type: 'KNIGHT_BLOODLUST'; stacks: number; x: number; y: number }
   | { type: 'ARCHER_BRACED'; x: number; y: number }
   /**
    * A power arrow has gone through a body. `left` is how many more it can pass

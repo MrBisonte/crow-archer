@@ -31,3 +31,27 @@ export function clearArena(): void {
     for (let col = 1; col < c.cols - 1; col++) tiles.set(row, col, TILE.EMPTY);
   }
 }
+
+/** One second of simulation, at the fixed 60 Hz step the loop uses. */
+export const ONE_SECOND = 60;
+
+/**
+ * Advances the simulation by exactly `n` fixed steps, riding out any impact
+ * freeze on the way.
+ *
+ * `stepSim(n)` is n *frames* of the loop, and hitstop can spend some of them
+ * holding the world still (see the HITSTOP ladder in game.js), so a test
+ * waiting out a cooldown has to count sim steps rather than frames or it comes
+ * up short by however heavily the run happened to land.
+ *
+ * That is not theoretical. The knight's Bloodlust test read zero stacks off a
+ * swing that had plainly connected, because the kill it landed froze the world
+ * for long enough that the swing had not finished when the frame budget ran
+ * out. Two frames short, and the mechanic looked broken.
+ */
+export function stepPast(n: number): void {
+  for (let i = 0; i < n; i++) {
+    while (g.hitstop() > 0) g.stepSim(1);
+    g.stepSim(1);
+  }
+}
