@@ -81,6 +81,14 @@ export type GameEvent =
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
+  /**
+   * The archer has stood still long enough to be fully braced.
+   *
+   * Emitted once on the crossing, not every frame it holds: it is the moment
+   * the trade pays off, and a cue that repeated would be a hum rather than a
+   * confirmation.
+   */
+  | { type: 'ARCHER_BRACED'; x: number; y: number }
   | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }

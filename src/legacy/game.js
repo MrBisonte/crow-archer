@@ -324,6 +324,19 @@ const CONFIG = {
   //
   // Every figure below is what a FULL draw is worth; a tap gets the bottom of
   // each range, so the decision is how long to stand still, not whether to.
+  // Brace. The archer's whole bargain is that he never has to be near, and
+  // the bill for it is the smallest hit per press on the roster — seven arrows
+  // to take the Crow King down, the longest count of anyone. Brace is where
+  // that gets paid back, and standing still is the price.
+  //
+  // It reaches full in a second and a quarter and empties four times faster,
+  // so it is a stance rather than a resource: you cannot bank it and walk it
+  // somewhere. It multiplies boss damage only, which is the number he is
+  // actually short of; a crow dies to any arrow either way.
+  braceFillSecs: 1.25,
+  braceDrainMult: 4,
+  braceBossMult: 1.8,
+
   archerDrawMaxSecs: 1.0,
   archerPowerCooldown: 5,
   archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
@@ -1131,6 +1144,14 @@ let archerPowerCD = 0;
  * look like anything.
  */
 let archerLoose = 0;
+/**
+ * How far the archer is braced, 0 to 1.
+ *
+ * Held here rather than derived from a "time since last moved" stamp, because
+ * the drain has to be its own rate: a stance you lose four times faster than
+ * you build is a decision, and one that simply resets is a punishment.
+ */
+let braceLevel = 0;
 const ARCHER_LOOSE_SECS = 0.12;
 // The ranger's net, the same draw-and-release shape as the archer's bow. He is
 // not rooted while he draws: it is a throw rather than an aimed shot, and the
@@ -1861,9 +1882,21 @@ function releaseArcherDraw() {
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     power: true,
     pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
-    dmgMult: 1 + drawn * (CONFIG.archerPowerBossMult - 1) });
+    // Draw and brace multiply: a fully drawn shot from a braced stance is
+    // the most committed thing he can do, and it is paid for in seconds.
+    dmgMult: (1 + drawn * (CONFIG.archerPowerBossMult - 1)) * braceBossMult() });
   archerLoose = ARCHER_LOOSE_SECS;
   events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
+}
+
+/**
+ * What a brace is worth to an arrow right now.
+ *
+ * One home, because both the ordinary shot and the power shot read it and a
+ * second copy is how they come to disagree about what standing still buys.
+ */
+function braceBossMult() {
+  return 1 + braceLevel * (CONFIG.braceBossMult - 1);
 }
 
 /** How far the net has been drawn, 0 to 1. */
@@ -2819,6 +2852,12 @@ events.on(e => {
       });
       break;
 
+    case 'ARCHER_BRACED':
+      // Quiet and short: a confirmation, not an alarm. He is standing still to
+      // hear it, so it does not have to compete with anything.
+      playSound(sndPickup);
+      burst(e.x, e.y, { count: 5, colors: ['#EAFF6A'], speed: 22, life: 0.35, size: 1 });
+      break;
     case 'ARCHER_POWER_SHOT':
       // The shake scales with the draw, so a full one is felt and a tap is not.
       playSound(sndShoot); triggerShake(1 + 3 * e.power, 80 + 120 * e.power);
@@ -3009,7 +3048,7 @@ function initGame() {
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
   knightChainTimer = 0;
-  archerDraw.on = false; archerPowerCD = 0; archerLoose = 0;
+  archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -3221,6 +3260,19 @@ function updatePlayer(dt) {
       const len = Math.hypot(vx, vy);
       if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += walkPhaseFor(Math.hypot(vx, vy)); }
     }
+    // Brace builds while he is still and drains while he is not. Read off the
+    // movement that was actually applied, not off the keys: a hero walking into
+    // a wall is standing still, and pretending otherwise would let him brace by
+    // holding a direction against terrain.
+    const moved = Math.hypot(vx, vy) > 0.01;
+    if (selectedChar === 'archer' && !moved) {
+      const was = braceLevel;
+      braceLevel = Math.min(1, braceLevel + dt / CONFIG.braceFillSecs);
+      if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
+    } else {
+      braceLevel = Math.max(0, braceLevel - (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
+    }
+
     const fromX = player.x, fromY = player.y;
     const nx = player.x + vx;
     if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
@@ -3480,7 +3532,8 @@ function tryShoot() {
     vy: Math.sin(player.aimAngle) * CONFIG.arrowSpeed,
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: CONFIG.arrowSpeed,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0 });
+    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    dmgMult: braceBossMult() });
   archerLoose = ARCHER_LOOSE_SECS;
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
 }
@@ -10437,6 +10490,10 @@ const GLYPH = {
   // Round body and a stub of fuse: the sapper's bomb, not a stick of dynamite.
   bomb: (s) => { ctx.beginPath(); ctx.arc(s*0.48, s*0.6, s*0.3, 0, Math.PI*2); ctx.fill();
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.66, s*0.36); ctx.lineTo(s*0.84, s*0.14); ctx.stroke(); },
+  // Two planted feet on a ground line: the chip says "still", not "shoot".
+  brace: (s) => { ctx.fillRect(s*0.2, s*0.28, s*0.18, s*0.42);
+    ctx.fillRect(s*0.62, s*0.28, s*0.18, s*0.42);
+    ctx.fillRect(s*0.1, s*0.76, s*0.8, s*0.12); },
   satchel: (s) => { ctx.fillRect(s*0.15, s*0.4, s*0.7, s*0.5);
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.3, s*0.4); ctx.lineTo(s*0.7, s*0.4); ctx.stroke(); },
   javelin: (s) => { ctx.lineWidth = 2;
@@ -10534,7 +10591,7 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['power', 'shield'],
+  archer: ['brace', 'power', 'shield'],
   ranger: ['net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
@@ -10554,6 +10611,14 @@ const CHIP = {
   // in the lane say the same thing.
   power:     () => cooldownChip('arrow', archerPowerCD, CONFIG.archerPowerCooldown,
                                 archerDraw.on ? CONFIG.archerDrawMaxSecs : 0),
+  // Not a cooldownChip: nothing is gated and nothing is spent, so "READY"
+  // would be a lie. It reports a stance that is filling, full, or draining,
+  // and the fraction is the same number the arrows are multiplied by.
+  brace:     () => ({
+    glyph: 'brace', color: '#EAFF6A', lit: braceLevel >= 1,
+    label: braceLevel >= 1 ? 'SET' : braceLevel <= 0 ? '' : Math.round(braceLevel * 100) + '%',
+    frac: braceLevel >= 1 ? null : braceLevel,
+  }),
   net:       () => cooldownChip('satchel', rangerNetCD, CONFIG.netCooldown,
                                 rangerNet.on ? CONFIG.netDrawMaxSecs : 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
@@ -12230,6 +12295,7 @@ export const devHooks = {
   shift() { pressShift(); },
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
+  brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.
