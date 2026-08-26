@@ -52,6 +52,20 @@ function stepPast(n: number): void {
 }
 
 /**
+ * Rides a boss death sequence out, keeping the hero on his feet while it runs.
+ *
+ * Waiting on the flag rather than on a frame count matters: a blind
+ * stepSim(240) would pass whether or not the sequence ever finished, and the
+ * sequence finishing is half of what every caller is checking. The healing is
+ * because nobody is holding the keys, so a hero left standing in a wave dies
+ * and the test measures that instead -- see devHooks.healHero.
+ */
+function settleBossDeath(): void {
+  for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
+  g.healHero();
+}
+
+/**
  * The maps the mapselect screen offers, derived the same way MAP_PANELS
  * derives them. Naming them here instead would be a third copy of a list the
  * game deliberately keeps in one place.
@@ -3499,17 +3513,6 @@ describe('the siege loop', () => {
   it('plays all ten waves through to a win, killing every boss for real', () => {
     openSiege();
     const killed: string[] = [];
-    // The hero is not the subject and nobody is holding the keys, so one left
-    // standing in a wave dies and this would be measuring that instead. The
-    // first run of this test failed on wave ten for exactly that reason.
-    //
-    // Waiting on the flag rather than on a frame count matters: a blind
-    // stepSim(240) would pass whether or not the sequence ever finished, and
-    // the sequence finishing is half of what is being tested.
-    const settle = (): void => {
-      for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
-      g.healHero();
-    };
     for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
       g.healHero();
       g.stepSim(1);
@@ -3519,7 +3522,7 @@ describe('the siege loop', () => {
         const which = g.killSiegeBoss();
         if (!which) break;
         killed.push(`wave ${siegeState().wave}: ${which}`);
-        settle();
+        settleBossDeath();
         expect(g.bossDeathSeq(), `wave ${siegeState().wave}: the field froze`).toBeNull();
         expect(g.state(), `wave ${siegeState().wave}: the run left the bastion`).toBe('playing');
       }
@@ -3562,8 +3565,7 @@ describe('the siege loop', () => {
     // would pass while the bug was present. The reference outlives the lists.
     const displaced = g.boss() as { bstate: string };
     expect(g.killSiegeBoss('extra')).toBe('extra');
-    for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
-    g.healHero();
+    settleBossDeath();
     expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
 
     // One life between them, so the displaced one goes down too -- and it can
@@ -4175,14 +4177,28 @@ describe('a siege boss is on the field and can be fought', () => {
 
   it('can be killed, and killing it lets the wave advance', () => {
     atWave(7);
-    g.clearSiegeWave();
-    // Put the boss back and kill it through the real death path.
-    g.stepSim(1);
     const wave = siegeState().wave;
-    g.killBoss();
-    g.stepSim(240);
+    // Killed, not deleted. This used to clear the field first and then call
+    // killBoss(), which was a no-op both ways round: clearSiegeWave() nulls
+    // the slot, and the step after it completed the wave rather than putting
+    // a boss back. The test was named for a death sequence it never entered.
+    expect(g.killSiegeBoss('primary'), 'wave 7 should field a boss to kill').toBe('primary');
+    settleBossDeath();
+    expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
+
+    // The escort outlives its boss, so let it fight: what advances a wave is
+    // the field being empty, and the escort is what is left holding it up.
+    for (let i = 0; i < 4; i++) { g.healHero(); g.stepSim(ONE_SECOND); }
     g.clearSiegeWave();
-    g.stepSim(2);
+
+    // Sim steps, not frames -- and that is what made this test flaky. A hit
+    // landed in the last frames above arms an impact freeze, fixedStep spends
+    // held frames without running stepGame at all, and a bare stepSim(2) can
+    // hand both of its frames to the freeze: updateSiege never runs and the
+    // wave sits where it was. Which frame the last hit lands on is decided by
+    // the Math.random() the wave's spawners use, so it failed about one run in
+    // a hundred and never twice in the same place.
+    stepPast(2);
     expect(siegeState().wave, 'the wave never advanced past its boss').toBeGreaterThan(wave);
   });
 
@@ -4665,8 +4681,7 @@ describe('a siege boss dying leaves the wave running', () => {
     expect(crows.length, 'no crows to freeze').toBeGreaterThan(0);
 
     g.killBoss();
-    for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
-    g.healHero();
+    settleBossDeath();
     expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
 
     const stillFrozen = (g.crows() as { frozen?: boolean }[]).filter((c) => c.frozen);
