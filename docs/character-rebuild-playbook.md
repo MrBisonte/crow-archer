@@ -51,6 +51,30 @@ time belongs here.
   `strideOf` checks the closed frame against the legs that actually get drawn.
   Two columns for cloth, three for plate, and a stance wide enough to pay for
   whichever it is.
+- **Every hero reading as the same man in different colours?** Look at the
+  legs. `paintLeg` draws a leg the way *cloth* hangs — an even taper from hip
+  to ankle — and it is right for four of the five. A knight built on it is the
+  archer's leg in grey, however good the armour above it. Plate is a stack of
+  plates: a cuisse, a knee cop and a greave, and the knee is the **widest** part
+  of the leg. Cloth never gets wider going down; armour does at every joint.
+  That is the whole read, and no palette recovers it. `paintPlateLeg` is a
+  separate implementation rather than a flag, per `CLAUDE.md` — a parameter
+  switching "cloth" or "plate" would be two functions sharing a name.
+- **A hero in a floor-length garment?** Draw the legs anyway and cover them.
+  The wizard's hem sits one row above his boots and his legs never show, but
+  they are what puts the boots where they go. What carries the walk is two
+  boots parting under a swinging hem — so the hem has to swing: full sway at
+  the back edge, half at the front. Loose behind and pinned in front reads as a
+  flag rather than as cloth being walked in, and a front edge on the full sway
+  swings through whatever the face carries.
+- **Putting a fold or a motif on a garment that sways?** It rides the sway.
+  A fold pinned to a fixed column slides across the cloth as the cloth moves,
+  which reads as the pattern travelling rather than the garment.
+- **Giving a hero a foot?** `paintBoots` hangs a rectangle entirely outside the
+  ankle, and that is deliberate: it buys back the column of daylight the legs
+  need at the closed frame. It is wrong for anything longer than a boot. A
+  sabaton points forward and has to sit *under* the shin as well as ahead of
+  it; hung outside, it reads as detached from the leg.
 - **Setting a throw?** It is the clearest thing a body says about its speed, so
   read it off `CHARACTER_STATS`: the ranger throws three columns at 250 px/s,
   the archer and sapper two at 200, the knight two on a wider base at 150. A
