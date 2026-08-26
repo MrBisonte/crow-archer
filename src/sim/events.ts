@@ -89,7 +89,11 @@ export type GameEvent =
   | { type: 'KNIGHT_CHARGE_STOPPED'; x: number; y: number }
   // The escape hatch fired: the player had nowhere to move and was lifted out.
   | { type: 'PLAYER_UNSTUCK'; x: number; y: number; toX: number; toY: number }
-  | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
+  // `radius` is the radius the arrival pulse actually damaged at, carried so
+  // the ring drawn for it cannot claim a different one. It used to be read
+  // straight off CONFIG at the draw site, which is the same number by
+  // coincidence rather than by construction.
+  | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number; radius: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
   /**

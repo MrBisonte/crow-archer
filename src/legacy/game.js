@@ -70,6 +70,9 @@ import { paintWizardBroom } from '../render/wizard-broom';
 import { bloodlustStacks, paintBloodlust } from '../render/bloodlust';
 import { BLAST_SECS, paintExplosion } from '../render/explosion';
 import { paintNet, paintSatchel } from '../render/ranger-fx';
+import { paintDynamiteCharge, paintPowerDraw, throwReachPx } from '../render/archer-fx';
+import { chargeCommitColour, paintChargeDash, paintWhirlwind } from '../render/knight-fx';
+import { BLINK_FX_SECS, STORM_FX_SECS, paintBlinkArrival, paintLightningStorm } from '../render/wizard-fx';
 
 /**
  * The ground disc that says whose side a body is on.
@@ -1220,6 +1223,17 @@ let wizBlinkHops = 0, wizBlinkChainTimer = 0;
 let knightChainTimer = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
 let _stormFlash = 0; // countdown for the brief blue screen-flash after storm
+/**
+ * How long the storm's own art has left, and the blink's.
+ *
+ * Separate from `_stormFlash` on purpose. That is the screen flash and the
+ * boss hit-flash, tuned to 0.35 s, and nine lightning strikes cannot stagger
+ * themselves inside a third of a second without arriving as one white frame.
+ * The blink's is shorter than its 0.3 s of invulnerability, so the effect is
+ * gone before he is vulnerable again rather than outliving the protection.
+ */
+let stormFx = 0, blinkFx = 0, blinkRadius = 0;
+let blinkFrom = { x: 0, y: 0 }, blinkTo = { x: 0, y: 0 };
 
 // Knight combat state
 let knightSpearCD = 0, knightSpearSwing = 0, knightSpearBossHit = false, knightSpearPhase2Hit = false;
@@ -1286,6 +1300,14 @@ let archerPowerCD = 0;
  * look like anything.
  */
 let archerLoose = 0;
+/**
+ * How drawn the shot that is currently snapping back was, 0 for an ordinary one.
+ *
+ * Separate from `archerLoose`, which every shot sets. The release flourish
+ * belongs to the power shot alone -- an ordinary arrow has no windup, so a snap
+ * scaled to one would be a promise the shot never made.
+ */
+let archerLoosePower = 0;
 /**
  * How far the archer is braced, 0 to 1.
  *
@@ -1998,7 +2020,8 @@ function tryWizardBlink() {
   // what the ring shows a moment later is a report of what was already hit.
   damageEnemiesInRadius(player.x, player.y, CONFIG.wizBlinkPulseRadius,
     { amount: CONFIG.wizBlinkPulseBossDamage, source: 'storm', flash: 0.1 });
-  events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: player.x, toY: player.y });
+  events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: player.x, toY: player.y,
+                radius: CONFIG.wizBlinkPulseRadius });
 }
 
 /** How far the draw has come, 0 to 1. Read by the release, the aim line and
@@ -2054,6 +2077,7 @@ function releaseArcherDraw() {
     // the most committed thing he can do, and it is paid for in seconds.
     dmgMult: (1 + drawn * (CONFIG.archerPowerBossMult - 1)) * braceBossMult() });
   archerLoose = ARCHER_LOOSE_SECS;
+  archerLoosePower = drawn;
   events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
 }
 
@@ -2350,6 +2374,71 @@ function openNet(n) {
 }
 
 /** Ages every mat, dropping the ones whose hold has run out. */
+/**
+ * The wizard's two effects, and the knight's, in the world layer.
+ *
+ * Grouped rather than each called from its own character's draw function,
+ * because none of them belongs to a *body*: a storm is a 450 px area on the
+ * ground, a blink is a line between two places he is not, and a whirlwind
+ * keeps spinning while he is drawn walking. Drawing them with the hero would
+ * mirror them with him, which for the vortex reverses its spin every time he
+ * turns around.
+ */
+function drawAbilityFx() {
+  if (selectedChar === 'archer') {
+    if (charge.on) {
+      // The same expression releaseCharge hands throwDynamite, so what the
+      // preview promises and what the throw does cannot drift.
+      const frac = Math.min(1, (performance.now() - charge.t0) / 1000);
+      paintDynamiteCharge(ctx, {
+        x: player.x, y: player.y + CONFIG.hudHeight, aim: player.aimAngle, frac,
+        reach: throwReachPx(CONFIG.dynamiteSpeed * (1 + frac * 2), CONFIG.dynamiteLifetime),
+        blastRadius: CONFIG.dynamiteBlastRadius, t: loopT,
+      });
+    }
+    if (archerDraw.on || archerLoose > 0) {
+      paintPowerDraw(ctx, {
+        x: player.x, y: player.y + CONFIG.hudHeight, aim: player.aimAngle,
+        draw: archerDrawFrac(), recoil: archerLoose / ARCHER_LOOSE_SECS,
+        power: archerLoosePower, t: loopT,
+      });
+    }
+  }
+  if (stormFx > 0) {
+    paintLightningStorm(ctx, {
+      x: player.x, y: player.y + CONFIG.hudHeight,
+      radius: CONFIG.stormBlastRadius, age: 1 - stormFx / STORM_FX_SECS,
+    });
+  }
+  if (blinkFx > 0) {
+    paintBlinkArrival(ctx, {
+      fromX: blinkFrom.x, fromY: blinkFrom.y + CONFIG.hudHeight,
+      toX: blinkTo.x, toY: blinkTo.y + CONFIG.hudHeight,
+      radius: blinkRadius, age: 1 - blinkFx / BLINK_FX_SECS,
+    });
+  }
+  if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
+    paintWhirlwind(ctx, {
+      x: player.x, y: player.y + CONFIG.hudHeight,
+      radius: CONFIG.knightWhirlwindRadius,
+      age:  1 - knightWhirlwindTimer / CONFIG.knightWhirlwindDuration,
+      tick: 1 - knightWhirlwindTick / CONFIG.knightWhirlwindTickRate,
+      t: loopT,
+      kind: inv.knightFireSwordTimer > 0 ? 'fireSword' : 'normal',
+    });
+  }
+  if (selectedChar === 'knight' && knightDash.timer > 0) {
+    paintChargeDash(ctx, {
+      x: player.x, y: player.y + CONFIG.hudHeight,
+      angle: knightDash.angle,
+      radius: CONFIG.knightChargeRadius, arc: CONFIG.knightChargeArcRadians,
+      frac: knightDash.frac,
+      progress: 1 - knightDash.timer / CONFIG.knightChargeDashDuration,
+      tick: 1 - knightChargeTick / CONFIG.knightChargeTickRate,
+    });
+  }
+}
+
 /** Ages every blast, dropping the ones whose half second is up. */
 function updateBlasts(dt) {
   for (let i = blasts.length - 1; i >= 0; i--) {
@@ -2469,10 +2558,6 @@ function knightDashBossDamage() {
   return CONFIG.knightChargeBossDamage * (lo + knightDash.frac * (hi - lo));
 }
 
-/** Windup and dash both tint yellow through orange to red as the charge builds. */
-function knightChargeColor(frac) {
-  return frac >= 0.85 ? '#FF3020' : frac > 0.5 ? '#FF8800' : '#FFCC00';
-}
 
 /** World-space angle mapped into the mirrored canvas a character is drawn in. */
 function mirrorAngle(a, facing) {
@@ -3246,7 +3331,13 @@ events.on(e => {
         shadowBlur: 8, shadowColor: '#8888FF'
       });
       // The arrival pulse's reach, at the radius the damage already used.
-      spawnShockRing(e.toX, e.toY, CONFIG.wizBlinkPulseRadius, '#8888FF');
+      // The ring the painter draws is at exactly wizBlinkPulseRadius and does
+      // not grow into it, so a shock ring here is a second ring saying the same
+      // thing at a different size.
+      blinkFx = BLINK_FX_SECS;
+      blinkFrom = { x: e.x, y: e.y };
+      blinkTo = { x: e.toX, y: e.toY };
+      blinkRadius = e.radius;
       break;
 
     case 'RANGER_NET_OPEN':
@@ -3489,13 +3580,14 @@ function initGame() {
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  stormFx = 0; blinkFx = 0;
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
 
   knightChainTimer = 0;
-  archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
+  archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
@@ -3801,6 +3893,8 @@ function updatePlayer(dt) {
   }
   if (stormCD             > 0) stormCD            = Math.max(0, stormCD            - dt);
   if (_stormFlash         > 0) _stormFlash        = Math.max(0, _stormFlash        - dt);
+  if (stormFx             > 0) stormFx            = Math.max(0, stormFx            - dt);
+  if (blinkFx             > 0) blinkFx            = Math.max(0, blinkFx            - dt);
   if (knightSpearCD       > 0) knightSpearCD      = Math.max(0, knightSpearCD      - dt);
   if (knightWhirlwindCD   > 0) knightWhirlwindCD  = Math.max(0, knightWhirlwindCD  - dt);
   // Held off while the ability is still running, so the 4s only starts once
@@ -4000,6 +4094,7 @@ function tryShoot() {
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     dmgMult: braceBossMult() });
   archerLoose = ARCHER_LOOSE_SECS;
+  archerLoosePower = 0;
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
 }
 
@@ -4276,6 +4371,7 @@ function fireLightningStorm() {
   const STORM_R = CONFIG.stormBlastRadius;
   stormCD = CONFIG.stormCooldown;
   _stormFlash = CONFIG.stormFlashDuration;
+  stormFx = STORM_FX_SECS;
   events.emit({ type: 'STORM_CAST', x: player.x, y: player.y });
   // Damage enemies
   const r2 = STORM_R ** 2;
@@ -8928,7 +9024,7 @@ function drawKnightChargeTelegraph(g, tele, facing) {
  * would promise a range the dash never has.
  */
 function drawKnightChargeReach(g, tele, ang) {
-  const col = knightChargeColor(tele.frac);
+  const col = chargeCommitColour(tele.frac);
   const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
   g.strokeStyle = col; g.shadowColor = col;
   g.shadowBlur = 6 + 10 * tele.frac + (tele.frac >= 1 ? 6 * Math.sin(loopT * 18) : 0);
@@ -8964,7 +9060,7 @@ function drawKnightChargeReach(g, tele, ang) {
  * letting go.
  */
 function drawKnightChargeTravel(g, tele, facing) {
-  const col = knightChargeColor(tele.frac);
+  const col = chargeCommitColour(tele.frac);
   // The endpoint is a world position; the knight is drawn mirrored about his
   // own x. facing is ±1, so scaling the offset by it maps either way round.
   const lx = (tele.endX - player.x) * facing, ly = tele.endY - player.y;
@@ -9025,7 +9121,7 @@ function drawKnight() {
     const wedge = knightChargeWedge(knightDash.angle);
     const ang   = mirrorAngle(wedge.angle, f);
     const half  = wedge.half;
-    const col   = knightChargeColor(heavy);
+    const col   = chargeCommitColour(heavy);
     const r     = wedge.radius;
     // Three passes across the arc over the dash, so it reads as repeated swings.
     const sweep = (prog * 3) % 1;
@@ -12495,7 +12591,7 @@ function render(t) {
     // Over every body, because half of what sells a blast is that it briefly
     // hides what it went off on. Under the floaters, so the damage numbers
     // still read through it.
-    drawBlasts();
+    drawBlasts(); drawAbilityFx();
     drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
@@ -13016,6 +13112,8 @@ export const devHooks = {
   // The blink runs off a keydown edge rather than the held `keys` map, so a
   // headless test drives it the same way devHooks.shoot drives the primary.
   blink() { tryWizardBlink(); },
+  /** What the arrival effect is drawing, and at what radius. */
+  blinkFx: () => ({ secs: blinkFx, radius: blinkRadius, from: blinkFrom, to: blinkTo }),
   wizBlink: () => ({ cd: wizBlinkCD, iframe: wizBlinkIFrame,
                      hops: wizBlinkHops, chainWindow: wizBlinkChainTimer }),
   // The secondary-attack path, which is the F key and the right mouse button

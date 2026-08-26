@@ -2131,12 +2131,23 @@ describe('the wizard blink arrival pulse', () => {
   });
 
   it('shows a ring at the radius the damage used', () => {
+    // The claim is unchanged -- what is drawn reports what was hit -- but the
+    // ring moved from a generic shock ring into render/wizard-fx.ts, which
+    // draws its rim at exactly the radius it is handed and does not grow into
+    // it. Two rings saying the same thing at different sizes is what a shock
+    // ring alongside it would have been.
+    //
+    // The radius now rides the WIZARD_BLINK event from the same expression the
+    // pulse damaged at, rather than being read off CONFIG again at the draw
+    // site, so this is a stronger claim than it was: the two are the same
+    // number by construction and not by coincidence.
     const c = g.config();
     wizardAt(6, 6);
     g.blink();
-    const rings = g.rings() as Array<{ radius: number }>;
-    expect(rings.length).toBe(1);
-    expect(rings[0]!.radius).toBe(c.wizBlinkPulseRadius);
+    const fx = g.blinkFx() as { secs: number; radius: number };
+    expect(fx.secs, 'the arrival effect is up').toBeGreaterThan(0);
+    expect(fx.radius).toBe(c.wizBlinkPulseRadius);
+    expect((g.rings() as unknown[]).length, 'and no second ring beside it').toBe(0);
   });
 });
 
