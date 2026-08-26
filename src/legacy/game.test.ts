@@ -3352,6 +3352,12 @@ interface GuardBody {
   healCD: number;
   /** The post it is holding, written by updateGuards each frame. */
   anchor?: { x: number; y: number };
+  /**
+   * What it has decided to answer, written by updateGuards each frame, and
+   * `null` on a frame it found nothing. `ref` is the live body itself, so
+   * this is identity rather than a position that happens to match.
+   */
+  quarry?: { ref: unknown } | null;
   guard: { kind: GuardKind; rank: number; hp: number; maxHp: number; ward?: string };
 }
 
@@ -3664,16 +3670,46 @@ describe('the siege loop', () => {
    *
    * Measured in a headless run before the fix: three bodies stacked on the
    * hero, nearest post 190px away, leash 170, six guards motionless.
+   *
+   * WHAT ANSWERING IS MEASURED BY, and why it is not distance. This asked
+   * "is a guard within melee reach of the foe" for a while, and that is a
+   * different question with a different answer. An archer answers by
+   * shooting from where it stands -- updateGuards closes the gap only when
+   * the target is beyond its own reach, and that reach is 260px against a
+   * melee reach of 26 -- so on an all-archer roster the retinue answers from
+   * 195px away and never once comes closer. Measured: siege seeds 7 and 12
+   * roll archer/archer/priest and failed a distance reading 12 runs in 12,
+   * with no minimum to record at any point in the run. No threshold fixes
+   * that, because the guard doing the answering is deliberately standing
+   * still.
+   *
+   * So the reading is the decision, not the geometry: the quarry updateGuards
+   * takes each frame, matched by identity against the body this test placed.
+   * It is the direct negation of what the playtest reported -- guards
+   * "correctly concluding there was nothing within their remit" -- and it is
+   * the same for every kind, since melee and ranged both take a quarry before
+   * they diverge. Measured across 8 siege seeds x 12 runs: 0 failures with
+   * the two-anchor ground, 96 out of 96 with `guardGround` reverted to the
+   * post alone.
+   *
+   * Scoping it to this foe is the load-bearing part, not a detail. Wave one
+   * is already on the field when openSiege returns, so the retinue always has
+   * something to shoot at: with no foe placed at all, a guard still holds
+   * some quarry in 6 runs out of 6 on every siege seed, and still looses 4-5
+   * arrows. Any reading that counts guard activity rather than naming its
+   * object -- a GUARD_SHOT tally is the obvious one -- passes an empty
+   * threat. Those events carry only x and y, which is why this reads the
+   * decision off the body instead.
    */
   it('answers a threat standing on the hero, instead of holding a quiet gate', () => {
     openSiege();
     const hero = g.player() as { x: number; y: number };
-    const reach = g.config().guardMeleeReach as number;
 
     // Nothing anywhere near a gate, so the only thing that can bring a guard
-    // over is the hero being in trouble.
-    const posts = (g.guards() as { anchor?: { x: number; y: number } }[])
-      .map((b) => b.anchor).filter(Boolean) as { x: number; y: number }[];
+    // over is the hero being in trouble. This is what stops the assertion at
+    // the bottom from being free: the foe is outside every post leash, so the
+    // only ground it can be standing on is the hero.
+    const posts = bodies().map((b) => b.anchor).filter(Boolean) as { x: number; y: number }[];
     standAt(hero.x + 24, hero.y);
     const foe = (g.skeletons() as { x: number; y: number }[]).at(-1);
     if (!foe) throw new Error('no foe was placed');
@@ -3685,13 +3721,29 @@ describe('the siege loop', () => {
     // Long enough to walk it. The furthest gate is most of the map from the
     // hero and a guard moves at CONFIG.guardSpeed, so this is about arriving,
     // not about reacting quickly.
-    for (let i = 0; i < 8; i++) { g.healHero(); g.stepSim(ONE_SECOND); }
+    //
+    // Read every step rather than once at the end, because the guard that
+    // answers need not survive to be counted. A foot_soldier has 3hp and the
+    // foe standAt places has 99, so it loses roughly one contact in thirty:
+    // six Math.random seeds in two hundred used to fail here with the retinue
+    // down to two, having watched somebody come, fight and die between two
+    // samples. The neighbouring 'stops shooting the moment it falls' reads
+    // frame by frame for the same class of reason.
+    const answered = new Set<GuardKind>();
+    for (let step = 0; step < 8 * ONE_SECOND; step++) {
+      g.healHero();
+      g.stepSim(1);
+      for (const body of bodies()) {
+        // Priests are excluded: a healer arriving is not an answer. One never
+        // takes a quarry anyway -- it leaves updateGuards before a target is
+        // looked for -- so this says so rather than leaning on it.
+        if (body.guard.kind === 'priest') continue;
+        if (body.quarry?.ref === foe) answered.add(body.guard.kind);
+      }
+    }
 
-    // Somebody came. Priests are excluded: a healer arriving is not an answer.
-    const closest = (g.guards() as { x: number; y: number; guard: { kind: string } }[])
-      .filter((b) => b.guard.kind !== 'priest')
-      .map((b) => Math.hypot(b.x - foe.x, b.y - foe.y));
-    expect(Math.min(...closest), 'nobody left their gate for the hero').toBeLessThan(reach * 2);
+    expect([...answered], 'no guard ever made the threat on the hero its business')
+      .not.toHaveLength(0);
   });
 
   /**
