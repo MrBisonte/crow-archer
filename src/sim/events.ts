@@ -81,6 +81,23 @@ export type GameEvent =
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
+  /**
+   * The archer has stood still long enough to be fully braced.
+   *
+   * Emitted once on the crossing, not every frame it holds: it is the moment
+   * the trade pays off, and a cue that repeated would be a hum rather than a
+   * confirmation.
+   */
+  | { type: 'ARCHER_BRACED'; x: number; y: number }
+  /**
+   * A power arrow has gone through a body. `left` is how many more it can pass
+   * through, so the effect can get quieter as the shot spends itself.
+   *
+   * Per body rather than once per shot: piercing three enemies and killing one
+   * looked identical before, which is most of why the power shot read as a bar
+   * filling rather than as a shot landing.
+   */
+  | { type: 'ARCHER_POWER_HIT'; x: number; y: number; left: number }
   | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }

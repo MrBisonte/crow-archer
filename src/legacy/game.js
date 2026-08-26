@@ -64,6 +64,7 @@ import {
   KNIGHT_SPRITE, buildKnightGrid,
   SAPPER_SPRITE, buildSapperGrid,
 } from '../render/character-grids';
+import { paintArcherBow } from '../render/archer-bow';
 
 /**
  * The ground disc that says whose side a body is on.
@@ -339,6 +340,19 @@ const CONFIG = {
   //
   // Every figure below is what a FULL draw is worth; a tap gets the bottom of
   // each range, so the decision is how long to stand still, not whether to.
+  // Brace. The archer's whole bargain is that he never has to be near, and
+  // the bill for it is the smallest hit per press on the roster — seven arrows
+  // to take the Crow King down, the longest count of anyone. Brace is where
+  // that gets paid back, and standing still is the price.
+  //
+  // It reaches full in a second and a quarter and empties four times faster,
+  // so it is a stance rather than a resource: you cannot bank it and walk it
+  // somewhere. It multiplies boss damage only, which is the number he is
+  // actually short of; a crow dies to any arrow either way.
+  braceFillSecs: 1.25,
+  braceDrainMult: 4,
+  braceBossMult: 1.8,
+
   archerDrawMaxSecs: 1.0,
   archerPowerCooldown: 5,
   archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
@@ -881,7 +895,7 @@ const statPips = (value, peak) =>
 const CHAR_PANELS = [
   { char:'archer', key:'A', color:'#39FF14', bg:'rgba(57,255,20,0.08)',  dim:'#1a7a08',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.medium,
-    preview: () => ({ grid: buildArcherGrid(SP_TRIM.archer), sprite: ARCHER_SPRITE, key: 'archer' }),
+    preview: (frame) => ({ grid: buildArcherGrid(frame, SP_TRIM.archer), sprite: ARCHER_SPRITE, key: `archer|${frame}` }),
     hook: 'Longbow and quiver', range: 5, damage: 3,
     skills: { main: 'Longbow, three arrows in flight',
               secondary: 'Dynamite, thrown further the longer held',
@@ -902,8 +916,6 @@ const CHAR_PANELS = [
               shift: 'Charge a dash, tap again to chain it' } },
   { char:'ranger', key:'X', color:'#FFCC00', bg:'rgba(255,204,0,0.10)',  dim:'#7a5a00',  dimBg:'rgba(255,255,255,0.025)', newBadge:false,
     difficulty: DIFFICULTY.easy,
-    // The one animated preview: its cloak sway is a real 3-frame cycle, so the
-    // frame is a parameter rather than baked like every other row's.
     preview: (frame) => ({ grid: buildRangerGrid(frame, SP_TRIM.ranger), sprite: RANGER_SPRITE, key: `ranger|${frame}` }),
     hook: 'Fast skirmisher', range: 3, damage: 2,
     skills: { main: 'Crossbow burst of three weaker bolts',
@@ -1118,7 +1130,45 @@ let charge = { on: false, t0: 0 };
 // The archer's draw, on the key that means sniper mode for the sapper. Same
 // shape as `charge` above, and deliberately so: the hand already knows it.
 let archerDraw = { on: false, t0: 0 };
+/**
+ * Ground a full stride cycle covers, in pixels. The walk phase is derived from
+ * it rather than ticking at a fixed rate.
+ *
+ * A flat `walkPhase += 8 * dt` meant one cycle per 157px at the base speed —
+ * two steps to cross five body widths, so the hero skated and the legs
+ * shuffled. Sixty-four is a stride of about one body height per step, which is
+ * what a walk looks like.
+ *
+ * Deriving it from speed also means the swiftness upgrade and a poison slow
+ * both reach the legs. At a fixed rate a hero bought up to 260px/s kept the
+ * cadence of one at 200 and skated further with every level.
+ */
+const WALK_CYCLE_PX = 64;
+
+/** Radians of walk phase for a distance travelled. */
+function walkPhaseFor(distancePx) {
+  return (distancePx / WALK_CYCLE_PX) * Math.PI * 2;
+}
+
 let archerPowerCD = 0;
+/**
+ * Seconds left of the snap forward after a shot leaves, counting down.
+ *
+ * Not a cooldown and deliberately not near one: nothing is gated on it, it
+ * only tells the bow painter how far through a release it is. An ordinary
+ * arrow has no windup at all, so this is the only thing that makes loosing one
+ * look like anything.
+ */
+let archerLoose = 0;
+/**
+ * How far the archer is braced, 0 to 1.
+ *
+ * Held here rather than derived from a "time since last moved" stamp, because
+ * the drain has to be its own rate: a stance you lose four times faster than
+ * you build is a decision, and one that simply resets is a punishment.
+ */
+let braceLevel = 0;
+const ARCHER_LOOSE_SECS = 0.12;
 // The ranger's net, the same draw-and-release shape as the archer's bow. He is
 // not rooted while he draws: it is a throw rather than an aimed shot, and the
 // skirmisher is the one character whose whole identity is not standing still.
@@ -1857,8 +1907,21 @@ function releaseArcherDraw() {
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     power: true,
     pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
-    dmgMult: 1 + drawn * (CONFIG.archerPowerBossMult - 1) });
+    // Draw and brace multiply: a fully drawn shot from a braced stance is
+    // the most committed thing he can do, and it is paid for in seconds.
+    dmgMult: (1 + drawn * (CONFIG.archerPowerBossMult - 1)) * braceBossMult() });
+  archerLoose = ARCHER_LOOSE_SECS;
   events.emit({ type: 'ARCHER_POWER_SHOT', x: player.x, y: player.y, power: drawn });
+}
+
+/**
+ * What a brace is worth to an arrow right now.
+ *
+ * One home, because both the ordinary shot and the power shot read it and a
+ * second copy is how they come to disagree about what standing still buys.
+ */
+function braceBossMult() {
+  return 1 + braceLevel * (CONFIG.braceBossMult - 1);
 }
 
 /** How far the net has been drawn, 0 to 1. */
@@ -2814,6 +2877,24 @@ events.on(e => {
       });
       break;
 
+    case 'ARCHER_POWER_HIT': {
+      // Weight on the body, not on the bow: a shake and a spray at the point of
+      // contact, easing off as the shot spends what it has left to give.
+      const bite = 0.4 + 0.2 * e.left;
+      triggerShake(2 + 2 * bite, 90 + 60 * bite);
+      burst(e.x, e.y, {
+        count: 5 + 3 * e.left, colors: ['#EAFF6A', '#FFFFFF'],
+        speedMin: 50, speedMax: 120 + 40 * e.left, decay: 2.8, shape: 'spark',
+        shadowBlur: 5, shadowColor: '#EAFF6A',
+      });
+      break;
+    }
+    case 'ARCHER_BRACED':
+      // Quiet and short: a confirmation, not an alarm. He is standing still to
+      // hear it, so it does not have to compete with anything.
+      playSound(sndPickup);
+      burst(e.x, e.y, { count: 5, colors: ['#EAFF6A'], speed: 22, life: 0.35, size: 1 });
+      break;
     case 'ARCHER_POWER_SHOT':
       // The shake scales with the draw, so a full one is felt and a tap is not.
       playSound(sndShoot); triggerShake(1 + 3 * e.power, 80 + 120 * e.power);
@@ -3004,7 +3085,7 @@ function initGame() {
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
   knightChainTimer = 0;
-  archerDraw.on = false; archerPowerCD = 0;
+  archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -3210,12 +3291,25 @@ function updatePlayer(dt) {
       const spd = FEATHERS.speed() * dashMult * dt;
       vx = Math.cos(knightDash.angle) * spd;
       vy = Math.sin(knightDash.angle) * spd;
-      player.walkPhase += 8 * dt;
+      player.walkPhase += walkPhaseFor(Math.hypot(vx, vy));
     } else {
       vx = wantX; vy = wantY;
       const len = Math.hypot(vx, vy);
-      if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += 8 * dt; }
+      if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += walkPhaseFor(Math.hypot(vx, vy)); }
     }
+    // Brace builds while he is still and drains while he is not. Read off the
+    // movement that was actually applied, not off the keys: a hero walking into
+    // a wall is standing still, and pretending otherwise would let him brace by
+    // holding a direction against terrain.
+    const moved = Math.hypot(vx, vy) > 0.01;
+    if (selectedChar === 'archer' && !moved) {
+      const was = braceLevel;
+      braceLevel = Math.min(1, braceLevel + dt / CONFIG.braceFillSecs);
+      if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
+    } else {
+      braceLevel = Math.max(0, braceLevel - (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
+    }
+
     const fromX = player.x, fromY = player.y;
     const nx = player.x + vx;
     if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
@@ -3283,6 +3377,7 @@ function updatePlayer(dt) {
   if (wizBlinkIFrame      > 0) wizBlinkIFrame     = Math.max(0, wizBlinkIFrame     - dt);
   if (knightChainTimer    > 0) knightChainTimer   = Math.max(0, knightChainTimer   - dt);
   if (archerPowerCD       > 0) archerPowerCD      = Math.max(0, archerPowerCD      - dt);
+  if (archerLoose         > 0) archerLoose        = Math.max(0, archerLoose        - dt);
   if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
@@ -3474,7 +3569,9 @@ function tryShoot() {
     vy: Math.sin(player.aimAngle) * CONFIG.arrowSpeed,
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: CONFIG.arrowSpeed,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0 });
+    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    dmgMult: braceBossMult() });
+  archerLoose = ARCHER_LOOSE_SECS;
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
 }
 
@@ -3946,14 +4043,14 @@ function updateArrows(dt) {
     for (let j = crows.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, crows[j].x, crows[j].y) < hitR*hitR) {
         damageCrow(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
-        arrows.splice(i, 1); hit = true; break;
+        if (spendArrowPierce(a, i)) { hit = true; break; }
       }
     }
     if (hit) continue;
     for (let j = skeletons.length - 1; j >= 0; j--) {
       if (dist2(a.x, a.y, skeletons[j].x, skeletons[j].y) < hitR*hitR) {
         damageSkeleton(j, arrowDamage, knockFrom(a.vx, a.vy)); if (a.type === 'fire') spawnFire(a.x, a.y);
-        arrows.splice(i, 1); hit = true; break;
+        if (spendArrowPierce(a, i)) { hit = true; break; }
       }
     }
     if (hit) continue;
@@ -4077,6 +4174,28 @@ function hitKnockOffset(e) {
   return { x: e.knock.x * d, y: e.knock.y * d };
 }
 const ZERO_KNOCK = { x: 0, y: 0 };
+
+/**
+ * Spends one body of an arrow's pierce budget, and says whether it is finished.
+ *
+ * `pierceLeft` was set on every power shot and read by nothing but the
+ * renderer: the javelin's hit path honoured it, the ordinary arrow path spliced
+ * on first contact, and a power arrow goes down the ordinary path. So a third
+ * of what the hold bought never existed.
+ *
+ * An arrow with no pierce is finished by its first contact, which is why this
+ * is one shape for both rather than a branch at each hit site.
+ */
+function spendArrowPierce(a, i) {
+  // Emitted per body, including the last, so a shot that goes through three
+  // enemies reads as three hits rather than as one arrow disappearing.
+  if (a.power) {
+    events.emit({ type: 'ARCHER_POWER_HIT', x: a.x, y: a.y, left: Math.max(0, (a.pierceLeft || 1) - 1) });
+  }
+  if (a.pierceLeft > 1) { a.pierceLeft--; return false; }
+  arrows.splice(i, 1);
+  return true;
+}
 
 function knockFrom(vx, vy) {
   const m = Math.hypot(vx, vy);
@@ -7851,14 +7970,28 @@ function drawPlayer() {
   // grid rather than rotated with aim, matching the rest of the aim feedback
   // this game already draws (drawAimLine, the per-character reticle) rather
   // than duplicating it on the sprite itself.
-  const grid = buildArcherGrid(SP_TRIM.archer);
+  const aFrame = animFrame3(player.walkPhase || 0);
+  const grid = buildArcherGrid(aFrame, SP_TRIM.archer);
   const spriteScale = 1;
   const spriteDx = -(ARCHER_SPRITE.w * spriteScale) / 2;
-  const spriteDy = -22;
+  // The body rises as the legs pass and drops on each contact, twice a stride.
+  // Whole pixels: a sprite on a half pixel is a sprite with a blurred edge.
+  const aBob = Math.abs(Math.sin(player.walkPhase || 0)) > 0.5 ? 0 : -1;
+  const spriteDy = -22 + aBob;
   const archerCanvas = flashOn
-    ? spriteFlashCanvas('archer', grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
-    : spriteCanvas(`archer|${SP_TRIM.archer}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
+    ? spriteFlashCanvas(`archer|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, '#ffffff', spriteScale)
+    : spriteCanvas(`archer|${SP_TRIM.archer}|${aFrame}`, grid, ARCHER_SPRITE.w, ARCHER_SPRITE.h, spriteScale);
   ctx.drawImage(archerCanvas, spriteDx, spriteDy);
+  // The bow is not part of the body grid: it swings to the aim, bends through a
+  // held power shot and snaps forward on release. One painter, shared with the
+  // multiplayer renderer, so the two cannot drift.
+  paintArcherBow(ctx, {
+    aim: localAngle,
+    draw: archerDrawFrac(),
+    recoil: archerLoose / ARCHER_LOOSE_SECS,
+    trim: SP_TRIM.archer,
+    wash: (colour) => (flashOn ? '#ffffff' : colour),
+  });
 
   // Shield halo
   if (playerShield) {
@@ -10454,6 +10587,10 @@ const GLYPH = {
   // Round body and a stub of fuse: the sapper's bomb, not a stick of dynamite.
   bomb: (s) => { ctx.beginPath(); ctx.arc(s*0.48, s*0.6, s*0.3, 0, Math.PI*2); ctx.fill();
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.66, s*0.36); ctx.lineTo(s*0.84, s*0.14); ctx.stroke(); },
+  // Two planted feet on a ground line: the chip says "still", not "shoot".
+  brace: (s) => { ctx.fillRect(s*0.2, s*0.28, s*0.18, s*0.42);
+    ctx.fillRect(s*0.62, s*0.28, s*0.18, s*0.42);
+    ctx.fillRect(s*0.1, s*0.76, s*0.8, s*0.12); },
   satchel: (s) => { ctx.fillRect(s*0.15, s*0.4, s*0.7, s*0.5);
     ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s*0.3, s*0.4); ctx.lineTo(s*0.7, s*0.4); ctx.stroke(); },
   javelin: (s) => { ctx.lineWidth = 2;
@@ -10551,7 +10688,7 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['power', 'shield'],
+  archer: ['brace', 'power', 'shield'],
   ranger: ['net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
@@ -10571,6 +10708,14 @@ const CHIP = {
   // in the lane say the same thing.
   power:     () => cooldownChip('arrow', archerPowerCD, CONFIG.archerPowerCooldown,
                                 archerDraw.on ? CONFIG.archerDrawMaxSecs : 0),
+  // Not a cooldownChip: nothing is gated and nothing is spent, so "READY"
+  // would be a lie. It reports a stance that is filling, full, or draining,
+  // and the fraction is the same number the arrows are multiplied by.
+  brace:     () => ({
+    glyph: 'brace', color: '#EAFF6A', lit: braceLevel >= 1,
+    label: braceLevel >= 1 ? 'SET' : braceLevel <= 0 ? '' : Math.round(braceLevel * 100) + '%',
+    frac: braceLevel >= 1 ? null : braceLevel,
+  }),
   net:       () => cooldownChip('satchel', rangerNetCD, CONFIG.netCooldown,
                                 rangerNet.on ? CONFIG.netDrawMaxSecs : 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
@@ -11159,7 +11304,9 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
  * built per panel per frame instead of all five: the lookup this replaced was
  * a table literal, so every call rebuilt every character's grid to use one. */
 function _drawCharPreview(cx, cy, panel, t) {
-  const { grid, sprite, key } = panel.preview(animFrame3(t * 1.5));
+  // Roughly the cadence the hero walks at in play. At the old 1.5 the preview
+  // took four seconds a cycle, which read as a stuck sprite rather than a walk.
+  const { grid, sprite, key } = panel.preview(animFrame3(t * 10));
   const scale = 1.4;
   const bob = Math.round(1.5 * Math.sin(t * 2));
   ctx.save(); ctx.translate(cx, cy + bob);
@@ -12295,6 +12442,7 @@ export const devHooks = {
   shift() { pressShift(); },
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
+  brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.

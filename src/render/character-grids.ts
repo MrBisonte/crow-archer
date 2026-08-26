@@ -13,66 +13,179 @@
  * trim colour included.
  */
 
-import { makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, type PixelGrid } from './pixel-grid';
+import { makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp, type AnimFrame, type PixelGrid } from './pixel-grid';
 
 export const ARCHER_SPRITE = { w: 24, h: 32 };
 
-/** Top-down 3/4, one fixed pose (facing the viewer) — callers only ever
- * mirror left/right, so there is no separate back pose. The bow is not
- * baked in; both renderers draw it live, rotated to the real-time aim. */
-export function buildArcherGrid(trim: string): PixelGrid {
+/** The row the boots land on, and the row the two legs have to read as two. */
+const BOOT_ROW = 30;
+
+/**
+ * Where the feet sit at rest, as two columns rather than a centre and a spread.
+ *
+ * Nine columns apart, which is wide for a man, and the width is what pays for
+ * the swing: the closed frame brings the feet to within five of each other, and
+ * with two-column shins that still leaves three columns of daylight. Narrow the
+ * rest stance or thicken the shins and the closed frame drops to two, which
+ * pixelOutline fills from both sides — the legs weld for one frame of the walk.
+ */
+const STANCE_BACK = 6;
+const STANCE_FRONT = 15;
+
+/**
+ * The archer in profile, facing +x, three baked stride frames off walk phase.
+ *
+ * Profile rather than the front-facing 3/4 the other heroes are drawn in, and
+ * it is the walk that forces it: face-on, a stride can only lift a boot a
+ * pixel, which is invisible at 24x32. Side-on it swings the whole leg through
+ * seven columns. Every guard in guard-grids.ts is already drawn this way, the
+ * foot archer included, so the convention is the codebase's rather than new.
+ *
+ * The caller mirrors the whole sprite for the other heading — see `facing` in
+ * render/characters.ts and `player.facing` in the legacy renderer, both of
+ * which already flip on the sign of the aim.
+ *
+ * The bow is not baked: it swings to the aim, bends through a held power shot
+ * and snaps forward on release, which no fixed number of frames can carry.
+ * render/archer-bow.ts draws it, and both renderers call that one painter.
+ */
+export function buildArcherGrid(frame: AnimFrame, trim: string): PixelGrid {
   const C = {
     tunic: '#1F4A19', tunicHi: '#2C5A22', tunicSh: '#14330F',
     leather: '#1A2A1A', leatherHi: '#243424',
     skin: '#D9B98A', skinSh: '#A88A5E',
     wood: '#5B3A1F', woodHi: '#A07828',
     fletch: '#8A1010', fletchAlt: '#E8D8A0',
+    // Trousers are their own value on purpose. Legs drawn in the cloak's
+    // colour vanish into it, and the stride is the only thing the walk has.
+    trouser: '#4A3A22', trouserHi: '#66512F', boot: '#241A10',
     outline: '#0A0F0A',
   };
   const g = makePixelGrid(ARCHER_SPRITE.w, ARCHER_SPRITE.h);
-  // Quiver on back, three arrows alternating fletching colours so the bundle
-  // reads as separate shafts instead of one block, plus a band round the case
-  pixelEllipse(g, 5, 7, 2.1, 4, C.wood);
-  pixelEllipse(g, 4.2, 5, 1, 2, C.woodHi);
-  pixelRect(g, 3, 9, 5, 1, C.leather);
-  pixelRect(g, 4, 0, 1, 3, C.fletch); pixelRect(g, 5, 0, 1, 3, C.fletchAlt); pixelRect(g, 6, 1, 1, 3, C.fletch);
-  // Cloak hanging off the far shoulder, behind everything else
-  pixelRect(g, 3, 12, 3, 6, C.leather);
-  pixelRect(g, 3, 12, 1, 5, C.leatherHi);
-  // Hood
-  pixelEllipse(g, 12, 6, 5.5, 4.5, C.leather);
-  pixelEllipse(g, 10, 4.5, 2.5, 2, C.leatherHi);
-  // Face, two eye pixels so the pose reads front-facing. The brow row is the
-  // hood's own shadow: that is what makes the face read as set *under* it.
-  pixelEllipse(g, 12, 7.7, 2.6, 1.8, C.skin);
-  pixelRect(g, 10, 6, 5, 1, C.skinSh);
-  setPixel(g, 10.5, 7.5, C.outline); setPixel(g, 13.5, 7.5, C.outline);
-  // Shoulders and tapered torso, shaded down the side away from the light
-  pixelRect(g, 5, 9, 14, 3, C.tunic);
-  pixelRect(g, 7, 12, 10, 8, C.tunic);
-  pixelRect(g, 6, 9, 3, 10, C.tunicHi);
-  pixelRect(g, 15, 12, 2, 8, C.tunicSh);
-  pixelRect(g, 8, 20, 8, 2, C.leather);
-  // Quiver strap across the chest and the belt buckle it feeds into. Both go
-  // down before the trim stripe, which stays the last thing painted on the
-  // torso so the one team-readable marker can never be drawn over.
-  pixelCurve(g, [7, 10], [11, 14], [15, 19], C.wood, 24);
-  pixelRect(g, 11, 20, 2, 2, C.woodHi);
-  pixelRect(g, 11, 13, 1, 6, trim);
-  // Draw arm folded across the chest, bow arm out to the side under a bracer
-  pixelRect(g, 6, 12, 3, 3, C.tunicHi);
-  setPixel(g, 8, 15, C.skin); setPixel(g, 9, 15, C.skin);
-  pixelRect(g, 16, 12, 3, 3, C.tunic);
-  pixelRect(g, 17, 14, 2, 3, C.leatherHi);
-  // Bow arm, held out to the side
-  pixelCurve(g, [18, 9], [23, 15], [19, 23], C.wood, 40);
-  pixelCurve(g, [18, 10], [22.3, 15], [19.5, 22], C.woodHi, 40);
-  setPixel(g, 19, 16, C.skin); setPixel(g, 20, 16, C.skin);
-  // Legs and boots, with a knee pad and a turned-down cuff at the boot top
-  pixelRect(g, 8, 22, 3, 5, C.leather); pixelRect(g, 13, 22, 3, 5, C.leather);
-  pixelRect(g, 8, 24, 3, 1, C.leatherHi); pixelRect(g, 13, 24, 3, 1, C.leatherHi);
-  pixelRect(g, 7, 27, 4, 3, C.leatherHi); pixelRect(g, 13, 27, 4, 3, C.leatherHi);
-  pixelRect(g, 7, 27, 4, 1, C.wood); pixelRect(g, 13, 27, 4, 1, C.wood);
+
+  // Both feet swing about a shared centre and opposite ways, so the two
+  // extremes are mirror images of one another — which is what a stride is.
+  // guard-grids.ts records the alternative: swing each foot about its own top
+  // and they converge instead of splaying, meeting for one frame of the cycle
+  // as a single thick leg. Invisible in a still, unmissable in motion.
+  //
+  // Two columns each way, not one: a single column of travel is a shuffle at
+  // this size, and the swing has to carry against a 24-wide body.
+  const swing = frame === 'a' ? 2 : frame === 'b' ? -2 : 0;
+  const footBack = STANCE_BACK - swing;
+  const footFront = STANCE_FRONT + swing;
+  // The cloak lags the step rather than leading it.
+  const sway = frame === 'a' ? -1 : frame === 'b' ? 1 : 0;
+
+  /**
+   * One leg, two thick, tapering from the hip to wherever the foot landed.
+   *
+   * Two and not three. At a two-column swing the closed frame leaves three
+   * columns between three-wide shins, and pixelOutline fills every empty cell
+   * touching a filled one from both sides — the legs weld for exactly the frame
+   * nobody screenshots. A slimmer shin is also simply a better archer.
+   */
+  const leg = (hipX: number, footX: number, body: string, lit: string): void => {
+    for (let y = 20; y < BOOT_ROW; y++) {
+      const t = (y - 20) / (BOOT_ROW - 1 - 20);
+      const x = Math.round(hipX + (footX - hipX) * t);
+      pixelRect(g, x - 1, y, 2, 1, body);
+      setPixel(g, x - 1, y, lit);
+      // A knee patch on the way down, so the shin is not one flat run.
+      if (y === 23) setPixel(g, x, y, lit);
+    }
+  };
+
+  // ---- behind the body -----------------------------------------------------
+
+  // Cloak, hung off the shoulder and widening to the hem, swinging with the
+  // step. It stops above the boots: a cloak drawn to the floor is a third
+  // vertical run at the row that decides whether the legs read as two.
+  for (let y = 11; y <= 23; y++) {
+    const t = (y - 11) / 12;
+    const back = Math.round(9 - 4 * t) + sway;
+    pixelRect(g, back, y, 10 - back, 1, C.leather);
+    setPixel(g, back, y, C.leatherHi);
+  }
+
+  // Quiver slung across the back, and three arrows standing out of it over the
+  // trailing shoulder. Alternating fletching so the bundle reads as separate
+  // shafts rather than one block.
+  pixelEllipse(g, 8, 15, 2.2, 4.6, C.wood);
+  pixelEllipse(g, 7.2, 13, 1, 2.2, C.woodHi);
+  pixelRect(g, 6, 19, 5, 1, C.leather);
+  pixelRect(g, 6, 5, 1, 5, C.fletch);
+  pixelRect(g, 7, 4, 1, 6, C.fletchAlt);
+  pixelRect(g, 8, 5, 1, 5, C.fletch);
+
+  // Trailing leg first, so the torso and the leading leg overlap it.
+  leg(10, footBack, C.trouser, C.trouserHi);
+
+  // ---- body ----------------------------------------------------------------
+
+  // Torso in profile: chest forward, shoulder blade back, narrowing to a belt.
+  pixelRect(g, 10, 11, 7, 10, C.tunic);
+  pixelRect(g, 10, 11, 7, 2, C.tunicHi);
+  pixelRect(g, 10, 13, 2, 7, C.tunicSh);
+  pixelEllipse(g, 16, 15, 1.6, 3.4, C.tunicHi);
+  pixelRect(g, 10, 20, 7, 2, C.leather);
+  pixelRect(g, 12, 20, 2, 2, C.woodHi);
+  // Folds down the tunic, and the quiver's belt running to the buckle.
+  setPixel(g, 12, 17, C.tunicSh); setPixel(g, 14, 18, C.tunicSh);
+  setPixel(g, 13, 13, C.tunicHi); setPixel(g, 15, 17, C.tunicHi);
+  pixelRect(g, 9, 18, 3, 1, C.wood);
+  pixelRect(g, 10, 12, 1, 8, C.tunicSh);
+
+  // Leading leg over the torso's hem.
+  leg(15, footFront, C.trouser, C.trouserHi);
+
+  // Boots, hung outside the ankle rather than centred on it. Centred boots eat
+  // a column of the gap from each side, which on the closed frame is the whole
+  // gap: the legs part cleanly and the feet fuse instead.
+  pixelRect(g, footBack - 2, BOOT_ROW - 1, 3, 2, C.boot);
+  pixelRect(g, footFront, BOOT_ROW - 1, 3, 2, C.boot);
+  pixelRect(g, footBack - 2, BOOT_ROW - 1, 3, 1, C.trouserHi);
+  pixelRect(g, footFront, BOOT_ROW - 1, 3, 1, C.trouserHi);
+
+  // ---- head ----------------------------------------------------------------
+
+  // Hood: the bulk sits behind the skull and a brim reaches forward over the
+  // brow, which is what makes a profile read as hooded rather than helmeted.
+  // The shadow row under the brim is what sets the face inside it.
+  pixelEllipse(g, 11.5, 6.5, 4, 4, C.leather);
+  pixelEllipse(g, 10, 5, 2.2, 1.8, C.leatherHi);
+  pixelRect(g, 8, 8, 4, 4, C.leather);
+  pixelRect(g, 13, 4, 4, 2, C.leather);
+  // Face: cheek and jaw under the brim, a nose off the front of it, and the
+  // brim's own shadow along the brow so the face sits inside the hood.
+  pixelRect(g, 13, 6, 4, 4, C.skin);
+  setPixel(g, 17, 7, C.skin);
+  setPixel(g, 17, 8, C.skin);
+  pixelRect(g, 13, 6, 4, 1, C.skinSh);
+  pixelRect(g, 13, 10, 3, 1, C.skinSh);
+  setPixel(g, 15, 8, C.outline);
+
+  // ---- arms and bow --------------------------------------------------------
+
+  // Trailing arm swings against the legs — opposite the foot on its own side,
+  // which is what an arm does and what stops the walk reading as a shuffle.
+  // The bow arm deliberately does not swing: it is holding a bow at a target,
+  // and an archer whose aim wandered with his stride would be lying about it.
+  const armSwing = -swing;
+  pixelRect(g, 11 + armSwing, 13, 3, 4, C.tunicHi);
+  setPixel(g, 12 + armSwing, 17, C.skin);
+  setPixel(g, 13 + armSwing, 17, C.skin);
+  // Leading arm out to the bow, bracer over the forearm.
+  pixelRect(g, 16, 13, 3, 2, C.tunic);
+  pixelRect(g, 18, 13, 2, 3, C.leatherHi);
+  setPixel(g, 19, 15, C.skin);
+
+
+  // Trim last, over everything on the torso: it is the one marker a player
+  // reads a side off, and anything painted after it could bury it.
+  pixelRect(g, 11, 15, 6, 1, trim);
+  setPixel(g, 10, 16, trim);
+
   return pixelOutline(g, C.outline);
 }
 
