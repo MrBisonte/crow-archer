@@ -6,13 +6,13 @@ import { FOV, Path } from 'rot-js';
 
 import { TILE, TileMap, tilePassable } from '../sim/tilemap';
 import { mulberry32 } from '../sim/rng';
-import { MAP_GEN, MAP_KINDS, MAP_RULES, runsWaves } from '../sim/arena-map';
+import { MAP_COLS, MAP_GEN, MAP_KINDS, MAP_ROWS, MAP_RULES, TILE_SIZE, runsWaves } from '../sim/arena-map';
 import { modeRule, picksItsMap } from '../sim/game-mode';
 import { BESTIARY } from '../sim/bestiary';
 import { SIEGE_WAVE_COUNT } from '../sim/siege-waves';
 import {
   GUARD_STATS, RANK_MARK, guardDamage, guardHeal, healGuard, invokeWard,
-  isPriest, makeGuard, missingHp, shouldWard,
+  isPriest, makeGuard, missingHp, onGuardGround as onDutyGround, shouldWard,
 } from '../sim/guards';
 import {
   completeWave as siegeCompleteWave, guardLost as siegeGuardLost,
@@ -42,6 +42,7 @@ import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { Hitstop } from '../sim/hitstop';
 import { log, attachToEvents } from '../sim/log';
+import { SPANS, countingContext, trace } from '../render/trace';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
   featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
@@ -165,9 +166,19 @@ function zzfx(
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 
+/**
+ * The band above the playfield. Named because the canvas height is the grid
+ * plus this, and a literal in both places is two places to get it wrong.
+ */
+const HUD_HEIGHT = 48;
+
 const CONFIG = {
-  tileSize: 32, cols: 33, rows: 21, hudHeight: 48,
-  canvasW: 1056, canvasH: 720,
+  // Derived from the grid rather than restated: these were a third copy of the
+  // arena's size, and a mismatch is invisible until something draws off the end
+  // of the map. `src/legacy/arena-size.test.ts` pins them to MAP_COLS/MAP_ROWS.
+  // Everything in world space is drawn at +hudHeight for the same reason.
+  tileSize: TILE_SIZE, cols: MAP_COLS, rows: MAP_ROWS, hudHeight: HUD_HEIGHT,
+  canvasW: MAP_COLS * TILE_SIZE, canvasH: MAP_ROWS * TILE_SIZE + HUD_HEIGHT,
 
   // No playerSpeed or playerMaxHP here on purpose. Both are per character,
   // in CHARACTER_STATS (src/sim/arena.ts), and FEATHERS stacks purchased
@@ -189,18 +200,23 @@ const CONFIG = {
   // that it is on screen and reachable the moment its wave begins.
   siegeBossSpawnDistance: 260,
   // The retinue is a bodyguard, not a hunting pack. postRadius is how far out
-  // they ring the hero at rest, postDrift the slow rotation that keeps a
-  // standing retinue milling rather than frozen into a diagram, and leash how
-  // far from the hero something has to be before it stops being their problem.
+  // they ring the hero at rest, and postDrift the slow rotation that keeps a
+  // standing retinue milling rather than frozen into a diagram.
+  //
+  // There was a second leash here, `guardLeash: 210`, carrying the rationale
+  // below. Nothing read it — the live path has always used guardPostLeash — so
+  // it has been deleted rather than left to look load-bearing.
+  guardPostRadius: 58, guardPostDrift: 0.25,
+  // How far a guard will leave its duty ground to fight, and how near it has to
+  // get before it counts as standing on its gate again.
   //
   // The leash is the whole behaviour. Without it every guard walked at the
   // nearest enemy on the map, which on an open bastion meant the retinue
   // scattered across the field in the first ten seconds and the hero fought
-  // the wave alone — the opposite of what a bodyguard is for.
-  guardPostRadius: 58, guardPostDrift: 0.25, guardLeash: 210,
-  // How far a guard will leave its gate to fight, and how near it has to get
-  // before it counts as standing there again. The leash is generous enough to
-  // meet something walking into the gap and mean enough that it comes back.
+  // the wave alone — the opposite of what a bodyguard is for. Generous enough
+  // to meet something walking into the gap, mean enough that it comes back.
+  //
+  // What it is measured from is the capsule in sim/guards.ts, not a disc.
   guardPostLeash: 170, guardPostSlack: 14,
   // How often a guard re-solves its route home. Staggered per guard at
   // spawn so a retinue does not all solve on the same frame.
@@ -1481,6 +1497,15 @@ let shootPressed = false;
 // there is no document. Everything that reads them runs downstream of boot().
 let canvas = null;
 let ctx = null;
+/**
+ * The context as the canvas handed it over, before any tracing wrapper.
+ *
+ * Kept because `ctx` is replaced by the counting wrapper at the `ops` level,
+ * and wrapping is not idempotent: wrapping an already-wrapped context counts
+ * every call twice, which reads as a real regression and is not one. Every
+ * wrap starts from this.
+ */
+let rawCtx = null;
 let booted = false;
 
 function initAudio() {
@@ -6439,10 +6464,15 @@ function guardGround(home) {
   return [home, { x: player.x, y: player.y }];
 }
 
-/** Is this point on the ground a guard answers for? */
+/**
+ * Is this point on the ground a guard answers for?
+ *
+ * The geometry is `onGuardGround` in sim/guards.ts, which is where the reason
+ * it is a capsule rather than two discs is written down and unit tested.
+ */
 function onGuardGround(ground, x, y) {
-  const reach = CONFIG.guardPostLeash * CONFIG.guardPostLeash;
-  return ground.some((p) => dist2(p.x, p.y, x, y) <= reach);
+  const [post, hero] = ground;
+  return onDutyGround(post, hero, x, y, CONFIG.guardPostLeash);
 }
 
 /**
@@ -10342,6 +10372,26 @@ function drawBossEntrance() {
  * C · CONTEXT      run state, or the boss, or the maze objective
  * D · STATUS       cooldowns and non-countable power-ups
  */
+/**
+ * The width the HUD band is laid out for, which is the canvas width it was
+ * drawn against and no longer follows.
+ *
+ * The four lanes below sum to exactly this, and the painters inside them use
+ * absolute coordinates — `drawReservePool(key, 240 + i * 100)` and the like —
+ * so the band cannot be stretched without re-laying out every one of them. It
+ * is therefore drawn at its designed width and centred, with `hudBandInset()`
+ * as the single offset. On a wider canvas that leaves dead bar either side.
+ *
+ * Reflowing the lanes from `CONFIG.canvasW` is the real fix and is its own
+ * change; this is the part that keeps the HUD readable in the meantime.
+ */
+const HUD_BAND_W = 1056;
+
+/** Where the fixed-width HUD band starts, so it sits centred on any canvas. */
+function hudBandInset() {
+  return Math.max(0, Math.round((CONFIG.canvasW - HUD_BAND_W) / 2));
+}
+
 const LANE = {
   A: { x:   0, w: 232 },
   B: { x: 232, w: 280 },
@@ -10713,6 +10763,10 @@ function drawHUD(t) {
 
   ctx.fillStyle = '#0A0F0A'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.hudHeight);
   ctx.textBaseline = 'middle';
+
+  // The band is a fixed-width island, centred. See HUD_BAND_W.
+  ctx.save();
+  ctx.translate(hudBandInset(), 0);
   ctx.fillStyle = '#243424';
   for (const l of [LANE.B, LANE.C, LANE.D]) ctx.fillRect(l.x, 4, 1, 38);
 
@@ -10720,6 +10774,7 @@ function drawHUD(t) {
   drawLaneConsumables();
   drawLaneContext(t, isBoss);
   drawLaneStatus();
+  ctx.restore();
 
   ctx.shadowColor = lowHP ? '#FF1F1F' : '#196407';
   ctx.shadowBlur  = lowHP ? 6 + 6*Math.sin(t*8) : 4;
@@ -11646,9 +11701,11 @@ function drawWizardReticle() {
 const GAME_VISIBLE_STATES = new Set(['playing','paused','boss_entrance','boss_fight']);
 
 function render(t) {
+  trace.mark('hud');
   syncCursor();
   const gameVisible = GAME_VISIBLE_STATES.has(appState);
   if (gameVisible) {
+    trace.mark('tiles');
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
@@ -11659,6 +11716,7 @@ function render(t) {
     // The ice overlay goes on at the call site rather than inside each of the
     // three draw functions: it is the same rime over whatever was just drawn,
     // and one copy beats three that could drift.
+    trace.mark('bodies');
     for (const c of crows) if (litAt(c.x, c.y)) { drawCrow(c); drawFrozenOverlay(c); }
     for (const s of skeletons) if (litAt(s.x, s.y)) { drawSkeleton(s); drawFrozenOverlay(s); }
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
@@ -11671,8 +11729,10 @@ function render(t) {
     drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
+    trace.mark('fog');
     drawFog();
     ctx.restore();
+    trace.mark('vignette');
     drawEdgeTicks(); drawEdgeAlerts();
     // Vignette — applied outside shake to stay stable
     ctx.drawImage(vignetteCanvas, 0, 0);
@@ -11698,6 +11758,7 @@ function render(t) {
       ctx.shadowBlur = 0;
       ctx.restore();
     }
+    trace.mark('hud');
     drawHUD(t);
     FORESHADOW.drawBanner(); STREAK.draw(); BOUNTIES.draw();
     // Lightning storm flash overlay
@@ -11723,29 +11784,59 @@ function render(t) {
 
 // ── LOOP ──────────────────────────────────────────────────────────────────────
 
-// Frame-time probe, dev only. Enable with ?perf=1.
-// Tracks update and render cost separately over the last 120 frames.
-let PERF = null;
-const makePerf = () => ({
-  upd: new Float32Array(120), ren: new Float32Array(120), i: 0, n: 0,
-  push(u, r) {
-    this.upd[this.i] = u; this.ren[this.i] = r;
-    this.i = (this.i + 1) % 120; if (this.n < 120) this.n++;
-  },
-  stats(buf) {
-    let sum = 0, max = 0;
-    for (let k = 0; k < this.n; k++) { sum += buf[k]; if (buf[k] > max) max = buf[k]; }
-    return [sum / this.n, max];
-  },
-  draw() {
-    if (!this.n) return;
-    const [ua, um] = this.stats(this.upd), [ra, rm] = this.stats(this.ren);
-    ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillStyle = '#39FF14';
-    ctx.fillText(`UPD AVG ${ua.toFixed(2)} MAX ${um.toFixed(2)}`, 4, CONFIG.canvasH - 24);
-    ctx.fillText(`REN AVG ${ra.toFixed(2)} MAX ${rm.toFixed(2)}`, 4, CONFIG.canvasH - 13);
-  }
-});
+/**
+ * The tracer's readout, one row per section, drawn after the frame is filed so
+ * it never counts itself.
+ *
+ * Deliberately not part of `render()`: the thing measuring the render pass
+ * cannot also be inside it. `trace` holds the numbers (see src/render/trace.ts)
+ * and formats the rows; this only puts them on the canvas.
+ */
+/**
+ * Sets the trace level and puts the right context behind `ctx`.
+ *
+ * The only place the counting wrapper is installed or removed, so the two
+ * callers (the ?perf switch at boot and devHooks.setTrace) cannot disagree
+ * about it, and so re-entering `ops` rewraps the raw context rather than the
+ * wrapper it installed last time.
+ */
+function applyTraceLevel(level) {
+  trace.setLevel(level);
+  if (rawCtx !== null) ctx = trace.level() === 'ops' ? countingContext(rawCtx, trace.counters) : rawCtx;
+  return trace.level();
+}
+
+function drawTraceOverlay() {
+  if (!trace.frames()) return;
+  const rows = trace.lines();
+  const top = CONFIG.canvasH - 11 * (rows.length + 1) - 4;
+  ctx.save();
+  ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(2, top - 2, 420, 11 * (rows.length + 1) + 4);
+  ctx.fillStyle = '#39FF14';
+  ctx.fillText(`TRACE ${trace.level()}  ${trace.frames()} frames`, 4, top);
+  rows.forEach((row, i) => ctx.fillText(row, 4, top + 11 * (i + 1)));
+  ctx.restore();
+}
+
+/**
+ * Mirrors the same rows into the diagnostic log once a second, so a playtest
+ * bug report carries the numbers without the reporter having had the overlay
+ * open. Gated on the log's own level, so it costs nothing below `debug`.
+ */
+let traceLoggedAt = 0;
+function logTraceSummary(ts) {
+  if (trace.level() === 'off' || log.currentLevel() !== 'debug') return;
+  if (ts - traceLoggedAt < 1000) return;
+  traceLoggedAt = ts;
+  const summary = trace.summary();
+  log.debug('trace', `${trace.frames()} frames`, {
+    map: mapKind,
+    rows: trace.lines(),
+    worst: SPANS.reduce((a, b) => (summary[a].ms >= summary[b].ms ? a : b)),
+  });
+}
 
 let lastTs = 0, loopT = 0;
 
@@ -11949,7 +12040,10 @@ function loop(ts) {
 
   if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
 
-  const _pt0 = PERF ? performance.now() : 0;
+  // The frame's own boundaries. render() marks the rest: its first mark closes
+  // `sim`, so the accumulator below needs no closing call of its own.
+  trace.beginFrame();
+  trace.mark('sim');
   accumulator += frameTime;
   let steps = 0;
   while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
@@ -11958,11 +12052,10 @@ function loop(ts) {
     steps++;
   }
   if (steps === MAX_STEPS) accumulator = 0;   // discard backlog after the cap
-  const _updMs = PERF ? performance.now() - _pt0 : 0;
 
-  const _pt1 = PERF ? performance.now() : 0;
   render(loopT);
-  if (PERF) { PERF.push(_updMs, performance.now() - _pt1); PERF.draw(); }
+  trace.endFrame();
+  if (trace.level() !== 'off') { drawTraceOverlay(); logTraceSummary(ts); }
   if (liveLoop) requestAnimationFrame(loop);
 }
 
@@ -12024,6 +12117,13 @@ export const devHooks = {
   holdFrames(n) { hitstop.trigger(n); },
   hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
+  /**
+   * The frame tracer, for a headless run that wants the numbers rather than
+   * the overlay. `level` takes the same values ?perf does; 'ops' installs the
+   * counting wrapper, which a booted page needs a canvas for.
+   */
+  trace: () => ({ level: trace.level(), frames: trace.frames(), spans: trace.summary() }),
+  setTrace(level) { trace.reset(); return applyTraceLevel(level); },
   // The live key map and the one-shot fire latch, so a test can drive the same
   // input path a real keyboard does instead of a parallel one.
   keys: () => keys,
@@ -12410,13 +12510,18 @@ export function boot() {
 
   canvas = document.getElementById('game');
   canvas.width = CONFIG.canvasW; canvas.height = CONFIG.canvasH;
-  ctx = canvas.getContext('2d');
+  rawCtx = canvas.getContext('2d');
+  ctx = rawCtx;
 
   tileLayer      = new StaticTileLayer(tileMap, tileLayout);
   tileOverlay    = new AnimatedTileOverlay(tileMap, tileLayout);
   vignetteCanvas = makeVignette(CONFIG.canvasW, CONFIG.canvasH, CONFIG.hudHeight);
 
-  if (query.has('perf')) PERF = makePerf();
+  // ?perf=1 times the six sections; ?perf=ops also counts canvas calls and
+  // fill area, which needs every call routed through a wrapper and is for
+  // verifying a change rather than for playing. Off, a span is one comparison.
+  const perf = query.get('perf');
+  if (perf !== null) applyTraceLevel(perf === 'ops' ? 'ops' : 'time');
 
   // ?log=debug (or info/warn/error) for a human testing session; omitted,
   // the logger stays at its default 'warn' floor so real play pays for

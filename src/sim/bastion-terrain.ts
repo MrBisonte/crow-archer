@@ -87,6 +87,27 @@ const TOWER_COL = 3;
 const SPINE_COL = TOWER_COL - 1;
 
 /**
+ * How far right of the towers the barrier is allowed to stand, in columns.
+ *
+ * The towers are anchored west, in the spawn block, for the reasons above. The
+ * barrier was placed a quarter of the way across, which on 33 columns lands 5
+ * right of them and inside the towers' reach. A quarter of a *wider* grid is
+ * not: the barrier walks away from stationary towers, and since every gate sits
+ * on the centre columns, it takes all four gates with it.
+ *
+ * Measured against `CONFIG.towerReach`, from the tower centres out to each gate
+ * centre: 4 of 4 gates covered at 33 columns, 1 of 4 at 55 unless this cap is
+ * applied, 0 of 4 at 71 where the barrier's west face is beyond reach at any
+ * row. Capping here rather than widening the reach, because a reach long enough
+ * to cross a wide map is also long enough to shoot most of it.
+ *
+ * The consequence is deliberate: the fortress is a fixed-size structure on the
+ * west edge, and extra width becomes the open ground the siege has to cross,
+ * not a proportionally larger keep.
+ */
+const BARRIER_REACH_COLS = 5;
+
+/**
  * How far above and below the centre line the towers stand.
  *
  * Strictly greater than 3 at every size, because isSpawnZone clears everything
@@ -173,7 +194,10 @@ export interface BarrierSegment {
  * sections land on or past the corridor and nothing is built.
  */
 const centreCols = (cols: number): readonly [number, number] => {
-  const first = Math.max(TOWER_COL + 2, Math.min(Math.floor(cols / 4), cols - 4));
+  const first = Math.max(
+    TOWER_COL + 2,
+    Math.min(Math.floor(cols / 4), TOWER_COL + BARRIER_REACH_COLS, cols - 4),
+  );
   return [first, first + 1];
 };
 

@@ -8,11 +8,20 @@
  */
 
 import type { CharacterKind } from '../net/protocol';
+import { MAP_COLS, MAP_ROWS, TILE_SIZE } from './arena-map';
 import { Button, type InputCommand } from './input';
 
-/** Playable area, the tile grid in pixels. The HUD is a client-side offset. */
-export const ARENA_W = 33 * 32;
-export const ARENA_H = 21 * 32;
+/**
+ * Playable area, the tile grid in pixels. The HUD is a client-side offset.
+ *
+ * Derived rather than written out, because these used to be a second copy of
+ * the grid size and nothing checked them against the first. Resizing the map
+ * left the networked worlds clamping bodies to the old box inside the new one,
+ * silently. `src/legacy/arena-size.test.ts` now pins all three statements of
+ * the size together.
+ */
+export const ARENA_W = MAP_COLS * TILE_SIZE;
+export const ARENA_H = MAP_ROWS * TILE_SIZE;
 
 /**
  * The default for a world with no character of its own: MovementWorld and

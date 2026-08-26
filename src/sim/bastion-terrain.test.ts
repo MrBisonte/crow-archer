@@ -557,8 +557,8 @@ describe('barrierCols', () => {
   // barrier, so no section is ever allowed to land behind them.
   it('never names a column at or behind the towers, at any width', () => {
     for (let cols = 5; cols <= 60; cols++) {
-      const [tower] = towerSites(21, cols);
-      for (const segment of barrierCols(21, cols)) {
+      const [tower] = towerSites(MAP_ROWS, cols);
+      for (const segment of barrierCols(MAP_ROWS, cols)) {
         expect(segment.cols[0], `${cols} columns`).toBeGreaterThan(tower.col);
         expect(segment.cols[1], `${cols} columns`).toBeLessThan(cols - 2);
       }
@@ -569,7 +569,7 @@ describe('barrierCols', () => {
   // reach either rim, and the sections may never overlap each other.
   it('never lets a section span the full height, at any size', () => {
     for (let rows = 5; rows <= 45; rows++) {
-      const segments = barrierCols(rows, 33);
+      const segments = barrierCols(rows, MAP_COLS);
       for (const segment of segments) {
         expect(segment.firstRow, `${rows} rows`).toBeGreaterThan(0);
         expect(segment.lastRow, `${rows} rows`).toBeLessThan(rows - 1);
