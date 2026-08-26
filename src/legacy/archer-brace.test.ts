@@ -12,6 +12,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { clearArena } from './arena-testkit';
 import { devHooks as g } from './game.js';
 
 /** The live key map, which is what the movement code actually reads. */
@@ -21,13 +22,24 @@ function clearKeys(): void {
   for (const k of Object.keys(keys())) keys()[k] = false;
 }
 
-/** A fresh archer, standing in a playable map with a full health bar. */
+/**
+ * A fresh archer on open ground, with a full health bar and room to walk.
+ *
+ * `clearArena` is load-bearing and was not here originally. Brace reads the
+ * distance the body actually covered rather than the key that was held -- a
+ * hero shoving into a tree is standing still, which is the point of the
+ * mechanic -- so on a generated forest the "walk away and lose it" half of
+ * every test here is a question about where the generator put a trunk. It
+ * failed about one full-suite run in three, and passed ten times out of ten in
+ * isolation, because the map is generated fresh each time.
+ */
 beforeEach(() => {
   clearKeys();
   g.takeClock();
   g.pick('archer');
   g.go('playing');
   g.generateMap('forest');
+  clearArena();
   g.respawnPlayer();
   g.healHero();
   g.stepSim(1);

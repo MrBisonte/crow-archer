@@ -16,7 +16,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { clearArena } from './arena-fixture';
+import { clearArena } from './arena-testkit';
 import { devHooks as g } from './game.js';
 
 /** Bodies in a line along +x from the hero, closer together than the arrow's reach. */
@@ -45,12 +45,10 @@ beforeEach(() => {
   g.pick('archer');
   g.go('playing');
   g.generateMap('forest');
-  // The bodies are lined up 30, 60 and 90 pixels out and the arrow has to
-  // reach all three. generateMap runs on an unseeded Math.random, so on about
-  // one seed in fifteen it grows a tree across that line -- measured at 4
-  // failing seeds in 60, every one of them with a tile standing between the
-  // second body and the third. The arrow stops there and the test reads as a
-  // pierce that did not pierce. Same terrain bug the wizard's homing bolt hit.
+  // Open ground, or the shot is a question about where the generator put its
+  // trees: a power arrow spends a pierce charge on the first thing it meets,
+  // and a trunk in the lane makes three bodies short of five read as two. This
+  // flaked about one run in five before the clear.
   clearArena();
   g.healHero();
   (g.skeletons() as unknown[]).length = 0;

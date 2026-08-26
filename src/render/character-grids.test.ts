@@ -14,9 +14,10 @@ import {
   WIZARD_SPRITE, buildWizardGrid,
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
+  SAPPER_SPRITE, buildSapperGrid,
   type KnightKind,
 } from './character-grids';
-import { ANIM_FRAMES, type PixelGrid } from './pixel-grid';
+import { ANIM_FRAMES, type AnimFrame, type PixelGrid } from './pixel-grid';
 import { spriteCanvas, spriteFlashCanvas } from './pixel-sprite';
 import {
   countFilled, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
@@ -30,6 +31,7 @@ const TRIM = '#39FF14';
 /** Every palette the knight's grid is built against. */
 const KNIGHT_KINDS: readonly KnightKind[] = ['normal', 'fireSword'];
 
+/** One hero, one frame, one palette: exactly what a renderer asks a builder for. */
 interface HeroCase {
   name: string;
   sprite: { w: number; h: number };
@@ -38,35 +40,66 @@ interface HeroCase {
   before: number;
 }
 
-const HEROES: readonly HeroCase[] = [
-  // The archer's three are 340, not the 440 the rest carry, and the gap is two
-  // deliberate changes rather than a flattening. He was redrawn from a
-  // front-facing 3/4 into profile, and a body edge-on is narrower than the same
-  // body face-on. Then the bow came out of the grid entirely — it has to swing
-  // to the aim and bend through a draw, so render/archer-bow.ts paints it live.
-  // The ratchet's premise is "same pose, more detail"; neither survives a
-  // change of pose or a part moving to another module, so it is re-cut here.
-  { name: 'archer|a', sprite: ARCHER_SPRITE, grid: buildArcherGrid('a', TRIM), before: 340 },
-  { name: 'archer|mid', sprite: ARCHER_SPRITE, grid: buildArcherGrid('mid', TRIM), before: 340 },
-  { name: 'archer|b', sprite: ARCHER_SPRITE, grid: buildArcherGrid('b', TRIM), before: 340 },
-  { name: 'wizard', sprite: WIZARD_SPRITE, grid: buildWizardGrid(TRIM), before: 440 },
-  { name: 'ranger|a', sprite: RANGER_SPRITE, grid: buildRangerGrid('a', TRIM), before: 374 },
-  { name: 'ranger|mid', sprite: RANGER_SPRITE, grid: buildRangerGrid('mid', TRIM), before: 376 },
-  { name: 'ranger|b', sprite: RANGER_SPRITE, grid: buildRangerGrid('b', TRIM), before: 385 },
-  { name: 'knight|normal', sprite: KNIGHT_SPRITE, grid: buildKnightGrid('normal', TRIM), before: 713 },
-  { name: 'knight|fireSword', sprite: KNIGHT_SPRITE, grid: buildKnightGrid('fireSword', TRIM), before: 713 },
-];
+/**
+ * A hero, before its frames are expanded.
+ *
+ * The table used to be written out one frame at a time, with a separate test
+ * checking that every frame the renderers ask for had a row. Expanding over
+ * ANIM_FRAMES here removes the gap that test was watching: a fourth stride
+ * frame gets checked because it exists, not because someone remembered. It is
+ * also how the sapper came to be missing from this file entirely — he had no
+ * frames when it was written, so nobody added the row.
+ */
+interface HeroSpec {
+  name: string;
+  sprite: { w: number; h: number };
+  build: (frame: AnimFrame) => PixelGrid;
+  before: number;
+}
+
+/**
+ * The `before` counts are the filled-cell totals this ratchet was cut against.
+ *
+ * Four of the five were re-cut when the hero was redrawn from a front-facing
+ * 3/4 into profile. The ratchet's premise is "same pose, more detail", and a
+ * re-pose does not survive it: a body edge-on is simply narrower than the same
+ * body face-on, and in the wizard's and knight's case a weapon left the grid
+ * for a live painter at the same time. Re-cut, not raised — the guard still
+ * catches a later change that flattens a hero back out.
+ */
+const HEROES: readonly HeroCase[] = ([
+  { name: 'archer', sprite: ARCHER_SPRITE, build: (f) => buildArcherGrid(f, TRIM), before: 340 },
+  { name: 'wizard', sprite: WIZARD_SPRITE, build: (f) => buildWizardGrid(f, TRIM), before: 320 },
+  { name: 'ranger', sprite: RANGER_SPRITE, build: (f) => buildRangerGrid(f, TRIM), before: 350 },
+  { name: 'sapper', sprite: SAPPER_SPRITE, build: (f) => buildSapperGrid(f, TRIM), before: 380 },
+  ...KNIGHT_KINDS.map((kind) => ({
+    name: `knight|${kind}`,
+    sprite: KNIGHT_SPRITE,
+    build: (f: AnimFrame) => buildKnightGrid(kind, f, TRIM),
+    before: 440,
+  })),
+] satisfies readonly HeroSpec[]).flatMap((h) =>
+  ANIM_FRAMES.map((frame) => ({
+    name: `${h.name}|${frame}`,
+    sprite: h.sprite,
+    grid: h.build(frame),
+    before: h.before,
+  })),
+);
 
 describe('hero pixel grids', () => {
-  it('cover every frame and kind the renderers ask a builder for', () => {
-    // The table above is hand-written, so this is what stops a new stride
-    // frame or knight palette from being added and simply never checked.
-    // ANIM_FRAMES is the builders' own frame list, not a copy of it, so a
-    // fourth frame would fail here rather than quietly go unchecked.
-    const names = new Set(HEROES.map((h) => h.name));
-    for (const frame of ANIM_FRAMES) expect(names).toContain(`archer|${frame}`);
-    for (const frame of ANIM_FRAMES) expect(names).toContain(`ranger|${frame}`);
-    for (const kind of KNIGHT_KINDS) expect(names).toContain(`knight|${kind}`);
+  it('covers every hero the char-select screen can offer, in every frame', () => {
+    // Compared against the exact key set rather than a length: a length check
+    // catches a deletion and misses an addition, and a sixth hero arriving
+    // with no rows here is precisely the gap that left the sapper unchecked.
+    const expected = new Set<string>();
+    for (const hero of ['archer', 'wizard', 'ranger', 'sapper']) {
+      for (const frame of ANIM_FRAMES) expected.add(`${hero}|${frame}`);
+    }
+    for (const kind of KNIGHT_KINDS) {
+      for (const frame of ANIM_FRAMES) expected.add(`knight|${kind}|${frame}`);
+    }
+    expect(new Set(HEROES.map((h) => h.name))).toEqual(expected);
   });
 
   for (const hero of HEROES) {

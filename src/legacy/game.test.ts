@@ -24,7 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
-import { clearArena } from './arena-fixture';
+import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -33,24 +33,6 @@ import {
   filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
 } from '../render/grid-testkit';
 
-/** One second of simulation, at the fixed 60 Hz step the loop uses. */
-const ONE_SECOND = 60;
-
-/**
- * Advances the simulation by exactly `n` fixed steps, riding out any impact
- * freeze on the way.
- *
- * `stepSim(n)` is n *frames* of the loop, and hitstop can spend some of them
- * holding the world still (see the HITSTOP ladder in game.js), so a test
- * waiting out a cooldown has to count sim steps rather than frames or it comes
- * up short by however heavily the run happened to land.
- */
-function stepPast(n: number): void {
-  for (let i = 0; i < n; i++) {
-    while (g.hitstop() > 0) g.stepSim(1);
-    g.stepSim(1);
-  }
-}
 
 /**
  * Rides a boss death sequence out, keeping the hero on his feet while it runs.
@@ -1073,7 +1055,6 @@ describe('the sapper', () => {
  * about the rule, not the map, so they lay their own walls where they want
  * them and leave the rest empty.
  */
-
 /** Puts the wizard at a tile centre, aiming due east, on open ground. */
 function wizardAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
   g.pick('wizard');
@@ -2024,7 +2005,7 @@ interface CharPanel {
   hook: string;
   /** The authored DAMAGE bar, checked against bossDamageMult's ordering. */
   damage: number;
-  skills: { main: string; secondary: string; shift: string };
+  skills: { main: string; secondary: string; shift: string; passive: string };
   statBars: ReadonlyArray<{ label: string; pips: number }>;
   preview: (frame: 'a' | 'mid' | 'b') => { grid: PixelGrid; sprite: { w: number; h: number }; key: string };
 }
@@ -2039,7 +2020,7 @@ describe('character-select panel data', () => {
   it('gives every panel a hook and all three skill lines', () => {
     for (const p of charPanels()) {
       expect(p.hook, p.char).toBeTruthy();
-      for (const slot of ['main', 'secondary', 'shift'] as const) {
+      for (const slot of ['main', 'secondary', 'shift', 'passive'] as const) {
         expect(p.skills?.[slot], `${p.char}.${slot}`).toBeTruthy();
         // A budget, not a style rule. The selected panel is 350px wide less
         // 12px padding a side, and Courier New advances 0.6em, so at 10.5px
@@ -2087,6 +2068,33 @@ describe('character-select panel data', () => {
           .toEqual({ w: shown.sprite.w, h: shown.sprite.h });
         expect(invalidColours(shown.grid), `${p.char}|${frame}`).toEqual([]);
       }
+    }
+  });
+
+  it('moves every hero’s feet between stride frames, not just their cloth', () => {
+    // Deliberately the *boot rows* and not the whole grid. Comparing whole
+    // grids passes on a hero whose only moving part is a hem: the ranger
+    // shipped three frames that differed by a one-column cloak sway over a
+    // floor-length skirt, and read as a stuck sprite for exactly that reason.
+    // Pinning the wizard's legs to one frame still leaves his robe swaying,
+    // so a whole-grid check goes green on the bug it exists to catch.
+    for (const p of charPanels()) {
+      const feet = ANIM_FRAMES.map((f) => {
+        const { grid } = p.preview(f);
+        return JSON.stringify(grid.slice(grid.length - 4));
+      });
+      expect(new Set(feet).size, `${p.char} plants the same feet every frame`).toBe(3);
+    }
+  });
+
+  it('caches each stride frame under its own key', () => {
+    // The sprite cache hands back a canvas *without* calling the painter, so a
+    // key that does not name the frame pins the whole walk to whichever frame
+    // was drawn first. Three grids behind one key is a hero frozen mid-step,
+    // and nothing else in the suite would see it.
+    for (const p of charPanels()) {
+      const keys = new Set(ANIM_FRAMES.map((f) => p.preview(f).key));
+      expect(keys.size, `${p.char} reuses a cache key across frames`).toBe(3);
     }
   });
 });
@@ -2137,12 +2145,23 @@ describe('the wizard blink arrival pulse', () => {
   });
 
   it('shows a ring at the radius the damage used', () => {
+    // The claim is unchanged -- what is drawn reports what was hit -- but the
+    // ring moved from a generic shock ring into render/wizard-fx.ts, which
+    // draws its rim at exactly the radius it is handed and does not grow into
+    // it. Two rings saying the same thing at different sizes is what a shock
+    // ring alongside it would have been.
+    //
+    // The radius now rides the WIZARD_BLINK event from the same expression the
+    // pulse damaged at, rather than being read off CONFIG again at the draw
+    // site, so this is a stronger claim than it was: the two are the same
+    // number by construction and not by coincidence.
     const c = g.config();
     wizardAt(6, 6);
     g.blink();
-    const rings = g.rings() as Array<{ radius: number }>;
-    expect(rings.length).toBe(1);
-    expect(rings[0]!.radius).toBe(c.wizBlinkPulseRadius);
+    const fx = g.blinkFx() as { secs: number; radius: number };
+    expect(fx.secs, 'the arrival effect is up').toBeGreaterThan(0);
+    expect(fx.radius).toBe(c.wizBlinkPulseRadius);
+    expect((g.rings() as unknown[]).length, 'and no second ring beside it').toBe(0);
   });
 });
 

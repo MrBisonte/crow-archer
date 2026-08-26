@@ -147,10 +147,89 @@ Against the Crow King's 10, which is the fight every character sees first.
 | Ranger | one volley of three bolts | 3 x 0.7 | 0.8 | 1.68 | 6.0 | click-limited |
 | Archer | one arrow | 1 | 1.4 | 1.4 | 7.1 | click-limited |
 
+Every row above is a hero with nothing built up: unbraced, on no stacks, and
+with no ground behind him. Three of them have a second table now, because what
+the hero was doing before the hit decides what the hit is worth.
+
 The two click-limited kits take the most hits and land them fastest, which is
 what "fastest shots, weakest hit" has to mean. The knight's three and a bit
 swings are the shortest fight on paper and the longest in practice, because
 every one of them needs him inside 80 px of a boss that orbits and charges.
+
+### The archer stands still
+
+| Archer, standing still | One action | Per action | Actions | Price of the stance |
+|---|---|---|---|---|
+| Unbraced | one arrow | 1.4 | 7.1 | none |
+| Braced (`braceBossMult` 1.8) | one arrow | 2.5 | 4.0 | 1.25 s still, lost 4x as fast |
+| Braced power shot | one drawn arrow | 7.6 | 1.3 | the above, plus 1 s drawing and a 5 s cooldown |
+
+Braced, he is the wizard: 4.0 actions against 4.0, which is the point. The
+smallest hit per press on the roster was never meant to stay the smallest hit
+available to him — it is the price of a kit that never has to be near, and
+brace is where he buys it back by giving up the other half of that freedom.
+
+### The ranger never does
+
+Momentum is brace read backwards: it pays for covering ground where brace pays
+for giving it up. A volley is `crossbowBoltCount` 3 bolts at
+`crossbowBoltDamageMult` 0.7, so 2.1 raw before the ranger's 0.8, and the bonus
+multiplies that product rather than replacing any part of it.
+
+| Ranger, one volley | Raw | x mult | Per volley | Volleys | Where the bonus is |
+|---|---|---|---|---|---|
+| No momentum | 3 x 0.7 | 0.8 | 1.68 | 6.0 | standing still, or stopped 3 s ago |
+| +10% | 3 x 0.7 | 0.8 x 1.1 | 1.85 | 5.4 | stopped 2 s ago |
+| +20% | 3 x 0.7 | 0.8 x 1.2 | 2.02 | 5.0 | stopped 1 s ago |
+| +30%, the cap | 3 x 0.7 | 0.8 x 1.3 | 2.18 | 4.6 | still moving |
+
+At the cap he is 4.6 volleys, against the sapper's 4.2 and the wizard's 4.0,
+and stopping walks him back down to last place over three seconds. Brace costs
+1.25 s of standing still and takes the archer from 7.1 actions to 4.0; momentum
+costs nothing but never stopping and takes the ranger from 6.0 to 4.6. The
+smaller prize is deliberate. He is already the fastest body in the game, so the
+thing he is being paid to do is the thing he was going to do anyway.
+
+### The knight stays in contact
+
+Bloodlust does not reduce to one multiplier, because the swing that lands is
+the swing that adds the stack, so an unbroken chain climbs while it is running.
+A swing is `knightSpearBossDamage` 1 landing twice, 2 raw, times the knight's
+1.5. Attack speed is a rate, so the interval after a swing is
+`knightSpearCooldown` 1.0 s divided by the bonus rather than multiplied by it.
+
+The interval is set when a swing *starts*, off the stacks he was already
+holding — the stack a swing earns is banked when it ends, so it pays for the
+next swing rather than for itself. That is why the first row is a flat second.
+
+| Swing | Stacks | Per swing | Running total | Interval after it | Lands at |
+|---|---|---|---|---|---|
+| 1st | 0 | 3.0 | 3.0 | 1.0 / 1.0 = 1.000 s | 0.000 s |
+| 2nd | 1 | 3.3 | 6.3 | 1.0 / 1.1 = 0.909 s | 1.000 s |
+| 3rd | 2 | 3.6 | 9.9 | 1.0 / 1.2 = 0.833 s | 1.909 s |
+| 4th | 3 | 3.9 | 13.8 | 1.0 / 1.3 = 0.769 s | 2.742 s |
+
+Measured against a live Crow King rather than computed, because the swing
+resolves over 0.35 s and lands its two hits half a swing apart.
+
+Against his 10 that is the same four swings he already needed — unstacked
+swings of 3.0 reach 3.0, 6.0, 9.0, 12.0 and finish on the fourth too — landed
+0.26 s sooner, 2.74 s against 3.00 s. **The count does not move on the Crow
+King at all.** It moves on a longer pool: against the Dark Knight's 16 it is
+five swings against six, and 3.51 s against 5.00 s.
+
+That is the shape the stacks were given. Three swings of ramp is most of a Crow
+King fight and a third of a Dark Knight one, so bloodlust is worth least in the
+fight that is easiest to hold contact through and most in the ones that run
+long. A swing that hits nothing resets it, so swinging at air to keep a stack
+has already spent it.
+
+The wizard's 1.2 s is a burst rate now rather than a sustained one. Focus is
+spent per cast and comes back on a timer slower than that cooldown, so the
+first three of the four bolts in his column are paced by the cooldown and the
+fourth waits on the pool. It does not change what a bolt is worth, which is all
+this table measures. See [the manual](manual.md#wizard) for the pool and its
+rate.
 
 What this changes against what shipped before it:
 
@@ -159,7 +238,7 @@ What this changes against what shipped before it:
 | Wizard | 14 bolts at 2.0 s, about 28 s of uninterrupted hits | 4 bolts at 1.2 s | The fight was not winnable. This is the whole reason the pass happened |
 | Sapper | 3 charges | 4.2 | He had no column in the old matrix at all, so he fought the base pool with the second-highest damage in the game |
 | Ranger | 2.4 volleys | 6.0 | Same fall-through: three bolts against a pool sized for one arrow |
-| Archer | 5 arrows | 7.1 | The baseline moved; the fight is longer for everyone |
+| Archer | 5 arrows | 7.1 unbraced, 4.0 braced | The baseline moved; the fight is longer for everyone, and brace is how he shortens his own |
 | Knight | 3 swings | 3.3 | Deliberately unchanged. His was the one column that was tuned |
 
 `knightSpearBossDamage` drops from 2 to 1 as part of this. It still lands
