@@ -23,7 +23,30 @@ interface Bomb { kind: string; x: number; y: number; life: number; lit: boolean;
 const chain = (): Bomb[] => g.chain() as Bomb[];
 const cfg = (): { sapperChainRadius: number; sapperChainDelaySecs: number;
                   sapperChainBossBonus: number; sapperChainMaxLinks: number;
-                  dynamiteBossDamage: number; sapperBombLifetime: number } => g.config();
+                  dynamiteBossDamage: number; sapperBombLifetime: number;
+                  sapperBurstCount: number; sapperBurstIntervalSecs: number;
+                  sapperChargeCooldown: number; sapperComboRadiusMult: number;
+                  keys: { shoot: string } } => g.config();
+
+/** Holds or releases the primary, the way a held mouse button reads to the sim. */
+function holdPrimary(down: boolean): void {
+  (g.keys() as Record<string, boolean>)[cfg().keys.shoot] = down;
+}
+
+/** Opens a burst and holds through it, returning how many charges left. */
+function burst(hold: boolean): number {
+  let thrown = 0;
+  const off = g.onEvent((e: { type: string; kind?: string }) => {
+    if (e.type === 'WEAPON_FIRED' && e.kind === 'charge') thrown += 1;
+  });
+  holdPrimary(hold);
+  g.shoot();
+  stepPast(Math.ceil(cfg().sapperBurstIntervalSecs * 60) * (cfg().sapperBurstCount + 1) + 4);
+  holdPrimary(false);
+  stepPast(2);
+  if (typeof off === 'function') off();
+  return thrown;
+}
 
 /** Puts `n` bombs in a line, each a comfortable step inside chain reach. */
 function bombLine(n: number, gapFraction = 0.6): Bomb[] {
@@ -190,5 +213,90 @@ describe('what a link is worth', () => {
     // Stated here so the ceiling is checkable: the last link a chain can reach
     // is worth this much of a lone bomb, and no arrangement buys more.
     expect(1 + max * perLink).toBeCloseTo(3.5, 5);
+  });
+});
+
+describe('the burst is what gives the chain something to chain', () => {
+  it('throws one charge on a tap', () => {
+    expect(burst(false)).toBe(1);
+  });
+
+  it('throws up to the configured count while the primary is held', () => {
+    expect(burst(true)).toBe(cfg().sapperBurstCount);
+  });
+
+  it('charges one cooldown per bomb that actually left, not one per burst', () => {
+    // The rule that keeps this a placement tool rather than a rate increase:
+    // three bombs in one spot cost exactly what three bombs over three presses
+    // cost. Measured as bombs thrown over a fixed window rather than by reading
+    // the timer, because the rate is the thing being claimed.
+    const secs = 12;
+    const count = (hold: boolean): number => {
+      g.go('playing');
+      clearArena();
+      g.healHero();
+      let thrown = 0;
+      const off = g.onEvent((e: { type: string; kind?: string }) => {
+        if (e.type === 'WEAPON_FIRED' && e.kind === 'charge') thrown += 1;
+      });
+      for (let i = 0; i < secs * ONE_SECOND; i++) {
+        holdPrimary(hold);
+        if (i % 80 === 0) g.shoot();
+        stepPast(1);
+      }
+      holdPrimary(false);
+      if (typeof off === 'function') off();
+      return thrown;
+    };
+    const tapped = count(false);
+    const held = count(true);
+    expect(held, 'holding must not multiply his throughput').toBe(tapped);
+  });
+
+  it('stops the burst the moment the primary comes up', () => {
+    holdPrimary(true);
+    let thrown = 0;
+    const off = g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'charge') thrown += 1;
+    });
+    g.shoot();
+    stepPast(Math.ceil(cfg().sapperBurstIntervalSecs * 60) + 2);
+    holdPrimary(false);
+    stepPast(60);
+    if (typeof off === 'function') off();
+    expect(thrown, 'two out, and the third was never asked for').toBe(2);
+  });
+
+  it('ends the burst rather than going negative on an empty pouch', () => {
+    const inv = g.inv() as { bombs: number; fireBombs: number; iceBombs: number };
+    inv.bombs = 2; inv.fireBombs = 0; inv.iceBombs = 0;
+    expect(burst(true)).toBe(2);
+    expect(inv.bombs).toBe(0);
+  });
+});
+
+describe('the shift shot widens the whole cluster', () => {
+  it('carries its radius onto every bomb the chain lights', () => {
+    // The ability is "hit one and they all go up bigger". Marking only the
+    // bomb the dart touched gives one wide blast ringed by ordinary ones,
+    // which is not what a player is aiming for.
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.aimAngle = 0;
+    const live = g.dynamites() as { kind: string; x: number; y: number; life: number;
+                                    vx: number; vy: number; element: string }[];
+    live.length = 0;
+    for (let i = 0; i < 3; i++) {
+      live.push({ kind: 'bomb', x: p.x + 90 + i * cfg().sapperChainRadius * 0.5, y: p.y,
+                  vx: 0, vy: 0, life: 60, element: 'none' });
+    }
+    let big = 0, plain = 0;
+    const off = g.onEvent((e: { type: string; big?: boolean }) => {
+      if (e.type === 'EXPLOSION') { if (e.big) big += 1; else plain += 1; }
+    });
+    g.sapperShot();
+    stepPast(ONE_SECOND);
+    if (typeof off === 'function') off();
+    expect(big, 'every blast in the cascade is the wide one').toBe(3);
+    expect(plain).toBe(0);
   });
 });

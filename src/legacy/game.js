@@ -469,6 +469,17 @@ const CONFIG = {
   // primary but the wizard's bolt, matching SAPPER_CHARGE_COOLDOWN_TICKS in
   // sim/weapons.ts.
   sapperChargeCooldown: 1.1,
+  // Held fire puts up to three charges down in one go, and the cooldown that
+  // follows is the per-bomb one times however many actually left. So the burst
+  // buys *placement*, not rate: three bombs in one spot cost exactly what three
+  // bombs spread over three presses cost, and what he gets for it is a pile the
+  // shift shot can set off together.
+  //
+  // Without it the chain was very nearly dead. A 1.8 s fuse against a 1.1 s
+  // cooldown puts at most 1.6 charges in the air at a time, so "a blast sets off
+  // nearby bombs" almost never had a second bomb to reach.
+  sapperBurstCount: 3,
+  sapperBurstIntervalSecs: 0.13,
   // The sapper's own bomb outranges the archer's dynamite on purpose, via
   // speed and fuse both — a straight-line demolition tool, not a lob.
   sapperBombSpeed: 400, sapperBombLifetime: 1.8,
@@ -1157,6 +1168,8 @@ let selectedMapKind = 'forest';
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
 let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
+/** Charges still owed to the burst in progress, and the timer to the next. */
+let sapperBurstLeft = 0, sapperBurstTimer = 0, sapperBurstThrown = 0;
 let sapperBarrageCD = 0, sapperShotCD = 0;
 // Arcane Blink: what the wizard spends the sniper key on. The iframe is the
 // short mercy window on arrival, without which blinking out of a swarm still
@@ -3308,6 +3321,7 @@ function initGame() {
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
@@ -3619,6 +3633,7 @@ function updatePlayer(dt) {
   if (blockedFlash > 0) blockedFlash = Math.max(0, blockedFlash - dt);
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
+  if (selectedChar === 'sapper') tickSapperBurst(dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
@@ -4012,16 +4027,73 @@ function throwDynamite(chargeFrac) {
  * pitchfork the archer and ranger swing when the quiver is empty, rather
  * than standing there with nothing at all.
  */
-function trySapperCharge() {
-  if (inv.bombs <= 0 && inv.fireBombs <= 0 && inv.iceBombs <= 0) { tryPitchfork(); return; }
-  if (sapperChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  sapperChargeCD = CONFIG.sapperChargeCooldown;
+/** Whether the sapper still has anything in the pouch to throw. */
+function hasBomb() {
+  return inv.bombs > 0 || inv.fireBombs > 0 || inv.iceBombs > 0;
+}
+
+/**
+ * Throws one charge out of the pouch, best kind first.
+ *
+ * The spend order matches the quiver's for the same reason: the elemental ones
+ * are the scarce ones, so they go first and the plain ones are what he is left
+ * holding. See spendShaft.
+ */
+function throwOneCharge() {
   let element = 'none';
   if      (inv.fireBombs > 0) { inv.fireBombs--; element = 'fire'; }
   else if (inv.iceBombs  > 0) { inv.iceBombs--;  element = 'ice';  }
   else                        { inv.bombs--;                       }
   launchCharge(CONFIG.sapperBombSpeed, 'bomb', element);
   events.emit({ type: 'WEAPON_FIRED', kind: 'charge' });
+}
+
+/**
+ * Opens a burst. Holding the primary keeps it running, up to
+ * CONFIG.sapperBurstCount charges; releasing early ends it there.
+ *
+ * The cooldown is not set here. It is charged when the burst *ends*, at the
+ * per-bomb rate times however many actually left, so a player who holds for
+ * three pays three cooldowns and one who taps pays one. That is what keeps the
+ * burst a placement tool rather than a rate increase.
+ */
+function trySapperCharge() {
+  if (!hasBomb()) { tryPitchfork(); return; }
+  if (sapperChargeCD > 0 || sapperBurstLeft > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  throwOneCharge();
+  sapperBurstThrown = 1;
+  sapperBurstLeft   = CONFIG.sapperBurstCount - 1;
+  sapperBurstTimer  = CONFIG.sapperBurstIntervalSecs;
+}
+
+/**
+ * Runs a burst already in progress, one charge at a time while the primary is
+ * still down.
+ *
+ * Read off the held key rather than off a repeat of the press, because "keeps
+ * the attack pressed" is the input: a burst that continued after the button
+ * came up would throw bombs the player had already decided not to throw.
+ */
+function tickSapperBurst(dt) {
+  if (sapperBurstLeft <= 0 && sapperBurstThrown === 0) return;
+
+  const holding = mouseLeftHeld || !!keys[CONFIG.keys.shoot];
+  if (sapperBurstLeft > 0 && holding && hasBomb()) {
+    sapperBurstTimer -= dt;
+    if (sapperBurstTimer <= 0) {
+      throwOneCharge();
+      sapperBurstThrown += 1;
+      sapperBurstLeft   -= 1;
+      sapperBurstTimer   = CONFIG.sapperBurstIntervalSecs;
+    }
+    return;
+  }
+
+  // The burst is over: either he let go, he ran the pouch dry, or all three
+  // left. Bill him for exactly what he threw.
+  sapperChargeCD    = CONFIG.sapperChargeCooldown * sapperBurstThrown;
+  sapperBurstLeft   = 0;
+  sapperBurstThrown = 0;
 }
 
 /**
@@ -4042,7 +4114,7 @@ function trySapperBarrage() {
     barrageBombs.push({
       x: player.x, y: player.y,
       vx: Math.cos(a) * CONFIG.sapperBarrageSpeed, vy: Math.sin(a) * CONFIG.sapperBarrageSpeed,
-      life: CONFIG.sapperBarrageLifetime, angle: a,
+      life: CONFIG.sapperBarrageLifetime, angle: a, kind: 'barrage',
     });
   }
   events.emit({ type: 'WEAPON_FIRED', kind: 'barrage' });
@@ -4945,25 +5017,46 @@ function updateDynamites(dt) {
  * standing still and piling them up, which is the easiest input the sapper has.
  */
 function chainNearbyBombs(from, link) {
-  if (from.kind !== 'bomb') return;
+  if (!isSapperExplosive(from)) return;
   if (link >= CONFIG.sapperChainMaxLinks) return;
   const r2 = CONFIG.sapperChainRadius ** 2;
-  for (const other of dynamites) {
-    if (other.kind !== 'bomb' || other.chainLit) continue;
-    if (dist2(from.x, from.y, other.x, other.y) >= r2) continue;
-    other.chainLit  = true;
-    other.chainLink = link + 1;
-    // Never lengthens a fuse: a bomb already about to go off is not delayed by
-    // being lit, it just goes off as its own link of the chain.
-    other.life = Math.min(other.life, CONFIG.sapperChainDelaySecs);
-  }
+  // Both arrays. His thrown charges live in `dynamites` alongside the archer's
+  // sticks and the ranger's satchels; his barrage fan lives in `barrageBombs`
+  // on its own. Scanning only the first is what this shipped as, and it made
+  // the whole mechanic very nearly inert: a 1.8 s fuse against a 1.1 s
+  // cooldown puts at most 1.6 charges in the air at a time, so the one moment
+  // he reliably has a pile of explosives out -- the five-bomb fan -- was the
+  // one the chain could not see.
+  for (const other of dynamites)    chainOne(from, other, link, r2);
+  for (const other of barrageBombs) chainOne(from, other, link, r2);
+}
+
+/** Is this one of the sapper's, as opposed to a stick or a satchel? */
+function isSapperExplosive(e) {
+  return e.kind === 'bomb' || e.kind === 'barrage';
+}
+
+/** Lights one neighbour, if it is his, unlit, and in reach. */
+function chainOne(from, other, link, r2) {
+  if (other === from || other.chainLit || !isSapperExplosive(other)) return;
+  if (dist2(from.x, from.y, other.x, other.y) >= r2) return;
+  other.chainLit  = true;
+  other.chainLink = link + 1;
+  other.chainMult = from.chainMult ?? 1;
+  // Never lengthens a fuse: a bomb already about to go off is not delayed by
+  // being lit, it just goes off as its own link of the chain.
+  other.life = Math.min(other.life, CONFIG.sapperChainDelaySecs);
 }
 
 function explodeExplosive(d, source, opts = {}) {
-  const radius = opts.radius ?? CONFIG.dynamiteBlastRadius;
+  // A bomb carries its own radius multiplier so a chain inherits it. The shift
+  // shot detonates one bomb wider than usual, and the point of the ability is
+  // that the whole pile goes up that wide -- not just the one the dart touched.
+  const mult = d.chainMult ?? 1;
+  const radius = opts.radius ?? CONFIG.dynamiteBlastRadius * mult;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
-  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: !!opts.falloff });
+  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1 });
   const r2 = radius ** 2;
 
   // Destroy ROCK and TREE tiles within blast radius
@@ -5051,8 +5144,11 @@ function updateSapperShots(dt) {
       const d = dynamites[j];
       if (d.kind === 'bomb' && dist2(s.x, s.y, d.x, d.y) < hitR * hitR) {
         dynamites.splice(j, 1);
+        // Marked rather than given a one-off radius: chainNearbyBombs copies
+        // this onto everything it lights, so the whole cluster goes up at the
+        // wider size instead of one wide blast surrounded by ordinary ones.
+        d.chainMult = CONFIG.sapperComboRadiusMult;
         explodeExplosive(d, 'sapperShot', {
-          radius: CONFIG.dynamiteBlastRadius * CONFIG.sapperComboRadiusMult,
           falloff: { max: CONFIG.sapperComboFalloffMax, min: CONFIG.sapperComboFalloffMin },
         });
         comboHit = true;
@@ -12816,9 +12912,18 @@ export const devHooks = {
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
   brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
-  /** Every live bomb's chain state, so a cascade can be watched running. */
-  chain: () => dynamites.map((d) => ({ kind: d.kind, x: d.x, y: d.y, life: d.life,
-                                       lit: !!d.chainLit, link: d.chainLink ?? 0 })),
+  /**
+   * Every live explosive's chain state, across both arrays they live in.
+   *
+   * Reporting only `dynamites` is what hid the bug this exists to catch: the
+   * barrage fan is the one time the sapper has a pile of bombs out, it lives in
+   * its own array, and a harness that cannot see it measures a cascade that
+   * never happened as a cascade that worked.
+   */
+  chain: () => [...dynamites, ...barrageBombs].map((d) => ({
+    kind: d.kind, x: d.x, y: d.y, life: d.life,
+    lit: !!d.chainLit, link: d.chainLink ?? 0,
+  })),
   /** Momentum's meter and what it multiplies a bolt by. */
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: CONFIG.rangerMomentumMax }),
