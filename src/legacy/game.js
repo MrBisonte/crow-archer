@@ -11194,10 +11194,7 @@ function _drawCharPreview(cx, cy, panel, t, scale) {
   const bob = Math.round(1.5 * Math.sin(t * 2));
   ctx.save(); ctx.translate(cx, cy + bob);
   ctx.drawImage(
-    // The scale is part of the cache key, not just of the draw. spriteCanvas
-    // caches on the key alone, so two scales sharing one key would both get
-    // whichever was rendered first — invisible until a panel is picked.
-    spriteCanvas(`preview|${key}|${scale}`, grid, sprite.w, sprite.h, scale),
+    spriteCanvas(`preview|${key}`, grid, sprite.w, sprite.h, scale),
     -(sprite.w * scale) / 2, -(sprite.h * scale) / 2,
   );
   ctx.restore();
