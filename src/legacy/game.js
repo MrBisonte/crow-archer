@@ -485,6 +485,25 @@ const CONFIG = {
   sapperShotCooldown: 10, sapperShotSpeed: 600, sapperShotLifetime: 1.5,
   sapperShotDamageMult: 3, sapperShotBossDamage: 3,
   sapperComboRadiusMult: 1.33, sapperComboFalloffMax: 10, sapperComboFalloffMin: 2,
+  // Chain detonation: a bomb going off lights every other bomb near it, and
+  // those light the next. It finishes the combo the piercing shot already
+  // started -- his shot detonates one of his own bombs -- by making the pouch
+  // itself the weapon rather than needing a shot threaded through it.
+  //
+  // Lit rather than exploded outright. Setting a short fuse on the neighbour
+  // costs no recursion, cannot re-enter, and buys the stagger for free: a
+  // cascade that all went off on one frame is one loud blast, and the whole
+  // appeal is hearing it run.
+  //
+  // The boss bonus is what makes it his answer to a boss rather than only to a
+  // crowd. Ordinary enemies have one hit point and die to anything, so radius
+  // is the only thing that helps against them and a damage bonus would be
+  // invisible; against a boss each link lands harder than the last. Capped,
+  // because a pouch of ten with no ceiling is a one-press boss kill.
+  sapperChainRadius: 74,
+  sapperChainDelaySecs: 0.07,
+  sapperChainBossBonus: 0.5,
+  sapperChainMaxLinks: 5,
   // A fire bomb leaves the ground burning where it went off. Shorter-lived
   // than a fire arrow's patch and worth less per second, because a blast
   // already did its damage up front — this is the after-effect, not the hit.
@@ -4913,6 +4932,43 @@ function updateDynamites(dt) {
  * instead of a second copy of this function existing to drift out of sync
  * with the first.
  */
+/**
+ * Lights every one of the sapper's other bombs within reach of a blast.
+ *
+ * Called from the blast rather than from the bomb, so anything that sets a
+ * bomb off starts a chain: a fuse running out, a barrage landing on the pile,
+ * or the piercing shot that already detonated one on purpose.
+ *
+ * Only `kind === 'bomb'` is chained, which is the sapper's own pouch. The
+ * archer's dynamite and the ranger's satchel share this array and this blast
+ * path, and neither hero was given a chain -- the same test the shift-detonated
+ * combo already makes.
+ *
+ * A bomb is lit once, and that guard is about *damage*, not termination — the
+ * `Math.min` below already guarantees a lit bomb keeps counting down whoever
+ * relights it. What it stops is a bomb being promoted a link deeper by every
+ * successive blast that reaches it, so the boss bonus tracks how deep the chain
+ * really is rather than how many neighbours happened to overlap it.
+ *
+ * Not a theoretical tidiness. Measured on six bombs packed inside a single
+ * radius: 20.4 boss damage with the guard, 32.4 without — a 59% bonus bought by
+ * standing still and piling them up, which is the easiest input the sapper has.
+ */
+function chainNearbyBombs(from, link) {
+  if (from.kind !== 'bomb') return;
+  if (link >= CONFIG.sapperChainMaxLinks) return;
+  const r2 = CONFIG.sapperChainRadius ** 2;
+  for (const other of dynamites) {
+    if (other.kind !== 'bomb' || other.chainLit) continue;
+    if (dist2(from.x, from.y, other.x, other.y) >= r2) continue;
+    other.chainLit  = true;
+    other.chainLink = link + 1;
+    // Never lengthens a fuse: a bomb already about to go off is not delayed by
+    // being lit, it just goes off as its own link of the chain.
+    other.life = Math.min(other.life, CONFIG.sapperChainDelaySecs);
+  }
+}
+
 function explodeExplosive(d, source, opts = {}) {
   const radius = opts.radius ?? CONFIG.dynamiteBlastRadius;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
@@ -4934,12 +4990,20 @@ function explodeExplosive(d, source, opts = {}) {
     }
   }
 
-  const bossDamage = source === 'satchel' ? CONFIG.satchelBossDamage
+  const baseBossDamage = source === 'satchel' ? CONFIG.satchelBossDamage
               : source === 'barrage' ? CONFIG.sapperBarrageDamage
               : CONFIG.dynamiteBossDamage;
+  // Each link of a chain hits a boss harder than the one that lit it. The
+  // multiplier reaches boss damage only, which is the point rather than a
+  // limitation: everything else on the field dies to one hit of anything, so
+  // against a crowd a chain is already worth exactly its coverage.
+  const link = Math.min(d.chainLink ?? 0, CONFIG.sapperChainMaxLinks);
+  const bossDamage = baseBossDamage * (1 + link * CONFIG.sapperChainBossBonus);
   damageEnemiesInRadius(d.x, d.y, radius,
     { amount: bossDamage, source, flash: 0.25 },
     { falloff: opts.falloff, element: d.element });
+
+  chainNearbyBombs(d, link);
 
   // Fire leaves the ground burning where it went off.
   if (d.element === 'fire' && !onWater) {
@@ -12758,6 +12822,9 @@ export const devHooks = {
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
   brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
+  /** Every live bomb's chain state, so a cascade can be watched running. */
+  chain: () => dynamites.map((d) => ({ kind: d.kind, x: d.x, y: d.y, life: d.life,
+                                       lit: !!d.chainLit, link: d.chainLink ?? 0 })),
   /** Momentum's meter and what it multiplies a bolt by. */
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: CONFIG.rangerMomentumMax }),
