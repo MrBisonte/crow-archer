@@ -6377,6 +6377,10 @@ function placeGuard(guard) {
     facing: 0, walkPhase: Math.random() * Math.PI * 2, hitFlash: 0,
     shotCD: GUARD_STATS[guard.kind].ranged ? CONFIG.guardShotInterval * Math.random() : 0,
     swingCD: 0,
+    // What this guard has decided to answer, refreshed every frame by
+    // updateGuards. Seeded here so a body always carries the field rather
+    // than growing it on whichever frame it first took a target.
+    quarry: null,
     // A priest arrives having just prayed, so its first heal is a full interval
     // away. Starting at zero would let it mend somebody on the frame it walked
     // in, which reads as the ability firing at nothing in particular and makes
@@ -6764,6 +6768,15 @@ function updateGuards(dt) {
     // where the intent is known, is what closes that.
     const onDuty = onGuardGround(g.ground, g.x, g.y);
     const target = onDuty ? guardQuarry(g, hostiles, g.ground) : null;
+    // Kept, not merely used. Every branch below turns this into movement, a
+    // swing or a shot, and those are all the loop leaves behind -- so "which
+    // body is this guard answering" could only be inferred back out of
+    // geometry afterwards, and geometry cannot express it: an archer answers
+    // from most of its 260px reach away without taking a step, which any
+    // distance reading scores as a guard idling at its gate. The decision is
+    // the honest record of it. `anchor` just above is kept for the same
+    // reason. A priest has already left the loop and never takes one.
+    g.quarry = target;
     if (!target) { returnToPost(g, home, dt); continue; }
 
     const dx = target.x - g.x, dy = target.y - g.y;
