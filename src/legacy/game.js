@@ -68,6 +68,8 @@ import { paintArcherBow } from '../render/archer-bow';
 import { paintWizardStaff } from '../render/wizard-staff';
 import { paintWizardBroom } from '../render/wizard-broom';
 import { bloodlustStacks, paintBloodlust } from '../render/bloodlust';
+import { BLAST_SECS, paintExplosion } from '../render/explosion';
+import { paintNet, paintSatchel } from '../render/ranger-fx';
 
 /**
  * The ground disc that says whose side a body is on.
@@ -1308,6 +1310,15 @@ let rangerMomentum = 0;
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
 let nets = [];
+/**
+ * Nets lying on the ground, as opposed to `nets`, which is the throw in flight.
+ *
+ * Purely a thing to look at: the hold itself is still each caught enemy's own
+ * `heldTimer`, and a mat expiring frees nothing. Two lists rather than a flag
+ * on one, because a net in the air and a net on the ground share no field that
+ * matters and every consumer wants exactly one of them.
+ */
+let netMats = [];
 
 function resetInv() {
   for (const [k, r] of Object.entries(CONFIG.resources)) { inv[k] = r.max; iFlash[k] = 0; }
@@ -2323,7 +2334,55 @@ function openNet(n) {
     { amount: CONFIG.netDamage, source: 'net', flash: 0.1 },
     { amount: CONFIG.netDamage });
   const caught = holdEnemiesInRadius(n.x, n.y, n.radius, n.hold);
+  // The mat the net becomes once it lands.
+  //
+  // There was nothing here before: the projectile was spliced on arrival and
+  // the hold lived on each enemy's own timer, so the only thing on screen was
+  // a crosshatch over whatever got caught. That reads as the enemies being
+  // marked rather than as a net being on the ground, and it left a player no
+  // way to see how much longer the hold has to run.
+  //
+  // Spawned here rather than off RANGER_NET_OPEN because `n.hold` is in scope
+  // here and is not on the event; carrying it would mean widening the event
+  // union, its handler and its emit for something no listener needs.
+  netMats.push({ x: n.x, y: n.y, radius: n.radius, timer: n.hold, total: n.hold });
   events.emit({ type: 'RANGER_NET_OPEN', x: n.x, y: n.y, radius: n.radius, caught });
+}
+
+/** Ages every mat, dropping the ones whose hold has run out. */
+/** Ages every blast, dropping the ones whose half second is up. */
+function updateBlasts(dt) {
+  for (let i = blasts.length - 1; i >= 0; i--) {
+    blasts[i].t += dt;
+    if (blasts[i].t >= BLAST_SECS) blasts.splice(i, 1);
+  }
+}
+
+/** Every blast on screen, oldest first so a fresh one draws over a fading one. */
+function drawBlasts() {
+  for (const b of blasts) {
+    paintExplosion(ctx, {
+      x: b.x, y: b.y + CONFIG.hudHeight, radius: b.radius,
+      age: b.t / BLAST_SECS, onWater: b.onWater,
+    });
+  }
+}
+
+/** Nets lying on the ground, under everything that walks on them. */
+function drawNetMats() {
+  for (const m of netMats) {
+    paintNet(ctx, {
+      x: m.x, y: m.y + CONFIG.hudHeight, radius: m.radius,
+      age: 1 - m.timer / m.total,
+    });
+  }
+}
+
+function updateNetMats(dt) {
+  for (let i = netMats.length - 1; i >= 0; i--) {
+    netMats[i].timer -= dt;
+    if (netMats[i].timer <= 0) netMats.splice(i, 1);
+  }
 }
 
 /**
@@ -2621,6 +2680,17 @@ let barrageBombs = [], sapperShots = [];
 // Expanding rings that show how far an area effect actually reached. Purely
 // cosmetic: the damage is resolved before one is ever spawned.
 let shockRings = [];
+/**
+ * Blasts still being drawn.
+ *
+ * An explosion is instantaneous in the simulation -- damage, tiles and the
+ * event all resolve on one frame -- and half a second on screen. The fireball
+ * therefore cannot live on the bomb, which is gone, so it lives here and is
+ * aged out on its own timer. `radius` is the one the blast really damaged at,
+ * carried on the event, so the picture cannot claim a reach the hit did not
+ * have.
+ */
+let blasts = [];
 // The castle stage's critter. A parallel array to crows, not a variant of it —
 // see damageSkeleton/killSkeleton and updateSkeletons for why.
 let skeletons = [];
@@ -3080,6 +3150,7 @@ events.on(e => {
 
     case 'EXPLOSION':
       playSound(sndExplosion); impact('explosion');
+      blasts.push({ x: e.x, y: e.y, radius: e.radius, onWater: e.onWater, t: 0 });
       if (e.onWater) {
         burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
           speedMin: 80, speedMax: 200, decay: 1.6,
@@ -3426,7 +3497,7 @@ function initGame() {
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
   rangerMomentum = 0;
-  rangerNet.on = false; rangerNetCD = 0; nets = [];
+  rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
@@ -5142,7 +5213,7 @@ function explodeExplosive(d, source, opts = {}) {
   const radius = opts.radius ?? CONFIG.dynamiteBlastRadius * mult;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
-  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1 });
+  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius });
   const r2 = radius ** 2;
 
   clearTilesInBlast(d.x, d.y, radius);
@@ -6656,7 +6727,7 @@ function fireIceBolt(s) {
  */
 function detonateHostileBomb(b) {
   const onWater = tileAt(b.x, b.y) === TILE.WATER;
-  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater, big: false });
+  events.emit({ type: 'EXPLOSION', x: b.x, y: b.y, onWater, big: false, radius: b.blastRadius });
   if (dist2(b.x, b.y, player.x, player.y) < b.blastRadius * b.blastRadius) {
     damagePlayer(b.damage);
   }
@@ -9401,67 +9472,29 @@ function drawSapperShots() {
 }
 
 /**
- * The ranger's satchels. A dull leather bag while thrown-but-unarmed — it can
- * sit for up to satchelIdleLife without going off, so nothing here should
- * read as urgent — and a glowing, counting-down bag once armed, matching how
- * drawDynamites shows its own fuse.
+ * Every satchel on the ground, thrown or armed.
+ *
+ * The drawing itself is `paintSatchel` in render/ranger-fx.ts, which is where
+ * it belongs: this was fifty-eight lines of inline canvas work with the two
+ * states interleaved through it, and the two states are the whole ability --
+ * a second click is what arms one, so confusing them is a mistake a player
+ * pays for.
+ *
+ * The bob stays here rather than in the painter. It is a property of a bag
+ * lying on this game's ground, not of what a satchel looks like.
  */
 function drawSatchels() {
   for (const s of satchels) {
-    const dx = s.x, dy = s.y + CONFIG.hudHeight;
     const bobOff = 1.5 * Math.sin(loopT * 4 + (s.bobPhase || 0));
-    ctx.save(); ctx.translate(dx, dy + bobOff);
-
-    if (s.armed) {
-      // Blast radius ring — dynamiteBlastRadius, the one shared figure every
-      // explosive in the game uses.
-      ctx.globalAlpha = 0.15; ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1;
-      ctx.setLineDash([4,4]); ctx.beginPath(); ctx.arc(0, 0, CONFIG.dynamiteBlastRadius, 0, Math.PI*2); ctx.stroke();
-      ctx.setLineDash([]); ctx.globalAlpha = 1;
-    }
-
-    ctx.rotate(s.angle);
-
-    // 1. Ground shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.beginPath(); ctx.ellipse(0, 7, 10, 2.5, 0, 0, Math.PI*2); ctx.fill();
-
-    // 2. Bag body
-    ctx.fillStyle = s.armed ? '#B08020' : '#5A4A2A';
-    ctx.beginPath();
-    ctx.moveTo(-9, 2); ctx.quadraticCurveTo(-9, -6, 0, -6); ctx.quadraticCurveTo(9, -6, 9, 2);
-    ctx.quadraticCurveTo(9, 6, 0, 7); ctx.quadraticCurveTo(-9, 6, -9, 2);
-    ctx.closePath(); ctx.fill();
-
-    // 3. Strap and buckle
-    ctx.strokeStyle = '#3A2A10'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-6, -5); ctx.lineTo(6, -5); ctx.stroke();
-    ctx.fillStyle = '#D0B060'; ctx.fillRect(-2, -6, 4, 3);
-
-    if (s.armed) {
-      // 4. Armed pulse
-      const sparkPhase = loopT * 10;
-      ctx.shadowColor = '#FFB400'; ctx.shadowBlur = 6 + 4 * Math.sin(sparkPhase);
-      ctx.fillStyle = 'rgba(255,180,0,0.5)';
-      ctx.beginPath(); ctx.arc(0, -2, 2 + Math.sin(sparkPhase), 0, Math.PI*2); ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-
-    ctx.rotate(-s.angle);
-
-    if (s.armed) {
-      // 5. Countdown text, same tiered color/glow treatment as dynamite's
-      const fuseT = s.life;
-      let countCol = '#FFCC00', countBlur = 4;
-      if      (fuseT <= 0.5) { countCol = '#FFFFFF'; countBlur = 16; }
-      else if (fuseT <= 1.0) { countCol = '#FFB400'; countBlur = 4;  }
-      ctx.shadowColor = countCol; ctx.shadowBlur = countBlur;
-      ctx.fillStyle = countCol; ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText(String(Math.max(1, Math.ceil(fuseT))), 0, -10);
-      ctx.shadowBlur = 0;
-    }
-    ctx.restore();
+    paintSatchel(ctx, {
+      x: s.x, y: s.y + CONFIG.hudHeight + bobOff,
+      state: s.armed ? 'armed' : 'inert',
+      angle: s.angle,
+      fuse: s.life / CONFIG.satchelArmFuse,
+      fuseSecs: s.life,
+      blast: s.armed ? CONFIG.dynamiteBlastRadius : null,
+      t: loopT,
+    });
   }
 }
 
@@ -12439,7 +12472,11 @@ function render(t) {
     ctx.fillStyle = '#0a140a'; ctx.fillRect(0, 0, CONFIG.canvasW, CONFIG.canvasH);
     const so = shakeOffset(t);
     ctx.save(); ctx.translate(so.x, so.y);
-    drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawPickups(); drawFires(); drawParticles(); drawShockRings();
+    // A net lies on the ground, so it goes down with the terrain and before
+    // anything that walks over it. Blasts go over the bodies instead -- they
+    // are in the air and half of what sells one is that it hides what it hit.
+    drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
+    drawPickups(); drawFires(); drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
@@ -12455,6 +12492,10 @@ function render(t) {
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
     if (!boss || litAt(boss.x, boss.y)) drawBoss();
+    // Over every body, because half of what sells a blast is that it briefly
+    // hides what it went off on. Under the floaters, so the damage numbers
+    // still read through it.
+    drawBlasts();
     drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
@@ -12645,7 +12686,7 @@ function stepGame(dt) {
       // cannot be finished. Found by playing it.
       if (bossDeathSeq) updateBossDeath(dt);
       updateHostileBolts(dt);
-      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateBlasts(dt); updateNets(dt); updateNetMats(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection(); updateEscalation(dt);
       updateMazeObjective(dt);
       updateSoldiers(dt); regrowth.tick(dt);
       updateTowers(dt); updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
@@ -12653,14 +12694,14 @@ function stepGame(dt) {
       break;
 
     case 'boss_entrance':
-      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt);
+      updateBossEntrance(dt); updateParticles(dt); updateShockRings(dt); updateBlasts(dt); updateNets(dt); updateNetMats(dt); updateFloaters(dt);
       break;
 
     case 'boss_fight':
       if (keys['Escape']) { pausedFrom='boss_fight'; transitionTo('paused'); keys['Escape']=false; break; }
       gameTime += dt;
       updateFOV(); updatePlayer(dt); updateArrows(dt); updateDynamites(dt); updateSatchels(dt); updateCrows(dt); updateSkeletons(dt);
-      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateNets(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
+      updatePickups(dt); updateParticles(dt); updateShockRings(dt); updateBlasts(dt); updateNets(dt); updateNetMats(dt); updateFloaters(dt); updateFires(dt); checkPickupCollection();
       updateSoldiers(dt); regrowth.tick(dt); updateBarrageBombs(dt); updateSapperShots(dt);
       updateTowers(dt); updateGuards(dt); updateSiegeContact(dt); updateSiege(dt);
       if (bossDeathSeq) updateBossDeath(dt); else { updateBoss(dt); updateHostileBolts(dt); }
@@ -13022,6 +13063,11 @@ export const devHooks = {
   holdNet(secs) { if (rangerNet.on) rangerNet.t0 = performance.now() - secs * 1000; },
   rangerNet: () => ({ drawing: rangerNet.on, frac: rangerNetFrac(), cooldown: rangerNetCD }),
   nets: () => nets,
+  /** Nets lying on the ground, which is what a player actually sees. */
+  netMats: () => netMats,
+  /** Blasts still being drawn. An explosion is one frame in the sim and half a
+   *  second on screen, so this is the only place the picture is observable. */
+  blasts: () => blasts,
   rings: () => shockRings,
   pickMap(kind) { selectedMapKind = kind; },
   spawnCrow() { spawnCrow(); },

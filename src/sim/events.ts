@@ -68,9 +68,15 @@ export type GameEvent =
   | { type: 'BOSS_HIT'; source: HitSource }
   | { type: 'ARROW_MISS' }
   | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
-  // `big` is the sapper's shift-detonated combo, which reaches a wider
-  // radius than a normal blast and whose burst is scaled to match.
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean }
+  // `big` is the sapper's shift-detonated combo, which reaches a wider radius
+  // than a normal blast and whose burst is scaled to match.
+  //
+  // `radius` is the radius the blast actually damaged at, and it is carried
+  // rather than derived because there is no rule that recovers it. A listener
+  // reconstructing size from `big` alone paints the hostile bomber's 55 px
+  // blast at the dynamite's 90, which is 64% too wide — and that emit is not
+  // the sapper's, so no flag on it could ever have said so.
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean; radius: number }
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
