@@ -140,6 +140,20 @@ Against the Crow King's 10, which is the fight every character sees first.
 | Ranger | one volley of three bolts | 3 x 0.7 | 0.8 | 1.68 | 6.0 | click-limited |
 | Archer | one arrow | 1 | 1.4 | 1.4 | 7.1 | click-limited |
 
+Every row above is a hero who has just moved. The archer has a second column
+now, because standing still changes what his arrows are worth:
+
+| Archer, standing still | One action | Per action | Actions | Price of the stance |
+|---|---|---|---|---|
+| Unbraced | one arrow | 1.4 | 7.1 | none |
+| Braced (`braceBossMult` 1.8) | one arrow | 2.5 | 4.0 | 1.25 s still, lost 4x as fast |
+| Braced power shot | one drawn arrow | 7.6 | 1.3 | the above, plus 1 s drawing and a 5 s cooldown |
+
+Braced, he is the wizard: 4.0 actions against 4.0, which is the point. The
+smallest hit per press on the roster was never meant to stay the smallest hit
+available to him — it is the price of a kit that never has to be near, and
+brace is where he buys it back by giving up the other half of that freedom.
+
 The two click-limited kits take the most hits and land them fastest, which is
 what "fastest shots, weakest hit" has to mean. The knight's three and a bit
 swings are the shortest fight on paper and the longest in practice, because
@@ -152,7 +166,7 @@ What this changes against what shipped before it:
 | Wizard | 14 bolts at 2.0 s, about 28 s of uninterrupted hits | 4 bolts at 1.2 s | The fight was not winnable. This is the whole reason the pass happened |
 | Sapper | 3 charges | 4.2 | He had no column in the old matrix at all, so he fought the base pool with the second-highest damage in the game |
 | Ranger | 2.4 volleys | 6.0 | Same fall-through: three bolts against a pool sized for one arrow |
-| Archer | 5 arrows | 7.1 | The baseline moved; the fight is longer for everyone |
+| Archer | 5 arrows | 7.1 unbraced, 4.0 braced | The baseline moved; the fight is longer for everyone, and brace is how he shortens his own |
 | Knight | 3 swings | 3.3 | Deliberately unchanged. His was the one column that was tuned |
 
 `knightSpearBossDamage` drops from 2 to 1 as part of this. It still lands
