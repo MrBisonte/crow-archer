@@ -604,6 +604,21 @@ const CONFIG = {
   // arrows/ricochetArrows/fireArrows fields and CONFIG.arrowBossDamage
   // unchanged; only the burst and its per-bolt scale-down live here.
   crossbowBoltCount: 3, crossbowBoltDamageMult: 0.7, crossbowBoltRadiusMult: 0.7,
+  // Momentum: the archer's Brace pointed the other way. The archer is paid for
+  // standing still and the ranger for never doing it, which is what makes the
+  // pair legible -- and it is the right shape for the fastest hero on the
+  // roster, who is also the weakest against a boss at 0.8x.
+  //
+  // Built off ground covered rather than time spent moving, so a speed upgrade
+  // and a poison slow both reach it. 375 px is a second and a half at his 250
+  // px/s; the decay is three seconds from full, slower than the fill on
+  // purpose. Brace drains the archer four times faster than it fills, because
+  // moving is what an archer wants to do anyway and the drain has to bite.
+  // Standing still is not what a skirmisher wants to do, so his penalty is the
+  // gentler one and his reward is the thing he was going to do regardless.
+  rangerMomentumMax: 0.30,
+  rangerMomentumFullPx: 375,
+  rangerMomentumDecaySecs: 3,
   crossbowSpreadRadians: Math.PI / 60,   // 3° between adjacent bolts
   // Satchel: no charge to hold, one click is one throw at a fixed speed.
   // Blast radius and boss damage reuse dynamiteBlastRadius/dynamiteBossDamage
@@ -1235,6 +1250,15 @@ const ARCHER_LOOSE_SECS = 0.12;
 // The ranger's net, the same draw-and-release shape as the archer's bow. He is
 // not rooted while he draws: it is a throw rather than an aimed shot, and the
 // skirmisher is the one character whose whole identity is not standing still.
+/**
+ * Momentum, 0..1. Multiply by CONFIG.rangerMomentumMax for the bonus itself.
+ *
+ * Held as a fraction of full rather than as the percentage, so the cap is one
+ * number in one place: raising rangerMomentumMax changes what a full meter is
+ * worth without touching the fill rate, the decay, or the chip that draws it.
+ */
+let rangerMomentum = 0;
+
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
 let nets = [];
@@ -1995,6 +2019,32 @@ function releaseArcherDraw() {
  * two halves of a swing come to disagree about a multiplier: Bloodlust would
  * have had to be added in two places, and the fire sword already was.
  */
+/**
+ * One tick of a meter that fills under a condition and drains when it does not.
+ *
+ * Brace and Momentum are the same mechanic pointed in opposite directions, so
+ * the clamp and the shape live here once and the callers pass what actually
+ * differs: the condition, and the two rates. Deliberately takes deltas rather
+ * than rates, because one of the two fills by distance and the other by time
+ * and forcing both through a seconds-based rate would mean converting one of
+ * them back at every call site.
+ */
+function tickMeter(level, filling, fillDelta, drainDelta) {
+  return filling ? Math.min(1, level + fillDelta) : Math.max(0, level - drainDelta);
+}
+
+/**
+ * What Momentum is worth right now, as a multiplier on a bolt's damage.
+ *
+ * A multiplier and not a written damage figure, which is the whole reason it
+ * is applied at the point a bolt is built: the ranger's fire and ricochet
+ * pickups ride on the bolt's `type`, and anything that reset his damage to a
+ * default would take those with it.
+ */
+function rangerMomentumMult() {
+  return 1 + rangerMomentum * CONFIG.rangerMomentumMax;
+}
+
 function knightSpearDamage(fireSword) {
   return CONFIG.knightSpearBossDamage
     * (fireSword ? CONFIG.knightFireSwordDamageMult : 1)
@@ -3039,6 +3089,13 @@ events.on(e => {
         playSound(sndMiss);
       }
       break;
+    case 'RANGER_MOMENTUM':
+      // The mirror of ARCHER_BRACED, and quieter still: he is running when it
+      // lands, so it competes with everything, and a loud tell for a bonus he
+      // will lose again in three seconds would wear out fast.
+      playSound(sndPickup);
+      burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
+      break;
     case 'ARCHER_BRACED':
       // Quiet and short: a confirmation, not an alarm. He is standing still to
       // hear it, so it does not have to compete with anything.
@@ -3240,6 +3297,7 @@ function initGame() {
   wizFocusFill = 0;
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; braceLevel = 0;
+  rangerMomentum = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -3451,24 +3509,45 @@ function updatePlayer(dt) {
       const len = Math.hypot(vx, vy);
       if (len > 0) { const sp = FEATHERS.speed() * poisonSpeedMult(); vx = (vx/len)*sp*dt; vy = (vy/len)*sp*dt; player.walkPhase += walkPhaseFor(Math.hypot(vx, vy)); }
     }
-    // Brace builds while he is still and drains while he is not. Read off the
-    // movement that was actually applied, not off the keys: a hero walking into
-    // a wall is standing still, and pretending otherwise would let him brace by
-    // holding a direction against terrain.
-    const moved = Math.hypot(vx, vy) > 0.01;
-    if (selectedChar === 'archer' && !moved) {
-      const was = braceLevel;
-      braceLevel = Math.min(1, braceLevel + dt / CONFIG.braceFillSecs);
-      if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
-    } else {
-      braceLevel = Math.max(0, braceLevel - (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
-    }
-
     const fromX = player.x, fromY = player.y;
     const nx = player.x + vx;
     if (playerFits(nx, player.y)) player.x = clampArenaX(nx);
     const ny = player.y + vy;
     if (playerFits(player.x, ny)) player.y = clampArenaY(ny);
+
+    // Two heroes carry a meter driven by movement, pointed opposite ways: the
+    // archer's Brace fills while he is still, the ranger's Momentum fills while
+    // he is not.
+    //
+    // Measured from the position that was actually reached, and ticked *after*
+    // the move rather than before it. That is load-bearing and it was wrong:
+    // vx/vy are what he asked for, and the fits checks above are what he got.
+    // Reading the request meant a hero shoving into a wall covered ground on
+    // paper -- which is the exact "earn a stance by leaning on terrain" this
+    // comment claimed was prevented, and was not.
+    const movedPx = Math.hypot(player.x - fromX, player.y - fromY);
+    const moved = movedPx > 0.01;
+    if (selectedChar === 'archer') {
+      const was = braceLevel;
+      braceLevel = tickMeter(braceLevel, !moved,
+        dt / CONFIG.braceFillSecs,
+        (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
+      if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
+    } else if (selectedChar === 'ranger') {
+      const was = rangerMomentum;
+      // Filled by distance and drained by time, which is not a symmetry worth
+      // forcing: ground covered is what the bonus is *for*, and a hero who has
+      // stopped is covering none of it, so there is nothing to measure a decay
+      // against but the clock.
+      rangerMomentum = tickMeter(rangerMomentum, moved,
+        movedPx / CONFIG.rangerMomentumFullPx,
+        dt / CONFIG.rangerMomentumDecaySecs);
+      if (was < 1 && rangerMomentum >= 1) {
+        events.emit({ type: 'RANGER_MOMENTUM', x: player.x, y: player.y });
+      }
+    } else {
+      braceLevel = 0;
+    }
     // A dash terrain has interfered with at all is over. Any blocked axis
     // counts, not just a dead stop: a dash clipping a wall used to slide along
     // it for the rest of its second and a half, moving the player on one axis
@@ -3781,7 +3860,7 @@ function tryCrossbowBolt() {
       trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
       bolt: true,
       hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
-      dmgMult: CONFIG.crossbowBoltDamageMult });
+      dmgMult: CONFIG.crossbowBoltDamageMult * rangerMomentumMult() });
   }
   events.emit({ type: 'WEAPON_FIRED', kind: 'crossbow' });
 }
@@ -10763,6 +10842,12 @@ function drawCellTrack(x, y, cells, pitch, body, h, cur, max, colOn, colDim) {
  * share #FF7A1F and differ only in outline.
  */
 const GLYPH = {
+  // Momentum: three speed lines, which is the one idiom in this table that is
+  // about the hero rather than about what he throws.
+  momentum: (s) => { ctx.lineWidth = 2;
+    for (const [y, w] of [[0.28, 0.9], [0.5, 0.65], [0.72, 0.85]]) {
+      ctx.beginPath(); ctx.moveTo(s * 0.08, s * y); ctx.lineTo(s * w, s * y); ctx.stroke();
+    } },
   // Focus: a four-pointed diamond, which is the one shape in this table that
   // is not a weapon. It should not — a point of Focus is not a projectile, it
   // is what a projectile is bought with.
@@ -10893,7 +10978,7 @@ const LANE_B = {
  */
 const LANE_D = {
   archer: ['brace', 'power', 'shield'],
-  ranger: ['net', 'shield'],
+  ranger: ['momentum', 'net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
   sapper: ['charge', 'barrage', 'sapperShot', 'shield'],
@@ -10915,6 +11000,14 @@ const CHIP = {
   // Not a cooldownChip: nothing is gated and nothing is spent, so "READY"
   // would be a lie. It reports a stance that is filling, full, or draining,
   // and the fraction is the same number the arrows are multiplied by.
+  // Not a cooldownChip either, and for the same reason Brace is not: nothing
+  // is gated and nothing is spent. It reports a bonus that is building, full,
+  // or falling away, and the label is the figure the bolts are multiplied by.
+  momentum:  () => ({
+    glyph: 'momentum', color: '#FFCC00', lit: rangerMomentum >= 1,
+    label: rangerMomentum <= 0 ? '' : '+' + Math.round(rangerMomentum * CONFIG.rangerMomentumMax * 100) + '%',
+    frac: rangerMomentum >= 1 ? null : rangerMomentum,
+  }),
   brace:     () => ({
     glyph: 'brace', color: '#EAFF6A', lit: braceLevel >= 1,
     label: braceLevel >= 1 ? 'SET' : braceLevel <= 0 ? '' : Math.round(braceLevel * 100) + '%',
@@ -12665,6 +12758,9 @@ export const devHooks = {
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
   brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),
+  /** Momentum's meter and what it multiplies a bolt by. */
+  momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
+                     max: CONFIG.rangerMomentumMax }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress
    *  has touched anything yet. Enough to check a stack or a reset without
    *  reconstructing the swing. */
