@@ -42,10 +42,20 @@ function nockOf(calls: Call[]): { x: number; y: number } {
 
 describe('the archer\'s bow', () => {
   it('holds the string at the grip when nothing is drawn', () => {
-    // Aiming along +x, so the grip is 9 out and the nock sits on it.
+    // Aiming along +x, so the grip is 11 out and the nock sits on it.
     const { ctx, calls } = fake();
     paintArcherBow(ctx, pose());
-    expect(Math.round(nockOf(calls).x)).toBe(9);
+    expect(Math.round(nockOf(calls).x)).toBe(11);
+  });
+
+  it('sights down the middle of the bow, not over his boots', () => {
+    // The sprite's origin is on the ground between his feet and the body runs
+    // from -22 to +10 around it, so a bow anchored at 0 hangs at ankle height —
+    // which is where this one hung. It has to sit on his chest to be aimed
+    // along, so the grip is well above the origin whatever the aim is doing.
+    const { ctx, calls } = fake();
+    paintArcherBow(ctx, pose({ aim: 0 }));
+    expect(nockOf(calls).y).toBeLessThan(-5);
   });
 
   it('pulls the nock back as the draw deepens', () => {
@@ -57,7 +67,7 @@ describe('the archer\'s bow', () => {
     // Monotonic, and a full draw has travelled the whole pull.
     expect(at(0.5)).toBeLessThan(at(0));
     expect(at(1)).toBeLessThan(at(0.5));
-    expect(Math.round(at(0) - at(1))).toBe(8);
+    expect(Math.round(at(0) - at(1))).toBe(10);
   });
 
   it('nocks an arrow only while the bow is drawn', () => {
@@ -73,14 +83,16 @@ describe('the archer\'s bow', () => {
     // the grip there would be no loose to see: it has to overshoot and settle.
     const { ctx, calls } = fake();
     paintArcherBow(ctx, pose({ draw: 0, recoil: 1 }));
-    expect(nockOf(calls).x).toBeGreaterThan(9);
+    expect(nockOf(calls).x).toBeGreaterThan(11);
   });
 
   it('swings the whole bow with the aim', () => {
     // Same bow a quarter turn on: what was along +x is now along +y.
     const along = fake(); paintArcherBow(along.ctx, pose({ aim: 0 }));
     const down = fake(); paintArcherBow(down.ctx, pose({ aim: Math.PI / 2 }));
-    expect(Math.round(nockOf(along.calls).x)).toBe(9);
-    expect(Math.round(nockOf(down.calls).y)).toBe(9);
+    // Reach is measured from the bow hand, so aiming down puts the grip
+    // GRIP below HAND_Y rather than GRIP below the origin.
+    expect(Math.round(nockOf(along.calls).x)).toBe(11);
+    expect(Math.round(nockOf(down.calls).y)).toBe(4);
   });
 });

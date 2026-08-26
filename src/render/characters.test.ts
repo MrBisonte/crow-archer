@@ -383,9 +383,9 @@ describe('drawCharacter', () => {
     expect(stave).toBeDefined();
     const [cpx, cpy, tipX, tipY] = (stave?.args ?? []).map((n) => Math.round(Number(n)));
     // Control point sits beyond the grip along the aim: the belly of the bow.
-    expect([cpx, cpy]).toEqual([0, 13]);
+    expect([cpx, cpy]).toEqual([0, 9]);
     // Far tip is out to the side at grip depth, not along the aim.
-    expect([tipX, tipY]).toEqual([8, 9]);
+    expect([tipX, tipY]).toEqual([10, 4]);
   });
 
   it('draws every combination of kind, facing and state without throwing', () => {

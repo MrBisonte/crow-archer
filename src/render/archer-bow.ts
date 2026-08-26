@@ -15,14 +15,27 @@
  * the two renderers drift.
  */
 
-/** How far the grip sits from the body's centre, along the aim. */
-const GRIP = 9;
+/**
+ * Where the bow hand sits, as an offset up from the sprite's origin.
+ *
+ * The origin is on the ground between his feet — the body is drawn from -22 to
+ * +10 around it — so a bow anchored at 0 hangs at ankle height, which is where
+ * this one was. An archer sights down the middle of his bow, so the stave has
+ * to be centred on his chest. -7 puts it there.
+ */
+const HAND_Y = -7;
+
+/** How far the grip sits from the bow hand, along the aim. */
+const GRIP = 11;
 
 /** Half the stave's length, across the aim. */
-const LIMB = 8;
+const LIMB = 10.4;
 
 /** How far back the nock travels at a full draw. */
-const PULL = 8;
+const PULL = 10.4;
+
+/** How far past the nock the arrow reaches at rest. */
+const ARROW = 14;
 
 /**
  * How far the limb tips bend back at a full draw.
@@ -32,7 +45,7 @@ const PULL = 8;
  * half pixels of tip travel is the difference between "pulling a string" and
  * "loading a weapon".
  */
-const BEND = 2.5;
+const BEND = 3.25;
 
 /**
  * Colours. A bow is wood and hemp, and it is painted as wood and hemp.
@@ -79,7 +92,8 @@ export function paintArcherBow(ctx: CanvasRenderingContext2D, p: BowPose): void 
   // Across the aim, for the limbs and the string's two ends.
   const px = -sin, py = cos;
 
-  const gx = cos * GRIP, gy = sin * GRIP;
+  // Everything hangs off the bow hand, not off the sprite's origin.
+  const gx = cos * GRIP, gy = HAND_Y + sin * GRIP;
   const bend = p.draw * BEND;
   const tipAx = gx + px * LIMB - cos * bend, tipAy = gy + py * LIMB - sin * bend;
   const tipBx = gx - px * LIMB - cos * bend, tipBy = gy - py * LIMB - sin * bend;
@@ -93,14 +107,14 @@ export function paintArcherBow(ctx: CanvasRenderingContext2D, p: BowPose): void 
   ctx.strokeStyle = p.wash(SHAFT);
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, -2);
+  ctx.moveTo(0, HAND_Y);
   ctx.lineTo(gx, gy);
   ctx.stroke();
 
   // The stave, as one curve through both tips bulging along the aim. It
   // straightens as the draw deepens, which is the bow storing the shot.
-  const bellyX = gx + cos * (4 - p.draw * 2.5);
-  const bellyY = gy + sin * (4 - p.draw * 2.5);
+  const bellyX = gx + cos * (5 - p.draw * 3.2);
+  const bellyY = gy + sin * (5 - p.draw * 3.2);
   ctx.strokeStyle = p.wash(p.draw > 0.05 ? STAVE_LIT : STAVE);
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -112,7 +126,7 @@ export function paintArcherBow(ctx: CanvasRenderingContext2D, p: BowPose): void 
   // nock forward past the grip, so a deep draw shows more shaft behind the bow
   // — the shot getting longer is the thing the player is waiting on.
   if (p.draw > 0.02) {
-    const tipX = nx + cos * (pull + 11), tipY = ny + sin * (pull + 11);
+    const tipX = nx + cos * (pull + ARROW), tipY = ny + sin * (pull + ARROW);
     ctx.strokeStyle = p.wash(SHAFT);
     ctx.lineWidth = 1;
     ctx.beginPath();
