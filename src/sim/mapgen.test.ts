@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAP_COLS, MAP_ROWS } from './arena-map';
 import { generateGrid } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, tilePassable } from './tilemap';
 
-const ROWS = 21;
-const COLS = 33;
+// The shipped grid, by reference. Written out, these stopped covering the
+// map the moment it was resized, without a single test turning red.
+const ROWS = MAP_ROWS;
+const COLS = MAP_COLS;
 
 describe('generateGrid', () => {
   it('is deterministic for a given seed', () => {

@@ -24,6 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
+import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -32,23 +33,19 @@ import {
   filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
 } from '../render/grid-testkit';
 
-/** One second of simulation, at the fixed 60 Hz step the loop uses. */
-const ONE_SECOND = 60;
 
 /**
- * Advances the simulation by exactly `n` fixed steps, riding out any impact
- * freeze on the way.
+ * Rides a boss death sequence out, keeping the hero on his feet while it runs.
  *
- * `stepSim(n)` is n *frames* of the loop, and hitstop can spend some of them
- * holding the world still (see the HITSTOP ladder in game.js), so a test
- * waiting out a cooldown has to count sim steps rather than frames or it comes
- * up short by however heavily the run happened to land.
+ * Waiting on the flag rather than on a frame count matters: a blind
+ * stepSim(240) would pass whether or not the sequence ever finished, and the
+ * sequence finishing is half of what every caller is checking. The healing is
+ * because nobody is holding the keys, so a hero left standing in a wave dies
+ * and the test measures that instead -- see devHooks.healHero.
  */
-function stepPast(n: number): void {
-  for (let i = 0; i < n; i++) {
-    while (g.hitstop() > 0) g.stepSim(1);
-    g.stepSim(1);
-  }
+function settleBossDeath(): void {
+  for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
+  g.healHero();
 }
 
 /**
@@ -1058,13 +1055,6 @@ describe('the sapper', () => {
  * about the rule, not the map, so they lay their own walls where they want
  * them and leave the rest empty.
  */
-function clearArena(): void {
-  const c = g.config();
-  const tiles = g.tiles();
-  for (let row = 1; row < c.rows - 1; row++)
-    for (let col = 1; col < c.cols - 1; col++) tiles.set(row, col, TILE.EMPTY);
-}
-
 /** Puts the wizard at a tile centre, aiming due east, on open ground. */
 function wizardAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
   g.pick('wizard');
@@ -2015,7 +2005,7 @@ interface CharPanel {
   hook: string;
   /** The authored DAMAGE bar, checked against bossDamageMult's ordering. */
   damage: number;
-  skills: { main: string; secondary: string; shift: string };
+  skills: { main: string; secondary: string; shift: string; passive: string };
   statBars: ReadonlyArray<{ label: string; pips: number }>;
   preview: (frame: 'a' | 'mid' | 'b') => { grid: PixelGrid; sprite: { w: number; h: number }; key: string };
 }
@@ -2030,7 +2020,7 @@ describe('character-select panel data', () => {
   it('gives every panel a hook and all three skill lines', () => {
     for (const p of charPanels()) {
       expect(p.hook, p.char).toBeTruthy();
-      for (const slot of ['main', 'secondary', 'shift'] as const) {
+      for (const slot of ['main', 'secondary', 'shift', 'passive'] as const) {
         expect(p.skills?.[slot], `${p.char}.${slot}`).toBeTruthy();
         // A budget, not a style rule. The selected panel is 350px wide less
         // 12px padding a side, and Courier New advances 0.6em, so at 10.5px
@@ -2078,6 +2068,33 @@ describe('character-select panel data', () => {
           .toEqual({ w: shown.sprite.w, h: shown.sprite.h });
         expect(invalidColours(shown.grid), `${p.char}|${frame}`).toEqual([]);
       }
+    }
+  });
+
+  it('moves every hero’s feet between stride frames, not just their cloth', () => {
+    // Deliberately the *boot rows* and not the whole grid. Comparing whole
+    // grids passes on a hero whose only moving part is a hem: the ranger
+    // shipped three frames that differed by a one-column cloak sway over a
+    // floor-length skirt, and read as a stuck sprite for exactly that reason.
+    // Pinning the wizard's legs to one frame still leaves his robe swaying,
+    // so a whole-grid check goes green on the bug it exists to catch.
+    for (const p of charPanels()) {
+      const feet = ANIM_FRAMES.map((f) => {
+        const { grid } = p.preview(f);
+        return JSON.stringify(grid.slice(grid.length - 4));
+      });
+      expect(new Set(feet).size, `${p.char} plants the same feet every frame`).toBe(3);
+    }
+  });
+
+  it('caches each stride frame under its own key', () => {
+    // The sprite cache hands back a canvas *without* calling the painter, so a
+    // key that does not name the frame pins the whole walk to whichever frame
+    // was drawn first. Three grids behind one key is a hero frozen mid-step,
+    // and nothing else in the suite would see it.
+    for (const p of charPanels()) {
+      const keys = new Set(ANIM_FRAMES.map((f) => p.preview(f).key));
+      expect(keys.size, `${p.char} reuses a cache key across frames`).toBe(3);
     }
   });
 });
@@ -2128,12 +2145,23 @@ describe('the wizard blink arrival pulse', () => {
   });
 
   it('shows a ring at the radius the damage used', () => {
+    // The claim is unchanged -- what is drawn reports what was hit -- but the
+    // ring moved from a generic shock ring into render/wizard-fx.ts, which
+    // draws its rim at exactly the radius it is handed and does not grow into
+    // it. Two rings saying the same thing at different sizes is what a shock
+    // ring alongside it would have been.
+    //
+    // The radius now rides the WIZARD_BLINK event from the same expression the
+    // pulse damaged at, rather than being read off CONFIG again at the draw
+    // site, so this is a stronger claim than it was: the two are the same
+    // number by construction and not by coincidence.
     const c = g.config();
     wizardAt(6, 6);
     g.blink();
-    const rings = g.rings() as Array<{ radius: number }>;
-    expect(rings.length).toBe(1);
-    expect(rings[0]!.radius).toBe(c.wizBlinkPulseRadius);
+    const fx = g.blinkFx() as { secs: number; radius: number };
+    expect(fx.secs, 'the arrival effect is up').toBeGreaterThan(0);
+    expect(fx.radius).toBe(c.wizBlinkPulseRadius);
+    expect((g.rings() as unknown[]).length, 'and no second ring beside it').toBe(0);
   });
 });
 
@@ -3352,6 +3380,12 @@ interface GuardBody {
   healCD: number;
   /** The post it is holding, written by updateGuards each frame. */
   anchor?: { x: number; y: number };
+  /**
+   * What it has decided to answer, written by updateGuards each frame, and
+   * `null` on a frame it found nothing. `ref` is the live body itself, so
+   * this is identity rather than a position that happens to match.
+   */
+  quarry?: { ref: unknown } | null;
   guard: { kind: GuardKind; rank: number; hp: number; maxHp: number; ward?: string };
 }
 
@@ -3499,17 +3533,6 @@ describe('the siege loop', () => {
   it('plays all ten waves through to a win, killing every boss for real', () => {
     openSiege();
     const killed: string[] = [];
-    // The hero is not the subject and nobody is holding the keys, so one left
-    // standing in a wave dies and this would be measuring that instead. The
-    // first run of this test failed on wave ten for exactly that reason.
-    //
-    // Waiting on the flag rather than on a frame count matters: a blind
-    // stepSim(240) would pass whether or not the sequence ever finished, and
-    // the sequence finishing is half of what is being tested.
-    const settle = (): void => {
-      for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
-      g.healHero();
-    };
     for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
       g.healHero();
       g.stepSim(1);
@@ -3519,7 +3542,7 @@ describe('the siege loop', () => {
         const which = g.killSiegeBoss();
         if (!which) break;
         killed.push(`wave ${siegeState().wave}: ${which}`);
-        settle();
+        settleBossDeath();
         expect(g.bossDeathSeq(), `wave ${siegeState().wave}: the field froze`).toBeNull();
         expect(g.state(), `wave ${siegeState().wave}: the run left the bastion`).toBe('playing');
       }
@@ -3562,8 +3585,7 @@ describe('the siege loop', () => {
     // would pass while the bug was present. The reference outlives the lists.
     const displaced = g.boss() as { bstate: string };
     expect(g.killSiegeBoss('extra')).toBe('extra');
-    for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
-    g.healHero();
+    settleBossDeath();
     expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
 
     // One life between them, so the displaced one goes down too -- and it can
@@ -3664,16 +3686,46 @@ describe('the siege loop', () => {
    *
    * Measured in a headless run before the fix: three bodies stacked on the
    * hero, nearest post 190px away, leash 170, six guards motionless.
+   *
+   * WHAT ANSWERING IS MEASURED BY, and why it is not distance. This asked
+   * "is a guard within melee reach of the foe" for a while, and that is a
+   * different question with a different answer. An archer answers by
+   * shooting from where it stands -- updateGuards closes the gap only when
+   * the target is beyond its own reach, and that reach is 260px against a
+   * melee reach of 26 -- so on an all-archer roster the retinue answers from
+   * 195px away and never once comes closer. Measured: siege seeds 7 and 12
+   * roll archer/archer/priest and failed a distance reading 12 runs in 12,
+   * with no minimum to record at any point in the run. No threshold fixes
+   * that, because the guard doing the answering is deliberately standing
+   * still.
+   *
+   * So the reading is the decision, not the geometry: the quarry updateGuards
+   * takes each frame, matched by identity against the body this test placed.
+   * It is the direct negation of what the playtest reported -- guards
+   * "correctly concluding there was nothing within their remit" -- and it is
+   * the same for every kind, since melee and ranged both take a quarry before
+   * they diverge. Measured across 8 siege seeds x 12 runs: 0 failures with
+   * the two-anchor ground, 96 out of 96 with `guardGround` reverted to the
+   * post alone.
+   *
+   * Scoping it to this foe is the load-bearing part, not a detail. Wave one
+   * is already on the field when openSiege returns, so the retinue always has
+   * something to shoot at: with no foe placed at all, a guard still holds
+   * some quarry in 6 runs out of 6 on every siege seed, and still looses 4-5
+   * arrows. Any reading that counts guard activity rather than naming its
+   * object -- a GUARD_SHOT tally is the obvious one -- passes an empty
+   * threat. Those events carry only x and y, which is why this reads the
+   * decision off the body instead.
    */
   it('answers a threat standing on the hero, instead of holding a quiet gate', () => {
     openSiege();
     const hero = g.player() as { x: number; y: number };
-    const reach = g.config().guardMeleeReach as number;
 
     // Nothing anywhere near a gate, so the only thing that can bring a guard
-    // over is the hero being in trouble.
-    const posts = (g.guards() as { anchor?: { x: number; y: number } }[])
-      .map((b) => b.anchor).filter(Boolean) as { x: number; y: number }[];
+    // over is the hero being in trouble. This is what stops the assertion at
+    // the bottom from being free: the foe is outside every post leash, so the
+    // only ground it can be standing on is the hero.
+    const posts = bodies().map((b) => b.anchor).filter(Boolean) as { x: number; y: number }[];
     standAt(hero.x + 24, hero.y);
     const foe = (g.skeletons() as { x: number; y: number }[]).at(-1);
     if (!foe) throw new Error('no foe was placed');
@@ -3685,13 +3737,29 @@ describe('the siege loop', () => {
     // Long enough to walk it. The furthest gate is most of the map from the
     // hero and a guard moves at CONFIG.guardSpeed, so this is about arriving,
     // not about reacting quickly.
-    for (let i = 0; i < 8; i++) { g.healHero(); g.stepSim(ONE_SECOND); }
+    //
+    // Read every step rather than once at the end, because the guard that
+    // answers need not survive to be counted. A foot_soldier has 3hp and the
+    // foe standAt places has 99, so it loses roughly one contact in thirty:
+    // six Math.random seeds in two hundred used to fail here with the retinue
+    // down to two, having watched somebody come, fight and die between two
+    // samples. The neighbouring 'stops shooting the moment it falls' reads
+    // frame by frame for the same class of reason.
+    const answered = new Set<GuardKind>();
+    for (let step = 0; step < 8 * ONE_SECOND; step++) {
+      g.healHero();
+      g.stepSim(1);
+      for (const body of bodies()) {
+        // Priests are excluded: a healer arriving is not an answer. One never
+        // takes a quarry anyway -- it leaves updateGuards before a target is
+        // looked for -- so this says so rather than leaning on it.
+        if (body.guard.kind === 'priest') continue;
+        if (body.quarry?.ref === foe) answered.add(body.guard.kind);
+      }
+    }
 
-    // Somebody came. Priests are excluded: a healer arriving is not an answer.
-    const closest = (g.guards() as { x: number; y: number; guard: { kind: string } }[])
-      .filter((b) => b.guard.kind !== 'priest')
-      .map((b) => Math.hypot(b.x - foe.x, b.y - foe.y));
-    expect(Math.min(...closest), 'nobody left their gate for the hero').toBeLessThan(reach * 2);
+    expect([...answered], 'no guard ever made the threat on the hero its business')
+      .not.toHaveLength(0);
   });
 
   /**
@@ -3855,7 +3923,10 @@ describe('the priest in the field', () => {
    * as well when the setup is broken and the enemy was never in anyone's reach,
    * which is the way a test like this usually rots.
    */
-  it('deals no damage at all, even with an enemy standing on it', () => {
+  // 15s rather than the 5s default: this drives 180 frames of full siege sim
+  // twice (the priest, then the fighting control), and the 55x33 field made
+  // each frame ~2.7x the tiles. It ran 5.3s on CI and timed out at the edge.
+  it('deals no damage at all, even with an enemy standing on it', { timeout: 15000 }, () => {
     openSiege();
     const priest = priestBody();
     const fighters = bodies().filter((body) => body !== priest);
@@ -4175,14 +4246,28 @@ describe('a siege boss is on the field and can be fought', () => {
 
   it('can be killed, and killing it lets the wave advance', () => {
     atWave(7);
-    g.clearSiegeWave();
-    // Put the boss back and kill it through the real death path.
-    g.stepSim(1);
     const wave = siegeState().wave;
-    g.killBoss();
-    g.stepSim(240);
+    // Killed, not deleted. This used to clear the field first and then call
+    // killBoss(), which was a no-op both ways round: clearSiegeWave() nulls
+    // the slot, and the step after it completed the wave rather than putting
+    // a boss back. The test was named for a death sequence it never entered.
+    expect(g.killSiegeBoss('primary'), 'wave 7 should field a boss to kill').toBe('primary');
+    settleBossDeath();
+    expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
+
+    // The escort outlives its boss, so let it fight: what advances a wave is
+    // the field being empty, and the escort is what is left holding it up.
+    for (let i = 0; i < 4; i++) { g.healHero(); g.stepSim(ONE_SECOND); }
     g.clearSiegeWave();
-    g.stepSim(2);
+
+    // Sim steps, not frames -- and that is what made this test flaky. A hit
+    // landed in the last frames above arms an impact freeze, fixedStep spends
+    // held frames without running stepGame at all, and a bare stepSim(2) can
+    // hand both of its frames to the freeze: updateSiege never runs and the
+    // wave sits where it was. Which frame the last hit lands on is decided by
+    // the Math.random() the wave's spawners use, so it failed about one run in
+    // a hundred and never twice in the same place.
+    stepPast(2);
     expect(siegeState().wave, 'the wave never advanced past its boss').toBeGreaterThan(wave);
   });
 
@@ -4665,8 +4750,7 @@ describe('a siege boss dying leaves the wave running', () => {
     expect(crows.length, 'no crows to freeze').toBeGreaterThan(0);
 
     g.killBoss();
-    for (let i = 0; i < 60 && g.bossDeathSeq(); i++) { g.healHero(); g.stepSim(10); }
-    g.healHero();
+    settleBossDeath();
     expect(g.bossDeathSeq(), 'the death sequence never finished').toBeNull();
 
     const stillFrozen = (g.crows() as { frozen?: boolean }[]).filter((c) => c.frozen);

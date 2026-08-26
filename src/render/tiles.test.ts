@@ -347,3 +347,72 @@ describe('themed tile art', () => {
     });
   }
 });
+
+/**
+ * The overlay used to rebuild its whole coordinate list on every tile written,
+ * and TileMap.set fires once per tile, so a mass terrain event cost changes x
+ * area. It now takes the coordinates onChange hands it. That is only safe while
+ * the incremental path lands in exactly the state a full rescan would, which is
+ * what these compare — including the cases a naive delete-and-insert gets wrong:
+ * a tile leaving the animated set, and one arriving into it.
+ */
+describe('AnimatedTileOverlay stays in step with a full rebuild', () => {
+  const LAYOUT = { tileSize: 32, hudHeight: 48 };
+
+  /** Draw ops, order-independent: the lists are sets of cells, not sequences. */
+  function paintedBy(map: TileMap, built: AnimatedTileOverlay): string[] {
+    const rec = fakeContext();
+    built.draw(rec.ctx, 1.25, true);
+    return rec.log
+      .map((e) => (e.kind === 'call' ? `${e.name}(${JSON.stringify(e.args)})` : `${e.name}=${String(e.value)}`))
+      .sort();
+  }
+
+  const EDITS: readonly (readonly [string, (m: TileMap) => void])[] = [
+    ['a tree burning to ash', (m) => { m.set(1, 1, TILE.TREE); m.set(1, 1, TILE.ASH); }],
+    ['water arriving where rock was', (m) => { m.set(2, 3, TILE.ROCK); m.set(2, 3, TILE.WATER); }],
+    ['an animated tile leaving the set', (m) => { m.set(0, 2, TILE.WATER); m.set(0, 2, TILE.EMPTY); }],
+    ['a whole row of trees going to ash', (m) => {
+      for (let c = 0; c < 4; c++) m.set(3, c, TILE.TREE);
+      for (let c = 0; c < 4; c++) m.set(3, c, TILE.ASH);
+    }],
+    ['the same cell rewritten many times', (m) => {
+      for (const t of [TILE.WATER, TILE.TREE, TILE.ASH, TILE.WATER, TILE.EMPTY, TILE.TREE]) m.set(2, 2, t);
+    }],
+  ];
+
+  it.each(EDITS)('matches a rebuild after %s', (_label, edit) => {
+    const live = new TileMap(5, 5);
+    const overlay = new AnimatedTileOverlay(live, LAYOUT);
+    edit(live);
+
+    // The same edits, then one full rescan. The constructor only subscribes,
+    // it does not seed from a map that already has tiles on it, so the rescan
+    // has to be asked for.
+    const settled = new TileMap(5, 5);
+    edit(settled);
+    const rebuilt = new AnimatedTileOverlay(settled, LAYOUT);
+    rebuilt.rebuild();
+
+    expect(paintedBy(live, overlay)).toEqual(paintedBy(settled, rebuilt));
+  });
+
+  it('still rescans on reset, which replaces every tile at once', () => {
+    const live = new TileMap(3, 3);
+    const overlay = new AnimatedTileOverlay(live, LAYOUT);
+    live.set(0, 0, TILE.WATER);
+
+    const grid = [
+      [TILE.TREE, TILE.EMPTY, TILE.ASH],
+      [TILE.EMPTY, TILE.WATER, TILE.EMPTY],
+      [TILE.ASH, TILE.EMPTY, TILE.TREE],
+    ];
+    live.reset(grid);
+
+    const fresh = new TileMap(3, 3);
+    fresh.reset(grid);
+    const rebuilt = new AnimatedTileOverlay(fresh, LAYOUT);
+    rebuilt.rebuild();
+    expect(paintedBy(live, overlay)).toEqual(paintedBy(fresh, rebuilt));
+  });
+});

@@ -293,7 +293,8 @@
     <ul>
       <li><strong>Body</strong> — <em>9 health</em>, <em>200 px/s</em>. The middle of the roster on both, and the one the other four are read against.</li>
       <li><strong>Bow</strong> — quiver of 16, up to <em>5 arrows in flight</em> at once.</li>
-      <li><strong>Power shot</strong> — hold <span class="key">SHIFT</span> to draw, up to 1s, rooted while you do. Release and the arrow <em>pierces up to 3 bodies</em>, flies at double speed and hits a boss for 3x. A tap gets the weakest version of all three. 5s cooldown, and it keeps whatever ammo was queued.</li>
+      <li><strong>Brace</strong> — stand still and he sets his feet, filling over 1.25s and shown as a chip in the status lane. Braced, every arrow is worth <em>1.8x against a boss</em>; against a crow it changes nothing, since a crow dies to any arrow. It drains four times faster than it fills, so it is a stance and not a resource — you cannot build it in cover and carry it into the open.</li>
+      <li><strong>Power shot</strong> — hold <span class="key">SHIFT</span> to draw, up to 1s, rooted while you do. Release and the arrow <em>pierces up to 3 bodies</em>, flies at double speed and hits a boss for 3x. A tap gets the weakest version of all three. 5s cooldown, and it keeps whatever ammo was queued. Draw and brace multiply: a full draw from a full brace hits a boss for <em>5.4x</em> a plain arrow.</li>
       <li><strong>Dynamite</strong> — hold to charge, release to throw. Clears tiles and hurts bosses.</li>
       <li><strong>Pickups</strong> — fire arrows (leave burning patches), ricochet arrows (bounce off walls, faster each bounce).</li>
     </ul>
@@ -306,6 +307,7 @@
     <ul>
       <li><strong>Body</strong> — <em>7 health</em>, <em>175 px/s</em>. The thinnest on the roster, and slower than everyone but the knight, so there is nothing to soak a mistake and nothing to outrun one.</li>
       <li><strong>Magic bolts</strong> — 1.2s cooldown, they <em>steer toward the nearest enemy</em> on their own.</li>
+      <li><strong>Focus</strong> — a pool of <em>3 points</em>, and the only resource on the roster you spend rather than pick up. A bolt costs 1, a blink costs 2, and the chained second hop is <em>free</em>. Lightning Storm costs none of it and keeps its own cooldown. One point comes back <em>every 2s</em>, casting or not, which is deliberately slower than the bolt cooldown — below that rate it is Focus that paces him and not the cooldown. Run it dry and he cannot cast at all: he swings a <strong>broom</strong>, the pitchfork's swing at <em>2.25s</em> against its 1.5s, and that is a rare save rather than a way to fight.</li>
       <li><strong>Blink</strong> — tap <span class="key">SHIFT</span> to step 160px down your aim, <em>taking no damage</em> for a moment on arrival. 6s cooldown. It stops at walls rather than passing through them, and a blink with nowhere to go costs you nothing.</li>
       <li><strong>Blink chain</strong> — tap again <em>within 1.1s</em> and the second hop is free. Two is the cap; let the window lapse and you wait out the full cooldown.</li>
       <li><strong>Arrival pulse</strong> — every hop lets off a 56px pulse where it lands, killing what is in it and taking 1 off a boss. The ring you see is drawn at the radius the damage actually used.</li>
@@ -324,6 +326,7 @@
       <li><strong>Charge</strong> — hold <span class="key">SHIFT</span> to wind up, rooted and <em>taking no damage</em>, then sweep forward through a wide arc. Anything caught in it dies outright.</li>
       <li><strong>Charge chain</strong> — tap <span class="key">SHIFT</span> again <em>within 1.1s</em> of releasing, with room still ahead, and he commits: the dash speeds up for the rest of its run and he lands one 60px whirlwind swing where he stands. Once per dash, and it cannot steer — the direction was fixed when you let go.</li>
       <li><strong>Block</strong> — passive, no key. Banks one absorbed hit every 10 seconds, by itself.</li>
+      <li><strong>Bloodlust</strong> — passive, no key. Every swing that <em>connects</em> adds a stack, up to three, and each stack is worth <em>+10% damage and +10% attack speed</em>, so three of them is +30% on both. A swing that hits nothing puts him straight back to zero. Up to three blood drops over his head say where he is.</li>
       <li><strong>Whirlwind</strong> — a spinning AoE that chews through terrain.</li>
       <li><strong>Pickups</strong> — Iron Javelin (thrown, pierces), Fire Sword (2&times; damage and reach, 8s).</li>
     </ul>
@@ -335,6 +338,7 @@
     <ul>
       <li><strong>Body</strong> — <em>8 health</em>, <em>250 px/s</em>. The fastest body in the game and the second-thinnest, so distance is the only defence he has, and he is very good at keeping it.</li>
       <li><strong>Crossbow</strong> — one press fires <em>3 independent bolts</em> in a narrow spread, each 30% weaker than an arrow.</li>
+      <li><strong>Momentum</strong> — the archer's brace, inverted. Ground covered recently builds a damage bonus that caps at <em>+30%</em>; the moment he stops it drains at <em>10 points a second</em>, so three seconds standing still loses all of it. It multiplies with pickups and other buffs rather than replacing them. The archer is paid for planting his feet and the ranger for never planting his.</li>
       <li><strong>Net</strong> — hold <span class="key">SHIFT</span> to draw, then throw. A longer draw means a longer throw, a wider net and a longer hold, <em>0.8s up to 2s</em>. 10s cooldown, and you can keep moving while you draw it.</li>
       <li><strong>The net does not kill</strong> — 0.9 damage against a creep's 1 hit point, on purpose. It catches <em>everything under it</em>, pins it completely, and leaves it on a sliver. Bosses are held too, briefly, the Minotaur included.</li>
       <li><strong>Satchel</strong> — first click throws it inert; second click arms a 3s fuse. Your own bolt sets it off early, armed or not.</li>
@@ -351,6 +355,7 @@
       <li><strong>Powder charge</strong> — one press lobs it, every 1.1s, out of a <em>pouch of 10</em>. It bounces off cover the way the archer's dynamite does, but leaves the hand faster and runs a longer 1.8s fuse, so it reaches further before it goes off: <em>everything in the blast takes it</em>, and rock, trees and huts come down.</li>
       <li><strong>The pouch</strong> — ten to open with, and every pickup is worth <em>one bomb back</em>, up to that same ten. Fire and ice bombs go before plain ones. Run all three out and he swings the pitchfork, same as an archer on an empty quiver.</li>
       <li><strong>Barrage</strong> — one press throws <em>five mini-bombs</em> across a 45 degree fan, 6s cooldown. Each is a small blast, 40px against the charge's 90, and each goes off on the first thing it touches instead of counting down. A miss still goes off when its own 0.9s runs out.</li>
+      <li><strong>Chain detonation</strong> — a blast sets off any of his other bombs near it, and each of those sets off the next, so a barrage's fan or a handful of charges thrown at one spot goes up as <em>one cascade</em> instead of five separate counts. It costs nothing beyond the bombs it was already going to spend, and it is weighted to pay him most <em>against a boss</em> — the one fight he is worst at. Hold the primary and he puts down up to <em>three</em> charges in one go, with the cooldown charged per bomb that left, so the burst buys placement rather than rate — and landing the combo shot on the pile copies its wider blast onto every bomb the cascade lights.</li>
       <li><strong>Combo shot</strong> — tap <span class="key">SHIFT</span> for one fast dart, 600px/s, straight and gone on the first thing it touches. It lands <em>3 where a plain arrow lands 1</em>, and the same 3 on a boss. 10s cooldown.</li>
       <li><strong>The combo</strong> — the dart checks his own bombs still in the air before it checks enemies, so catching one sets that bomb off early into a wider blast: <em>1.33&times; the radius</em>, scaled from 10&times; damage at the centre down to 2&times; at the rim.</li>
       <li><strong>Pickups</strong> — fire bombs (the ground burns for 1.5s where the blast went off) and ice bombs (1 damage to everything caught, held still for 1.5s). Three of either, from the two slots that hand the archer fire and ricochet arrows.</li>

@@ -20,9 +20,11 @@ import {
 import { TEAM_COLOURS } from './palette';
 import type { CharacterKind } from '../net/protocol';
 import { animFrame3, type PixelGrid } from './pixel-grid';
+import { paintArcherBow } from './archer-bow';
+import { paintWizardStaff } from './wizard-staff';
 import { spriteCanvas, spriteFlashCanvas } from './pixel-sprite';
 import {
-  ARCHER_SPRITE, buildArcherGrid,
+  ARCHER_SPRITE, SPRITE_ORIGIN_ROW, buildArcherGrid,
   WIZARD_SPRITE, buildWizardGrid,
   RANGER_SPRITE, buildRangerGrid,
   KNIGHT_SPRITE, buildKnightGrid,
@@ -288,7 +290,7 @@ function paintBakedBody(
   grid: PixelGrid,
   extraDy = 0,
 ): void {
-  const dx = -sprite.w / 2, dy = -22 + extraDy;
+  const dx = -sprite.w / 2, dy = -SPRITE_ORIGIN_ROW + extraDy;
   const canvas =
     p.white > 0 ? spriteFlashCanvas(key, grid, sprite.w, sprite.h, WHITE)
     : p.grey > 0 ? spriteFlashCanvas(key, grid, sprite.w, sprite.h, CORPSE_GREY)
@@ -300,41 +302,31 @@ function paintBakedBody(
 // Archer
 // ---------------------------------------------------------------------------
 
-function paintArcher(ctx: CanvasRenderingContext2D, p: Pose): void {
-  paintBakedBody(ctx, p, 'archer', ARCHER_SPRITE, buildArcherGrid(p.trim));
-  paintBow(ctx, p);
+/**
+ * The body's rise and fall over a stride, in whole pixels.
+ *
+ * Twice the stride frequency, because a body rises once per step and there are
+ * two steps to a cycle: highest as the legs pass, lowest on each contact. The
+ * knight's `Math.sin(p.walk)` is a sway rather than a bob — it lifts on one
+ * extreme and drops on the other — and is left alone here only because
+ * changing it would change a shipped character.
+ *
+ * Whole pixels, because a sprite drawn on a half pixel is a sprite with a
+ * blurred edge, and the whole art style is that the edge is hard.
+ */
+function walkBob(phase: number): number {
+  return Math.abs(Math.sin(phase)) > 0.5 ? 0 : -1;
 }
 
-/** Bow arm, half-circle bow and string, all swung to the aim direction. */
-function paintBow(ctx: CanvasRenderingContext2D, p: Pose): void {
-  const gx = Math.cos(p.aim) * 8;
-  const gy = Math.sin(p.aim) * 8;
-  ctx.strokeStyle = shade(p, '#D9B98A');
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, -2);
-  ctx.lineTo(gx, gy);
-  ctx.stroke();
-  ctx.strokeStyle = shade(p, '#8A6028');
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(gx, gy, 7, p.aim - Math.PI / 2, p.aim + Math.PI / 2);
-  ctx.stroke();
-  // String, drawn back to the nock. Legacy painted it phosphor green, which is
-  // team 0's colour, so a trim-coloured string is the same picture for team 0.
-  const top = { x: gx + Math.cos(p.aim - Math.PI / 2) * 7, y: gy + Math.sin(p.aim - Math.PI / 2) * 7 };
-  const bot = { x: gx + Math.cos(p.aim + Math.PI / 2) * 7, y: gy + Math.sin(p.aim + Math.PI / 2) * 7 };
-  const nock = { x: gx - Math.cos(p.aim) * 3, y: gy - Math.sin(p.aim) * 3 };
-  ctx.shadowColor = p.trim;
-  ctx.shadowBlur = 4;
-  ctx.strokeStyle = p.trim;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(top.x, top.y);
-  ctx.lineTo(nock.x, nock.y);
-  ctx.lineTo(bot.x, bot.y);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+function paintArcher(ctx: CanvasRenderingContext2D, p: Pose): void {
+  // Stride is 3 baked frames off walk phase (see buildArcherGrid), the same
+  // technique the ranger's cloak swings on.
+  const frame = animFrame3(p.walk);
+  paintBakedBody(ctx, p, `archer|${frame}`, ARCHER_SPRITE, buildArcherGrid(frame, p.trim), walkBob(p.walk));
+  // No draw state crosses the wire yet, so a networked archer holds his bow
+  // at rest. The painter is the same one single-player drives with
+  // archerDrawFrac, so wiring it later is a field, not a second bow.
+  paintArcherBow(ctx, { aim: p.aim, draw: 0, recoil: 0, trim: p.trim, wash: (x) => shade(p, x) });
 }
 
 // ---------------------------------------------------------------------------
@@ -348,10 +340,10 @@ function paintBow(ctx: CanvasRenderingContext2D, p: Pose): void {
  * arena the silhouette is what has to tell them apart, not the palette.
  */
 function paintRanger(ctx: CanvasRenderingContext2D, p: Pose): void {
-  // Cloak sway is 3 baked frames off walk phase (see buildRangerGrid),
-  // rather than the continuous live offset the vector version swung with.
+  // Stride is 3 baked frames off walk phase (see buildRangerGrid), and the
+  // body bobs with it the way the archer's does.
   const frame = animFrame3(p.walk);
-  paintBakedBody(ctx, p, `ranger|${frame}`, RANGER_SPRITE, buildRangerGrid(frame, p.trim));
+  paintBakedBody(ctx, p, `ranger|${frame}`, RANGER_SPRITE, buildRangerGrid(frame, p.trim), walkBob(p.walk));
   paintCrossbow(ctx, p);
 }
 
@@ -397,7 +389,8 @@ function paintCrossbow(ctx: CanvasRenderingContext2D, p: Pose): void {
 // ---------------------------------------------------------------------------
 
 function paintSapper(ctx: CanvasRenderingContext2D, p: Pose): void {
-  paintBakedBody(ctx, p, 'sapper', SAPPER_SPRITE, buildSapperGrid(p.trim));
+  const frame = animFrame3(p.walk);
+  paintBakedBody(ctx, p, `sapper|${frame}`, SAPPER_SPRITE, buildSapperGrid(frame, p.trim), walkBob(p.walk));
   paintHeldCharge(ctx, p);
 }
 
@@ -453,34 +446,13 @@ function paintHeldCharge(ctx: CanvasRenderingContext2D, p: Pose): void {
 // ---------------------------------------------------------------------------
 
 function paintWizard(ctx: CanvasRenderingContext2D, p: Pose): void {
-  paintBakedBody(ctx, p, 'wizard', WIZARD_SPRITE, buildWizardGrid(p.trim));
-  paintStaff(ctx, p);
+  const frame = animFrame3(p.walk);
+  paintBakedBody(ctx, p, `wizard|${frame}`, WIZARD_SPRITE, buildWizardGrid(frame, p.trim), walkBob(p.walk));
+  // No cooldown crosses the wire, so a networked wizard shows no charge ring.
+  paintWizardStaff(ctx, { aim: p.aim, t: p.t, cooldown: null, wash: (c) => shade(p, c) });
 }
 
 /** Staff arm out to the aim, with the orb pulsing on the end of it. */
-function paintStaff(ctx: CanvasRenderingContext2D, p: Pose): void {
-  const sx = Math.cos(p.aim) * 15;
-  const sy = Math.sin(p.aim) * 15;
-  ctx.strokeStyle = shade(p, '#5C3317');
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(sx, sy);
-  ctx.stroke();
-  const op = p.t * 4.5;
-  ctx.shadowColor = '#8888FF';
-  ctx.shadowBlur = 10 + 4 * Math.sin(op);
-  ctx.fillStyle = `rgba(136,136,255,${(0.85 + 0.15 * Math.sin(op)).toFixed(2)})`;
-  ctx.beginPath();
-  ctx.arc(sx, sy, 4 + 0.5 * Math.sin(op), 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.beginPath();
-  ctx.arc(sx - 1, sy - 1, 1.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-}
-
 // ---------------------------------------------------------------------------
 // Knight
 // ---------------------------------------------------------------------------
@@ -492,7 +464,8 @@ function paintKnight(ctx: CanvasRenderingContext2D, p: Pose): void {
   // here; the plume, elsewhere the fire-sword's own recolor, carries the
   // team trim instead — multiplayer's one clearest team read stays put.
   const bob = Math.sin(p.walk) * 1.2;
-  paintBakedBody(ctx, p, 'knight', KNIGHT_SPRITE, buildKnightGrid('normal', p.trim), bob);
+  const frame = animFrame3(p.walk);
+  paintBakedBody(ctx, p, `knight|${frame}`, KNIGHT_SPRITE, buildKnightGrid('normal', frame, p.trim), bob);
   paintSpear(ctx, p);
 }
 

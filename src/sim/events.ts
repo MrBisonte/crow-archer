@@ -17,6 +17,10 @@ export type HitSource =
   | 'arrow'
   | 'javelin'
   | 'pitchfork'
+  // The wizard's out-of-Focus fallback. It hits a boss for exactly what the
+  // pitchfork does, but it is its own source rather than a re-used one so the
+  // feedback matches the weapon: straw whooshes, iron clangs.
+  | 'broom'
   | 'spear'
   | 'whirlwind'
   | 'storm'
@@ -30,6 +34,7 @@ export type WeaponKind =
   | 'bolt'
   | 'crossbow'
   | 'pitchfork'
+  | 'broom'
   | 'spear'
   | 'javelin'
   | 'charge'
@@ -59,13 +64,19 @@ export type GameEvent =
   | { type: 'FIRE_SKELETON_BLAST'; x: number; y: number }
   | { type: 'ICE_BOLT_FIRED'; x: number; y: number }
   | { type: 'PLAYER_FROZEN'; x: number; y: number }
-  | { type: 'MELEE_HIT'; x: number; y: number; kind: 'pitchfork' | 'spear'; fire: boolean }
+  | { type: 'MELEE_HIT'; x: number; y: number; kind: 'pitchfork' | 'broom' | 'spear'; fire: boolean }
   | { type: 'BOSS_HIT'; source: HitSource }
   | { type: 'ARROW_MISS' }
   | { type: 'JAVELIN_BOUNCE'; x: number; y: number }
-  // `big` is the sapper's shift-detonated combo, which reaches a wider
-  // radius than a normal blast and whose burst is scaled to match.
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean }
+  // `big` is the sapper's shift-detonated combo, which reaches a wider radius
+  // than a normal blast and whose burst is scaled to match.
+  //
+  // `radius` is the radius the blast actually damaged at, and it is carried
+  // rather than derived because there is no rule that recovers it. A listener
+  // reconstructing size from `big` alone paints the hostile bomber's 55 px
+  // blast at the dynamite's 90, which is 64% too wide — and that emit is not
+  // the sapper's, so no flag on it could ever have said so.
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean; radius: number }
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
@@ -78,9 +89,38 @@ export type GameEvent =
   | { type: 'KNIGHT_CHARGE_STOPPED'; x: number; y: number }
   // The escape hatch fired: the player had nowhere to move and was lifted out.
   | { type: 'PLAYER_UNSTUCK'; x: number; y: number; toX: number; toY: number }
-  | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number }
+  // `radius` is the radius the arrival pulse actually damaged at, carried so
+  // the ring drawn for it cannot claim a different one. It used to be read
+  // straight off CONFIG at the draw site, which is the same number by
+  // coincidence rather than by construction.
+  | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number; radius: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }
+  /**
+   * The archer has stood still long enough to be fully braced.
+   *
+   * Emitted once on the crossing, not every frame it holds: it is the moment
+   * the trade pays off, and a cue that repeated would be a hum rather than a
+   * confirmation.
+   */
+  // Carries the stack count *after* the change, and fires on the way down as
+  // well as up: a knight who whiffs and empties needs to hear that as much as
+  // he needs to hear a stack land, and zero is the more expensive of the two.
+  | { type: 'KNIGHT_BLOODLUST'; stacks: number; x: number; y: number }
+  // Fires once, on the frame Momentum reaches full. The archer's ARCHER_BRACED
+  // is the same event for the opposite condition, and both exist for the same
+  // reason: the useful moment is the threshold, not the meter.
+  | { type: 'RANGER_MOMENTUM'; x: number; y: number }
+  | { type: 'ARCHER_BRACED'; x: number; y: number }
+  /**
+   * A power arrow has gone through a body. `left` is how many more it can pass
+   * through, so the effect can get quieter as the shot spends itself.
+   *
+   * Per body rather than once per shot: piercing three enemies and killing one
+   * looked identical before, which is most of why the power shot read as a bar
+   * filling rather than as a shot landing.
+   */
+  | { type: 'ARCHER_POWER_HIT'; x: number; y: number; left: number }
   | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }

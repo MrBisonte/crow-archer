@@ -336,6 +336,7 @@ A sound is therefore varied where every shape can hear it: `playSound` nudges vo
 ## See also
 
 - [Design patterns](design-patterns.md): composition over inheritance for character definitions
+- [Playbooks](playbooks/README.md): what building this game has cost, one file per kind of work, kept separate from how it is put together
 - [Balance](balance.md): what every character and every boss is worth, and the one rule relating them
 - [Level 3: the maze](level-3-maze.md): why a third map breaks `MAP_GEN`'s row shape, and the Strategy table proposed to fix it. Historical — written before the maze existed
 - [Level 5: the bastion](level-5-bastion.md): the siege map, its retinue and its ladder, and why the whole feature gates on the map rather than the mode

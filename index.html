@@ -18,7 +18,10 @@
     );
     pointer-events: none; z-index: 100;
   }
-  #game { display: block; cursor: crosshair; }
+  /* The canvas is scaled down to fit small viewports (see
+     src/render/fit-canvas.ts), and the art is authored at a fixed pixel
+     size, so the browser must not smooth it on the way. */
+  #game { display: block; cursor: crosshair; image-rendering: pixelated; }
 </style>
 </head>
 <body>

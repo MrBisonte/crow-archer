@@ -12,6 +12,7 @@ import {
   UNIQUE_GUARD_KINDS,
   WARD_HEAL,
   WARD_TRIGGER_HURT,
+  onGuardGround,
   copyGuard,
   guardDamage,
   guardHeal,
@@ -733,5 +734,60 @@ describe('the opening retinue', () => {
     expect(OPENING_RETINUE).toBe(STARTING_RECRUITS + UNIQUE_GUARD_KINDS.length);
     expect(OPENING_RETINUE).toBeGreaterThan(STARTING_RECRUITS);
     expect(OPENING_RETINUE).toBe(3);
+  });
+});
+
+describe('onGuardGround', () => {
+  const LEASH = 170;
+  const post = { x: 0, y: 0 };
+
+  /**
+   * The measured bastion geometry that broke the old region: at 55x33 the
+   * nearest gate is this far from where the hero spawns, against a leash of
+   * 170. Two discs centred on the ends stop overlapping past 340, leaving a
+   * guard that walks toward the hero off-duty in the middle of its own walk.
+   */
+  const GATE_TO_HERO = 386.7;
+
+  it('answers for its own post', () => {
+    expect(onGuardGround(post, { x: 400, y: 0 }, 0, 0, LEASH)).toBe(true);
+  });
+
+  it('answers for the hero, however far off the post they stand', () => {
+    const hero = { x: 2000, y: 0 };
+    expect(onGuardGround(post, hero, hero.x, hero.y, LEASH)).toBe(true);
+  });
+
+  it('stays connected across the gap that broke it', () => {
+    const hero = { x: GATE_TO_HERO, y: 0 };
+    // Every step of the walk from post to hero, not just the ends.
+    for (let t = 0; t <= 1.0001; t += 0.05) {
+      const x = hero.x * t;
+      expect(onGuardGround(post, hero, x, 0, LEASH), `off duty at t=${t.toFixed(2)}`).toBe(true);
+    }
+  });
+
+  it('stays connected at any separation, so no grid size can break it again', () => {
+    for (const gap of [0, 170, 340, 386.7, 1000, 4096]) {
+      const hero = { x: gap, y: 0 };
+      expect(onGuardGround(post, hero, gap / 2, 0, LEASH), `midpoint at gap ${gap}`).toBe(true);
+    }
+  });
+
+  it('is no wider sideways than the leash, so a guard still will not wander off', () => {
+    const hero = { x: 400, y: 0 };
+    expect(onGuardGround(post, hero, 200, LEASH - 1, LEASH)).toBe(true);
+    expect(onGuardGround(post, hero, 200, LEASH + 1, LEASH)).toBe(false);
+  });
+
+  it('does not answer for ground beyond either end', () => {
+    const hero = { x: 400, y: 0 };
+    expect(onGuardGround(post, hero, -LEASH - 1, 0, LEASH)).toBe(false);
+    expect(onGuardGround(post, hero, 400 + LEASH + 1, 0, LEASH)).toBe(false);
+  });
+
+  it('is a plain disc when the hero stands on the post', () => {
+    expect(onGuardGround(post, post, LEASH - 1, 0, LEASH)).toBe(true);
+    expect(onGuardGround(post, post, LEASH + 1, 0, LEASH)).toBe(false);
   });
 });
