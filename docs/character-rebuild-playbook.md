@@ -86,6 +86,30 @@ time belongs here.
 - **Touching the walk?** Check the character-select screen too. Its preview ran
   at `t * 1.5`, one cycle every four seconds, which read as a stuck sprite.
 
+## Heading
+
+**A hero faces the side they are aiming at. Every hero, every surface, no
+exceptions.** This is the rule the rest of this section serves.
+
+- **Drawing a body that aims?** The sprite is authored facing +x and mirrored
+  by a negative scale — `player.facing` in the legacy renderer, `v.facing` in
+  the multiplayer one, both flipping on the sign of `cos(aim)`. The art must
+  use the *local* angle, not the world angle: at facing -1 the canvas has
+  already flipped underneath it.
+- **Aiming a weapon anywhere the body is not turned?** That is the bug. It
+  looks like a man pointing an arrow over his own shoulder while staring
+  forward, and it is instantly obvious in motion. The archer's select-screen
+  routine had it — the preview drove the bow's angle and never set `facing`,
+  because it does not go through the renderer that would have.
+- **Building a surface that is not the game?** The character-select preview
+  paints bodies without the world's facing logic anywhere near it. Any surface
+  that shows a hero aiming has to mirror the body itself, or only aim forward.
+  Check the select screen whenever you touch how a character points at things.
+- **Turning through a wide angle?** Sweep the aim through the *up* direction,
+  never down. The grip rides a circle about the bow hand, so a quarter turn
+  downward puts the weapon below the body's origin and drags it through the
+  hero's own legs on the way past.
+
 ## Weapons
 
 - **A weapon that moves for more than one reason?** It cannot be baked. The bow

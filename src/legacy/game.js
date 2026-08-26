@@ -11237,41 +11237,39 @@ function _drawStatBar(lx, ly, maxW, bar, color) {
  * built per panel per frame instead of all five: the lookup this replaced was
  * a table literal, so every call rebuilt every character's grid to use one. */
 /**
- * The archer's shop window: walk, plant and draw a power shot, loose it, then
- * two quick ones over his shoulder before turning back.
+ * The archer's shop window: walk in, plant, draw a power shot, loose it, then
+ * snap a quick one off before walking on.
  *
  * A routine rather than a loop of the walk, because the panel is where someone
  * decides which hero to be and the walk alone says nothing about him. Every
  * pose in it is one the game already computes — a stride frame, a draw
- * fraction, a release — so this schedules them rather than drawing anything
- * new. The shoulder shots are the reason he is worth picking: he is the one
- * hero whose whole bargain is never having to be near.
+ * fraction, a release — so this schedules them rather than drawing anything new.
+ *
+ * Everything is aimed forward. A first version turned him to shoot back over
+ * his shoulder and it exposed a real gap: the body is mirrored by `facing`,
+ * which the preview does not set, so he pointed the arrow behind himself while
+ * still looking ahead. Aiming somewhere a hero is not facing is wrong for every
+ * character, not just this one — see the heading rule in
+ * docs/character-rebuild-playbook.md — so the routine stays forward until the
+ * body can turn with the aim.
  *
  * Times are absolute seconds through one cycle, so reading the ladder top to
  * bottom is reading the performance in order.
  */
 function _archerPreviewAct(t) {
-  const u = t % 5.6;
-  // Walking in, bow down, aim ahead.
-  if (u < 1.8) return { walking: true, draw: 0, recoil: 0, aim: 0 };
-  // Planted, drawing the power shot over a full second.
-  if (u < 3.0) return { walking: false, draw: (u - 1.8) / 1.2, recoil: 0, aim: 0 };
+  const u = t % 5.0;
+  // Walking in, bow down.
+  if (u < 1.6) return { walking: true, draw: 0, recoil: 0, aim: 0 };
+  // Planted, drawing the power shot over a full second — the shift skill.
+  if (u < 2.8) return { walking: false, draw: (u - 1.6) / 1.2, recoil: 0, aim: 0 };
   // Loosed. The recoil decays over the same window the game gives it.
-  if (u < 3.3) return { walking: false, draw: 0, recoil: 1 - (u - 3.0) / 0.3, aim: 0 };
-  // Turning to look back, still walking, and two snapped shots behind him.
-  //
-  // The sweep goes negative, which is up and over his head. Positive is the
-  // same arc the other way round and drags the bow down through his own legs
-  // on the way past — the grip rides a circle about the bow hand, so a quarter
-  // turn downward puts it below the body's origin, at his feet.
-  const BACK = -Math.PI * 0.85;
-  if (u < 3.9) return { walking: true, draw: 0, recoil: 0, aim: BACK * ((u - 3.3) / 0.6) };
-  if (u < 4.2) return { walking: true, draw: (u - 3.9) / 0.3 * 0.5, recoil: 0, aim: BACK };
-  if (u < 4.4) return { walking: true, draw: 0, recoil: 1 - (u - 4.2) / 0.2, aim: BACK };
-  if (u < 4.7) return { walking: true, draw: (u - 4.4) / 0.3 * 0.5, recoil: 0, aim: BACK };
-  if (u < 4.9) return { walking: true, draw: 0, recoil: 1 - (u - 4.7) / 0.2, aim: BACK };
-  // Turning back to face the way he is going, over the top the same way.
-  return { walking: true, draw: 0, recoil: 0, aim: BACK * (1 - (u - 4.9) / 0.7) };
+  if (u < 3.1) return { walking: false, draw: 0, recoil: 1 - (u - 2.8) / 0.3, aim: 0 };
+  // A beat, then one quick shot from the same stance.
+  if (u < 3.5) return { walking: false, draw: 0, recoil: 0, aim: 0 };
+  if (u < 3.8) return { walking: false, draw: (u - 3.5) / 0.3 * 0.45, recoil: 0, aim: 0 };
+  if (u < 4.0) return { walking: false, draw: 0, recoil: 1 - (u - 3.8) / 0.2, aim: 0 };
+  // Walking on.
+  return { walking: true, draw: 0, recoil: 0, aim: 0 };
 }
 
 /** What each panel is doing in its window. Absent means "just walk". */
