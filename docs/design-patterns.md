@@ -309,8 +309,18 @@ Two other shapes were built out, in conversation, before this one:
   lived inside `game.js` to begin with.
 - **Hit-flash reuses the mechanism instead of special-casing it.**
   `spriteFlashCanvas` is a second cached canvas per key
-  (`` `${key}|flash|${color}` ``), painted once with every cell forced to one
-  color. Same `stamps.get`, a different painter: not a second code path.
+  (`` `${key}|flash|${color}|@${scale}` ``), painted once with every cell forced
+  to one color. Same `stamps.get`, a different painter: not a second code path.
+- **Everything that decides what the canvas looks like is in the key,
+  `scale` included.** Both entry points append `` `|@${scale}` `` rather than
+  leaving it to callers. `scale` reaches the canvas dimensions and the painter,
+  so a key without it makes one grid at two sizes a single cache entry, and
+  `StampCache.get` is first-write-wins — it returns the cached canvas without
+  re-checking `w` or `h`. Two scales already run (a hero preview and the
+  in-play draw); they missed each other only because their key prefixes
+  differed, which is accidental isolation rather than a design. The first
+  caller to draw one sprite at two sizes behind one prefix would have got the
+  wrong one back, with nothing in the symptom pointing at a cache.
 
 ### Example: adding a sprite kind
 

@@ -46,7 +46,7 @@ you into `integration/round-4` yet — Merger maintains that column, not you.
 | Session | Branch | Task | Status | Head | Base | In r4 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
 | `Merger` | `integration/round-4` | Integrate every branch, keep origin clean, open the PR | `started` | `5789592` | — | — | 08-26 12:30 | Coordinating session. Only branch permitted to push. |
-| `robinhood-39` *(exited)* | `feat/char-redesign` | Rebuild the archer: profile sprite, walk cycle, live-drawn bow, brace and pierce | `finished` | `69662b5` | current | yes | 08-26 11:33 | Left the roster ~12:30 without ever replying. Treated as finished: merged, and no longer committing. Was the likely owner of `feat/charselect-screen`. |
+| `robinhood-39` | `feat/char-redesign` | Rebuild the roster: all five heroes redrawn in profile with a real stride; archer's brace/pierce/quiver; live-drawn bow and staff | `idle` | `1697291` | current | **STALE** | 08-26 16:00 | **Alive.** Eight commits past r4's `69662b5`, gate green (typecheck 0, 54 files, 1626 tests). Wizard, knight, ranger and sapper are now profile sprites with baked three-frame strides; the wizard's staff came out of his grid into `render/wizard-staff.ts` (it had been baked **and** painted live by the multiplayer renderer — two staffs). `buildWizardGrid`, `buildKnightGrid` and `buildSapperGrid` **changed signature** to take an `AnimFrame`, and `CHAR_PANELS` rows gained `paintWeapon`. **Collision, unchanged:** `2cb0fc2` rewrites `_drawCharPreview`, which `feat/charselect-screen` also rewrites; merge-tree reports no markers, so a textual merge silently drops one — diff that function by hand. That function is now *more* contested, not less. **I do not own `feat/charselect-screen`.** Merger left the roster; recording here instead of messaging. |
 | *orphaned* | `feat/charselect-screen` | Rework the char-select screen: per-hero stats, clickable, panel row from canvas | `blocked` | `ddfd0d2` | current | **NO** | 08-26 11:50 | **No live owner.** Conflicts with `feat/char-redesign` and `feat/playfield-55x33` in `src/legacy/game.js` and `game.test.ts` — a structural collision, sprite caching against panel layout. `chars` and `DESIGN` both disclaimed it; `robinhood-39`, the likely owner, has exited. **Claim this row if it is yours.** |
 | `Crow Archer branch MAPS` | `feat/playfield-55x33` | Enlarge the playfield to 55x33 and scale the canvas to fit the window | `finished`? | `850a581` | current | yes | 08-25 22:51 | Merged. Status unconfirmed — has not replied. |
 | `trusting-khorana-80b923-a0` | `fix/siege-answering-guard-flake` | Score the siege answering test by quarry identity, not by distance | `finished`? | `ddf5ea8` | current | yes | 08-26 10:17 | Merged. Status unconfirmed — has not replied. |
@@ -59,6 +59,19 @@ session saying so. Replace it with the real value.
 
 ## Traps that have already cost time here
 
+- **Two branches fix the same flake two different ways.** `archer-pierce.test.ts`
+  fails about one run in five because the arrow spends a pierce charge on a
+  generated tree. r4 has `4277d8a` ("clear the field before the pierce test");
+  `feat/char-redesign` has `62fd89b`, which extracts `clearArena` out of
+  `game.test.ts` into a new `src/legacy/arena-testkit.ts` and imports it from
+  both. Same root cause, incompatible edits to the same `beforeEach`. Take one
+  deliberately — a textual merge that keeps both clears the field twice and
+  leaves a dead local helper behind.
+- **`master` still lacks `d2e342b`** (`fix/siege-wave-advance-flake`, in r4).
+  Every branch cut from `master` therefore carries the old frame-counting
+  `stepSim(240)` and fails a full-suite run roughly one time in three. It cost
+  three blocked commits in this session alone. Re-run rather than debugging it,
+  and do not cherry-pick — see the ancestry note below.
 - **The worktrees live inside the main repo,** at
   `robinhood\.claude\worktrees\<name>`. If a worktree's `.git` file is missing,
   every git command from that directory silently resolves to the main clone at
@@ -72,5 +85,13 @@ session saying so. Replace it with the real value.
 - **Git ancestry lies here in three separate ways** — squash merges, dropped
   content whose merge-base became the source tip, and cherry-picks that change
   the hash. Verify by content or tree hash, never by "N commits ahead".
+- **`master` is behind r4 on test stability.** `d2e342b`
+  (`fix/siege-wave-advance-flake`) is in `integration/round-4` and never reached
+  `master`, so every branch cut from master still carries the old frame-counting
+  `g.stepSim(240)` in `game.test.ts`. Measured from `feat/char-redesign`: the
+  siege wave-advance test fails about **1 full-suite run in 3**, and passes 4/4
+  in isolation. It is not your change. Re-run rather than cherry-picking the
+  fix — a cherry-pick duplicates content already in r4 and buys a conflict at
+  merge time. It goes away for everyone when r4's PR lands.
 - **`git branch -d` refuses a squash-merged branch** as "not fully merged"
   even when every line of it is on `master`. That refusal is not evidence.

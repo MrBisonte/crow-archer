@@ -94,6 +94,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 | [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Balance](docs/balance.md) | Character stats, boss health, and the one dial that relates them |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
+| [Playbooks](docs/playbooks/README.md) | What building this game has cost: one file per kind of work |
 | [Working rules](CLAUDE.md) | Contributing: the traps this codebase has already fallen into, and what is mechanically enforced |
 
 ## License
