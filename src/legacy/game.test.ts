@@ -3923,7 +3923,10 @@ describe('the priest in the field', () => {
    * as well when the setup is broken and the enemy was never in anyone's reach,
    * which is the way a test like this usually rots.
    */
-  it('deals no damage at all, even with an enemy standing on it', () => {
+  // 15s rather than the 5s default: this drives 180 frames of full siege sim
+  // twice (the priest, then the fighting control), and the 55x33 field made
+  // each frame ~2.7x the tiles. It ran 5.3s on CI and timed out at the edge.
+  it('deals no damage at all, even with an enemy standing on it', { timeout: 15000 }, () => {
     openSiege();
     const priest = priestBody();
     const fighters = bodies().filter((body) => body !== priest);
