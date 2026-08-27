@@ -20,6 +20,14 @@ import { describe, expect, it } from 'vitest';
  * console banner on the way out. The declaration was the one mention it
  * missed, and nothing in the build had a reason to look at it. This is that
  * reason. It walks the direction tsc cannot.
+ *
+ * The banner is the third set. `game.js` prints the verbs at boot so they are
+ * discoverable from the console rather than only from a document the player
+ * would have to already be reading, which makes that string a promise about
+ * what a person can type. Nothing held it to the verbs that exist. It is a
+ * softer failure than a missing assignment -- an unlisted verb is
+ * undiscoverable, not undefined -- and it is the same shape: a claim about
+ * `game.js` that `game.js` never has to honour.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const dtsSrc = readFileSync(resolve(here, 'globals.d.ts'), 'utf8');
@@ -48,37 +56,75 @@ function windowInterfaceBody(src: string): string {
 const body = windowInterfaceBody(dtsSrc).replace(/\/\*[\s\S]*?\*\//g, '');
 
 /**
- * Members of `Window`, split by who owes the assignment. A required member is
- * one `game.js` attaches; an optional one (`?:`) is the browser's, and
- * `webkitAudioContext` is Safari's rather than anything this game sets.
+ * Members of `Window`, each with the type it was declared at.
+ *
+ * Optional (`?:`) is the split that says who owes the assignment: an optional
+ * member is the browser's, and `webkitAudioContext` is Safari's rather than
+ * anything this game sets. A function type is the split that says what a
+ * member is for -- a verb is something a person calls, a surface is something
+ * the harness reads -- and both splits are pinned below rather than trusted,
+ * so a member that lands in the wrong one fails rather than escapes.
  */
-const members = [...body.matchAll(/^\s*([A-Za-z_$][\w$]*)(\??)\s*:/gm)]
-  .map(m => ({ name: m[1] as string, optional: m[2] === '?' }));
-const required = members.filter(m => !m.optional).map(m => m.name);
+const members = [...body.matchAll(/^[^\S\n]*([A-Za-z_$][\w$]*)(\??)\s*:([^;]*);/gm)]
+  .map(m => ({
+    name: m[1] as string,
+    optional: m[2] === '?',
+    isFunction: (m[3] as string).includes('=>'),
+  }));
+
+const required = members.filter(m => !m.optional);
 const optional = members.filter(m => m.optional).map(m => m.name);
+/** Required members a person is meant to call. These owe the banner a line. */
+const verbs = required.filter(m => m.isFunction).map(m => m.name).sort();
+/** Required members that are read, not called. These do not. */
+const surfaces = required.filter(m => !m.isFunction).map(m => m.name).sort();
 
 /** Members `game.js` actually attaches. `=(?!=)` so a comparison is not one. */
 const assigned = new Set(
   [...legacySrc.matchAll(/\bwindow\.([A-Za-z_$][\w$]*)\s*=(?!=)/g)].map(m => m[1] as string),
 );
 
+/** The names the boot banner advertises, in `verb(arg)` form. */
+function advertisedVerbs(src: string): string[] {
+  const banner = /'console: ([^']*)'/.exec(src);
+  if (!banner) throw new Error('game.js prints no `console: ` boot banner');
+  return [...(banner[1] as string).matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)]
+    .map(m => m[1] as string)
+    .sort();
+}
+
 describe('window surface coverage', () => {
   /**
    * A source-text test that matches nothing passes everything after it, so
    * this names what the parse must have recovered instead of counting it -- a
-   * floor goes stale as the surface grows. Both anchors are load bearing:
-   * `__game` is the harness's entry point, and the optional set is the whole
-   * reason the split exists, so a second entry there should have to be
-   * argued for rather than added.
+   * floor goes stale as the surface grows.
+   *
+   * Both sets are exact rather than partial, and both are load bearing. The
+   * optional set is the whole reason that split exists. The surface set is
+   * the escape hatch from the banner rule below: a member declared `unknown`
+   * is taken to be something the harness reads, so a verb typed loosely
+   * enough would slip the rule entirely. Naming the two that qualify means a
+   * third has to be argued for rather than added.
    */
   it('parses the surface it is walking', () => {
-    expect(required).toContain('__game');
-    expect([...assigned]).toContain('__game');
     expect(optional).toEqual(['webkitAudioContext']);
+    expect(surfaces).toEqual(['CrowArcherInternals', '__game']);
+    expect(verbs.length).toBeGreaterThan(0);
   });
 
   it('assigns every member it declares', () => {
-    const unassigned = required.filter(name => !assigned.has(name));
+    const unassigned = required.map(m => m.name).filter(name => !assigned.has(name));
     expect(unassigned).toEqual([]);
+  });
+
+  /**
+   * Both directions at once, because they fail differently and both are real:
+   * a verb missing from the banner is undiscoverable, and a name in the
+   * banner that no longer exists sends the reader to type something that does
+   * nothing. `906440b` got this right by hand while missing the `.d.ts`; the
+   * point is that neither half was checked.
+   */
+  it('advertises every verb, and only verbs that exist', () => {
+    expect(advertisedVerbs(legacySrc)).toEqual(verbs);
   });
 });
