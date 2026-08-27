@@ -47,8 +47,8 @@ import { DEFAULT_POP, panelAt, panelSlots } from '../render/panel-row';
 import { listRows, rowAt } from '../render/list-rows';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
-  featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
-  perkHeld, purchase, statValue,
+  axisReaches, featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel,
+  nextCost, perkHeld, purchase, statValue,
 } from '../sim/upgrades';
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
@@ -1239,7 +1239,10 @@ function cyclePanelSelection(panels, current, field) {
 // Declared here rather than with the other menu state below because the
 // health a run opens on is the selected character's, and playerHP is the
 // next line.
-let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper'
+// Typed rather than left to inference: the union was written in a comment
+// here and checked by nothing, so every table keyed by it took a bare string.
+/** @type {import('../net/protocol').CharacterKind} */
+let selectedChar = 'archer';
 let playerHP = CHARACTER_STATS[selectedChar].maxHp, playerHitFlash = 0;
 // Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
 let blockedFlash = 0;
@@ -1900,7 +1903,11 @@ function _clickCharSelect(e) {
     transitionTo(picksItsMap(gameMode) ? 'mapselect' : 'playing');
     return;
   }
-  selectedChar = CHAR_PANELS[hit].char;
+  // Cast rather than annotated on the table: annotating CHAR_PANELS costs the
+  // inferred shape of every other field on the row, which two test files read.
+  // The cast is checked elsewhere — game.test.ts asserts every character the
+  // protocol knows has a panel, so a panel's `char` is always one of them.
+  selectedChar = /** @type {import('../net/protocol').CharacterKind} */ (CHAR_PANELS[hit].char);
 }
 
 function syncCursor() {
@@ -8591,12 +8598,24 @@ const FEATHERS = (() => {
     CONFIG.resources.satchels.max   = statValue(_levels, 'tools', CONFIG.baseDynamites);
   }
 
+  /** The live level record. Handed out rather than copied so a test can set
+   *  an axis directly; nothing in the game writes it but `buyCurrent`. */
+  function levels() { return _levels; }
+
   function moveCursor(dir) {
     _cursor = (_cursor + dir + UPGRADE_ORDER.length) % UPGRADE_ORDER.length;
   }
 
   function buyCurrent() {
-    const result = purchase({ feathers: _feathers, levels: _levels }, UPGRADE_ORDER[_cursor]);
+    const id = UPGRADE_ORDER[_cursor];
+    // Half this tree is kit-specific wearing generic clothes, and three of the
+    // five heroes cannot use some of it at all -- see AXIS_HEROES. Refused
+    // rather than sold: the wallet is shared, so the same level bought while
+    // playing a hero it serves is worth exactly as much, and taking 45
+    // feathers for a POWDER KEG the sapper's bombs never read is the shop
+    // lying about what it sells.
+    if (!axisReaches(id, selectedChar)) return false;
+    const result = purchase({ feathers: _feathers, levels: _levels }, id);
     if (result.kind !== 'bought') return false;
     _feathers = result.progress.feathers;
     _levels   = result.progress.levels;
@@ -8637,6 +8656,10 @@ const FEATHERS = (() => {
       const sel   = i === _cursor;
       const maxed = isMaxed(_levels, id);
       const cost  = nextCost(_levels, id);
+      // Whether this axis does anything for the hero being played. Said on the
+      // row rather than only on the refusal, so the player reads it before
+      // spending the keypress rather than after.
+      const live  = axisReaches(id, selectedChar);
       const row   = rows[i];
       const oy    = row.midY;
       const barX  = row.x + 20;
@@ -8650,24 +8673,29 @@ const FEATHERS = (() => {
 
       // Label
       ctx.textAlign = 'left';
-      ctx.fillStyle = sel ? '#39FF14' : '#1a7a08';
+      ctx.fillStyle = !live ? '#7a8877' : sel ? '#39FF14' : '#1a7a08';
       ctx.font = '19px "Courier New", monospace';
       ctx.fillText(u.label, barX, oy - 12);
 
       // Level pips (right-aligned)
       ctx.textAlign = 'right';
-      ctx.fillStyle = maxed ? '#FFB400' : (sel ? '#39FF14' : '#1a7a08');
+      ctx.fillStyle = !live ? '#5c6b59' : maxed ? '#FFB400' : (sel ? '#39FF14' : '#1a7a08');
       ctx.fillText('■'.repeat(lv) + '□'.repeat(maxLevel(id) - lv), barR, oy - 12);
 
       // Description
       ctx.textAlign = 'left';
       ctx.font = '12px "Courier New", monospace';
-      ctx.fillStyle = '#0a5a08';
+      ctx.fillStyle = live ? '#0a5a08' : '#5c6b59';
       ctx.fillText(u.desc, barX, oy + 12);
 
-      // Cost / MAXED
+      // Cost / MAXED / nothing for this hero
       ctx.textAlign = 'right';
-      if (maxed) {
+      if (!live) {
+        // The levels still count for the heroes it does reach, so this says
+        // "not for you" and not "not worth buying".
+        ctx.fillStyle = '#7a8877';
+        ctx.fillText(`NOTHING FOR THE ${selectedChar.toUpperCase()}`, barR, oy + 12);
+      } else if (maxed) {
         ctx.fillStyle = '#FFB400';
         ctx.fillText('◆ MAXED', barR, oy + 12);
       } else {
@@ -8684,7 +8712,7 @@ const FEATHERS = (() => {
       CONFIG.canvasW / 2, CONFIG.canvasH - 22);
   }
 
-  return { init, onCrowKill, maxHP, pfRange, speed, wallet, spend, grant, wardStart, applyToGame, moveCursor, buyCurrent, draw };
+  return { init, onCrowKill, maxHP, pfRange, speed, wallet, spend, grant, levels, wardStart, applyToGame, moveCursor, buyCurrent, draw };
 })();
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
@@ -12887,6 +12915,19 @@ function chooserSpec(id) {
   return spec;
 }
 
+/**
+ * The climbable talent behind an offer id, or null for a capstone.
+ *
+ * `chooserSpec` answers with either kind, which is right for a label and a
+ * description because both carry those. A ladder and a tier only one kind
+ * carries, and asking `isRite` for them reads the ceremony instead of the
+ * offer — a capstone dealt by the draft would reach `.costs.length` on an
+ * object with no costs. This asks the tree, which is the thing that knows.
+ */
+function chooserLadder(id) {
+  return CHAR_TREES[selectedChar].talents.find((t) => t.id === id) ?? null;
+}
+
 /** One LEVEL ■■□ row sized to the talent's own ladder, not STAT_SCALE. */
 function _drawOwnedPips(lx, ly, maxW, filled, total, color) {
   ctx.textAlign = 'left';
@@ -12981,10 +13022,15 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
       '#C8D0C4');
   }
 
-  // A capstone has no ladder, so only the draft shows a level.
-  if (!isRite) {
+  // A capstone has no ladder, so only the draft shows a level. Asked of the
+  // spec rather than of `isRite`: the flag says which ceremony is open and the
+  // shape says whether this offer has a ladder at all, and reading the flag
+  // for both is how a capstone dealt by the draft would reach `.costs.length`
+  // on an object that has no costs.
+  const ladder = chooserLadder(id);
+  if (ladder !== null) {
     _drawOwnedPips(x + pad, y + h - 42, innerW,
-      talentLevel(TALENTS.state(), id), spec.costs.length, sel ? kind.color : '#5c6b59');
+      talentLevel(TALENTS.state(), id), ladder.costs.length, sel ? kind.color : '#5c6b59');
   }
 
   // Grey, both of them: the panel's colour is spent on what the talent does,
@@ -12992,8 +13038,8 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   ctx.textAlign = 'center';
   ctx.font = '11px "Courier New",monospace';
   ctx.fillStyle = sel ? PANEL_LABEL_COLOR : '#5c6b59';
-  ctx.fillText(isRite ? `${kind.label} · SEALS THE RUN`
-                      : `${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`, cx, y + h - 22);
+  ctx.fillText(ladder !== null ? `${kind.label} · TIER ${TIER_ROMAN[ladder.tier]}`
+                               : `${kind.label} · SEALS THE RUN`, cx, y + h - 22);
 }
 
 /**
@@ -14379,6 +14425,10 @@ export const devHooks = {
   charTree: () => CHAR_TREES[selectedChar],
   /** The wallet TALENTS buys from, so a test can set up a poor buyer. */
   feathers: () => FEATHERS,
+  /** The purchased upgrade levels themselves, so a test can measure one axis
+   *  at a time. Levels are module state that outlives a test, so reading the
+   *  sum of whatever earlier tests bought is the failure mode this avoids. */
+  upgradeLevels: () => FEATHERS.levels(),
   /** The mid-run chooser, and a pick that goes through the real confirm. */
   chooser: () => chooser,
   /** How each talent is presented: its kind, sigil and hook. Exposed so the

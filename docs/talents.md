@@ -9,6 +9,7 @@ this document is the per-character half that sits beside it.
 - [Mastery and ranks](#mastery-and-ranks)
 - [The wizard's tree](#the-wizards-tree)
 - [Buying them](#buying-them)
+- [The axes that have not moved yet](#the-axes-that-have-not-moved-yet)
 - [What a run looks like](#what-a-run-looks-like)
 - [The other four heroes](#the-other-four-heroes)
 - [What the colours mean](#what-the-colours-mean)
@@ -133,6 +134,47 @@ canvas rather than a design width, a pitch that shrinks to fit but never
 spreads, a short list centred in its band, and the rects the click handler
 tests are the rects the draw used. Buying that geometry also fixed the upgrade
 screen, which had drawn a literal 560 px row whatever the canvas was.
+
+## The axes that have not moved yet
+
+The design splits upgrades in two: the FEATHERS tree keeps what every hero
+has, and kit-specific axes move into the character trees here. That move has
+not happened. Four axes are still in the shared tree wearing generic clothes,
+and thirteen of the shop's forty cells do nothing at all for the hero playing
+them.
+
+| Axis | archer | wizard | knight | ranger | sapper |
+|---|:-:|:-:|:-:|:-:|:-:|
+| QUIVER DEPTH `arrows` | ● | — | — | ● | — |
+| FLETCHER CACHE `restore` | ● | — | — | ● | — |
+| POWDER KEG `tools` | ● | — | — | ● | — |
+| TINE REACH `pfRange` | ● | ● | — | ● | ● |
+| VITALITY, SWIFTNESS, PLUME BOUNTY, WARD FEATHER | ● | ● | ● | ● | ● |
+
+Read that bottom-left cell twice. **POWDER KEG says "tool capacity" and does
+nothing for the sapper**, the one hero built entirely around throwing: it sets
+`dynamites.max` and `satchels.max`, and he spends `bombs`, which no upgrade and
+no pace preset has ever touched. The knight is the other outlier — he spends
+nothing at all, so both quiver axes are dead for him, and his sword is his
+primary rather than an out-of-ammo fallback, which is why TINE REACH is dead
+too.
+
+The map lives in `AXIS_HEROES` (`src/sim/upgrades.ts`) and is **measured, not
+asserted**: `upgrades-reach.test.ts` plays each hero, fires every button they
+have, and checks which pools actually go down. A hand-written map is right
+until somebody gives the knight a crossbow.
+
+Until the split happens the shop greys a dead cell, labels it `NOTHING FOR THE
+<HERO>` and refuses the purchase. The wallet is shared, so the same level
+bought while playing a hero it serves is worth exactly as much — this costs the
+player nothing and stops the shop taking 45 feathers for a keg the sapper's
+pouch never reads.
+
+**The split itself is not decided.** Moving these four out means choosing, per
+hero, which axis becomes which talent, at which tier and price, deciding what
+the sapper's bomb capacity should cost when his pool is 10 deep and the
+archer's is 3, and deciding what happens to levels players have already bought.
+Those are balance calls, not refactors.
 
 ## What a run looks like
 
@@ -259,6 +301,7 @@ a run stays with the game.
 | The draft and rite screens | `drawChooser()` and `TALENT_LOOK` in `src/legacy/game.js` |
 | The buy screen | `drawTalentTree()` and `talentTreeLayout()` in `src/legacy/game.js` |
 | Row geometry, shared with the upgrade screen | `src/render/list-rows.ts` |
+| Which upgrade axes reach which hero | `AXIS_HEROES` in `src/sim/upgrades.ts`, measured by `src/legacy/upgrades-reach.test.ts` |
 | Purchases, spending the wallet | `TALENTS.buy()`, which spends through `FEATHERS.spend()` |
 
 The two chooser screens can still be staged by hand with the console verbs
