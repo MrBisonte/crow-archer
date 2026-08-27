@@ -14097,6 +14097,11 @@ export const devHooks = {
   /** The talent system's public face - bank, run layer, effective figures -
    *  so a test drives a draft before the screens exist. */
   talents: () => TALENTS,
+  /** The playing character's tree, so a harness can name every talent it owns
+   *  rather than keep a second list of them - the same reason `hitstopLadder`
+   *  hands out the real table. A benchmark that drafts a foreign id crashes
+   *  in `talentValue`, so guessing is not an option. */
+  charTree: () => CHAR_TREES[selectedChar],
   /** The wallet TALENTS buys from, so a test can set up a poor buyer. */
   feathers: () => FEATHERS,
   /** The mid-run chooser, and a pick that goes through the real confirm. */
