@@ -58,6 +58,8 @@ import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
+import { paintTalentSigil } from '../render/talent-sigil-paint';
+import { SIGILS } from '../render/talent-sigils';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
@@ -12745,39 +12747,39 @@ const TALENT_KINDS = {
  */
 const TALENT_LOOK = {
   // Wizard.
-  focusDepth:    { kind: 'indirect', sigil: '◉', hook: 'A full pool casts four bolts' },
-  blinkReach:    { kind: 'mechanic', sigil: '⤺', hook: 'The wall you could not reach is now cover' },
-  stormWidth:    { kind: 'direct',   sigil: '◎', hook: 'The storm stops asking where they are' },
-  overchannel:   { kind: 'indirect', sigil: '↯', hook: 'The escape button becomes the attack button' },
-  stormcaller:   { kind: 'indirect', sigil: '↻', hook: 'The sky becomes a habit' },
+  focusDepth:    { kind: 'indirect', hook: 'A full pool casts four bolts' },
+  blinkReach:    { kind: 'mechanic', hook: 'The wall you could not reach is now cover' },
+  stormWidth:    { kind: 'direct',   hook: 'The storm stops asking where they are' },
+  overchannel:   { kind: 'indirect', hook: 'The escape button becomes the attack button' },
+  stormcaller:   { kind: 'indirect', hook: 'The sky becomes a habit' },
 
   // Archer.
-  setFeet:       { kind: 'indirect', sigil: '▼', hook: 'Set faster, hit sooner' },
-  deepRoots:     { kind: 'indirect', sigil: '▬', hook: 'What you built takes longer to lose' },
-  splitShaft:    { kind: 'direct',   sigil: '»', hook: 'One shaft, a line of them' },
-  rooted:        { kind: 'indirect', sigil: '▣', hook: 'Braced, and free to walk' },
-  splinter:      { kind: 'direct',   sigil: '∴', hook: 'One stick, three craters' },
+  setFeet:       { kind: 'indirect', hook: 'Set faster, hit sooner' },
+  deepRoots:     { kind: 'indirect', hook: 'What you built takes longer to lose' },
+  splitShaft:    { kind: 'direct',   hook: 'One shaft, a line of them' },
+  rooted:        { kind: 'indirect', hook: 'Braced, and free to walk' },
+  splinter:      { kind: 'direct',   hook: 'One stick, three craters' },
 
   // Knight.
-  deeperCut:     { kind: 'direct',   sigil: '◆', hook: 'Every stack bites harder' },
-  fourthBlood:   { kind: 'direct',   sigil: '◈', hook: 'A fourth drop to earn' },
-  chargeThrough: { kind: 'direct',   sigil: '⇒', hook: 'He cuts on every side while charging' },
-  berserker:     { kind: 'indirect', sigil: '◇', hook: 'A miss is no longer the end of it' },
-  juggernaut:    { kind: 'mechanic', sigil: '█', hook: 'Nothing stops the charge' },
+  deeperCut:     { kind: 'direct',   hook: 'Every stack bites harder' },
+  fourthBlood:   { kind: 'direct',   hook: 'A fourth drop to earn' },
+  chargeThrough: { kind: 'direct',   hook: 'He cuts on every side while charging' },
+  berserker:     { kind: 'indirect', hook: 'A miss is no longer the end of it' },
+  juggernaut:    { kind: 'mechanic', hook: 'Nothing stops the charge' },
 
   // Ranger.
-  lightFoot:     { kind: 'indirect', sigil: '↗', hook: 'Less ground to reach full tilt' },
-  longWind:      { kind: 'indirect', sigil: '∿', hook: 'A pause no longer costs everything' },
-  fullTilt:      { kind: 'indirect', sigil: '≫', hook: 'The ceiling climbs with you' },
-  slipstream:    { kind: 'mechanic', sigil: '◌', hook: 'At full speed, nothing is in the way' },
-  shrapnel:      { kind: 'direct',   sigil: '∗', hook: 'The satchel answers outward' },
+  lightFoot:     { kind: 'indirect', hook: 'Less ground to reach full tilt' },
+  longWind:      { kind: 'indirect', hook: 'A pause no longer costs everything' },
+  fullTilt:      { kind: 'indirect', hook: 'The ceiling climbs with you' },
+  slipstream:    { kind: 'mechanic', hook: 'At full speed, nothing is in the way' },
+  shrapnel:      { kind: 'direct',   hook: 'The satchel answers outward' },
 
   // Sapper.
-  longFuse:      { kind: 'indirect', sigil: '∼', hook: 'A bomb reaches further for the next' },
-  moreLinks:     { kind: 'direct',   sigil: '≡', hook: 'The chain runs longer before it dies' },
-  stickyFan:     { kind: 'mechanic', sigil: '∵', hook: 'The fan stays where it lands' },
-  demolitionist: { kind: 'direct',   sigil: '⊙', hook: 'Each blast louder than the last' },
-  shockwave:     { kind: 'mechanic', sigil: '⊚', hook: 'What survives is thrown clear' },
+  longFuse:      { kind: 'indirect', hook: 'A bomb reaches further for the next' },
+  moreLinks:     { kind: 'direct',   hook: 'The chain runs longer before it dies' },
+  stickyFan:     { kind: 'mechanic', hook: 'The fan stays where it lands' },
+  demolitionist: { kind: 'direct',   hook: 'Each blast louder than the last' },
+  shockwave:     { kind: 'mechanic', hook: 'What survives is thrown clear' },
 };
 for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
   for (const entry of [...lookTree.talents, ...lookTree.capstones]) {
@@ -12788,6 +12790,9 @@ for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
     if (!TALENT_KINDS[row.kind]) {
       throw new Error(`TALENT_LOOK['${entry.id}'] has no such kind: '${row.kind}'`);
     }
+    // And a drawing. A talent with no sigil paints an empty panel, which is
+    // the same silent gap a missing look row would have been.
+    if (!SIGILS[entry.id]) throw new Error(`no sigil drawn for '${lookChar}.${entry.id}'`);
   }
 }
 
@@ -12863,15 +12868,25 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, y + 26);
 
   // The sigil stands where a hero's portrait stands on the select screen.
+  // Drawn rather than printed: a glyph is only as good as whatever font the
+  // player happens to have, and U+2608 shipped here as an empty box once.
+  //
   // Every figure below is a fraction of the panel, not a pixel count, so the
-  // box can be resized without the contents needing to be re-placed by hand.
-  // The type sizes are deliberately NOT fractions: shrinking the box must not
-  // shrink the reading.
-  ctx.font = `${sel ? 46 : 38}px "Courier New",monospace`;
-  if (sel) { ctx.shadowColor = kind.color; ctx.shadowBlur = 12; }
-  ctx.fillStyle = sel ? kind.color : kind.dim;
-  ctx.fillText(look.sigil, cx, y + h * (sel ? 0.34 : 0.46));
-  ctx.shadowBlur = 0;
+  // box can be resized without the contents needing re-placing by hand. The
+  // type sizes are deliberately NOT fractions: shrinking the box must not
+  // shrink the reading, and the sigil holds its stroke weight for the same
+  // reason.
+  paintTalentSigil(ctx, id, {
+    // Centred on the fraction, with no baseline fudge: the painter centres on
+    // the point it is given, where fillText hung a glyph off a baseline.
+    // Larger than the glyphs were, too — a 46 px letter fills its em box and a
+    // stroked drawing on a 24 grid does not, so matching the old number gave
+    // a sigil that read as an afterthought in the middle of the panel.
+    x: cx, y: y + h * (sel ? 0.32 : 0.44),
+    size: sel ? 74 : 58,
+    color: sel ? kind.color : kind.dim,
+    glow: sel ? 12 : 0,
+  });
 
   ctx.font = '10.5px "Courier New",monospace';
   ctx.fillStyle = '#93a08f';

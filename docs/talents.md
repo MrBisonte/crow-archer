@@ -181,6 +181,13 @@ decoration: the word teaches the colour, and after a few runs the colour works
 alone. Tier itself is grey now — it is a word, and it was competing for the
 same three hues.
 
+Each talent also carries a **drawn sigil** rather than a printed character. A
+glyph is only as good as the font the player happens to have — U+2608 rendered
+as an empty box on a default Windows install and shipped that way — and a
+drawing depends on nothing. They are generated from the design sheets into path
+data, so the shape has one home and the game never parses markup to draw a
+frame.
+
 A fourth kind — defensive, healing, damage taken — is **deliberately absent
 rather than empty**. Not one of the twenty-five does any of those things; the
 FEATHERS tree carries health and the ward. That is a fact about the trees, not
@@ -209,6 +216,8 @@ a run stays with the game.
 |---|---|
 | Trees, tiers, prices, mastery arithmetic, the draft deal | `src/sim/talents.ts` |
 | Which CONFIG figure each numeric talent moves | `TALENTS.STATS` in `src/legacy/game.js` |
+| Each talent's sigil, as path data | `src/render/talent-sigils.ts`, generated from `_design/talent-icons/` |
+| Drawing one onto a canvas | `src/render/talent-sigil-paint.ts` |
 | Save file, mastery awards, the run's drafted set, the rite's seal, effective figures | `TALENTS` in `src/legacy/game.js` |
 | The draft and rite screens | `drawChooser()` and `TALENT_LOOK` in `src/legacy/game.js` |
 | Purchases, spending the wallet | `TALENTS.buy()`, which spends through `FEATHERS.spend()` |
