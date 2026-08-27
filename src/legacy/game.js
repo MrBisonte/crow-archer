@@ -49,6 +49,10 @@ import {
   featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
   perkHeld, purchase, statValue,
 } from '../sim/upgrades';
+import {
+  CHAR_TREES, draftOffers, draftedValue, masteryAfter, ownedIds, purchaseTalent,
+  talentBankFrom,
+} from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
@@ -635,6 +639,8 @@ const CONFIG = {
   // punishes whoever was chasing, rather than a repositioning nuke: it clears
   // the ring of crows that closed in, and takes one point off a boss.
   wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
+  // The rite's Overchannel capstone: how long bolts cast free after a blink.
+  wizOverchannelSecs: 4,
   // A rate, not a damage. What a bolt is worth is wizBoltDamage times the
   // wizard's multiplier; this is how long he spends unable to answer
   // anything, and two full seconds of it was most of why the fight was
@@ -1239,6 +1245,9 @@ let pfKind = 'pitchfork';
 // taken in. The window is what makes a chain a rhythm rather than a stored
 // charge: let it lapse and the ability is back to its plain cooldown.
 let wizBlinkHops = 0, wizBlinkChainTimer = 0;
+// Overchannel's remaining free-bolt window, seconds. Only ever nonzero when
+// the rite sealed that capstone this run.
+let wizOverchannel = 0;
 // The same window for the knight, opened when a dash starts.
 let knightChainTimer = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
@@ -1377,6 +1386,9 @@ function transitionTo(next) {
   if (next === 'controls') controlsFrom = appState;
   const prev = appState;
   appState = next;
+  // Winning the run is a mastery milestone, and this is the one door into
+  // 'win' - awarded here rather than at each victorious call site.
+  if (next === 'win' && prev !== 'win') TALENTS.award('run_won');
   // A freeze belongs to one moment of one run. Resuming from the pause menu,
   // starting a fresh run, or walking into a boss fight all end that moment, so
   // none of them inherit whatever the last impact was still owed.
@@ -2068,7 +2080,7 @@ function tryWizardBlink() {
     return;
   }
 
-  const hop = probeAhead(player.x, player.y, player.aimAngle, CONFIG.wizBlinkDistance);
+  const hop = probeAhead(player.x, player.y, player.aimAngle, TALENTS.blinkDistance());
 
   // Blinking face-first into a wall would otherwise cost the whole cooldown
   // for a couple of pixels, which reads as the button being broken rather
@@ -2089,6 +2101,8 @@ function tryWizardBlink() {
   wizBlinkChainTimer = CONFIG.shiftChainSecs;
   wizBlinkCD         = CONFIG.wizBlinkCooldown;
   wizBlinkIFrame     = CONFIG.wizBlinkIFrames;
+  // The rite's Overchannel: a landed blink opens the free-bolt window.
+  if (TALENTS.capstoneActive('overchannel')) wizOverchannel = CONFIG.wizOverchannelSecs;
 
   // Arriving is itself the attack. Resolved here rather than on a timer, so
   // what the ring shows a moment later is a report of what was already hit.
@@ -2213,8 +2227,12 @@ const HERO_UPKEEP = {
   // hidden cooldown, and two rates interacting is a balance problem with no
   // single dial to turn.
   wizard: (dt) => {
-    if (inv.focus >= CONFIG.wizFocusMax) return;
-    inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + dt / CONFIG.wizFocusRegenSecs);
+    if (wizOverchannel > 0) wizOverchannel = Math.max(0, wizOverchannel - dt);
+    // The pool's ceiling is the effective figure, not the base: FOCUS DEPTH
+    // raises resources.focus.max through TALENTS.applyToRun, and reading the
+    // base here would regenerate a talent away.
+    if (inv.focus >= CONFIG.resources.focus.max) return;
+    inv.focus = Math.min(CONFIG.resources.focus.max, inv.focus + dt / CONFIG.wizFocusRegenSecs);
   },
   sapper: (dt) => tickSapperBurst(dt),
 };
@@ -2481,7 +2499,7 @@ function drawAbilityFx() {
   if (stormFx > 0) {
     paintLightningStorm(ctx, {
       x: player.x, y: player.y + CONFIG.hudHeight,
-      radius: CONFIG.stormBlastRadius, age: 1 - stormFx / STORM_FX_SECS,
+      radius: TALENTS.stormRadius(), age: 1 - stormFx / STORM_FX_SECS,
     });
   }
   if (blinkFx > 0) {
@@ -3520,7 +3538,7 @@ events.on(e => {
         shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
       for (let k = 0; k < 8; k++) {
         const ang = Math.random() * Math.PI * 2;
-        const dst = 60 + Math.random() * CONFIG.stormBlastRadius * 0.85;
+        const dst = 60 + Math.random() * TALENTS.stormRadius() * 0.85;
         burst(e.x + Math.cos(ang)*dst, e.y + Math.sin(ang)*dst, {
           count: 5, colors: ['#FFFFFF','#8888FF'],
           speedMin: 20, speedMax: 60, decay: 4.0, shape: 'spark',
@@ -3659,7 +3677,7 @@ function initGame() {
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
-  wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
+  wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
 
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
@@ -3669,6 +3687,7 @@ function initGame() {
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
   FEATHERS.applyToGame();
+  TALENTS.resetRun();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
   const spawn = spawnPoint();
@@ -4203,14 +4222,15 @@ function tryCrossbowBolt() {
 
 function tryWizardBolt() {
   if (wizBoltCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  if (inv.focus < CONFIG.wizFocusBolt) { tryBroom(); return; }
+  const boltFree = wizOverchannel > 0;
+  if (!boltFree && inv.focus < CONFIG.wizFocusBolt) { tryBroom(); return; }
   // Out of Focus he cannot cast at all, and swings a broom instead. Checked
   // before the in-flight cap so an empty pool always produces the swing rather
   // than sometimes producing nothing: a press that does nothing at all reads
   // as the button being broken.
 
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  inv.focus -= CONFIG.wizFocusBolt;
+  if (!boltFree) inv.focus -= CONFIG.wizFocusBolt;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
@@ -4443,8 +4463,8 @@ function trySapperShot() {
 }
 
 function fireLightningStorm() {
-  const STORM_R = CONFIG.stormBlastRadius;
-  stormCD = CONFIG.stormCooldown;
+  const STORM_R = TALENTS.stormRadius();
+  stormCD = TALENTS.stormCooldown();
   _stormFlash = CONFIG.stormFlashDuration;
   stormFx = STORM_FX_SECS;
   events.emit({ type: 'STORM_CAST', x: player.x, y: player.y });
@@ -5768,6 +5788,7 @@ const MAZE_LOCKS = {
       // stage now, so walking through here is a hand-off rather than a
       // curtain — the same shape the crow king's and the dark knight's
       // deaths already use.
+      TALENTS.award('stage_cleared');
       startBastionStage();
     },
   },
@@ -7035,6 +7056,9 @@ function updateBossDeath(dt) {
     bossDeathSeq = null;
     const deadKind = boss.kind;
     boss = null; hostileBolts = [];
+    // A boss down pays mastery whether it ends a stage or sits inside a siege
+    // wave; the stage hand-offs below pay their own milestone on top.
+    TALENTS.award('boss_down');
     // On a siege the boss is one enemy inside a wave, not the end of a stage.
     // Every branch below hands off to another map or to a win screen, so
     // running any of them here would load the castle in the middle of wave 7.
@@ -7062,6 +7086,7 @@ function updateBossDeath(dt) {
       // spot, wherever the crow king died, is still open ground), and seed
       // the first batch of skeletons.
       crows = [];
+      TALENTS.award('stage_cleared');
       bossStage = 2;
       generateMap('castle');
       player.x = 2.5 * CONFIG.tileSize; player.y = (CONFIG.rows / 2) * CONFIG.tileSize;
@@ -7079,6 +7104,7 @@ function updateBossDeath(dt) {
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
       skeletons = [];
+      TALENTS.award('stage_cleared');
       bossStage = 3;
       transitionTo('boss_entrance');
     } else if (deadKind === 'dark_knight') {
@@ -7089,6 +7115,7 @@ function updateBossDeath(dt) {
       // spawnBoss() reads bossStage, so that has to be 4 before it runs, and
       // the maze has to exist before the minotaur picks a tile to stand on.
       skeletons = []; crows = [];
+      TALENTS.award('stage_cleared');
       bossStage = 4;
       generateMap('maze');
       const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
@@ -7539,7 +7566,7 @@ function updateSiege(dt) {
   const before = siegeRun.wave;
   siegeRun = siegeCompleteWave(siegeRun, siegeRng);
   events.emit({ type: 'SIEGE_WAVE_CLEARED', wave: before });
-  if (siegeRun.outcome === 'won') { transitionTo('win'); return; }
+  if (siegeRun.outcome === 'won') { TALENTS.award('siege_cleared'); transitionTo('win'); return; }
 
   // Promotion happens in the sim, and completeWave clones on promotion rather
   // than mutating, so the bodies must be re-seated onto the new records or they
@@ -8321,6 +8348,9 @@ const FEATHERS = (() => {
   function pfRange() { return statValue(_levels, 'pfRange', CONFIG.pitchforkRange); }
   function speed()   { return statValue(_levels, 'speed',   CHARACTER_STATS[selectedChar].speed); }
   function wallet()  { return _feathers; }
+  // TALENTS buys from this same wallet; the subtraction lives with the wallet
+  // so no other module ever writes _feathers.
+  function spend(n) { _feathers = Math.max(0, _feathers - n); _save(); }
   // Whether a run opens with the shield already up, through the same
   // playerShield a pickup and the knight's block already raise.
   function wardStart() { return perkHeld(_levels, 'ward'); }
@@ -8429,10 +8459,93 @@ const FEATHERS = (() => {
     ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [B]  BACK', CONFIG.canvasW / 2, CONFIG.canvasH - 22);
   }
 
-  return { init, onCrowKill, maxHP, pfRange, speed, wallet, wardStart, applyToGame, moveCursor, buyCurrent, draw };
+  return { init, onCrowKill, maxHP, pfRange, speed, wallet, spend, wardStart, applyToGame, moveCursor, buyCurrent, draw };
 })();
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
+
+// ── TALENTS: per-character trees, mastery, and the run draft ──────────────────
+//
+// The trees, the gate arithmetic and the draft rule live in ../sim/talents.ts,
+// pure and checkable without a canvas — the FEATHERS split, applied again.
+// What stays here is what needs the browser or the run: the save file, the
+// mastery awards, the run's drafted set, the rite's seal, and the effective
+// figures the wizard's kit reads.
+const TALENTS = (() => {
+  const LS_KEY = 'crow_archer_talents_v1';
+
+  let _bank = talentBankFrom(null);
+  // The run layer. Never saved: a draft and a sealed capstone are this run's
+  // only, which is the whole reason ownership grows options rather than power.
+  let _drafted = [];
+  let _capstone = null;
+
+  function _save() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(_bank)); } catch (_) {}
+  }
+
+  function init() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) _bank = talentBankFrom(JSON.parse(raw));
+    } catch (_) { /* a hostile save reads as a fresh one */ }
+  }
+
+  function tree()  { return CHAR_TREES[selectedChar]; }
+  function state() { return _bank[selectedChar]; }
+
+  /** Banks a run milestone for the character playing it. */
+  function award(milestone) {
+    const s = state();
+    _bank[selectedChar] = { mastery: masteryAfter(s.mastery, [milestone]), levels: s.levels };
+    _save();
+  }
+
+  /** Buys with the FEATHERS wallet; the tree and the mastery gate decide. */
+  function buy(id) {
+    const result = purchaseTalent(tree(), state(), FEATHERS.wallet(), id);
+    if (result.kind !== 'bought') return result;
+    _bank[selectedChar] = result.state;
+    FEATHERS.spend(result.spent);
+    _save();
+    return result;
+  }
+
+  /** Test-only ladder bypass — this module's healHero. */
+  function grant(id, level) {
+    const s = state();
+    _bank[selectedChar] = { mastery: s.mastery, levels: { ...s.levels, [id]: level } };
+  }
+
+  function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
+  function draft(id) { if (!_drafted.includes(id)) _drafted.push(id); applyToRun(); }
+  function drafted() { return _drafted.slice(); }
+  function offers(count) { return draftOffers(ownedIds(tree(), state()), Math.random, count, _drafted); }
+  function sealCapstone(id) { _capstone = id; }
+  function capstoneActive(id) { return _capstone === id; }
+
+  // The effective figures: base + drafted talent, one function per consumer
+  // so the read sites cannot drift apart. With nothing drafted — every hero
+  // but a drafted wizard, today — each is exactly its base.
+  function blinkDistance() { return draftedValue(tree(), state(), _drafted, 'blinkReach', CONFIG.wizBlinkDistance); }
+  function stormRadius()   { return draftedValue(tree(), state(), _drafted, 'stormWidth', CONFIG.stormBlastRadius); }
+  function focusMax()      { return draftedValue(tree(), state(), _drafted, 'focusDepth', CONFIG.wizFocusMax); }
+  function stormCooldown() { return capstoneActive('stormcaller') ? CONFIG.stormCooldown / 2 : CONFIG.stormCooldown; }
+
+  function applyToRun() {
+    // The one CONFIG field talents move, moved the way FEATHERS.applyToGame
+    // moves arrow capacity: effective = base + drafted, re-derived in full so
+    // runs never compound onto each other.
+    CONFIG.resources.focus.max = focusMax();
+  }
+
+  return {
+    init, state, award, buy, grant,
+    resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
+    blinkDistance, stormRadius, focusMax, stormCooldown, applyToRun,
+  };
+})();
+
 const HANDICAP = (() => {
   // Returns a multiplier applied to crow speed each frame.
   // Low HP  → crows slow down (mercy assist).
@@ -8607,7 +8720,7 @@ function drawWizard() {
   // Broom or staff, never both: with the pool dry the staff is inert and the
   // broom is what he is actually swinging, so showing the orb would promise a
   // bolt he cannot cast.
-  if (pfSwing > 0 || inv.focus < CONFIG.wizFocusBolt) {
+  if (pfSwing > 0 || (inv.focus < CONFIG.wizFocusBolt && wizOverchannel <= 0)) {
     paintWizardBroom(ctx, {
       aim: wLocalAngle,
       swing: pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : -1,
@@ -8635,7 +8748,7 @@ function drawWizard() {
 
   // Storm cooldown bar (world-space, above wizard)
   if (stormCD > 0) {
-    const frac = 1 - stormCD/10, bw=34, bh=4, bx=px-bw/2, by2=py-38;
+    const frac = 1 - stormCD / TALENTS.stormCooldown(), bw=34, bh=4, bx=px-bw/2, by2=py-38;
     ctx.fillStyle='#0a0a2a'; ctx.fillRect(bx,by2,bw,bh);
     ctx.fillStyle='#4444ff'; ctx.fillRect(bx,by2,bw*frac,bh);
     ctx.strokeStyle='#8888ff'; ctx.lineWidth=0.5; ctx.strokeRect(bx,by2,bw,bh);
@@ -11457,7 +11570,7 @@ const CHIP = {
   block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, CONFIG.knightBlockCooldown, 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
   charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
-  storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
+  storm:     () => cooldownChip('storm', stormCD, TALENTS.stormCooldown(), 0),
   blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
   // Reads as live while the bow is bent, so the bar on the body and the chip
   // in the lane say the same thing.
@@ -13437,7 +13550,14 @@ export const devHooks = {
   /** The wizard's pool, the part-point banked toward the next one, and which
    *  fallback weapon is mid-swing. Enough to check a spend without guessing. */
   focus: () => ({ points: inv.focus, spendable: Math.floor(inv.focus),
-                  max: CONFIG.wizFocusMax, melee: pfKind }),
+                  max: CONFIG.resources.focus.max, melee: pfKind }),
+  /** The talent system's public face - bank, run layer, effective figures -
+   *  so a test drives a draft before the screens exist. */
+  talents: () => TALENTS,
+  /** The wallet TALENTS buys from, so a test can set up a poor buyer. */
+  feathers: () => FEATHERS,
+  /** Overchannel's remaining window, for pinning the rite's free bolts. */
+  wizOverchannel: () => wizOverchannel,
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.
@@ -13724,5 +13844,6 @@ export function boot() {
   log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue()');
 
   FEATHERS.init();
+  TALENTS.init();
   requestAnimationFrame(loop);
 }
