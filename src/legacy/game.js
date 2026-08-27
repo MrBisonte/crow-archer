@@ -44,15 +44,23 @@ import { Hitstop } from '../sim/hitstop';
 import { log, attachToEvents } from '../sim/log';
 import { SPANS, countingContext, trace } from '../render/trace';
 import { DEFAULT_POP, panelAt, panelSlots } from '../render/panel-row';
+import { listRows, rowAt } from '../render/list-rows';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
-  featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
-  perkHeld, purchase, statValue,
+  axisReaches, featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel,
+  nextCost, perkHeld, purchase, statValue,
 } from '../sim/upgrades';
+import {
+  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
+  draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
+  clampCursor, talentBankFrom, talentLevel, tierOpenAt,
+} from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
 import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, makeVignette } from '../render/tiles';
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
+import { paintTalentSigil } from '../render/talent-sigil-paint';
+import { SIGILS } from '../render/talent-sigils';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
@@ -635,6 +643,16 @@ const CONFIG = {
   // punishes whoever was chasing, rather than a repositioning nuke: it clears
   // the ring of crows that closed in, and takes one point off a boss.
   wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
+  // The rite's Overchannel capstone: how long bolts cast free after a blink.
+  wizOverchannelSecs: 4,
+  // The rest of the rite, and the two tier-II unlocks.
+  archerSplinterFrac: 0.6,       // each splinter's share of the parent blast
+  archerSplinterSpread: 62,      // px each splinter lands from the crater
+  knightJuggernautPush: 96,      // px the charge throws a body it reaches
+  rangerSlipstreamSecs: 3,       // owner's cap: a full meter phases this long
+  rangerShrapnelBolts: 8,        // bolts a satchel throws when it blows
+  sapperDemolitionGrowth: 0.30,  // each chain link widens the next blast by this
+  sapperShockwavePush: 120,      // px a combo blast throws a survivor
   // A rate, not a damage. What a bolt is worth is wizBoltDamage times the
   // wizard's multiplier; this is how long he spends unable to answer
   // anything, and two full seconds of it was most of why the fight was
@@ -843,6 +861,60 @@ function showStageIntro(kind) {
   appState = 'stage_intro';
 }
 
+// ── The mid-run choosers: the draft and the rite ─────────────────────────────
+//
+// One screen shape for both: the run-start and boss drafts wake an owned
+// talent for this run, and the rite seals a capstone the rank earned.
+// `resume` is the appState a pick returns to, so a chooser can sit over a
+// staged stage_intro or a boss entrance without either noticing — the same
+// direct-assignment reasoning showStageIntro gives above.
+let chooser = null;
+let chooserQueue = [];
+let riteOffered = false;   // once per run, taken or not
+
+function queueDraft(resume) {
+  const offers = TALENTS.offers(3);
+  if (offers.length === 0) return;   // an empty pool skips the ceremony
+  chooserQueue.push({ kind: 'draft', offers, cursor: 0, resume });
+}
+
+function queueRite(resume) {
+  if (riteOffered) return;
+  const capstones = CHAR_TREES[selectedChar].capstones;
+  if (capstones.length === 0 || !riteEligible(TALENTS.state().mastery)) return;
+  riteOffered = true;   // offered once, whether or not the pick is liked
+  chooserQueue.push({ kind: 'rite', offers: capstones.map((c) => c.id), cursor: 0, resume });
+}
+
+function openNextChooser() {
+  if (chooser !== null || chooserQueue.length === 0) return;
+  chooser = chooserQueue.shift();
+  appState = 'chooser';
+}
+
+/** A boss just died: the rite outranks the draft when both are owed. */
+function queueBossChoosers() {
+  if (appState === 'win' || appState === 'gameover') return;   // run over
+  // Never mid-siege. A siege boss is one enemy inside a wave rather than the
+  // end of a stage -- the death tail says so itself -- and a ceremony opened
+  // over a running wave stops the field with crows still on it. The siege
+  // pays its mastery like any other boss; what it does not do is hold a
+  // ceremony about it. CLAUDE.md's siege rule, applied to a screen.
+  if (siegeRun) return;
+  queueRite(appState);
+  queueDraft(appState);
+  openNextChooser();
+}
+
+function confirmChooser() {
+  const id = chooser.offers[chooser.cursor];
+  if (chooser.kind === 'draft') TALENTS.draft(id); else TALENTS.sealCapstone(id);
+  const resume = chooser.resume;
+  chooser = null;
+  if (chooserQueue.length > 0) { chooser = chooserQueue.shift(); return; }
+  appState = resume;
+}
+
 const BOSS_ENTRY_TEXT = {
   1: '⚠  THE CROWS SUMMONED THEIR KING  ⚠',
   2: '⚠  A DARK ARCHER STIRS IN THE DEPTHS  ⚠',
@@ -867,7 +939,8 @@ const LOW_HP_FRACTION = 0.25;
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
 // appState: menu | charselect | mapselect | multiplayer | controls | playing
-// | paused | boss_entrance | boss_fight | stage_intro | inventory | win | gameover
+// | paused | boss_entrance | boss_fight | stage_intro | inventory | talents
+// | win | gameover
 let appState = 'menu', controlsFrom = 'menu', pausedFrom = 'playing';
 
 let gameMode = 'brawl'; // a SinglePlayerMode; see MODE_RULES — persists across restarts
@@ -1166,7 +1239,10 @@ function cyclePanelSelection(panels, current, field) {
 // Declared here rather than with the other menu state below because the
 // health a run opens on is the selected character's, and playerHP is the
 // next line.
-let selectedChar = 'archer';   // 'archer' | 'wizard' | 'knight' | 'ranger' | 'sapper'
+// Typed rather than left to inference: the union was written in a comment
+// here and checked by nothing, so every table keyed by it took a bare string.
+/** @type {import('../net/protocol').CharacterKind} */
+let selectedChar = 'archer';
 let playerHP = CHARACTER_STATS[selectedChar].maxHp, playerHitFlash = 0;
 // Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
 let blockedFlash = 0;
@@ -1239,6 +1315,18 @@ let pfKind = 'pitchfork';
 // taken in. The window is what makes a chain a rhythm rather than a stored
 // charge: let it lapse and the ability is back to its plain cooldown.
 let wizBlinkHops = 0, wizBlinkChainTimer = 0;
+// Overchannel's remaining free-bolt window, seconds. Only ever nonzero when
+// the rite sealed that capstone this run.
+let wizOverchannel = 0;
+/**
+ * Slipstream's remaining window, seconds.
+ *
+ * Armed when the ranger's meter first reaches full and spent while it stays
+ * there, so the capstone is three seconds of a full run rather than an
+ * indefinite one -- the owner's cap, and the reason it is a timer and not a
+ * flag. Dropping below full disarms it, so the next full meter re-arms.
+ */
+let rangerSlip = 0;
 // The same window for the knight, opened when a dash starts.
 let knightChainTimer = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
@@ -1377,6 +1465,9 @@ function transitionTo(next) {
   if (next === 'controls') controlsFrom = appState;
   const prev = appState;
   appState = next;
+  // Winning the run is a mastery milestone, and this is the one door into
+  // 'win' - awarded here rather than at each victorious call site.
+  if (next === 'win' && prev !== 'win') TALENTS.award('run_won');
   // A freeze belongs to one moment of one run. Resuming from the pause menu,
   // starting a fresh run, or walking into a boss fight all end that moment, so
   // none of them inherit whatever the last impact was still owed.
@@ -1387,7 +1478,14 @@ function transitionTo(next) {
   // out of the screen (back, error, match start) must not leak the connection.
   if (next === 'multiplayer' && prev !== 'multiplayer') openMultiplayer();
   if (prev === 'multiplayer' && next !== 'multiplayer') closeMultiplayer();
-  if (next === 'playing' && prev !== 'paused' && prev !== 'controls' && prev !== 'inventory') initGame();
+  if (next === 'playing' && prev !== 'paused' && prev !== 'controls'
+      && prev !== 'inventory' && prev !== 'talents') {
+    initGame();
+    // The run's opening draft, over whatever screen initGame staged. An
+    // empty pool queues nothing and the run starts undisturbed.
+    queueDraft(appState);
+    openNextChooser();
+  }
   // A charge/dash held into the pause menu has nowhere left to receive the
   // keyup that would normally release it — see cancelHeldActions().
   if (next === 'paused') cancelHeldActions();
@@ -1762,9 +1860,16 @@ const inGame = () => appState === 'playing' || appState === 'boss_fight';
 let cursorStyle = 'crosshair';
 /** Whether the pointer is over something a click would act on. */
 function _overClickable() {
-  if (appState !== 'charselect') return false;
-  const { slots, selected } = charSelectLayout();
-  return panelAt(slots, selected, mouse.x, mouse.y) !== null;
+  // The talent tree is a list rather than a panel row, so it answers through
+  // its own hit test. Same rule either way: the rects the draw used.
+  if (appState === 'talents') {
+    return rowAt(talentTreeLayout().rows, mouse.x, mouse.y) !== null;
+  }
+  const layout = appState === 'charselect' ? charSelectLayout()
+    : appState === 'chooser' && chooser !== null ? chooserLayout()
+    : null;
+  if (layout === null) return false;
+  return panelAt(layout.slots, layout.selected, mouse.x, mouse.y) !== null;
 }
 
 /** Where a mouse event landed, in canvas pixels, or null before layout. */
@@ -1798,7 +1903,11 @@ function _clickCharSelect(e) {
     transitionTo(picksItsMap(gameMode) ? 'mapselect' : 'playing');
     return;
   }
-  selectedChar = CHAR_PANELS[hit].char;
+  // Cast rather than annotated on the table: annotating CHAR_PANELS costs the
+  // inferred shape of every other field on the row, which two test files read.
+  // The cast is checked elsewhere — game.test.ts asserts every character the
+  // protocol knows has a panel, so a panel's `char` is always one of them.
+  selectedChar = /** @type {import('../net/protocol').CharacterKind} */ (CHAR_PANELS[hit].char);
 }
 
 function syncCursor() {
@@ -2002,6 +2111,30 @@ function probeAhead(fromX, fromY, angle, maxDistance) {
  * creep outright — which is what the storm, the whirlwind and the blast all
  * want. Only the net passes anything else, and it passes less on purpose.
  */
+/**
+ * Shoves every body within `radius` directly away from a point.
+ *
+ * Shared by Juggernaut and Shockwave rather than written twice: they throw
+ * bodies for different reasons but by the same rule, and the rule -- move
+ * only onto ground the body could stand on -- is the part worth having in one
+ * place. A shove into a wall stops at the wall instead of posting a crow
+ * inside it.
+ */
+function pushBodiesFrom(cx, cy, radius, px) {
+  const r2 = radius * radius;
+  for (const list of [crows, skeletons, soldiers]) {
+    for (const b of list) {
+      const d2 = dist2(cx, cy, b.x, b.y);
+      if (d2 > r2 || d2 === 0) continue;
+      const d = Math.sqrt(d2);
+      const nx = b.x + ((b.x - cx) / d) * px;
+      const ny = b.y + ((b.y - cy) / d) * px;
+      if (tilePassable(tileAt(nx, b.y))) b.x = clampArenaX(nx);
+      if (tilePassable(tileAt(b.x, ny))) b.y = clampArenaY(ny);
+    }
+  }
+}
+
 function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   const r2 = radius * radius;
 
@@ -2068,7 +2201,7 @@ function tryWizardBlink() {
     return;
   }
 
-  const hop = probeAhead(player.x, player.y, player.aimAngle, CONFIG.wizBlinkDistance);
+  const hop = probeAhead(player.x, player.y, player.aimAngle, TALENTS.stat('blinkReach'));
 
   // Blinking face-first into a wall would otherwise cost the whole cooldown
   // for a couple of pixels, which reads as the button being broken rather
@@ -2089,6 +2222,8 @@ function tryWizardBlink() {
   wizBlinkChainTimer = CONFIG.shiftChainSecs;
   wizBlinkCD         = CONFIG.wizBlinkCooldown;
   wizBlinkIFrame     = CONFIG.wizBlinkIFrames;
+  // The rite's Overchannel: a landed blink opens the free-bolt window.
+  if (TALENTS.capstoneActive('overchannel')) wizOverchannel = CONFIG.wizOverchannelSecs;
 
   // Arriving is itself the attack. Resolved here rather than on a timer, so
   // what the ring shows a moment later is a report of what was already hit.
@@ -2146,7 +2281,7 @@ function releaseArcherDraw() {
     initSpeed: spd,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     power: true,
-    pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
+    pierceLeft: 1 + Math.round(drawn * (TALENTS.stat('splitShaft') - 1)),
     // Draw and brace multiply: a fully drawn shot from a braced stance is
     // the most committed thing he can do, and it is paid for in seconds.
     dmgMult: (1 + drawn * (CONFIG.archerPowerBossMult - 1)) * braceBossMult() });
@@ -2213,8 +2348,12 @@ const HERO_UPKEEP = {
   // hidden cooldown, and two rates interacting is a balance problem with no
   // single dial to turn.
   wizard: (dt) => {
-    if (inv.focus >= CONFIG.wizFocusMax) return;
-    inv.focus = Math.min(CONFIG.wizFocusMax, inv.focus + dt / CONFIG.wizFocusRegenSecs);
+    if (wizOverchannel > 0) wizOverchannel = Math.max(0, wizOverchannel - dt);
+    // The pool's ceiling is the effective figure, not the base: FOCUS DEPTH
+    // raises resources.focus.max through TALENTS.applyToRun, and reading the
+    // base here would regenerate a talent away.
+    if (inv.focus >= CONFIG.resources.focus.max) return;
+    inv.focus = Math.min(CONFIG.resources.focus.max, inv.focus + dt / CONFIG.wizFocusRegenSecs);
   },
   sapper: (dt) => tickSapperBurst(dt),
 };
@@ -2222,9 +2361,14 @@ const HERO_UPKEEP = {
 const MOVEMENT_METERS = {
   archer: (dt, movedPx) => {
     const was = braceLevel;
-    braceLevel = tickMeter(braceLevel, movedPx <= MOVED_EPSILON,
-      dt / CONFIG.braceFillSecs,
-      (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
+    const fillSecs = TALENTS.stat('setFeet');
+    // ROOTED: a brace that reached full survives being walked. Only a hit
+    // knocks it down, which is what takeDamage does. Without the capstone the
+    // meter drains the moment he moves, as it always has.
+    const rooted = braceLevel >= 1 && TALENTS.capstoneActive('rooted');
+    braceLevel = tickMeter(braceLevel, rooted || movedPx <= MOVED_EPSILON,
+      dt / fillSecs,
+      (dt / fillSecs) * TALENTS.stat('deepRoots'));
     if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
   },
   ranger: (dt, movedPx) => {
@@ -2234,11 +2378,17 @@ const MOVEMENT_METERS = {
     // stopped is covering none of it, so there is nothing to measure a decay
     // against but the clock.
     rangerMomentum = tickMeter(rangerMomentum, movedPx > MOVED_EPSILON,
-      movedPx / CONFIG.rangerMomentumFullPx,
-      dt / CONFIG.rangerMomentumDecaySecs);
+      movedPx / TALENTS.stat('lightFoot'),
+      dt / TALENTS.stat('longWind'));
     if (was < 1 && rangerMomentum >= 1) {
       events.emit({ type: 'RANGER_MOMENTUM', x: player.x, y: player.y });
+      // Arms on the rising edge only, so the window is three seconds per
+      // full meter rather than three seconds refreshed every frame she holds
+      // one.
+      if (TALENTS.capstoneActive('slipstream')) rangerSlip = CONFIG.rangerSlipstreamSecs;
     }
+    if (rangerMomentum >= 1) rangerSlip = Math.max(0, rangerSlip - dt);
+    else rangerSlip = 0;
   },
 };
 
@@ -2264,7 +2414,7 @@ function tickMeter(level, filling, fillDelta, drainDelta) {
  * default would take those with it.
  */
 function rangerMomentumMult() {
-  return 1 + rangerMomentum * CONFIG.rangerMomentumMax;
+  return 1 + rangerMomentum * TALENTS.stat('fullTilt');
 }
 
 function knightSpearDamage(fireSword) {
@@ -2274,7 +2424,7 @@ function knightSpearDamage(fireSword) {
 }
 
 function knightBloodlustMult() {
-  return 1 + knightBloodlust * CONFIG.knightBloodlustPer;
+  return 1 + knightBloodlust * TALENTS.stat('deeperCut');
 }
 
 function braceBossMult() {
@@ -2481,7 +2631,7 @@ function drawAbilityFx() {
   if (stormFx > 0) {
     paintLightningStorm(ctx, {
       x: player.x, y: player.y + CONFIG.hudHeight,
-      radius: CONFIG.stormBlastRadius, age: 1 - stormFx / STORM_FX_SECS,
+      radius: TALENTS.stat('stormWidth'), age: 1 - stormFx / STORM_FX_SECS,
     });
   }
   if (blinkFx > 0) {
@@ -2661,6 +2811,12 @@ function knightChargeWedge(angle) {
 function inKnightArc(x, y) {
   const wedge = knightChargeWedge(knightDash.angle);
   if (dist2(player.x, player.y, x, y) > wedge.radius ** 2) return false;
+  // CHARGE THROUGH turns the forward wedge into a full sweep: inside the
+  // reach is enough, whichever side of him it is on. The written effect --
+  // "wounds along its line rather than only at its end" -- was already true
+  // of the base dash, whose repeat ticks exist to catch what he advances
+  // into, so the talent had to buy something the dash does not already do.
+  if (TALENTS.held('chargeThrough')) return true;
   let d = Math.atan2(y - player.y, x - player.x) - wedge.angle;
   while (d >  Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
@@ -2820,6 +2976,8 @@ function installInput() {
   canvas.addEventListener('click', e => {
     initAudio();
     if (appState === 'charselect') { _clickCharSelect(e); return; }
+    if (appState === 'chooser') { _clickChooser(e); return; }
+    if (appState === 'talents') { _clickTalentTree(e); return; }
     if (appState !== 'controls') return;
     const r  = canvas.getBoundingClientRect();
     const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
@@ -3520,7 +3678,7 @@ events.on(e => {
         shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
       for (let k = 0; k < 8; k++) {
         const ang = Math.random() * Math.PI * 2;
-        const dst = 60 + Math.random() * CONFIG.stormBlastRadius * 0.85;
+        const dst = 60 + Math.random() * TALENTS.stat('stormWidth') * 0.85;
         burst(e.x + Math.cos(ang)*dst, e.y + Math.sin(ang)*dst, {
           count: 5, colors: ['#FFFFFF','#8888FF'],
           speedMin: 20, speedMax: 60, decay: 4.0, shape: 'spark',
@@ -3659,7 +3817,9 @@ function initGame() {
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
-  wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0;
+  wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
+  rangerSlip = 0;
+  chooser = null; chooserQueue = []; riteOffered = false;
 
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
@@ -3669,6 +3829,7 @@ function initGame() {
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
   resetSight(); // force an FOV recompute, and forget the last run's map
   FEATHERS.applyToGame();
+  TALENTS.resetRun();
   resetInv();
   FORESHADOW.reset(); STREAK.reset(); BOUNTIES.reset();
   const spawn = spawnPoint();
@@ -4078,9 +4239,12 @@ function updatePlayer(dt) {
     // never pays while disengaged.
     if (swingWas > 0 && knightSpearSwing === 0) {
       const was = knightBloodlust;
+      // BERSERKER: a miss costs one stack rather than the lot. The difference
+      // between a knight who must never miss and one who may.
+      const onMiss = TALENTS.capstoneActive('berserker') ? Math.max(0, knightBloodlust - 1) : 0;
       knightBloodlust = knightSpearConnected
-        ? Math.min(CONFIG.knightBloodlustMax, knightBloodlust + 1)
-        : 0;
+        ? Math.min(TALENTS.stat('fourthBlood'), knightBloodlust + 1)
+        : onMiss;
       if (knightBloodlust !== was) {
         events.emit({ type: 'KNIGHT_BLOODLUST', stacks: knightBloodlust, x: player.x, y: player.y });
       }
@@ -4140,6 +4304,12 @@ function updatePlayer(dt) {
       if (!knightDash.bossHit && bossInPlay() && !boss.shield && inKnightArc(boss.x, boss.y)) {
         knightDash.bossHit = true;
         damageBoss(knightDashBossDamage(), player.x, player.y, 'spear', 0.15);
+      }
+      // JUGGERNAUT throws aside what the charge reaches, so a body is an
+      // obstacle he goes through rather than one he grinds against.
+      if (TALENTS.capstoneActive('juggernaut')) {
+        pushBodiesFrom(player.x, player.y, knightChargeWedge(knightDash.angle).radius,
+          CONFIG.knightJuggernautPush * dt);
       }
     }
     if (knightDash.timer <= 0) knightDash.timer = 0;
@@ -4203,14 +4373,15 @@ function tryCrossbowBolt() {
 
 function tryWizardBolt() {
   if (wizBoltCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  if (inv.focus < CONFIG.wizFocusBolt) { tryBroom(); return; }
+  const boltFree = wizOverchannel > 0;
+  if (!boltFree && inv.focus < CONFIG.wizFocusBolt) { tryBroom(); return; }
   // Out of Focus he cannot cast at all, and swings a broom instead. Checked
   // before the in-flight cap so an empty pool always produces the swing rather
   // than sometimes producing nothing: a press that does nothing at all reads
   // as the button being broken.
 
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  inv.focus -= CONFIG.wizFocusBolt;
+  if (!boltFree) inv.focus -= CONFIG.wizFocusBolt;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
@@ -4443,8 +4614,8 @@ function trySapperShot() {
 }
 
 function fireLightningStorm() {
-  const STORM_R = CONFIG.stormBlastRadius;
-  stormCD = CONFIG.stormCooldown;
+  const STORM_R = TALENTS.stat('stormWidth');
+  stormCD = TALENTS.stormCooldown();
   _stormFlash = CONFIG.stormFlashDuration;
   stormFx = STORM_FX_SECS;
   events.emit({ type: 'STORM_CAST', x: player.x, y: player.y });
@@ -5320,8 +5491,8 @@ function updateDynamites(dt) {
  */
 function chainNearbyBombs(from, link) {
   if (!isSapperExplosive(from)) return;
-  if (link >= CONFIG.sapperChainMaxLinks) return;
-  const r2 = CONFIG.sapperChainRadius ** 2;
+  if (link >= TALENTS.stat('moreLinks')) return;
+  const r2 = TALENTS.stat('longFuse') ** 2;
   // Both arrays. His thrown charges live in `dynamites` alongside the archer's
   // sticks and the ranger's satchels; his barrage fan lives in `barrageBombs`
   // on its own. Scanning only the first is what this shipped as, and it made
@@ -5381,7 +5552,13 @@ function explodeExplosive(d, source, opts = {}) {
   // shot detonates one bomb wider than usual, and the point of the ability is
   // that the whole pile goes up that wide -- not just the one the dart touched.
   const mult = d.chainMult ?? 1;
-  const radius = opts.radius ?? CONFIG.dynamiteBlastRadius * mult;
+  // How deep into a chain this bomb sits, needed before the radius because
+  // DEMOLITIONIST grows the blast with it: each bomb a chain lights goes up
+  // wider than the one that lit it.
+  const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
+  const grow = TALENTS.capstoneActive('demolitionist')
+    ? 1 + link * CONFIG.sapperDemolitionGrowth : 1;
+  const radius = (opts.radius ?? CONFIG.dynamiteBlastRadius * mult) * grow;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
   events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius });
@@ -5396,13 +5573,46 @@ function explodeExplosive(d, source, opts = {}) {
   // multiplier reaches boss damage only, which is the point rather than a
   // limitation: everything else on the field dies to one hit of anything, so
   // against a crowd a chain is already worth exactly its coverage.
-  const link = Math.min(d.chainLink ?? 0, CONFIG.sapperChainMaxLinks);
   const bossDamage = baseBossDamage * (1 + link * CONFIG.sapperChainBossBonus);
   damageEnemiesInRadius(d.x, d.y, radius,
     { amount: bossDamage, source, flash: 0.25 },
     { falloff: opts.falloff, element: d.element });
 
   chainNearbyBombs(d, link);
+
+  // SHOCKWAVE: the combo blast clears the ground around him of whatever it
+  // did not kill. Only the combo -- an ordinary bomb keeps its old reach.
+  if (source === 'sapperShot' && TALENTS.capstoneActive('shockwave')) {
+    pushBodiesFrom(d.x, d.y, radius, CONFIG.sapperShockwavePush);
+  }
+  // SHRAPNEL: a satchel throws the ranger's own bolts outward as it goes.
+  if (source === 'satchel' && TALENTS.capstoneActive('shrapnel')) {
+    const n = CONFIG.rangerShrapnelBolts;
+    for (let i = 0; i < n && arrows.length < CONFIG.maxArrowsInFlight; i++) {
+      const a = (i / n) * Math.PI * 2;
+      arrows.push({ x: d.x, y: d.y,
+        vx: Math.cos(a) * CONFIG.arrowSpeed, vy: Math.sin(a) * CONFIG.arrowSpeed,
+        life: CONFIG.arrowLifetime, type: 'normal', bounces: 0,
+        initSpeed: CONFIG.arrowSpeed,
+        trailHistory: [], fireSeed: 0, trailTimer: 0,
+        bolt: true,
+        hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
+        dmgMult: CONFIG.crossbowBoltDamageMult });
+    }
+  }
+  // SPLINTER: one stick, three craters. The children are marked so they
+  // cannot splinter again -- an unmarked child would light three more, and
+  // the third generation is where a frame budget goes to die.
+  if (source === 'dynamite' && !d.splinterChild && TALENTS.capstoneActive('splinter')) {
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.4;
+      explodeExplosive({
+        x: d.x + Math.cos(a) * CONFIG.archerSplinterSpread,
+        y: d.y + Math.sin(a) * CONFIG.archerSplinterSpread,
+        vx: 0, vy: 0, life: 0, angle: 0, element: d.element, splinterChild: true,
+      }, 'dynamite', { radius: radius * CONFIG.archerSplinterFrac });
+    }
+  }
 
   // Fire leaves the ground burning where it went off.
   if (d.element === 'fire' && !onWater) {
@@ -5428,12 +5638,20 @@ function updateBarrageBombs(dt) {
     const blocked = !tilePassable(tileAt(nx, ny));
     if (!blocked) { b.x = nx; b.y = ny; }
 
-    let hit = blocked;
+    // A stuck bomb is already where it was going: it waits out its fuse.
+    let hit = b.stuck ? false : blocked;
     if (!hit) for (const c of crows) if (dist2(b.x, b.y, c.x, c.y) < hitR * hitR) { hit = true; break; }
     if (!hit) for (const s of skeletons) if (dist2(b.x, b.y, s.x, s.y) < hitR * hitR) { hit = true; break; }
     if (!hit && bossInPlay() && !boss.shield && dist2(b.x, b.y, boss.x, boss.y) < hitR * hitR) hit = true;
 
-    if (hit || b.life <= 0) {
+    // STICKY FAN: a bomb that touches something stops there and keeps its
+    // fuse instead of going off on contact, which turns the fan from a
+    // scatter into a placement -- and leaves five bombs on the ground for a
+    // chain to run through. Its written effect said they would stop bouncing;
+    // they never bounced, they detonated, so this is what it buys instead.
+    if (hit && TALENTS.held('stickyFan')) {
+      b.vx = 0; b.vy = 0; b.stuck = true;
+    } else if (hit || b.life <= 0) {
       explodeExplosive(b, 'barrage', { radius: CONFIG.sapperBarrageBlastRadius });
       barrageBombs.splice(i, 1);
     }
@@ -5768,6 +5986,7 @@ const MAZE_LOCKS = {
       // stage now, so walking through here is a hand-off rather than a
       // curtain — the same shape the crow king's and the dark knight's
       // deaths already use.
+      TALENTS.award('stage_cleared');
       startBastionStage();
     },
   },
@@ -6062,6 +6281,8 @@ function damagePlayer(amount, crowIndex = -1) {
   // And the moment after a blink is the wizard's, for the same reason: an
   // escape that still eats the hit it escaped is not an escape.
   if (wizBlinkIFrame > 0) return;
+  // Slipstream: at a full meter she is running through them, not into them.
+  if (rangerSlip > 0) return;
   if (playerShield) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
@@ -7035,6 +7256,9 @@ function updateBossDeath(dt) {
     bossDeathSeq = null;
     const deadKind = boss.kind;
     boss = null; hostileBolts = [];
+    // A boss down pays mastery whether it ends a stage or sits inside a siege
+    // wave; the stage hand-offs below pay their own milestone on top.
+    TALENTS.award('boss_down');
     // On a siege the boss is one enemy inside a wave, not the end of a stage.
     // Every branch below hands off to another map or to a win screen, so
     // running any of them here would load the castle in the middle of wave 7.
@@ -7053,6 +7277,7 @@ function updateBossDeath(dt) {
       // that kills a boss either clears the wave first or never looks at what
       // the survivors do afterwards.
       for (const c of crows) c.frozen = false;
+      queueBossChoosers();
       return;
     }
     if (deadKind === 'crowking') {
@@ -7062,6 +7287,7 @@ function updateBossDeath(dt) {
       // spot, wherever the crow king died, is still open ground), and seed
       // the first batch of skeletons.
       crows = [];
+      TALENTS.award('stage_cleared');
       bossStage = 2;
       generateMap('castle');
       player.x = 2.5 * CONFIG.tileSize; player.y = (CONFIG.rows / 2) * CONFIG.tileSize;
@@ -7079,6 +7305,7 @@ function updateBossDeath(dt) {
     } else if (deadKind === 'dark_archer') {
       // Both dark bosses share the castle stage, so no map reload here.
       skeletons = [];
+      TALENTS.award('stage_cleared');
       bossStage = 3;
       transitionTo('boss_entrance');
     } else if (deadKind === 'dark_knight') {
@@ -7089,6 +7316,7 @@ function updateBossDeath(dt) {
       // spawnBoss() reads bossStage, so that has to be 4 before it runs, and
       // the maze has to exist before the minotaur picks a tile to stand on.
       skeletons = []; crows = [];
+      TALENTS.award('stage_cleared');
       bossStage = 4;
       generateMap('maze');
       const spawn = nearestOpenTile(2.5 * CONFIG.tileSize, (CONFIG.rows / 2) * CONFIG.tileSize);
@@ -7107,6 +7335,7 @@ function updateBossDeath(dt) {
       skeletons = [];
       transitionTo('win');
     }
+    queueBossChoosers();
   }
 }
 
@@ -7539,7 +7768,7 @@ function updateSiege(dt) {
   const before = siegeRun.wave;
   siegeRun = siegeCompleteWave(siegeRun, siegeRng);
   events.emit({ type: 'SIEGE_WAVE_CLEARED', wave: before });
-  if (siegeRun.outcome === 'won') { transitionTo('win'); return; }
+  if (siegeRun.outcome === 'won') { TALENTS.award('siege_cleared'); transitionTo('win'); return; }
 
   // Promotion happens in the sim, and completeWave clones on promotion rather
   // than mutating, so the bodies must be re-seated onto the new records or they
@@ -8283,6 +8512,29 @@ const STREAK = (() => {
 // — lives in ../sim/upgrades.ts, where it is pure and can be checked without a
 // canvas. What stays here is everything that needs a browser: the wallet, the
 // save file, the cursor and the screen.
+/**
+ * Where a shop screen's rows sit: the upgrade list and the talent tree.
+ *
+ * Both are a stack of bands you point at and buy from, so they read the same
+ * geometry rather than each carrying its own copy of the three figures. The
+ * arithmetic is in `render/list-rows.ts`, testable without a canvas; what
+ * lives here is only which figures this game hands it.
+ */
+function _shopRows(count, opts = {}) {
+  return listRows({
+    canvasW: CONFIG.canvasW, canvasH: CONFIG.canvasH,
+    count,
+    top: opts.top ?? 170,
+    // Clear of the key hint along the bottom.
+    bottom: opts.bottom ?? CONFIG.canvasH - 54,
+    maxPitch: opts.maxPitch ?? 96,
+    maxBandH: opts.maxBandH ?? 76,
+    // Wide enough for a label, a description and a price without running to
+    // the canvas edge on a wide screen.
+    widthFrac: 0.62,
+  });
+}
+
 const FEATHERS = (() => {
   const LS_KEY  = 'crow_archer_v1';
 
@@ -8321,6 +8573,14 @@ const FEATHERS = (() => {
   function pfRange() { return statValue(_levels, 'pfRange', CONFIG.pitchforkRange); }
   function speed()   { return statValue(_levels, 'speed',   CHARACTER_STATS[selectedChar].speed); }
   function wallet()  { return _feathers; }
+  // TALENTS buys from this same wallet; the subtraction lives with the wallet
+  // so no other module ever writes _feathers.
+  function spend(n) { _feathers = Math.max(0, _feathers - n); _save(); }
+  /** Test-only wallet bypass, the sibling of TALENTS.grant. A shop test needs
+   *  an exact balance, and the only earning path rolls a random bonus per
+   *  kill; without this the alternative is spend(-n), which works by exploiting
+   *  a clamp and would break the moment spend grew a guard. */
+  function grant(n) { _feathers = Math.max(0, Math.trunc(n)); _save(); }
   // Whether a run opens with the shield already up, through the same
   // playerShield a pickup and the knight's block already raise.
   function wardStart() { return perkHeld(_levels, 'ward'); }
@@ -8338,12 +8598,24 @@ const FEATHERS = (() => {
     CONFIG.resources.satchels.max   = statValue(_levels, 'tools', CONFIG.baseDynamites);
   }
 
+  /** The live level record. Handed out rather than copied so a test can set
+   *  an axis directly; nothing in the game writes it but `buyCurrent`. */
+  function levels() { return _levels; }
+
   function moveCursor(dir) {
     _cursor = (_cursor + dir + UPGRADE_ORDER.length) % UPGRADE_ORDER.length;
   }
 
   function buyCurrent() {
-    const result = purchase({ feathers: _feathers, levels: _levels }, UPGRADE_ORDER[_cursor]);
+    const id = UPGRADE_ORDER[_cursor];
+    // Half this tree is kit-specific wearing generic clothes, and three of the
+    // five heroes cannot use some of it at all -- see AXIS_HEROES. Refused
+    // rather than sold: the wallet is shared, so the same level bought while
+    // playing a hero it serves is worth exactly as much, and taking 45
+    // feathers for a POWDER KEG the sapper's bombs never read is the shop
+    // lying about what it sells.
+    if (!axisReaches(id, selectedChar)) return false;
+    const result = purchase({ feathers: _feathers, levels: _levels }, id);
     if (result.kind !== 'bought') return false;
     _feathers = result.progress.feathers;
     _levels   = result.progress.levels;
@@ -8370,14 +8642,12 @@ const FEATHERS = (() => {
     ctx.fillText(`◆ ${_feathers}  FEATHERS  (persists across runs)`, CONFIG.canvasW / 2, 96);
     ctx.shadowBlur = 0;
 
-    // Row pitch shrinks to fit however many upgrades the table holds today,
-    // the way the char-select panels size themselves to CHAR_PANELS. Four
-    // rows still lay out at the 96 this screen has always used; it only
-    // tightens once the tree grows past what the canvas fits at that pitch.
-    const rowTop = 170;
-    const rowFoot = CONFIG.canvasH - 54; // clear of the key hint along the bottom
-    const pitch = Math.min(96, Math.floor((rowFoot - rowTop) / UPGRADE_ORDER.length));
-    const bandH = Math.min(76, pitch - 8);
+    // The rows come off the shared list geometry, which is also what the
+    // talent shop reads. The pitch still shrinks to fit however many upgrades
+    // the table holds; what changed is the width, which was a literal 560 px
+    // whatever the canvas was — comfortable on the 1056 it was authored
+    // against, a third of a 1760 one with the rest of the screen empty.
+    const rows = _shopRows(UPGRADE_ORDER.length);
 
     // Upgrade rows
     UPGRADE_ORDER.forEach((id, i) => {
@@ -8386,36 +8656,46 @@ const FEATHERS = (() => {
       const sel   = i === _cursor;
       const maxed = isMaxed(_levels, id);
       const cost  = nextCost(_levels, id);
-      const oy    = rowTop + i * pitch;
-      const barX  = CONFIG.canvasW / 2 - 260;
-      const barR  = CONFIG.canvasW / 2 + 260;
+      // Whether this axis does anything for the hero being played. Said on the
+      // row rather than only on the refusal, so the player reads it before
+      // spending the keypress rather than after.
+      const live  = axisReaches(id, selectedChar);
+      const row   = rows[i];
+      const oy    = row.midY;
+      const barX  = row.x + 20;
+      const barR  = row.x + row.w - 20;
 
       if (sel) {
         ctx.fillStyle = 'rgba(57,255,20,0.08)';
-        ctx.fillRect(CONFIG.canvasW / 2 - 280, oy + 6 - bandH / 2, 560, bandH);
+        ctx.fillRect(row.x, row.y, row.w, row.h);
         ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 14;
       }
 
       // Label
       ctx.textAlign = 'left';
-      ctx.fillStyle = sel ? '#39FF14' : '#1a7a08';
+      ctx.fillStyle = !live ? '#7a8877' : sel ? '#39FF14' : '#1a7a08';
       ctx.font = '19px "Courier New", monospace';
       ctx.fillText(u.label, barX, oy - 12);
 
       // Level pips (right-aligned)
       ctx.textAlign = 'right';
-      ctx.fillStyle = maxed ? '#FFB400' : (sel ? '#39FF14' : '#1a7a08');
+      ctx.fillStyle = !live ? '#5c6b59' : maxed ? '#FFB400' : (sel ? '#39FF14' : '#1a7a08');
       ctx.fillText('■'.repeat(lv) + '□'.repeat(maxLevel(id) - lv), barR, oy - 12);
 
       // Description
       ctx.textAlign = 'left';
       ctx.font = '12px "Courier New", monospace';
-      ctx.fillStyle = '#0a5a08';
+      ctx.fillStyle = live ? '#0a5a08' : '#5c6b59';
       ctx.fillText(u.desc, barX, oy + 12);
 
-      // Cost / MAXED
+      // Cost / MAXED / nothing for this hero
       ctx.textAlign = 'right';
-      if (maxed) {
+      if (!live) {
+        // The levels still count for the heroes it does reach, so this says
+        // "not for you" and not "not worth buying".
+        ctx.fillStyle = '#7a8877';
+        ctx.fillText(`NOTHING FOR THE ${selectedChar.toUpperCase()}`, barR, oy + 12);
+      } else if (maxed) {
         ctx.fillStyle = '#FFB400';
         ctx.fillText('◆ MAXED', barR, oy + 12);
       } else {
@@ -8425,14 +8705,194 @@ const FEATHERS = (() => {
       ctx.shadowBlur = 0;
     });
 
-    ctx.textAlign = 'center'; ctx.font = '13px "Courier New", monospace'; ctx.fillStyle = '#0d4d04';
-    ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [B]  BACK', CONFIG.canvasW / 2, CONFIG.canvasH - 22);
+    // #0d4d04 is 2.1:1 against black; #6f8a6c is 5.5:1, and is what the
+    // selection screens settled on for the same line.
+    ctx.textAlign = 'center'; ctx.font = '13px "Courier New", monospace'; ctx.fillStyle = '#6f8a6c';
+    ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [T]  TALENTS    [B]  BACK',
+      CONFIG.canvasW / 2, CONFIG.canvasH - 22);
   }
 
-  return { init, onCrowKill, maxHP, pfRange, speed, wallet, wardStart, applyToGame, moveCursor, buyCurrent, draw };
+  return { init, onCrowKill, maxHP, pfRange, speed, wallet, spend, grant, levels, wardStart, applyToGame, moveCursor, buyCurrent, draw };
 })();
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
+
+/**
+ * Refuses to load a tree whose numeric talents are not all wired to a CONFIG
+ * figure. `TALENTS.stat` would otherwise read `CONFIG[undefined]`, hand back
+ * NaN, and pass it to whatever consumer asked — a brace that never fills, a
+ * chain radius that matches nothing. Loud here, like TALENT_LOOK's own check.
+ */
+function assertTalentStatsWired(stats) {
+  for (const [char, charTree] of Object.entries(CHAR_TREES)) {
+    for (const spec of charTree.talents) {
+      if (spec.effect.kind !== 'linear') continue;
+      if (!stats[spec.id]) throw new Error(`TALENTS.STATS has no row for '${char}.${spec.id}'`);
+    }
+  }
+}
+
+// ── TALENTS: per-character trees, mastery, and the run draft ──────────────────
+//
+// The trees, the gate arithmetic and the draft rule live in ../sim/talents.ts,
+// pure and checkable without a canvas — the FEATHERS split, applied again.
+// What stays here is what needs the browser or the run: the save file, the
+// mastery awards, the run's drafted set, the rite's seal, and the effective
+// figures the wizard's kit reads.
+const TALENTS = (() => {
+  const LS_KEY = 'crow_archer_talents_v1';
+
+  let _bank = talentBankFrom(null);
+  // The run layer. Never saved: a draft and a sealed capstone are this run's
+  // only, which is the whole reason ownership grows options rather than power.
+  let _drafted = [];
+  let _capstone = null;
+  // The shop screen's cursor, and the note it prints under the rows. The note
+  // is a purchase result rather than a string, so the screen decides its own
+  // wording and this module never grows a copy of the screen's vocabulary.
+  // It clears on any move, which is why it needs no timer: a message that
+  // outlives the thing it is about is worse than none.
+  let _cursor = 0;
+  let _lastBuy = null;
+
+  function _save() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(_bank)); } catch (_) {}
+  }
+
+  function init() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) _bank = talentBankFrom(JSON.parse(raw));
+    } catch (_) { /* a hostile save reads as a fresh one */ }
+  }
+
+  function tree()  { return CHAR_TREES[selectedChar]; }
+  function state() { return _bank[selectedChar]; }
+
+  /** Banks a run milestone for the character playing it. */
+  function award(milestone) {
+    const s = state();
+    _bank[selectedChar] = { mastery: masteryAfter(s.mastery, [milestone]), levels: s.levels };
+    _save();
+  }
+
+  /** Where the shop cursor sits, clamped to the tree actually on screen -
+   *  characters can be switched between visits and the trees need not be the
+   *  same length. */
+  function cursor() { return clampCursor(tree().talents.length, _cursor); }
+
+  /** Moves the cursor and drops the note the last purchase left. */
+  function moveCursor(dir) {
+    const n = tree().talents.length;
+    if (n === 0) return;
+    _cursor = (cursor() + dir + n) % n;
+    _lastBuy = null;
+  }
+
+  /** Puts the cursor on a row outright, for a click. */
+  function setCursor(i) {
+    const n = tree().talents.length;
+    if (n === 0 || i < 0 || i >= n) return;
+    _cursor = i;
+    _lastBuy = null;
+  }
+
+  /** The last purchase attempt, or null. The screen reads its `kind`. */
+  function lastBuy() { return _lastBuy; }
+
+  /** Buys whatever the cursor is on, and keeps the answer for the screen. */
+  function buyCurrent() {
+    const spec = tree().talents[cursor()];
+    if (!spec) return null;
+    _lastBuy = buy(spec.id);
+    return _lastBuy;
+  }
+
+  /** Buys with the FEATHERS wallet; the tree and the mastery gate decide. */
+  function buy(id) {
+    const result = purchaseTalent(tree(), state(), FEATHERS.wallet(), id);
+    if (result.kind !== 'bought') return result;
+    _bank[selectedChar] = result.state;
+    FEATHERS.spend(result.spent);
+    _save();
+    return result;
+  }
+
+  /** Test-only ladder bypass — this module's healHero. */
+  function grant(id, level) {
+    const s = state();
+    _bank[selectedChar] = { mastery: s.mastery, levels: { ...s.levels, [id]: level } };
+  }
+
+  /** The same bypass for mastery, so a screen can be staged without playing
+   *  the four milestones that would otherwise be the only way to a rank. */
+  function grantMastery(points) {
+    const s = state();
+    _bank[selectedChar] = { mastery: Math.max(0, Math.trunc(points)), levels: s.levels };
+  }
+
+  function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
+  function draft(id) { if (!_drafted.includes(id)) _drafted.push(id); applyToRun(); }
+  function drafted() { return _drafted.slice(); }
+  function offers(count) { return draftOffers(ownedIds(tree(), state()), Math.random, count, _drafted); }
+  function sealCapstone(id) { _capstone = id; }
+  function capstoneActive(id) { return _capstone === id; }
+
+  /**
+   * Every talent that scales a CONFIG number, and which number it scales.
+   *
+   * A table rather than an accessor apiece, for the reason design-patterns.md
+   * opens with: a fourteenth numeric talent is a row here, not a fourteenth
+   * near-identical function. `min` is a floor where the arithmetic would
+   * otherwise run a figure to zero or past it — a brace that fills in no time
+   * is not a talent, it is a divide by zero waiting to happen.
+   */
+  const STATS = {
+    focusDepth:  { key: 'wizFocusMax' },
+    blinkReach:  { key: 'wizBlinkDistance' },
+    stormWidth:  { key: 'stormBlastRadius' },
+    setFeet:     { key: 'braceFillSecs', min: 0.35 },
+    deepRoots:   { key: 'braceDrainMult', min: 1 },
+    splitShaft:  { key: 'archerPowerPierce' },
+    deeperCut:   { key: 'knightBloodlustPer' },
+    fourthBlood: { key: 'knightBloodlustMax' },
+    lightFoot:   { key: 'rangerMomentumFullPx', min: 120 },
+    longWind:    { key: 'rangerMomentumDecaySecs' },
+    fullTilt:    { key: 'rangerMomentumMax' },
+    longFuse:    { key: 'sapperChainRadius' },
+    moreLinks:   { key: 'sapperChainMaxLinks' },
+  };
+
+  /** A talent's effective figure: its CONFIG base, plus the levels this run
+   *  drafted. Undrafted and unowned both come back as the base. */
+  function stat(id) {
+    const row = STATS[id];
+    const value = draftedValue(tree(), state(), _drafted, id, CONFIG[row.key]);
+    return row.min === undefined ? value : Math.max(row.min, value);
+  }
+
+  assertTalentStatsWired(STATS);
+
+  /** An unlock talent, held only if this run drafted it. */
+  function held(id) { return draftedHeld(tree(), state(), _drafted, id); }
+
+  function stormCooldown() { return capstoneActive('stormcaller') ? CONFIG.stormCooldown / 2 : CONFIG.stormCooldown; }
+
+  function applyToRun() {
+    // The one CONFIG field talents move, moved the way FEATHERS.applyToGame
+    // moves arrow capacity: effective = base + drafted, re-derived in full so
+    // runs never compound onto each other.
+    CONFIG.resources.focus.max = stat('focusDepth');
+  }
+
+  return {
+    init, state, award, buy, grant, grantMastery,
+    resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
+    stat, held, stormCooldown, applyToRun,
+    cursor, moveCursor, setCursor, buyCurrent, lastBuy,
+  };
+})();
+
 const HANDICAP = (() => {
   // Returns a multiplier applied to crow speed each frame.
   // Low HP  → crows slow down (mercy assist).
@@ -8607,7 +9067,7 @@ function drawWizard() {
   // Broom or staff, never both: with the pool dry the staff is inert and the
   // broom is what he is actually swinging, so showing the orb would promise a
   // bolt he cannot cast.
-  if (pfSwing > 0 || inv.focus < CONFIG.wizFocusBolt) {
+  if (pfSwing > 0 || (inv.focus < CONFIG.wizFocusBolt && wizOverchannel <= 0)) {
     paintWizardBroom(ctx, {
       aim: wLocalAngle,
       swing: pfSwing > 0 ? 1 - pfSwing / CONFIG.pitchforkSwingDuration : -1,
@@ -8635,7 +9095,7 @@ function drawWizard() {
 
   // Storm cooldown bar (world-space, above wizard)
   if (stormCD > 0) {
-    const frac = 1 - stormCD/10, bw=34, bh=4, bx=px-bw/2, by2=py-38;
+    const frac = 1 - stormCD / TALENTS.stormCooldown(), bw=34, bh=4, bx=px-bw/2, by2=py-38;
     ctx.fillStyle='#0a0a2a'; ctx.fillRect(bx,by2,bw,bh);
     ctx.fillStyle='#4444ff'; ctx.fillRect(bx,by2,bw*frac,bh);
     ctx.strokeStyle='#8888ff'; ctx.lineWidth=0.5; ctx.strokeRect(bx,by2,bw,bh);
@@ -11457,7 +11917,7 @@ const CHIP = {
   block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, CONFIG.knightBlockCooldown, 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
   charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
-  storm:     () => cooldownChip('storm', stormCD, CONFIG.stormCooldown, 0),
+  storm:     () => cooldownChip('storm', stormCD, TALENTS.stormCooldown(), 0),
   blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
   // Reads as live while the bow is bent, so the bar on the body and the chip
   // in the lane say the same thing.
@@ -12348,6 +12808,498 @@ function _drawCharDetail(p, top) {
   });
 }
 
+/**
+ * How each talent and capstone shows on the chooser screens: an accent in
+ * the char-select scheme, a sigil that depicts the effect, and the panel's
+ * hook line. Presentation only — the tree itself lives in sim/talents.ts —
+ * and checked loudly at load the way CHAR_PANELS checks CHARACTER_STATS: an
+ * id without a look would draw a blank panel, which is the sapper's old
+ * missing-portrait gap wearing new clothes.
+ */
+/**
+ * What a talent DOES to a run, and how that reads at a glance.
+ *
+ * Three kinds, one colour each. Inside a chooser every offer comes from the
+ * same hero, so colouring by hero spent the slot on something the player
+ * already knew — three sapper offers in three identical oranges. Colouring by
+ * kind spends it on the one thing the row is actually asking: what sort of
+ * talent is this.
+ *
+ * A fourth kind — defensive, healing, damage taken — is deliberately absent
+ * rather than empty. Not one of the twenty-five does any of those things; the
+ * FEATHERS tree carries health and the ward. The day a tree grows one, it
+ * gets a row here, and until then an unused colour would only be a promise
+ * the screen does not keep.
+ *
+ * `label` is on the panel beside the tier, because a colour code nobody can
+ * decode is decoration. The word teaches the colour; after a few runs the
+ * colour is doing the work alone.
+ */
+const TALENT_KINDS = {
+  /** Puts more damage on the target: reach, pierce, extra blasts, per-hit worth. */
+  direct:   { label: 'DAMAGE',   color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)' },
+  /** Pays for damage rather than dealing it: resources, uptime, meters, stacks. */
+  indirect: { label: 'BUILD-UP', color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)' },
+  /** Changes where bodies are: movement, placement, phasing, knockback. */
+  mechanic: { label: 'MOVEMENT', color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)' },
+};
+
+/**
+ * Each talent's kind, its sigil, and the one line the panel leads with.
+ *
+ * Presentation only — the tree itself lives in sim/talents.ts — and checked
+ * loudly at load the way CHAR_PANELS checks CHARACTER_STATS: an id without a
+ * look would draw a blank panel, which is the sapper's old missing-portrait
+ * gap wearing new clothes.
+ */
+const TALENT_LOOK = {
+  // Wizard.
+  focusDepth:    { kind: 'indirect', hook: 'A full pool casts four bolts' },
+  blinkReach:    { kind: 'mechanic', hook: 'The wall you could not reach is now cover' },
+  stormWidth:    { kind: 'direct',   hook: 'The storm stops asking where they are' },
+  overchannel:   { kind: 'indirect', hook: 'The escape button becomes the attack button' },
+  stormcaller:   { kind: 'indirect', hook: 'The sky becomes a habit' },
+
+  // Archer.
+  setFeet:       { kind: 'indirect', hook: 'Set faster, hit sooner' },
+  deepRoots:     { kind: 'indirect', hook: 'What you built takes longer to lose' },
+  splitShaft:    { kind: 'direct',   hook: 'One shaft, a line of them' },
+  rooted:        { kind: 'indirect', hook: 'Braced, and free to walk' },
+  splinter:      { kind: 'direct',   hook: 'One stick, three craters' },
+
+  // Knight.
+  deeperCut:     { kind: 'direct',   hook: 'Every stack bites harder' },
+  fourthBlood:   { kind: 'direct',   hook: 'A fourth drop to earn' },
+  chargeThrough: { kind: 'direct',   hook: 'He cuts on every side while charging' },
+  berserker:     { kind: 'indirect', hook: 'A miss is no longer the end of it' },
+  juggernaut:    { kind: 'mechanic', hook: 'Nothing stops the charge' },
+
+  // Ranger.
+  lightFoot:     { kind: 'indirect', hook: 'Less ground to reach full tilt' },
+  longWind:      { kind: 'indirect', hook: 'A pause no longer costs everything' },
+  fullTilt:      { kind: 'indirect', hook: 'The ceiling climbs with you' },
+  slipstream:    { kind: 'mechanic', hook: 'At full speed, nothing is in the way' },
+  shrapnel:      { kind: 'direct',   hook: 'The satchel answers outward' },
+
+  // Sapper.
+  longFuse:      { kind: 'indirect', hook: 'A bomb reaches further for the next' },
+  moreLinks:     { kind: 'direct',   hook: 'The chain runs longer before it dies' },
+  stickyFan:     { kind: 'mechanic', hook: 'The fan stays where it lands' },
+  demolitionist: { kind: 'direct',   hook: 'Each blast louder than the last' },
+  shockwave:     { kind: 'mechanic', hook: 'What survives is thrown clear' },
+};
+for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
+  for (const entry of [...lookTree.talents, ...lookTree.capstones]) {
+    const row = TALENT_LOOK[entry.id];
+    if (!row) throw new Error(`TALENT_LOOK has no row for '${lookChar}.${entry.id}'`);
+    // A kind that is not in the table would paint `undefined` on every field
+    // the panel reads, which draws an invisible offer rather than failing.
+    if (!TALENT_KINDS[row.kind]) {
+      throw new Error(`TALENT_LOOK['${entry.id}'] has no such kind: '${row.kind}'`);
+    }
+    // And a drawing. A talent with no sigil paints an empty panel, which is
+    // the same silent gap a missing look row would have been.
+    if (!SIGILS[entry.id]) throw new Error(`no sigil drawn for '${lookChar}.${entry.id}'`);
+  }
+}
+
+/** The numerals the tier footer wears. The colour left with them: tier is a
+ *  word, and the panel's colour now says what the talent does instead. */
+const TIER_ROMAN  = { 1: 'I', 2: 'II', 3: 'III' };
+
+/** The spec behind a chooser offer — a talent row or a capstone row. */
+function chooserSpec(id) {
+  const tree = CHAR_TREES[selectedChar];
+  const spec = tree.talents.find((t) => t.id === id) || tree.capstones.find((c) => c.id === id);
+  if (!spec) throw new Error(`chooser offer '${id}' is not in ${selectedChar}'s tree`);
+  return spec;
+}
+
+/**
+ * The climbable talent behind an offer id, or null for a capstone.
+ *
+ * `chooserSpec` answers with either kind, which is right for a label and a
+ * description because both carry those. A ladder and a tier only one kind
+ * carries, and asking `isRite` for them reads the ceremony instead of the
+ * offer — a capstone dealt by the draft would reach `.costs.length` on an
+ * object with no costs. This asks the tree, which is the thing that knows.
+ */
+function chooserLadder(id) {
+  return CHAR_TREES[selectedChar].talents.find((t) => t.id === id) ?? null;
+}
+
+/** One LEVEL ■■□ row sized to the talent's own ladder, not STAT_SCALE. */
+function _drawOwnedPips(lx, ly, maxW, filled, total, color) {
+  ctx.textAlign = 'left';
+  ctx.font = '9.5px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText('LEVEL', lx, ly);
+  const pipW = 7, pipGap = 3, pipH = 7;
+  const rowW = total * pipW + (total - 1) * pipGap;
+  const x0 = lx + maxW - rowW, top = ly - pipH / 2;
+  for (let i = 0; i < total; i++) {
+    const px = x0 + i * (pipW + pipGap);
+    if (i < filled) { ctx.fillStyle = color; ctx.fillRect(px, top, pipW, pipH); }
+    else { ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 1; ctx.strokeRect(px + 0.5, top + 0.5, pipW - 1, pipH - 1); }
+  }
+}
+
+/** The selected panel's detail block: pips for a talent, then EFFECT rows. */
+/** One label/value pair inside a panel, returning the y the next row starts at. */
+function _drawChooserRow(lx, y, maxW, label, text, color) {
+  ctx.textAlign = 'left';
+  ctx.font = '9px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(label, lx, y);
+  ctx.font = '11px "Courier New",monospace';
+  ctx.fillStyle = color;
+  ctx.fillText(_fitText(text, maxW), lx, y + 16);
+  return y + 34;
+}
+
+/**
+ * One offer's panel, painted into the slot the row geometry gave it.
+ *
+ * The picked panel carries its own detail rather than handing it to a strip
+ * below. Char select moved detail out because five panels on a 1056 px canvas
+ * left the picked one no room; three offers on this canvas are ~600 px wide,
+ * which is room enough, and the alternative is a tall panel holding a sigil
+ * and one line.
+ */
+function _drawChooserPanel(slot, id, index, sel, isRite) {
+  const { x, y, w, h } = slot;
+  const look = TALENT_LOOK[id], kind = TALENT_KINDS[look.kind], spec = chooserSpec(id);
+  const pad = 14, innerW = w - pad * 2, cx = x + w / 2;
+  _panelFrame(x, y, w, h, sel, { bg: kind.bg, dimBg: DIM_PANEL_BG, color: kind.color, dim: kind.dim });
+
+  // The green bar over the picked panel, for the reason _drawCharPanel gives:
+  // an offer whose own accent is the screen's accent would read as chrome.
+  if (sel) {
+    ctx.save();
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#39FF14';
+    ctx.fillRect(x, y - 7, w, 4);
+    ctx.restore();
+  }
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = sel ? kind.color : '#8f9a8c';
+  ctx.font = `${sel ? 18 : 15}px "Courier New",monospace`;
+  ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, y + 26);
+
+  // The sigil stands where a hero's portrait stands on the select screen.
+  // Drawn rather than printed: a glyph is only as good as whatever font the
+  // player happens to have, and U+2608 shipped here as an empty box once.
+  //
+  // Every figure below is a fraction of the panel, not a pixel count, so the
+  // box can be resized without the contents needing re-placing by hand. The
+  // type sizes are deliberately NOT fractions: shrinking the box must not
+  // shrink the reading, and the sigil holds its stroke weight for the same
+  // reason.
+  paintTalentSigil(ctx, id, {
+    // Centred on the fraction, with no baseline fudge: the painter centres on
+    // the point it is given, where fillText hung a glyph off a baseline.
+    // Larger than the glyphs were, too — a 46 px letter fills its em box and a
+    // stroked drawing on a 24 grid does not, so matching the old number gave
+    // a sigil that read as an afterthought in the middle of the panel.
+    x: cx, y: y + h * (sel ? 0.32 : 0.44),
+    size: sel ? 74 : 58,
+    color: sel ? kind.color : kind.dim,
+    glow: sel ? 12 : 0,
+  });
+
+  ctx.font = '10.5px "Courier New",monospace';
+  ctx.fillStyle = '#93a08f';
+  ctx.fillText(_fitText(look.hook, innerW), cx, y + h * (sel ? 0.50 : 0.72));
+
+  if (sel) {
+    let ry = y + h * 0.61;
+    ry = _drawChooserRow(x + pad, ry, innerW, 'EFFECT', spec.desc, '#C8D0C4');
+    _drawChooserRow(x + pad, ry, innerW,
+      isRite ? 'LASTS' : 'DRAFT',
+      isRite ? 'This run only, once the rite is sealed'
+             : 'Live this run only; the next wakes at each boss',
+      '#C8D0C4');
+  }
+
+  // A capstone has no ladder, so only the draft shows a level. Asked of the
+  // spec rather than of `isRite`: the flag says which ceremony is open and the
+  // shape says whether this offer has a ladder at all, and reading the flag
+  // for both is how a capstone dealt by the draft would reach `.costs.length`
+  // on an object that has no costs.
+  const ladder = chooserLadder(id);
+  if (ladder !== null) {
+    _drawOwnedPips(x + pad, y + h - 42, innerW,
+      talentLevel(TALENTS.state(), id), ladder.costs.length, sel ? kind.color : '#5c6b59');
+  }
+
+  // Grey, both of them: the panel's colour is spent on what the talent does,
+  // so tier says its piece in words rather than competing for the same hues.
+  ctx.textAlign = 'center';
+  ctx.font = '11px "Courier New",monospace';
+  ctx.fillStyle = sel ? PANEL_LABEL_COLOR : '#5c6b59';
+  ctx.fillText(ladder !== null ? `${kind.label} · TIER ${TIER_ROMAN[ladder.tier]}`
+                               : `${kind.label} · SEALS THE RUN`, cx, y + h - 22);
+}
+
+/**
+ * Where the chooser's panels are. `charSelectLayout`'s twin, over the offers
+ * instead of the roster, and canvas-derived for the same reason: a row sized
+ * from a literal fills half a wide canvas — see `render/panel-row.ts`.
+ */
+function chooserLayout() {
+  const H = CONFIG.canvasH;
+  const hintY = H - 34;
+  const bandTop = Math.round(H * 0.122) + 26;
+  const bandBot = hintY - 40;
+  // PANEL_SCALE off both dimensions, against the size this screen first
+  // shipped at. An offer carries a sigil, a hook and two label rows — a third
+  // of what a hero panel carries — so at char select's size the box read as
+  // mostly empty. Height comes off the band factor and the clamp; width comes
+  // off `sideMargin` below, which is the only lever `panelSlots` offers.
+  const restH = Math.max(150, Math.min(322, Math.round((bandBot - bandTop) * 0.60)));
+  return {
+    selected: chooser.cursor,
+    hintY,
+    slots: panelSlots({
+      count: chooser.offers.length,
+      canvasW: CONFIG.canvasW,
+      // Doubles as the width dial. `panelSlots` derives slot width from what
+      // the margins leave, so narrowing the panels means widening these: the
+      // row keeps 0.75 of the width it had at 0.09, which is the same quarter
+      // taken off the height above.
+      //
+      // It also has to clear the canvas edge. Char select's 56 works because
+      // five panels make each overhang small; a chooser deals two or three,
+      // and `panelSlots` takes the greater of margin and overhang rather than
+      // their sum — at 0.06 that put the picked panel 2 px from the edge.
+      sideMargin: Math.round(CONFIG.canvasW * 0.1925),
+      bandMidY: (bandTop + bandBot) / 2,
+      restH,
+      pop: DEFAULT_POP,
+    }, chooser.cursor),
+  };
+}
+
+/**
+ * The draft and the rite, in the char-select screen's own anatomy — the
+ * owner's pick of the five mocked styles. Same geometry module and the same
+ * panel frame, so a change to how selection reads lands on both screens
+ * rather than on one.
+ */
+function drawChooser() {
+  const isRite = chooser.kind === 'rite';
+  const rank = rankOf(TALENTS.state().mastery);
+  _selectionScreenBackdrop(
+    isRite ? '── THE RITE ──' : '── THE DRAFT ──',
+    isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
+           : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
+
+  const { slots, selected, hintY } = chooserLayout();
+  chooser.offers.forEach((id, i) => _drawChooserPanel(slots[i], id, i, i === selected, isRite));
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
+  const digits = chooser.offers.map((_, i) => `[${i + 1}]`).join(' ');
+  ctx.fillText(`CLICK OR ← →  /  ${digits}  SWITCH    ENTER  ${isRite ? 'SEAL THE RITE' : 'WAKE IT'}`,
+    CONFIG.canvasW / 2, hintY);
+}
+
+/** Click an offer to move to it; click the picked one to take it. The same
+ *  two-gesture rule char select uses, over the same `panelAt`. */
+function _clickChooser(e) {
+  const at = _canvasPoint(e);
+  if (at === null || chooser === null) return;
+  const { slots, selected } = chooserLayout();
+  const hit = panelAt(slots, selected, at.x, at.y);
+  if (hit === null) return;
+  if (hit === selected) { confirmChooser(); return; }
+  chooser.cursor = hit;
+}
+
+/**
+ * Where the talent shop's rows and its rite footer sit.
+ *
+ * One function, read by the draw and by the click handler, for the reason
+ * `charSelectLayout` gives: a rect computed twice is a rect that drifts.
+ */
+function talentTreeLayout() {
+  const H = CONFIG.canvasH;
+  const hintY = H - 34;
+  // The rite footer is a fixed block, so the rows take what is left above it
+  // rather than the footer taking what the rows leave.
+  const riteY = hintY - 86;
+  return {
+    hintY, riteY,
+    cursor: TALENTS.cursor(),
+    rows: _shopRows(CHAR_TREES[selectedChar].talents.length, {
+      top: Math.round(H * 0.185),
+      bottom: riteY - 26,
+      // Taller than an upgrade row: a talent carries a sigil, a kind, a tier
+      // and a description where an upgrade carries a label and a line.
+      maxPitch: 116, maxBandH: 104,
+    }),
+  };
+}
+
+/** What the shop should say about the last thing the player tried to buy. */
+function _talentBuyNote(result) {
+  if (result === null) return null;
+  switch (result.kind) {
+    case 'bought':     return { text: `BOUGHT · ◆ ${result.spent} SPENT`, color: '#39FF14' };
+    case 'maxed':      return { text: 'ALREADY AT ITS LAST LEVEL', color: '#FFB400' };
+    case 'tooPoor':    return { text: `◆ ${result.short} SHORT OF ${result.cost}`, color: '#C86A2A' };
+    case 'tierLocked': return {
+      text: `TIER LOCKED · MASTERY RANK ${TIER_ROMAN[result.rankNeeded] || result.rankNeeded}`
+          + ` NEEDED, RANK ${TIER_ROMAN[result.rankHeld] || result.rankHeld || '—'} HELD`,
+      color: '#C86A2A',
+    };
+  }
+  // Every kind the model returns is named above. A new one arriving silently
+  // would be a screen that says nothing when a purchase fails.
+  throw new Error(`no shop note for purchase kind '${result.kind}'`);
+}
+
+/** How far along the mastery ladder this character is, in words. */
+function _masteryLine(points) {
+  const rank = rankOf(points);
+  if (rank >= RANK_THRESHOLDS.length) {
+    return `MASTERY RANK ${TIER_ROMAN[rank] || rank} · EVERY TIER OPEN`;
+  }
+  const next = RANK_THRESHOLDS[rank];
+  return `MASTERY RANK ${rank === 0 ? '—' : TIER_ROMAN[rank]}`
+       + ` · ${points}/${next} TO RANK ${TIER_ROMAN[rank + 1]}`;
+}
+
+/**
+ * One talent's row: sigil, name, what kind of thing it is, and its price.
+ *
+ * Coloured by kind, the same three colours the draft uses, so a player meets
+ * a talent's colour here and recognises it when the chooser deals it.
+ */
+function _drawTalentRow(row, spec, sel, mastery, wallet) {
+  const look = TALENT_LOOK[spec.id], kind = TALENT_KINDS[look.kind];
+  const open = tierOpenAt(mastery, spec.tier);
+  const level = talentLevel(TALENTS.state(), spec.id);
+  const maxed = level >= spec.costs.length;
+  const cost = maxed ? 0 : spec.costs[level];
+  // A locked row is dimmed rather than hidden: what you are climbing toward
+  // is the reason to climb. Dimmed, not unreadable — #5c6659 measured 3.3:1
+  // against black, under the 4.5 floor the screens playbook set, and a talent
+  // you cannot read yet is not a goal.
+  const tint = !open ? '#5c6b59' : sel ? kind.color : kind.dim;
+  const lockedInk = '#7a8877';
+
+  ctx.fillStyle = sel ? kind.bg : 'rgba(0,0,0,0)';
+  ctx.fillRect(row.x, row.y, row.w, row.h);
+  ctx.strokeStyle = tint; ctx.lineWidth = sel ? 1.5 : 1;
+  if (sel) { ctx.shadowColor = kind.color; ctx.shadowBlur = 12; }
+  ctx.strokeRect(row.x, row.y, row.w, row.h);
+  ctx.shadowBlur = 0;
+
+  const sigilBox = row.h;
+  paintTalentSigil(ctx, spec.id, {
+    x: row.x + sigilBox / 2, y: row.midY,
+    // Two thirds of the row. The chooser's picked panel draws its sigil at
+    // 74 px and this lands near it, so a talent looks the same size where you
+    // buy it as where you wake it.
+    size: Math.round(row.h * 0.64),
+    color: tint,
+    glow: sel ? 10 : 0,
+  });
+
+  const textX = row.x + sigilBox;
+  const rightX = row.x + row.w - 20;
+  const textW = rightX - textX - 150;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = open ? (sel ? kind.color : '#8f9a8c') : lockedInk;
+  ctx.font = `${sel ? 19 : 17}px "Courier New",monospace`;
+  ctx.fillText(_fitText(spec.label, textW), textX, row.midY - 18);
+
+  ctx.font = '10px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(`${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`, textX, row.midY + 2);
+
+  ctx.font = '11.5px "Courier New",monospace';
+  ctx.fillStyle = open ? '#93a08f' : lockedInk;
+  ctx.fillText(_fitText(spec.desc, textW), textX, row.midY + 22);
+
+  // Price and ladder, right-aligned, on the same two lines as the name and
+  // the description so the eye reads across rather than hunting.
+  ctx.textAlign = 'right';
+  ctx.font = '13px "Courier New",monospace';
+  if (!open) {
+    ctx.fillStyle = '#C86A2A';
+    ctx.fillText(`LOCKED · RANK ${TIER_ROMAN[spec.tier - 1] || spec.tier - 1}`, rightX, row.midY - 18);
+  } else if (maxed) {
+    ctx.fillStyle = '#FFB400';
+    ctx.fillText('◆ MAXED', rightX, row.midY - 18);
+  } else {
+    ctx.fillStyle = wallet >= cost ? '#FFB400' : '#5a3a00';
+    ctx.fillText(`◆ ${cost}`, rightX, row.midY - 18);
+  }
+  _drawOwnedPips(rightX - 130, row.midY + 20, 130, level, spec.costs.length,
+    open ? (sel ? kind.color : '#5c6b59') : lockedInk);
+}
+
+/**
+ * The talent shop: the one screen that spends feathers on a tree.
+ *
+ * `TALENTS.buy()` has enforced the mastery gate and the wallet since the model
+ * landed, and until this screen there was no way to reach it but the console.
+ */
+function drawTalentTree() {
+  const tree = CHAR_TREES[selectedChar];
+  const mastery = TALENTS.state().mastery;
+  const wallet = FEATHERS.wallet();
+  _selectionScreenBackdrop(`── ${selectedChar.toUpperCase()} TALENTS ──`,
+    `◆ ${wallet} FEATHERS  ·  ${_masteryLine(mastery)}`);
+
+  const { rows, cursor, hintY, riteY } = talentTreeLayout();
+  tree.talents.forEach((spec, i) => _drawTalentRow(rows[i], spec, i === cursor, mastery, wallet));
+
+  // Under the last row rather than above the rite: a message about a purchase
+  // belongs beside the thing that was bought, and the rows are centred in
+  // their band, so the foot of the block moves with the tree's length.
+  const note = _talentBuyNote(TALENTS.lastBuy());
+  if (note !== null && rows.length > 0) {
+    const foot = rows[rows.length - 1];
+    ctx.textAlign = 'center'; ctx.font = '13px "Courier New",monospace';
+    ctx.fillStyle = note.color;
+    ctx.fillText(note.text, CONFIG.canvasW / 2, foot.y + foot.h + 32);
+  }
+
+  // The rite, which is earned and not bought — shown so the ladder has a
+  // visible top, and greyed until the rank that opens it.
+  const earned = riteEligible(mastery);
+  ctx.textAlign = 'center';
+  ctx.font = '11px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(`THE RITE · MASTERY RANK ${TIER_ROMAN[CAPSTONE_RANK]} · EARNED, NEVER BOUGHT`,
+    CONFIG.canvasW / 2, riteY);
+  ctx.font = '15px "Courier New",monospace';
+  ctx.fillStyle = earned ? '#FFB400' : '#7a8877';
+  ctx.fillText(tree.capstones.map((c) => c.label).join('   ·   ') || 'NONE YET',
+    CONFIG.canvasW / 2, riteY + 24);
+
+  ctx.font = '12px "Courier New",monospace'; ctx.fillStyle = '#6f8a6c';
+  ctx.fillText('CLICK OR ↑ ↓  NAVIGATE    ENTER  BUY    [U]  UPGRADES    [B]  BACK',
+    CONFIG.canvasW / 2, hintY);
+}
+
+/** Click a row to move to it; click the one you are on to buy it. The same
+ *  two-gesture rule char select and the chooser use, over the same rects. */
+function _clickTalentTree(e) {
+  const at = _canvasPoint(e);
+  if (at === null) return;
+  const { rows, cursor } = talentTreeLayout();
+  const hit = rowAt(rows, at.x, at.y);
+  if (hit === null) return;
+  if (hit === cursor) { TALENTS.buyCurrent(); return; }
+  TALENTS.setCursor(hit);
+}
+
 function drawCharSelect(t) {
   _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
   const { slots, selected, stripTop, hintY } = charSelectLayout();
@@ -12882,7 +13834,9 @@ function render(t) {
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
   } else if (appState === 'stage_intro') { drawStageIntro(t);
-  } else if (appState === 'inventory')  { FEATHERS.draw(); }
+  } else if (appState === 'chooser')    { drawChooser();
+  } else if (appState === 'inventory')  { FEATHERS.draw();
+  } else if (appState === 'talents')    { drawTalentTree(); }
 }
 
 // ── LOOP ──────────────────────────────────────────────────────────────────────
@@ -13029,6 +13983,17 @@ function stepGame(dt) {
       if (keys['Escape']) { transitionTo('charselect'); keys['Escape']=false; }
       break; }
 
+    case 'chooser': {
+      const picks = chooser ? chooser.offers.length : 0;
+      if (picks === 0) { appState = 'playing'; break; }   // belt: never staged empty
+      if (keys['ArrowLeft'])  { chooser.cursor = (chooser.cursor + picks - 1) % picks; keys['ArrowLeft'] = false; }
+      if (keys['ArrowRight']) { chooser.cursor = (chooser.cursor + 1) % picks; keys['ArrowRight'] = false; }
+      for (let i = 0; i < picks; i++) {
+        if (keys[String(i + 1)]) { chooser.cursor = i; keys[String(i + 1)] = false; }
+      }
+      if (keys['Enter']) { keys['Enter'] = false; confirmChooser(); }
+      break; }
+
     case 'controls':
       if (remapTarget === null && (keys['b']||keys['B'])) {
         transitionTo(controlsFrom === 'paused' ? 'paused' : 'menu'); keys['b']=keys['B']=false;
@@ -13079,12 +14044,24 @@ function stepGame(dt) {
       if (keys['c']||keys['C']){ transitionTo('controls'); keys['c']=keys['C']=false; }
       if (keys['m']||keys['M']){ transitionTo('menu');     keys['m']=keys['M']=false; }
       if (keys['i']||keys['I']){ transitionTo('inventory'); keys['i']=keys['I']=false; }
+      if (keys['t']||keys['T']){ transitionTo('talents');   keys['t']=keys['T']=false; }
       break;
 
     case 'inventory':
       if (keys['ArrowUp'])   { FEATHERS.moveCursor(-1); keys['ArrowUp']   = false; }
       if (keys['ArrowDown']) { FEATHERS.moveCursor( 1); keys['ArrowDown'] = false; }
       if (keys['Enter'])     { FEATHERS.buyCurrent();   keys['Enter']     = false; }
+      if (keys['t']||keys['T']) { transitionTo('talents'); keys['t']=keys['T']=false; }
+      if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
+      break;
+
+    // The talent shop. Both shops spend the same wallet, so they sit next to
+    // each other rather than one being buried under the other.
+    case 'talents':
+      if (keys['ArrowUp'])   { TALENTS.moveCursor(-1); keys['ArrowUp']   = false; }
+      if (keys['ArrowDown']) { TALENTS.moveCursor( 1); keys['ArrowDown'] = false; }
+      if (keys['Enter'])     { TALENTS.buyCurrent();   keys['Enter']     = false; }
+      if (keys['u']||keys['U']) { transitionTo('inventory'); keys['u']=keys['U']=false; }
       if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
       break;
 
@@ -13437,7 +14414,49 @@ export const devHooks = {
   /** The wizard's pool, the part-point banked toward the next one, and which
    *  fallback weapon is mid-swing. Enough to check a spend without guessing. */
   focus: () => ({ points: inv.focus, spendable: Math.floor(inv.focus),
-                  max: CONFIG.wizFocusMax, melee: pfKind }),
+                  max: CONFIG.resources.focus.max, melee: pfKind }),
+  /** The talent system's public face - bank, run layer, effective figures -
+   *  so a test drives a draft before the screens exist. */
+  talents: () => TALENTS,
+  /** The playing character's tree, so a harness can name every talent it owns
+   *  rather than keep a second list of them - the same reason `hitstopLadder`
+   *  hands out the real table. A benchmark that drafts a foreign id crashes
+   *  in `talentValue`, so guessing is not an option. */
+  charTree: () => CHAR_TREES[selectedChar],
+  /** The wallet TALENTS buys from, so a test can set up a poor buyer. */
+  feathers: () => FEATHERS,
+  /** The purchased upgrade levels themselves, so a test can measure one axis
+   *  at a time. Levels are module state that outlives a test, so reading the
+   *  sum of whatever earlier tests bought is the failure mode this avoids. */
+  upgradeLevels: () => FEATHERS.levels(),
+  /** The mid-run chooser, and a pick that goes through the real confirm. */
+  chooser: () => chooser,
+  /** How each talent is presented: its kind, sigil and hook. Exposed so the
+   *  colour code can be held to a test — a scheme that drifts talent by
+   *  talent is worse than no scheme, because it teaches the wrong thing. */
+  talentLook: () => ({ kinds: TALENT_KINDS, look: TALENT_LOOK }),
+  /** The talent shop's row geometry, held to the same playbook: canvas-derived,
+   *  inside the canvas, and the exact rects the click handler tests. */
+  talentTreeLayout: () => talentTreeLayout(),
+  /** What the shop prints about a purchase. Exposed because the alternative
+   *  is driving the real painter, and a refusal the screen cannot word is a
+   *  screen that says nothing when a purchase fails. */
+  talentBuyNote: (result) => _talentBuyNote(result),
+  /** The chooser row's geometry, so a test can hold it to the screens
+   *  playbook: canvas-derived, inside the canvas, and centres that do not
+   *  move when the cursor does. */
+  chooserLayout: () => (chooser === null ? null : chooserLayout()),
+  chooserPick(i) { if (!chooser) return false; chooser.cursor = i; confirmChooser(); return true; },
+  /** Overchannel's remaining window, for pinning the rite's free bolts. */
+  wizOverchannel: () => wizOverchannel,
+  /** Slipstream's remaining window, seconds. Zero whenever she is not phasing. */
+  slipstream: () => rangerSlip,
+  /** The sapper's combo blast at a point, the way `blast` stages a plain one:
+   *  same routine the shift shot reaches when it threads one of his bombs. */
+  sapperCombo(x, y) {
+    explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'sapperShot',
+      { radius: CONFIG.dynamiteBlastRadius * CONFIG.sapperComboRadiusMult });
+  },
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.
@@ -13592,6 +14611,10 @@ export const devHooks = {
    * which is exactly how the ten-wave play-through first failed, on wave ten.
    */
   healHero() { playerHP = FEATHERS.maxHP(); return playerHP; },
+  /** Hurts the hero through the real damage path, so every guard that path
+   *  carries — shields, i-frames, Slipstream — is exercised rather than
+   *  bypassed by writing playerHP directly. */
+  hurtHero(n = 1) { damagePlayer(n); return playerHP; },
   /** Wounds every guard by n, never below 1, so the priest has work to do. */
   hurtGuards(n = 1) {
     for (const body of guards) body.guard.hp = Math.max(1, body.guard.hp - n);
@@ -13719,10 +14742,31 @@ export function boot() {
   window.retinue = () => devHooks.guards().map(
     (b) => (RANK_MARK[b.guard.rank] || '') + b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp,
   );
+  // The two chooser screens, staged in one word each. Both exist because the
+  // screens are otherwise unreachable by hand: nothing sells a talent yet, and
+  // the rite additionally wants a rank that four milestones pay for.
+  window.draft = (char = selectedChar) => {
+    devHooks.pick(char);
+    for (const t of CHAR_TREES[char].talents) TALENTS.grant(t.id, 1);
+    transitionTo('playing');   // initGame queues the run's opening draft itself
+    return chooser ? chooser.offers : `${char} owns no talents to draft`;
+  };
+  window.rite = (char = selectedChar) => {
+    devHooks.pick(char);
+    TALENTS.grantMastery(RANK_THRESHOLDS[CAPSTONE_RANK - 1]);
+    transitionTo('playing');
+    // The run just started, so an opening draft may be queued in front of the
+    // rite; this verb is for looking at the rite, so it goes first.
+    chooser = null; chooserQueue = []; riteOffered = false;
+    queueRite('playing');
+    openNextChooser();
+    return chooser ? chooser.offers : `${char} has no capstones`;
+  };
   // Printed once so the verbs are discoverable from the console itself rather
   // than only from a document the player would have to already be reading.
-  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue()');
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue() draft(char) rite(char)');
 
   FEATHERS.init();
+  TALENTS.init();
   requestAnimationFrame(loop);
 }

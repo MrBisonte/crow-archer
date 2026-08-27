@@ -31,8 +31,59 @@
  * shielded" has no per-level number to add to anything.
  */
 
+import { CHARACTERS, type CharacterKind } from '../net/protocol';
+
 /** An axis that moves a number, one step per level. */
 export type StatId = 'arrows' | 'hp' | 'pfRange' | 'speed' | 'tools' | 'restore' | 'plume';
+
+/**
+ * Which heroes each axis actually reaches.
+ *
+ * Half of this tree is kit-specific wearing generic clothes. QUIVER DEPTH
+ * raises `arrows.max`, which only the archer and the ranger ever spend; the
+ * knight spends nothing at all, so FLETCHER CACHE refills a pool he never
+ * empties. POWDER KEG is the sharpest: it says "tool capacity", it sets
+ * `dynamites.max` and `satchels.max`, and the sapper -- the hero built around
+ * throwing -- spends `bombs`, which it does not touch. TINE REACH is the
+ * melee fallback's reach, and the knight is the one hero with no fallback,
+ * because his sword is his primary and never runs out.
+ *
+ * Thirteen of the forty cells are dead, and until this table existed the shop
+ * charged full price for every one of them.
+ *
+ * Written as data rather than left implicit for two reasons. The screen can
+ * say so, which is the difference between a tree with depth and a tree with
+ * traps. And the re-split -- moving these axes out of the shared tree and into
+ * the character trees in `talents.ts` -- needs exactly this map to know what
+ * goes where; deriving it by reading the game cost an afternoon once.
+ *
+ * `upgrades.reach.test.ts` holds it against what the game really does, so a
+ * hero who gains a quiver does not leave this saying otherwise.
+ */
+export const AXIS_HEROES: Record<UpgradeId, readonly CharacterKind[]> = {
+  // Every hero has hit points, a speed, a kill that pays and a run that can
+  // start shielded.
+  hp: CHARACTERS,
+  speed: CHARACTERS,
+  plume: CHARACTERS,
+  ward: CHARACTERS,
+  // The quiver. The archer and the ranger draw on the same three pools by
+  // design; nobody else has one.
+  arrows: ['archer', 'ranger'],
+  restore: ['archer', 'ranger'],
+  // What the hero throws -- the archer's dynamite and the ranger's satchels,
+  // which share a pace-preset figure. The sapper's pouch is a separate pool
+  // this axis has never set.
+  tools: ['archer', 'ranger'],
+  // The out-of-ammo swing: a pitchfork for the three quiver-and-pouch heroes,
+  // a broom for the wizard. The knight has no call site.
+  pfRange: ['archer', 'wizard', 'ranger', 'sapper'],
+};
+
+/** Whether buying this axis does anything at all for this hero. */
+export function axisReaches(id: UpgradeId, char: CharacterKind): boolean {
+  return AXIS_HEROES[id].includes(char);
+}
 
 /** An axis that is bought once and then simply held. */
 export type PerkId = 'ward';
