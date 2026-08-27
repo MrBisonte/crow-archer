@@ -35,7 +35,7 @@
  * caller-owned base, or an unlock that is simply held.
  */
 
-import type { CharacterKind } from '../net/protocol';
+import { CHARACTERS, type CharacterKind } from '../net/protocol';
 import type { Rng } from './rng';
 import type { UpgradeEffect } from './upgrades';
 
@@ -242,7 +242,67 @@ export function purchaseTalent(
   };
 }
 
+// ── The save file ────────────────────────────────────────────────────────────
+
+/**
+ * Reads one character's slice of the save file into a state that is safe to
+ * do arithmetic with — the same distrust `levelsFrom` gives the FEATHERS
+ * save, for the same reason: a save survives versions and is one devtools
+ * console away from holding anything. Unknown talent ids are dropped, levels
+ * are clamped into the ladder the tree actually has, and mastery is a
+ * non-negative integer or it is zero.
+ */
+export function talentStateFrom(tree: CharTree, raw: unknown): CharTalentState {
+  const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const rawLevels = (typeof source.levels === 'object' && source.levels !== null
+    ? source.levels : {}) as Record<string, unknown>;
+  const levels: Record<string, number> = {};
+  for (const spec of tree.talents) {
+    const value = rawLevels[spec.id];
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    const level = Math.min(Math.max(Math.trunc(value), 0), spec.costs.length);
+    if (level > 0) levels[spec.id] = level;
+  }
+  const mastery = typeof source.mastery === 'number' && Number.isFinite(source.mastery)
+    ? Math.max(Math.trunc(source.mastery), 0) : 0;
+  return { mastery, levels };
+}
+
+/**
+ * The whole save: one state per character the protocol knows, each read
+ * against its own tree. A row the file lacks — or holds junk in — comes back
+ * fresh rather than crashing the load, so an old save meets a new character
+ * the way it met every character on its first ever run.
+ */
+export function talentBankFrom(raw: unknown): Record<CharacterKind, CharTalentState> {
+  const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const bank = {} as Record<CharacterKind, CharTalentState>;
+  for (const char of CHARACTERS) {
+    bank[char] = talentStateFrom(CHAR_TREES[char], source[char]);
+  }
+  return bank;
+}
+
 // ── The run draft ────────────────────────────────────────────────────────────
+
+/** The ids this character owns at level one or higher: the draft's pool. */
+export function ownedIds(tree: CharTree, state: CharTalentState): string[] {
+  return tree.talents.filter((t) => talentLevel(state, t.id) > 0).map((t) => t.id);
+}
+
+/**
+ * A talent's stat over the caller's base, counting only if this run drafted
+ * it — the run layer's one rule, applied where the arithmetic lives so every
+ * consumer gets the same answer. An undrafted talent is the base, exactly as
+ * if it were unowned: ownership grows options, not passive power.
+ */
+export function draftedValue(
+  tree: CharTree, state: CharTalentState, drafted: readonly string[],
+  id: string, base: number,
+): number {
+  if (!drafted.includes(id)) return base;
+  return talentValue(tree, state, id, base);
+}
 
 /**
  * Deals a draft: up to `count` distinct owned talents, minus whatever this

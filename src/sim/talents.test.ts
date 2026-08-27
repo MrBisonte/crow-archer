@@ -24,11 +24,15 @@ import {
   MASTERY_AWARDS,
   RANK_THRESHOLDS,
   draftOffers,
+  draftedValue,
   masteryAfter,
+  ownedIds,
   purchaseTalent,
   rankOf,
   riteEligible,
+  talentBankFrom,
   talentLevel,
+  talentStateFrom,
   talentValue,
   tierOpenAt,
   type CharTalentState,
@@ -177,6 +181,63 @@ describe('buying a talent', () => {
 
   it('throws on an id the tree does not hold, rather than inventing a row', () => {
     expect(() => purchaseTalent(tree, fresh(), 1000, 'notATalent')).toThrow();
+  });
+});
+
+describe('reading the save file', () => {
+  const tree = CHAR_TREES.wizard;
+
+  it('reads a well-formed slice back exactly', () => {
+    const state = talentStateFrom(tree, { mastery: 7, levels: { blinkReach: 2 } });
+    expect(state.mastery).toBe(7);
+    expect(talentLevel(state, 'blinkReach')).toBe(2);
+  });
+
+  it('drops unknown ids and clamps levels into the ladder', () => {
+    const state = talentStateFrom(tree, {
+      mastery: 3.9,
+      levels: { blinkReach: 99, focusDepth: -2, notATalent: 5, stormWidth: 'two' },
+    });
+    // blinkReach's ladder is its costs array; 99 is clamped to its top.
+    const blink = tree.talents.find((t) => t.id === 'blinkReach')!;
+    expect(talentLevel(state, 'blinkReach')).toBe(blink.costs.length);
+    expect(talentLevel(state, 'focusDepth')).toBe(0);
+    expect(state.levels).not.toHaveProperty('notATalent');
+    expect(state.levels).not.toHaveProperty('stormWidth');
+    expect(state.mastery).toBe(3);
+  });
+
+  it('treats junk — or nothing — as a fresh character', () => {
+    for (const raw of [null, undefined, 42, 'save', { mastery: 'ten', levels: 7 }]) {
+      const state = talentStateFrom(tree, raw);
+      expect(state.mastery).toBe(0);
+      expect(Object.keys(state.levels)).toEqual([]);
+    }
+  });
+
+  it('banks a row for every character, fresh where the file has none', () => {
+    const bank = talentBankFrom({ wizard: { mastery: 5, levels: { focusDepth: 1 } } });
+    expect(new Set(Object.keys(bank))).toEqual(new Set(CHARACTERS));
+    expect(bank.wizard.mastery).toBe(5);
+    expect(bank.archer.mastery).toBe(0);
+  });
+});
+
+describe('the run layer arithmetic', () => {
+  const tree = CHAR_TREES.wizard;
+  const owned: CharTalentState = { mastery: 0, levels: { blinkReach: 1, focusDepth: 1 } };
+
+  it('lists exactly the talents held at level one or higher as the pool', () => {
+    expect(new Set(ownedIds(tree, owned))).toEqual(new Set(['blinkReach', 'focusDepth']));
+    expect(ownedIds(tree, { mastery: 9, levels: {} })).toEqual([]);
+  });
+
+  it('pays a talent only if this run drafted it', () => {
+    expect(draftedValue(tree, owned, ['blinkReach'], 'blinkReach', 160)).toBe(180);
+    // Owned but undrafted is the base — ownership grows options, not power.
+    expect(draftedValue(tree, owned, [], 'blinkReach', 160)).toBe(160);
+    // Drafted but unowned (level 0) is also the base.
+    expect(draftedValue(tree, owned, ['stormWidth'], 'stormWidth', 450)).toBe(450);
   });
 });
 
