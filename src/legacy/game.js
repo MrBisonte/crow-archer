@@ -1828,9 +1828,11 @@ const inGame = () => appState === 'playing' || appState === 'boss_fight';
 let cursorStyle = 'crosshair';
 /** Whether the pointer is over something a click would act on. */
 function _overClickable() {
-  if (appState !== 'charselect') return false;
-  const { slots, selected } = charSelectLayout();
-  return panelAt(slots, selected, mouse.x, mouse.y) !== null;
+  const layout = appState === 'charselect' ? charSelectLayout()
+    : appState === 'chooser' && chooser !== null ? chooserLayout()
+    : null;
+  if (layout === null) return false;
+  return panelAt(layout.slots, layout.selected, mouse.x, mouse.y) !== null;
 }
 
 /** Where a mouse event landed, in canvas pixels, or null before layout. */
@@ -2892,6 +2894,7 @@ function installInput() {
   canvas.addEventListener('click', e => {
     initAudio();
     if (appState === 'charselect') { _clickCharSelect(e); return; }
+    if (appState === 'chooser') { _clickChooser(e); return; }
     if (appState !== 'controls') return;
     const r  = canvas.getBoundingClientRect();
     const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
@@ -12568,58 +12571,121 @@ function _drawOwnedPips(lx, ly, maxW, filled, total, color) {
 }
 
 /** The selected panel's detail block: pips for a talent, then EFFECT rows. */
-function _drawChooserDetail(lx, ly, maxW, id, spec, look, isRite) {
-  let y = ly;
-  if (!isRite) {
-    _drawOwnedPips(lx, y, maxW, talentLevel(TALENTS.state(), id), spec.costs.length, look.color);
-    y += 26;
-  }
-  const rows = [
-    ['EFFECT', spec.desc],
-    isRite ? ['LASTS', 'This run only — no second asking until the next']
-           : ['DRAFT', 'Live this run only — the next wakes at each boss'],
-  ];
-  for (const [label, text] of rows) {
-    ctx.textAlign = 'left';
-    ctx.font = '9px "Courier New",monospace';
-    ctx.fillStyle = PANEL_LABEL_COLOR;
-    ctx.fillText(label, lx, y);
-    ctx.font = '10.5px "Courier New",monospace';
-    ctx.fillStyle = look.color;
-    ctx.fillText(_fitText(text, maxW), lx, y + 15);
-    y += 40;
-  }
-  ctx.textAlign = 'center';
+/** One label/value pair inside a panel, returning the y the next row starts at. */
+function _drawChooserRow(lx, y, maxW, label, text, color) {
+  ctx.textAlign = 'left';
+  ctx.font = '9px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(label, lx, y);
+  ctx.font = '11px "Courier New",monospace';
+  ctx.fillStyle = color;
+  ctx.fillText(_fitText(text, maxW), lx, y + 16);
+  return y + 38;
 }
 
-function _drawChooserPanel(px, py, w, h, sel, id, index, isRite) {
+/**
+ * One offer's panel, painted into the slot the row geometry gave it.
+ *
+ * The picked panel carries its own detail rather than handing it to a strip
+ * below. Char select moved detail out because five panels on a 1056 px canvas
+ * left the picked one no room; three offers on this canvas are ~600 px wide,
+ * which is room enough, and the alternative is a tall panel holding a sigil
+ * and one line.
+ */
+function _drawChooserPanel(slot, id, index, sel, isRite) {
+  const { x, y, w, h } = slot;
   const look = TALENT_LOOK[id], spec = chooserSpec(id);
-  const pad = 12, innerW = w - pad * 2, cx = px + w / 2;
-  _panelFrame(px, py, w, h, sel, { bg: look.bg, dimBg: DIM_PANEL_BG, color: look.color, dim: look.dim });
+  const pad = 14, innerW = w - pad * 2, cx = x + w / 2;
+  _panelFrame(x, y, w, h, sel, { bg: look.bg, dimBg: DIM_PANEL_BG, color: look.color, dim: look.dim });
+
+  // The green bar over the picked panel, for the reason _drawCharPanel gives:
+  // an offer whose own accent is the screen's accent would read as chrome.
+  if (sel) {
+    ctx.save();
+    ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#39FF14';
+    ctx.fillRect(x, y - 7, w, 4);
+    ctx.restore();
+  }
+
   ctx.textAlign = 'center';
-  ctx.fillStyle = sel ? look.color : look.dim;
-  ctx.font = '19px "Courier New",monospace';
-  ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, py + 30);
-  ctx.font = '10.5px "Courier New",monospace';
-  ctx.fillText(_fitText(look.hook, innerW), cx, py + 56);
-  ctx.font = '44px "Courier New",monospace';
+  ctx.fillStyle = sel ? look.color : '#8f9a8c';
+  ctx.font = `${sel ? 18 : 15}px "Courier New",monospace`;
+  ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, y + 26);
+
+  // The sigil stands where a hero's portrait stands on the select screen.
+  ctx.font = `${sel ? 46 : 38}px "Courier New",monospace`;
   if (sel) { ctx.shadowColor = look.color; ctx.shadowBlur = 12; }
   ctx.fillStyle = sel ? look.color : look.dim;
-  ctx.fillText(look.sigil, cx, py + 116);
+  ctx.fillText(look.sigil, cx, y + h * (sel ? 0.30 : 0.42));
   ctx.shadowBlur = 0;
-  if (sel) _drawChooserDetail(px + pad, py + 172, innerW, id, spec, look, isRite);
+
+  ctx.font = '10.5px "Courier New",monospace';
+  ctx.fillStyle = '#93a08f';
+  ctx.fillText(_fitText(look.hook, innerW), cx, y + h * (sel ? 0.44 : 0.68));
+
+  if (sel) {
+    let ry = y + h * 0.56;
+    ry = _drawChooserRow(x + pad, ry, innerW, 'EFFECT', spec.desc, '#C8D0C4');
+    _drawChooserRow(x + pad, ry, innerW,
+      isRite ? 'LASTS' : 'DRAFT',
+      isRite ? 'This run only, once the rite is sealed'
+             : 'Live this run only; the next wakes at each boss',
+      '#C8D0C4');
+  }
+
+  // A capstone has no ladder, so only the draft shows a level.
+  if (!isRite) {
+    _drawOwnedPips(x + pad, y + h - 46, innerW,
+      talentLevel(TALENTS.state(), id), spec.costs.length, sel ? look.color : '#5c6b59');
+  }
+
   const footColor = isRite ? '#FFB400' : TIER_COLORS[spec.tier];
+  ctx.textAlign = 'center';
   ctx.font = '11px "Courier New",monospace';
-  ctx.shadowColor = footColor; ctx.shadowBlur = 6;
-  ctx.fillStyle = footColor;
-  ctx.fillText(isRite ? 'SEALS THE RUN' : `TIER ${TIER_ROMAN[spec.tier]}`, cx, py + h - 24);
+  if (sel) { ctx.shadowColor = footColor; ctx.shadowBlur = 6; }
+  ctx.fillStyle = sel ? footColor : '#5c6b59';
+  ctx.fillText(isRite ? 'SEALS THE RUN' : `TIER ${TIER_ROMAN[spec.tier]}`, cx, y + h - 22);
   ctx.shadowBlur = 0;
 }
 
 /**
- * The draft and the rite, in the char-select screen's own anatomy: the
- * chosen option expands about the row's midline while the rest dim, each
- * offer wearing its own accent — the owner's pick of the five mocked styles.
+ * Where the chooser's panels are. `charSelectLayout`'s twin, over the offers
+ * instead of the roster, and canvas-derived for the same reason: a row sized
+ * from a literal fills half a wide canvas — see `render/panel-row.ts`.
+ */
+function chooserLayout() {
+  const H = CONFIG.canvasH;
+  const hintY = H - 34;
+  const bandTop = Math.round(H * 0.122) + 26;
+  const bandBot = hintY - 40;
+  const restH = Math.max(200, Math.min(430, Math.round((bandBot - bandTop) * 0.80)));
+  return {
+    selected: chooser.cursor,
+    hintY,
+    slots: panelSlots({
+      count: chooser.offers.length,
+      canvasW: CONFIG.canvasW,
+      // Wider than char select's 56, and derived rather than typed. That
+      // screen splits the row five ways, so its overhang is small next to the
+      // margin; a chooser deals two or three, making each panel — and so each
+      // overhang — much larger, and `panelSlots` takes the greater of margin
+      // and overhang rather than their sum. At 0.06 that left the picked panel
+      // 2 px from the canvas edge. 0.09 is sized off the worst case, two
+      // offers, and still clears the edge by 4% of the canvas at three.
+      sideMargin: Math.round(CONFIG.canvasW * 0.09),
+      bandMidY: (bandTop + bandBot) / 2,
+      restH,
+      pop: DEFAULT_POP,
+    }, chooser.cursor),
+  };
+}
+
+/**
+ * The draft and the rite, in the char-select screen's own anatomy — the
+ * owner's pick of the five mocked styles. Same geometry module and the same
+ * panel frame, so a change to how selection reads lands on both screens
+ * rather than on one.
  */
 function drawChooser() {
   const isRite = chooser.kind === 'rite';
@@ -12628,29 +12694,27 @@ function drawChooser() {
     isRite ? '── THE RITE ──' : '── THE DRAFT ──',
     isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
            : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
-  const offers = chooser.offers;
-  const gapX = 12, selH = 340, restH = 230;
-  const selW = isRite ? 460 : 380;
-  const others = offers.length - 1;
-  const restW = others > 0 ? Math.min(300, Math.floor((1000 - selW - gapX * others) / others)) : 0;
-  const widths = offers.map((_, i) => (i === chooser.cursor ? selW : restW));
-  const totalW = widths.reduce((a, b) => a + b, 0) + gapX * others;
-  // Centred on the canvas, not pinned under the title: this screen has no
-  // stat block below the row, so a top-anchored row leaves the bottom two
-  // thirds of the field black.
-  const midY = Math.round(CONFIG.canvasH * 0.45);
-  let px = Math.round(CONFIG.canvasW / 2 - totalW / 2);
-  offers.forEach((id, i) => {
-    const sel = i === chooser.cursor;
-    const w = widths[i], h = sel ? selH : restH;
-    _drawChooserPanel(px, Math.round(midY - h / 2), w, h, sel, id, i, isRite);
-    px += w + gapX;
-  });
-  ctx.fillStyle = '#0d4d04'; ctx.font = '14px "Courier New",monospace';
+
+  const { slots, selected, hintY } = chooserLayout();
+  chooser.offers.forEach((id, i) => _drawChooserPanel(slots[i], id, i, i === selected, isRite));
+
   ctx.textAlign = 'center';
-  const digits = offers.map((_, i) => `[${i + 1}]`).join(' ');
-  ctx.fillText(`← →  /  ${digits}  SWITCH    ENTER  ${isRite ? 'SEAL THE RITE' : 'WAKE IT'}`,
-    CONFIG.canvasW / 2, CONFIG.canvasH - 22);
+  ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
+  const digits = chooser.offers.map((_, i) => `[${i + 1}]`).join(' ');
+  ctx.fillText(`CLICK OR ← →  /  ${digits}  SWITCH    ENTER  ${isRite ? 'SEAL THE RITE' : 'WAKE IT'}`,
+    CONFIG.canvasW / 2, hintY);
+}
+
+/** Click an offer to move to it; click the picked one to take it. The same
+ *  two-gesture rule char select uses, over the same `panelAt`. */
+function _clickChooser(e) {
+  const at = _canvasPoint(e);
+  if (at === null || chooser === null) return;
+  const { slots, selected } = chooserLayout();
+  const hit = panelAt(slots, selected, at.x, at.y);
+  if (hit === null) return;
+  if (hit === selected) { confirmChooser(); return; }
+  chooser.cursor = hit;
 }
 
 function drawCharSelect(t) {
@@ -13762,6 +13826,10 @@ export const devHooks = {
   feathers: () => FEATHERS,
   /** The mid-run chooser, and a pick that goes through the real confirm. */
   chooser: () => chooser,
+  /** The chooser row's geometry, so a test can hold it to the screens
+   *  playbook: canvas-derived, inside the canvas, and centres that do not
+   *  move when the cursor does. */
+  chooserLayout: () => (chooser === null ? null : chooserLayout()),
   chooserPick(i) { if (!chooser) return false; chooser.cursor = i; confirmChooser(); return true; },
   /** Overchannel's remaining window, for pinning the rite's free bolts. */
   wizOverchannel: () => wizOverchannel,

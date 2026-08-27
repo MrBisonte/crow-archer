@@ -267,6 +267,61 @@ describe('the choosers', () => {
   });
 });
 
+interface Slot { x: number; y: number; w: number; h: number }
+interface ChooserLayout { slots: Slot[]; selected: number; hintY: number }
+
+describe('the chooser row obeys the screens playbook', () => {
+  const layout = (): ChooserLayout => g.chooserLayout() as unknown as ChooserLayout;
+
+  /** Opens a draft with everything owned, so the row has three panels. */
+  function openDraft(): void {
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
+    g.go('menu');
+    g.go('playing');
+    expect(g.state()).toBe('chooser');
+  }
+
+  it('fills the canvas rather than a literal design width', () => {
+    // The fault this guards: char select's pre-rebuild row was sized from a
+    // literal 1000, which is 57% of the 1760 canvas the game ships now.
+    openDraft();
+    const slots = layout().slots;
+    const left = Math.min(...slots.map((s) => s.x));
+    const right = Math.max(...slots.map((s) => s.x + s.w));
+    expect(right - left).toBeGreaterThan(g.config().canvasW * 0.75);
+  });
+
+  it('keeps every panel inside the canvas, edges included', () => {
+    openDraft();
+    const W = g.config().canvasW, H = g.config().canvasH;
+    // A real margin, not merely on-canvas: `panelSlots` clamps a panel that
+    // would overflow, so "inside" is satisfied by one that is jammed flush
+    // against the edge — which is exactly what too small a sideMargin gives.
+    const clear = W * 0.02;
+    for (const s of layout().slots) {
+      expect(s.x, 'a panel is jammed against the left edge').toBeGreaterThan(clear);
+      expect(s.x + s.w, 'a panel is jammed against the right edge').toBeLessThan(W - clear);
+      expect(s.y).toBeGreaterThan(0);
+      expect(s.y + s.h).toBeLessThan(H);
+    }
+  });
+
+  it('moves nothing but the picked panel when the cursor changes', () => {
+    // The other fault: the old screen re-centred the row on every switch, so
+    // the panel a player was reaching for moved out from under the cursor.
+    openDraft();
+    const centres = (): number[] => layout().slots.map((s) => Math.round(s.x + s.w / 2));
+    const first = centres();
+    const c = g.chooser() as unknown as { cursor: number };
+    c.cursor = 1;
+    const second = centres();
+    for (let i = 0; i < first.length; i++) {
+      if (i === 1) continue;
+      expect(second[i], `panel ${i} slid when the cursor moved`).toBe(first[i]);
+    }
+  });
+});
+
 describe('buying goes through the FEATHERS wallet', () => {
   it('refuses an open-tier talent the wallet cannot cover', () => {
     // Tier 1 is open at any rank, so this pins the wallet coupling alone;
