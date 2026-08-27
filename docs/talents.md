@@ -10,6 +10,7 @@ this document is the per-character half that sits beside it.
 - [The wizard's tree](#the-wizards-tree)
 - [What a run looks like](#what-a-run-looks-like)
 - [The other four heroes](#the-other-four-heroes)
+- [What a ceremony will not interrupt](#what-a-ceremony-will-not-interrupt)
 - [Where the code lives](#where-the-code-lives)
 
 ## The three layers
@@ -64,9 +65,9 @@ which is what lets the draft pool start existing at all.
 
 ## The wizard's tree
 
-The wizard pilots the system; his is the only tree with rows in it. Costs are
-a ladder read cheapest-first, so a talent's maximum level is the length of its
-own price list and is never written down twice.
+The wizard piloted the system, so his tree is the one the rest were built
+against. Costs are a ladder read cheapest-first, so a talent's maximum level is
+the length of its own price list and is never written down twice.
 
 ```mermaid
 flowchart BT
@@ -136,13 +137,41 @@ wears its own accent, sigil, hook line and tier footer. The
 
 ## The other four heroes
 
-The archer, knight, ranger and sapper have explicit empty rows in `CHAR_TREES`
-rather than absent ones. That is the shape the compiler can check: a hero
-missing a tree is a build error rather than a silent fall-through, which is
-the exact failure [Design patterns](design-patterns.md) records shipping once
-already when a table was keyed positionally.
+Every hero's tree deepens that hero's own passive. That is the whole design
+rule, and it is what keeps the archer and the ranger diverging rather than
+converging: they share a quiver, and one is paid for standing still while the
+other is paid for never doing it. Buying into either makes that difference
+larger, not smaller.
 
-An empty tree owns nothing, so those four never see a draft or a rite.
+Every row is a real figure the game runs on — thirteen of the twenty scale a
+`CONFIG` number, and the remaining seven are unlocks. A talent whose effect
+nothing reads must not ship, so `TALENTS.STATS` is checked at load: a numeric
+talent with no row throws by name rather than handing `NaN` to a consumer.
+
+| Hero | Deepens | Tier I | Tier II | The rite |
+|---|---|---|---|---|
+| Archer | Brace | SET FEET, DEEP ROOTS | SPLIT SHAFT | ROOTED / SPLINTER |
+| Knight | Bloodlust | DEEPER CUT, FOURTH BLOOD | CHARGE THROUGH | BERSERKER / JUGGERNAUT |
+| Ranger | Momentum | LIGHT FOOT, LONG WIND | FULL TILT | SLIPSTREAM / SHRAPNEL |
+| Sapper | Chain detonation | LONG FUSE, MORE LINKS | STICKY FAN | DEMOLITIONIST / SHOCKWAVE |
+
+Two figures worth stating outright, because they were set deliberately rather
+than derived. The ranger's FULL TILT adds **5% a level over three levels**, so
+her ceiling is **45%** rather than the 30% she starts with — and it still
+multiplies with pickups instead of replacing them. And the knight's FOURTH
+BLOOD is a single level: a fourth stack, not a fourth axis.
+
+## What a ceremony will not interrupt
+
+A chooser never opens during a siege. A siege boss is one enemy inside a wave
+rather than the end of a stage — the boss death tail says so itself, and every
+brawl hand-off is skipped there for the same reason — so a ceremony held over a
+running wave would stop the field with crows still on it. The siege pays its
+mastery like any other boss; what it does not do is hold a ceremony about it.
+
+`queueBossChoosers` owns that rule, and the siege path calls it and lets the
+guard refuse rather than deciding for itself: two places that both know when a
+ceremony is allowed is one too many.
 
 ## Where the code lives
 
@@ -153,6 +182,7 @@ a run stays with the game.
 | Concern | Home |
 |---|---|
 | Trees, tiers, prices, mastery arithmetic, the draft deal | `src/sim/talents.ts` |
+| Which CONFIG figure each numeric talent moves | `TALENTS.STATS` in `src/legacy/game.js` |
 | Save file, mastery awards, the run's drafted set, the rite's seal, effective figures | `TALENTS` in `src/legacy/game.js` |
 | The draft and rite screens | `drawChooser()` and `TALENT_LOOK` in `src/legacy/game.js` |
 | Purchases, spending the wallet | `TALENTS.buy()`, which spends through `FEATHERS.spend()` |
