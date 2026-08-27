@@ -16,8 +16,9 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { CHARACTERS } from '../net/protocol';
 import { CHAR_TREES } from '../sim/talents';
-import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
+import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
 import { devHooks as g } from './game.js';
 
 interface TalentState { mastery: number; levels: Record<string, number> }
@@ -33,6 +34,9 @@ interface Talents {
   stormRadius: () => number;
   focusMax: () => number;
   stormCooldown: () => number;
+  stat: (id: string) => number;
+  held: (id: string) => boolean;
+  grantMastery: (points: number) => void;
 }
 const talents = (): Talents => g.talents() as unknown as Talents;
 
@@ -334,6 +338,243 @@ describe('the chooser row obeys the screens playbook', () => {
       if (i === 1) continue;
       expect(second[i], `panel ${i} slid when the cursor moved`).toBe(first[i]);
     }
+  });
+});
+
+/**
+ * Every hero's tree reaches its own kit.
+ *
+ * One test per talent would be four times this file; what these hold instead
+ * is the seam each tree hangs on — that the drafted figure reaches the code
+ * that runs on it, measured through the real path rather than by reading the
+ * accessor back. The accessor agreeing with itself proves nothing.
+ */
+describe('the archer tree reaches Brace', () => {
+  const brace = (): number => (g.brace() as { level: number }).level;
+
+  beforeEach(() => {
+    g.pick('archer');
+    for (const t of CHAR_TREES.archer.talents) talents().grant(t.id, 0);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  });
+
+  it('fills faster with SET FEET drafted', () => {
+    // Half a second of standing still, with and without the talent.
+    const half = Math.ceil(0.5 * ONE_SECOND);
+    stepPast(half);
+    const plain = brace();
+    g.go('menu'); g.go('playing'); clearArena(); g.healHero();
+    talents().grant('setFeet', 2);
+    talents().draft('setFeet');
+    stepPast(half);
+    expect(brace(), 'a set-feet archer braces further in the same time')
+      .toBeGreaterThan(plain);
+  });
+
+  it('punches through more bodies with SPLIT SHAFT drafted', () => {
+    const base = g.config().archerPowerPierce;
+    talents().grant('splitShaft', 2);
+    talents().draft('splitShaft');
+    expect(talents().stat('splitShaft')).toBe(base + 2);
+  });
+
+  it('holds a full brace through movement only once ROOTED is sealed', () => {
+    stepPast(2 * ONE_SECOND);
+    expect(brace(), 'the archer should be fully braced by now').toBe(1);
+    // Walking normally spends it.
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(Math.ceil(0.4 * ONE_SECOND));
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    expect(brace(), 'walking drains an unsealed brace').toBeLessThan(1);
+
+    stepPast(2 * ONE_SECOND);
+    talents().sealCapstone('rooted');
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(Math.ceil(0.4 * ONE_SECOND));
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    expect(brace(), 'ROOTED carries a full brace through the same walk').toBe(1);
+  });
+});
+
+describe('the knight tree reaches Bloodlust', () => {
+  beforeEach(() => {
+    g.pick('knight');
+    for (const t of CHAR_TREES.knight.talents) talents().grant(t.id, 0);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  });
+
+  it('makes each stack worth more with DEEPER CUT drafted', () => {
+    const base = g.config().knightBloodlustPer;
+    talents().grant('deeperCut', 2);
+    talents().draft('deeperCut');
+    expect(talents().stat('deeperCut')).toBeCloseTo(base + 0.06, 6);
+  });
+
+  /**
+   * One connecting swing at the same body, re-planted in reach each time.
+   *
+   * Re-planted rather than freshly spawned: a skeleton walks, and a new one
+   * per swing piles a crowd around the knight that shoves him off his own
+   * aim. Measured that way the fourth swing simply missed, which reads as the
+   * talent failing when it is the harness drifting.
+   */
+  function swingInto(s: { x: number; y: number; hp: number }): void {
+    const p = g.player() as { x: number; y: number };
+    const c = g.config();
+    s.x = p.x + c.knightSpearRange * 0.7; s.y = p.y; s.hp = 9999;
+    // The target hits back, and a knight standing in contact for six swings
+    // dies partway through — after which nothing resolves and the stack count
+    // simply stops, which reads exactly like the talent failing. CLAUDE.md
+    // names healHero for precisely this.
+    g.healHero();
+    aimAt(p.x + c.knightSpearRange, p.y);
+    g.shoot();
+    stepPast(Math.ceil(c.knightSpearSwingDuration * 60) + 2);
+    stepPast(Math.ceil(c.knightSpearCooldown * 60) + 2);
+  }
+
+  /** One body to swing at, for the whole test. */
+  function plantTarget(): { x: number; y: number; hp: number } {
+    g.spawnSkeleton();
+    return (g.skeletons() as { x: number; y: number; hp: number }[]).at(-1)!;
+  }
+
+  const stacks = (): number => (g.bloodlust() as { stacks: number }).stacks;
+
+  it('stops at the base ceiling with nothing drafted', () => {
+    const target = plantTarget();
+    for (let i = 0; i < 6; i++) swingInto(target);
+    expect(stacks()).toBe(g.config().knightBloodlustMax);
+  });
+
+  it('banks a fourth stack once FOURTH BLOOD is drafted', () => {
+    // Counted off the real stack the swing banks, not off the table that
+    // decides the ceiling.
+    talents().grant('fourthBlood', 1);
+    talents().draft('fourthBlood');
+    const target = plantTarget();
+    for (let i = 0; i < 6; i++) swingInto(target);
+    expect(stacks()).toBe(g.config().knightBloodlustMax + 1);
+  });
+});
+
+describe('the ranger tree reaches Momentum', () => {
+  beforeEach(() => {
+    g.pick('ranger');
+    for (const t of CHAR_TREES.ranger.talents) talents().grant(t.id, 0);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  });
+
+  /** Runs right for `frames`, then reports the meter and what it is worth. */
+  function runFor(frames: number): { level: number; mult: number } {
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(frames);
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    return g.momentum() as { level: number; mult: number };
+  }
+
+  it('is worth 45% at a full meter with FULL TILT drafted', () => {
+    // Read off rangerMomentumMult, the figure a bolt's damage runs on. Asking
+    // the accessor what the accessor thinks proves nothing, and this file's
+    // own opening says exactly that.
+    talents().grant('fullTilt', 3);
+    talents().draft('fullTilt');
+    const m = runFor(4 * ONE_SECOND);
+    expect(m.level, 'the ranger should be at full tilt by now').toBe(1);
+    expect(m.mult).toBeCloseTo(1.45, 4);
+  });
+
+  it('is worth only the base ceiling without it', () => {
+    const m = runFor(4 * ONE_SECOND);
+    expect(m.level).toBe(1);
+    expect(m.mult).toBeCloseTo(1 + g.config().rangerMomentumMax, 4);
+  });
+
+  it('fills over less ground with LIGHT FOOT drafted', () => {
+    // The same run for the same frames: the talent has to show as a fuller
+    // meter, not as a different number in the table.
+    const plain = runFor(Math.ceil(0.45 * ONE_SECOND)).level;
+    expect(plain, 'this run must not already be capped').toBeLessThan(1);
+    g.go('menu'); g.go('playing'); clearArena(); g.healHero();
+    talents().grant('lightFoot', 2);
+    talents().draft('lightFoot');
+    const light = runFor(Math.ceil(0.45 * ONE_SECOND)).level;
+    expect(light, 'less ground to cover should mean a fuller meter')
+      .toBeGreaterThan(plain);
+  });
+});
+
+describe('the sapper tree reaches the chain', () => {
+  beforeEach(() => {
+    g.pick('sapper');
+    for (const t of CHAR_TREES.sapper.talents) talents().grant(t.id, 0);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  });
+
+  it('reaches further with LONG FUSE drafted', () => {
+    const base = g.config().sapperChainRadius;
+    talents().grant('longFuse', 2);
+    talents().draft('longFuse');
+    expect(talents().stat('longFuse')).toBe(base + 36);
+  });
+
+  it('runs through more bombs with MORE LINKS drafted', () => {
+    const base = g.config().sapperChainMaxLinks;
+    talents().grant('moreLinks', 2);
+    talents().draft('moreLinks');
+    expect(talents().stat('moreLinks')).toBe(base + 4);
+  });
+});
+
+describe('a numeric talent nothing has drafted is exactly its base', () => {
+  // The whole run layer in one assertion, over every hero: owning a tree does
+  // not change a single figure the game runs on until a run drafts it.
+  it('leaves every hero\'s figures alone', () => {
+    for (const char of CHARACTERS) {
+      g.pick(char);
+      for (const t of CHAR_TREES[char].talents) talents().grant(t.id, 2);
+      g.go('menu');
+      g.go('playing');
+      // The run-start draft may be waiting; nothing has been picked from it.
+      for (const t of CHAR_TREES[char].talents) {
+        if (t.effect.kind !== 'linear') continue;
+        const before = talents().stat(t.id);
+        talents().grant(t.id, 0);
+        expect(talents().stat(t.id), `${char}.${t.id} moved without being drafted`)
+          .toBe(before);
+      }
+    }
+  });
+});
+
+describe('the choosers keep out of a siege', () => {
+  it('pays mastery for a siege boss without stopping the wave', () => {
+    // A siege boss is one enemy inside a wave, not the end of a stage. A
+    // ceremony here would hold the field with crows still on it.
+    g.pick('wizard');
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
+    talents().grantMastery(100);          // far past the rite's rank
+    g.setMode('siege');
+    g.go('playing');
+    // The run's opening draft is legitimate and opens first; take it, so what
+    // this test measures afterwards is the siege boss alone.
+    if (g.state() === 'chooser') g.chooserPick(0);
+    expect(g.state()).toBe('playing');
+    g.jumpToSiegeWave(7);
+    const before = talents().state().mastery;
+    g.killSiegeBoss();
+    stepPast(Math.ceil(2 * ONE_SECOND));
+    expect(g.state(), 'a siege boss opened a chooser mid-wave').toBe('playing');
+    expect(talents().state().mastery, 'the siege boss paid no mastery')
+      .toBeGreaterThan(before);
   });
 });
 

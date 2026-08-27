@@ -75,10 +75,14 @@ export interface CharTree {
 }
 
 /**
- * Every character's tree. The wizard pilots; the other four are explicit
- * empty rows rather than absent ones, so building their trees is filling a
- * row that already exists and forgetting one is a compile error, not a
- * fall-through.
+ * Every character's tree, one row per hero — the shape the compiler can
+ * check, so forgetting a character is a build error rather than the silent
+ * fall-through the design-patterns doc records shipping once already.
+ *
+ * Each hero's tree deepens that hero's own passive, which is what keeps the
+ * archer and the ranger diverging rather than converging: they share a quiver,
+ * and one is paid for standing still while the other is paid for never doing
+ * it. See `docs/talents.md`.
  *
  * Pilot figures: FOCUS DEPTH is owner-specified — "if he scales it he could
  * fire up to 3/4 bolts with a full pool" — so it is +1 over the base pool of
@@ -87,7 +91,35 @@ export interface CharTree {
  * commits; a row whose effect nothing reads yet must not ship past that.
  */
 export const CHAR_TREES: Record<CharacterKind, CharTree> = {
-  archer: { talents: [], capstones: [] },
+  archer: {
+    talents: [
+      {
+        id: 'setFeet', label: 'SET FEET',
+        desc: '-0.25 s to reach a full brace / level',
+        tier: 1, costs: [14, 26], effect: { kind: 'linear', per: -0.25 },
+      },
+      {
+        id: 'deepRoots', label: 'DEEP ROOTS',
+        desc: 'Brace bleeds away slower once he moves',
+        tier: 1, costs: [12, 22], effect: { kind: 'linear', per: -1 },
+      },
+      {
+        id: 'splitShaft', label: 'SPLIT SHAFT',
+        desc: '+1 body a full power shot passes through / level',
+        tier: 2, costs: [20, 34], effect: { kind: 'linear', per: 1 },
+      },
+    ],
+    capstones: [
+      {
+        id: 'rooted', label: 'ROOTED',
+        desc: 'A full brace holds through movement; only a hit knocks it down',
+      },
+      {
+        id: 'splinter', label: 'SPLINTER',
+        desc: 'Dynamite bursts into three smaller blasts',
+      },
+    ],
+  },
   wizard: {
     talents: [
       {
@@ -117,9 +149,93 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       },
     ],
   },
-  knight: { talents: [], capstones: [] },
-  ranger: { talents: [], capstones: [] },
-  sapper: { talents: [], capstones: [] },
+  knight: {
+    talents: [
+      {
+        id: 'deeperCut', label: 'DEEPER CUT',
+        desc: '+3% damage and swing speed per Bloodlust stack / level',
+        tier: 1, costs: [16, 28], effect: { kind: 'linear', per: 0.03 },
+      },
+      {
+        id: 'fourthBlood', label: 'FOURTH BLOOD',
+        desc: 'A fourth Bloodlust stack to fill',
+        tier: 1, costs: [30], effect: { kind: 'linear', per: 1 },
+      },
+      {
+        id: 'chargeThrough', label: 'CHARGE THROUGH',
+        desc: 'The dash wounds everything along its line, not only its end',
+        tier: 2, costs: [32], effect: { kind: 'unlock' },
+      },
+    ],
+    capstones: [
+      {
+        id: 'berserker', label: 'BERSERKER',
+        desc: 'A miss drops one Bloodlust stack instead of all of them',
+      },
+      {
+        id: 'juggernaut', label: 'JUGGERNAUT',
+        desc: 'The dash cannot be stopped, and throws back what it hits',
+      },
+    ],
+  },
+  ranger: {
+    talents: [
+      {
+        id: 'lightFoot', label: 'LIGHT FOOT',
+        desc: '-75 px of ground to fill Momentum / level',
+        tier: 1, costs: [13, 24], effect: { kind: 'linear', per: -75 },
+      },
+      {
+        id: 'longWind', label: 'LONG WIND',
+        desc: '+1 s before a standing ranger loses Momentum / level',
+        tier: 1, costs: [12, 22], effect: { kind: 'linear', per: 1 },
+      },
+      {
+        id: 'fullTilt', label: 'FULL TILT',
+        desc: '+5% to the Momentum ceiling / level',
+        tier: 2, costs: [18, 26, 36], effect: { kind: 'linear', per: 0.05 },
+      },
+    ],
+    capstones: [
+      {
+        id: 'slipstream', label: 'SLIPSTREAM',
+        desc: 'At full Momentum she runs through bodies unharmed, up to 3 s',
+      },
+      {
+        id: 'shrapnel', label: 'SHRAPNEL',
+        desc: 'The satchel throws bolts outward when it blows',
+      },
+    ],
+  },
+  sapper: {
+    talents: [
+      {
+        id: 'longFuse', label: 'LONG FUSE',
+        desc: '+18 px of reach for a bomb to light the next / level',
+        tier: 1, costs: [14, 25], effect: { kind: 'linear', per: 18 },
+      },
+      {
+        id: 'moreLinks', label: 'MORE LINKS',
+        desc: '+2 bombs one chain may run through / level',
+        tier: 1, costs: [16, 28], effect: { kind: 'linear', per: 2 },
+      },
+      {
+        id: 'stickyFan', label: 'STICKY FAN',
+        desc: 'Barrage bombs cling to what they hit instead of bouncing off',
+        tier: 2, costs: [30], effect: { kind: 'unlock' },
+      },
+    ],
+    capstones: [
+      {
+        id: 'demolitionist', label: 'DEMOLITIONIST',
+        desc: 'Every bomb a chain lights blows wider than the one before',
+      },
+      {
+        id: 'shockwave', label: 'SHOCKWAVE',
+        desc: 'A combo blast throws back everything it does not kill',
+      },
+    ],
+  },
 };
 
 /** What one character has: mastery points banked and talent levels bought. */
@@ -197,6 +313,18 @@ export type TalentPurchase =
 export function talentLevel(state: CharTalentState, id: string): number {
   const raw = state.levels[id] ?? 0;
   return Math.max(0, Math.trunc(raw));
+}
+
+/**
+ * Whether an unlock talent is held at all. The sibling of `talentValue` for
+ * the effects that carry no number — holding one IS the effect, exactly as
+ * `perkHeld` reads the FEATHERS tree's perks.
+ */
+export function talentHeld(tree: CharTree, state: CharTalentState, id: string): boolean {
+  const spec = tree.talents.find((t) => t.id === id);
+  if (!spec) throw new Error(`no talent '${id}' in this tree`);
+  if (spec.effect.kind !== 'unlock') throw new Error(`talent '${id}' is not an unlock`);
+  return talentLevel(state, id) > 0;
 }
 
 /**
@@ -302,6 +430,17 @@ export function draftedValue(
 ): number {
   if (!drafted.includes(id)) return base;
   return talentValue(tree, state, id, base);
+}
+
+/**
+ * The same run-layer rule for an unlock: owned counts for nothing until this
+ * run drafted it.
+ */
+export function draftedHeld(
+  tree: CharTree, state: CharTalentState, drafted: readonly string[], id: string,
+): boolean {
+  if (!drafted.includes(id)) return false;
+  return talentHeld(tree, state, id);
 }
 
 /**

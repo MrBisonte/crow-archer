@@ -50,9 +50,9 @@ import {
   perkHeld, purchase, statValue,
 } from '../sim/upgrades';
 import {
-  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedValue,
-  masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible, talentBankFrom,
-  talentLevel,
+  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
+  draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
+  talentBankFrom, talentLevel,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -884,6 +884,12 @@ function openNextChooser() {
 /** A boss just died: the rite outranks the draft when both are owed. */
 function queueBossChoosers() {
   if (appState === 'win' || appState === 'gameover') return;   // run over
+  // Never mid-siege. A siege boss is one enemy inside a wave rather than the
+  // end of a stage -- the death tail says so itself -- and a ceremony opened
+  // over a running wave stops the field with crows still on it. The siege
+  // pays its mastery like any other boss; what it does not do is hold a
+  // ceremony about it. CLAUDE.md's siege rule, applied to a screen.
+  if (siegeRun) return;
   queueRite(appState);
   queueDraft(appState);
   openNextChooser();
@@ -2137,7 +2143,7 @@ function tryWizardBlink() {
     return;
   }
 
-  const hop = probeAhead(player.x, player.y, player.aimAngle, TALENTS.blinkDistance());
+  const hop = probeAhead(player.x, player.y, player.aimAngle, TALENTS.stat('blinkReach'));
 
   // Blinking face-first into a wall would otherwise cost the whole cooldown
   // for a couple of pixels, which reads as the button being broken rather
@@ -2217,7 +2223,7 @@ function releaseArcherDraw() {
     initSpeed: spd,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     power: true,
-    pierceLeft: 1 + Math.round(drawn * (CONFIG.archerPowerPierce - 1)),
+    pierceLeft: 1 + Math.round(drawn * (TALENTS.stat('splitShaft') - 1)),
     // Draw and brace multiply: a fully drawn shot from a braced stance is
     // the most committed thing he can do, and it is paid for in seconds.
     dmgMult: (1 + drawn * (CONFIG.archerPowerBossMult - 1)) * braceBossMult() });
@@ -2297,9 +2303,14 @@ const HERO_UPKEEP = {
 const MOVEMENT_METERS = {
   archer: (dt, movedPx) => {
     const was = braceLevel;
-    braceLevel = tickMeter(braceLevel, movedPx <= MOVED_EPSILON,
-      dt / CONFIG.braceFillSecs,
-      (dt / CONFIG.braceFillSecs) * CONFIG.braceDrainMult);
+    const fillSecs = TALENTS.stat('setFeet');
+    // ROOTED: a brace that reached full survives being walked. Only a hit
+    // knocks it down, which is what takeDamage does. Without the capstone the
+    // meter drains the moment he moves, as it always has.
+    const rooted = braceLevel >= 1 && TALENTS.capstoneActive('rooted');
+    braceLevel = tickMeter(braceLevel, rooted || movedPx <= MOVED_EPSILON,
+      dt / fillSecs,
+      (dt / fillSecs) * TALENTS.stat('deepRoots'));
     if (was < 1 && braceLevel >= 1) events.emit({ type: 'ARCHER_BRACED', x: player.x, y: player.y });
   },
   ranger: (dt, movedPx) => {
@@ -2309,8 +2320,8 @@ const MOVEMENT_METERS = {
     // stopped is covering none of it, so there is nothing to measure a decay
     // against but the clock.
     rangerMomentum = tickMeter(rangerMomentum, movedPx > MOVED_EPSILON,
-      movedPx / CONFIG.rangerMomentumFullPx,
-      dt / CONFIG.rangerMomentumDecaySecs);
+      movedPx / TALENTS.stat('lightFoot'),
+      dt / TALENTS.stat('longWind'));
     if (was < 1 && rangerMomentum >= 1) {
       events.emit({ type: 'RANGER_MOMENTUM', x: player.x, y: player.y });
     }
@@ -2339,7 +2350,7 @@ function tickMeter(level, filling, fillDelta, drainDelta) {
  * default would take those with it.
  */
 function rangerMomentumMult() {
-  return 1 + rangerMomentum * CONFIG.rangerMomentumMax;
+  return 1 + rangerMomentum * TALENTS.stat('fullTilt');
 }
 
 function knightSpearDamage(fireSword) {
@@ -2349,7 +2360,7 @@ function knightSpearDamage(fireSword) {
 }
 
 function knightBloodlustMult() {
-  return 1 + knightBloodlust * CONFIG.knightBloodlustPer;
+  return 1 + knightBloodlust * TALENTS.stat('deeperCut');
 }
 
 function braceBossMult() {
@@ -2556,7 +2567,7 @@ function drawAbilityFx() {
   if (stormFx > 0) {
     paintLightningStorm(ctx, {
       x: player.x, y: player.y + CONFIG.hudHeight,
-      radius: TALENTS.stormRadius(), age: 1 - stormFx / STORM_FX_SECS,
+      radius: TALENTS.stat('stormWidth'), age: 1 - stormFx / STORM_FX_SECS,
     });
   }
   if (blinkFx > 0) {
@@ -3596,7 +3607,7 @@ events.on(e => {
         shadowBlur: 14, shadowColor: '#8888FF', gravity: -20 });
       for (let k = 0; k < 8; k++) {
         const ang = Math.random() * Math.PI * 2;
-        const dst = 60 + Math.random() * TALENTS.stormRadius() * 0.85;
+        const dst = 60 + Math.random() * TALENTS.stat('stormWidth') * 0.85;
         burst(e.x + Math.cos(ang)*dst, e.y + Math.sin(ang)*dst, {
           count: 5, colors: ['#FFFFFF','#8888FF'],
           speedMin: 20, speedMax: 60, decay: 4.0, shape: 'spark',
@@ -4156,9 +4167,12 @@ function updatePlayer(dt) {
     // never pays while disengaged.
     if (swingWas > 0 && knightSpearSwing === 0) {
       const was = knightBloodlust;
+      // BERSERKER: a miss costs one stack rather than the lot. The difference
+      // between a knight who must never miss and one who may.
+      const onMiss = TALENTS.capstoneActive('berserker') ? Math.max(0, knightBloodlust - 1) : 0;
       knightBloodlust = knightSpearConnected
-        ? Math.min(CONFIG.knightBloodlustMax, knightBloodlust + 1)
-        : 0;
+        ? Math.min(TALENTS.stat('fourthBlood'), knightBloodlust + 1)
+        : onMiss;
       if (knightBloodlust !== was) {
         events.emit({ type: 'KNIGHT_BLOODLUST', stacks: knightBloodlust, x: player.x, y: player.y });
       }
@@ -4522,7 +4536,7 @@ function trySapperShot() {
 }
 
 function fireLightningStorm() {
-  const STORM_R = TALENTS.stormRadius();
+  const STORM_R = TALENTS.stat('stormWidth');
   stormCD = TALENTS.stormCooldown();
   _stormFlash = CONFIG.stormFlashDuration;
   stormFx = STORM_FX_SECS;
@@ -5399,8 +5413,8 @@ function updateDynamites(dt) {
  */
 function chainNearbyBombs(from, link) {
   if (!isSapperExplosive(from)) return;
-  if (link >= CONFIG.sapperChainMaxLinks) return;
-  const r2 = CONFIG.sapperChainRadius ** 2;
+  if (link >= TALENTS.stat('moreLinks')) return;
+  const r2 = TALENTS.stat('longFuse') ** 2;
   // Both arrays. His thrown charges live in `dynamites` alongside the archer's
   // sticks and the ranger's satchels; his barrage fan lives in `barrageBombs`
   // on its own. Scanning only the first is what this shipped as, and it made
@@ -5475,7 +5489,7 @@ function explodeExplosive(d, source, opts = {}) {
   // multiplier reaches boss damage only, which is the point rather than a
   // limitation: everything else on the field dies to one hit of anything, so
   // against a crowd a chain is already worth exactly its coverage.
-  const link = Math.min(d.chainLink ?? 0, CONFIG.sapperChainMaxLinks);
+  const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
   const bossDamage = baseBossDamage * (1 + link * CONFIG.sapperChainBossBonus);
   damageEnemiesInRadius(d.x, d.y, radius,
     { amount: bossDamage, source, flash: 0.25 },
@@ -8525,6 +8539,21 @@ const FEATHERS = (() => {
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
 
+/**
+ * Refuses to load a tree whose numeric talents are not all wired to a CONFIG
+ * figure. `TALENTS.stat` would otherwise read `CONFIG[undefined]`, hand back
+ * NaN, and pass it to whatever consumer asked — a brace that never fills, a
+ * chain radius that matches nothing. Loud here, like TALENT_LOOK's own check.
+ */
+function assertTalentStatsWired(stats) {
+  for (const [char, charTree] of Object.entries(CHAR_TREES)) {
+    for (const spec of charTree.talents) {
+      if (spec.effect.kind !== 'linear') continue;
+      if (!stats[spec.id]) throw new Error(`TALENTS.STATS has no row for '${char}.${spec.id}'`);
+    }
+  }
+}
+
 // ── TALENTS: per-character trees, mastery, and the run draft ──────────────────
 //
 // The trees, the gate arithmetic and the draft rule live in ../sim/talents.ts,
@@ -8592,25 +8621,57 @@ const TALENTS = (() => {
   function sealCapstone(id) { _capstone = id; }
   function capstoneActive(id) { return _capstone === id; }
 
-  // The effective figures: base + drafted talent, one function per consumer
-  // so the read sites cannot drift apart. With nothing drafted — every hero
-  // but a drafted wizard, today — each is exactly its base.
-  function blinkDistance() { return draftedValue(tree(), state(), _drafted, 'blinkReach', CONFIG.wizBlinkDistance); }
-  function stormRadius()   { return draftedValue(tree(), state(), _drafted, 'stormWidth', CONFIG.stormBlastRadius); }
-  function focusMax()      { return draftedValue(tree(), state(), _drafted, 'focusDepth', CONFIG.wizFocusMax); }
+  /**
+   * Every talent that scales a CONFIG number, and which number it scales.
+   *
+   * A table rather than an accessor apiece, for the reason design-patterns.md
+   * opens with: a fourteenth numeric talent is a row here, not a fourteenth
+   * near-identical function. `min` is a floor where the arithmetic would
+   * otherwise run a figure to zero or past it — a brace that fills in no time
+   * is not a talent, it is a divide by zero waiting to happen.
+   */
+  const STATS = {
+    focusDepth:  { key: 'wizFocusMax' },
+    blinkReach:  { key: 'wizBlinkDistance' },
+    stormWidth:  { key: 'stormBlastRadius' },
+    setFeet:     { key: 'braceFillSecs', min: 0.35 },
+    deepRoots:   { key: 'braceDrainMult', min: 1 },
+    splitShaft:  { key: 'archerPowerPierce' },
+    deeperCut:   { key: 'knightBloodlustPer' },
+    fourthBlood: { key: 'knightBloodlustMax' },
+    lightFoot:   { key: 'rangerMomentumFullPx', min: 120 },
+    longWind:    { key: 'rangerMomentumDecaySecs' },
+    fullTilt:    { key: 'rangerMomentumMax' },
+    longFuse:    { key: 'sapperChainRadius' },
+    moreLinks:   { key: 'sapperChainMaxLinks' },
+  };
+
+  /** A talent's effective figure: its CONFIG base, plus the levels this run
+   *  drafted. Undrafted and unowned both come back as the base. */
+  function stat(id) {
+    const row = STATS[id];
+    const value = draftedValue(tree(), state(), _drafted, id, CONFIG[row.key]);
+    return row.min === undefined ? value : Math.max(row.min, value);
+  }
+
+  assertTalentStatsWired(STATS);
+
+  /** An unlock talent, held only if this run drafted it. */
+  function held(id) { return draftedHeld(tree(), state(), _drafted, id); }
+
   function stormCooldown() { return capstoneActive('stormcaller') ? CONFIG.stormCooldown / 2 : CONFIG.stormCooldown; }
 
   function applyToRun() {
     // The one CONFIG field talents move, moved the way FEATHERS.applyToGame
     // moves arrow capacity: effective = base + drafted, re-derived in full so
     // runs never compound onto each other.
-    CONFIG.resources.focus.max = focusMax();
+    CONFIG.resources.focus.max = stat('focusDepth');
   }
 
   return {
     init, state, award, buy, grant, grantMastery,
     resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
-    blinkDistance, stormRadius, focusMax, stormCooldown, applyToRun,
+    stat, held, stormCooldown, applyToRun,
   };
 })();
 
@@ -12543,6 +12604,36 @@ const TALENT_LOOK = {
   stormWidth:  { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '\u25ce', hook: 'The storm stops asking where they are' },
   overchannel: { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u21af', hook: 'The escape button becomes the attack button' },
   stormcaller: { color: '#FFB400', dim: '#7a5a00', bg: 'rgba(255,180,0,0.10)',   sigil: '\u21bb', hook: 'The sky becomes a habit' },
+
+  // Archer. His accent is the screen's own green, which drawCharSelect
+  // already records as reading like chrome rather than a choice; the panel's
+  // green selection bar is what keeps the two apart.
+  setFeet:       { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '▼', hook: 'Set faster, hit sooner' },
+  deepRoots:     { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '▬', hook: 'What you built takes longer to lose' },
+  splitShaft:    { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '»', hook: 'One shaft, a line of them' },
+  rooted:        { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '▣', hook: 'Braced, and free to walk' },
+  splinter:      { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '∴', hook: 'One stick, three craters' },
+
+  // Knight.
+  deeperCut:     { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '◆', hook: 'Every stack bites harder' },
+  fourthBlood:   { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '◈', hook: 'A fourth drop to earn' },
+  chargeThrough: { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '⇒', hook: 'The whole charge cuts, not just its end' },
+  berserker:     { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '◇', hook: 'A miss is no longer the end of it' },
+  juggernaut:    { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '█', hook: 'Nothing stops the charge' },
+
+  // Ranger.
+  lightFoot:     { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '↗', hook: 'Less ground to reach full tilt' },
+  longWind:      { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '∿', hook: 'A pause no longer costs everything' },
+  fullTilt:      { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '≫', hook: 'The ceiling climbs with you' },
+  slipstream:    { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '◌', hook: 'At full speed, nothing is in the way' },
+  shrapnel:      { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '∗', hook: 'The satchel answers outward' },
+
+  // Sapper.
+  longFuse:      { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '∼', hook: 'A bomb reaches further for the next' },
+  moreLinks:     { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '≡', hook: 'The chain runs longer before it dies' },
+  stickyFan:     { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '∵', hook: 'The fan lands where you aimed it' },
+  demolitionist: { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '⊙', hook: 'Each blast louder than the last' },
+  shockwave:     { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '⊚', hook: 'What survives is thrown clear' },
 };
 for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
   for (const entry of [...lookTree.talents, ...lookTree.capstones]) {
