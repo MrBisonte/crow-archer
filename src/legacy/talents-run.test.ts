@@ -281,14 +281,29 @@ describe('the chooser row obeys the screens playbook', () => {
     expect(g.state()).toBe('chooser');
   }
 
-  it('fills the canvas rather than a literal design width', () => {
+  it('sizes the row from the canvas, not from a literal design width', () => {
     // The fault this guards: char select's pre-rebuild row was sized from a
     // literal 1000, which is 57% of the 1760 canvas the game ships now.
+    //
+    // Asserted as proportionality rather than as a minimum width, because a
+    // minimum is really a claim about how big the panels should look, and
+    // tuning that — which the owner has already done once — would then read
+    // as this rule breaking. Widen the canvas and the row must widen with it;
+    // a literal would not move at all.
     openDraft();
-    const slots = layout().slots;
-    const left = Math.min(...slots.map((s) => s.x));
-    const right = Math.max(...slots.map((s) => s.x + s.w));
-    expect(right - left).toBeGreaterThan(g.config().canvasW * 0.75);
+    const rowW = (): number => {
+      const slots = layout().slots;
+      return Math.max(...slots.map((s) => s.x + s.w)) - Math.min(...slots.map((s) => s.x));
+    };
+    const cfg = g.config() as { canvasW: number };
+    const was = cfg.canvasW;
+    const before = rowW();
+    try {
+      cfg.canvasW = Math.round(was * 1.5);
+      expect(rowW() / before).toBeCloseTo(1.5, 1);
+    } finally {
+      cfg.canvasW = was;   // never leak a resized canvas into the next test
+    }
   });
 
   it('keeps every panel inside the canvas, edges included', () => {

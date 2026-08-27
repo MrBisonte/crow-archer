@@ -12588,7 +12588,7 @@ function _drawChooserRow(lx, y, maxW, label, text, color) {
   ctx.font = '11px "Courier New",monospace';
   ctx.fillStyle = color;
   ctx.fillText(_fitText(text, maxW), lx, y + 16);
-  return y + 38;
+  return y + 34;
 }
 
 /**
@@ -12622,18 +12622,22 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, y + 26);
 
   // The sigil stands where a hero's portrait stands on the select screen.
+  // Every figure below is a fraction of the panel, not a pixel count, so the
+  // box can be resized without the contents needing to be re-placed by hand.
+  // The type sizes are deliberately NOT fractions: shrinking the box must not
+  // shrink the reading.
   ctx.font = `${sel ? 46 : 38}px "Courier New",monospace`;
   if (sel) { ctx.shadowColor = look.color; ctx.shadowBlur = 12; }
   ctx.fillStyle = sel ? look.color : look.dim;
-  ctx.fillText(look.sigil, cx, y + h * (sel ? 0.30 : 0.42));
+  ctx.fillText(look.sigil, cx, y + h * (sel ? 0.34 : 0.46));
   ctx.shadowBlur = 0;
 
   ctx.font = '10.5px "Courier New",monospace';
   ctx.fillStyle = '#93a08f';
-  ctx.fillText(_fitText(look.hook, innerW), cx, y + h * (sel ? 0.44 : 0.68));
+  ctx.fillText(_fitText(look.hook, innerW), cx, y + h * (sel ? 0.50 : 0.72));
 
   if (sel) {
-    let ry = y + h * 0.56;
+    let ry = y + h * 0.61;
     ry = _drawChooserRow(x + pad, ry, innerW, 'EFFECT', spec.desc, '#C8D0C4');
     _drawChooserRow(x + pad, ry, innerW,
       isRite ? 'LASTS' : 'DRAFT',
@@ -12644,7 +12648,7 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
 
   // A capstone has no ladder, so only the draft shows a level.
   if (!isRite) {
-    _drawOwnedPips(x + pad, y + h - 46, innerW,
+    _drawOwnedPips(x + pad, y + h - 42, innerW,
       talentLevel(TALENTS.state(), id), spec.costs.length, sel ? look.color : '#5c6b59');
   }
 
@@ -12667,21 +12671,28 @@ function chooserLayout() {
   const hintY = H - 34;
   const bandTop = Math.round(H * 0.122) + 26;
   const bandBot = hintY - 40;
-  const restH = Math.max(200, Math.min(430, Math.round((bandBot - bandTop) * 0.80)));
+  // PANEL_SCALE off both dimensions, against the size this screen first
+  // shipped at. An offer carries a sigil, a hook and two label rows — a third
+  // of what a hero panel carries — so at char select's size the box read as
+  // mostly empty. Height comes off the band factor and the clamp; width comes
+  // off `sideMargin` below, which is the only lever `panelSlots` offers.
+  const restH = Math.max(150, Math.min(322, Math.round((bandBot - bandTop) * 0.60)));
   return {
     selected: chooser.cursor,
     hintY,
     slots: panelSlots({
       count: chooser.offers.length,
       canvasW: CONFIG.canvasW,
-      // Wider than char select's 56, and derived rather than typed. That
-      // screen splits the row five ways, so its overhang is small next to the
-      // margin; a chooser deals two or three, making each panel — and so each
-      // overhang — much larger, and `panelSlots` takes the greater of margin
-      // and overhang rather than their sum. At 0.06 that left the picked panel
-      // 2 px from the canvas edge. 0.09 is sized off the worst case, two
-      // offers, and still clears the edge by 4% of the canvas at three.
-      sideMargin: Math.round(CONFIG.canvasW * 0.09),
+      // Doubles as the width dial. `panelSlots` derives slot width from what
+      // the margins leave, so narrowing the panels means widening these: the
+      // row keeps 0.75 of the width it had at 0.09, which is the same quarter
+      // taken off the height above.
+      //
+      // It also has to clear the canvas edge. Char select's 56 works because
+      // five panels make each overhang small; a chooser deals two or three,
+      // and `panelSlots` takes the greater of margin and overhang rather than
+      // their sum — at 0.06 that put the picked panel 2 px from the edge.
+      sideMargin: Math.round(CONFIG.canvasW * 0.1925),
       bandMidY: (bandTop + bandBot) / 2,
       restH,
       pop: DEFAULT_POP,
