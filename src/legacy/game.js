@@ -12529,7 +12529,7 @@ function _drawCharDetail(p, top) {
 const TALENT_LOOK = {
   focusDepth:  { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u25c9', hook: 'A full pool casts four bolts' },
   blinkReach:  { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '\u293a', hook: 'The wall you could not reach is now cover' },
-  stormWidth:  { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '\u2608', hook: 'The storm stops asking where they are' },
+  stormWidth:  { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '\u25ce', hook: 'The storm stops asking where they are' },
   overchannel: { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u21af', hook: 'The escape button becomes the attack button' },
   stormcaller: { color: '#FFB400', dim: '#7a5a00', bg: 'rgba(255,180,0,0.10)',   sigil: '\u21bb', hook: 'The sky becomes a habit' },
 };
@@ -12629,13 +12629,16 @@ function drawChooser() {
     isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
            : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
   const offers = chooser.offers;
-  const gapX = 12, selH = 400, restH = 230, panelY = 150;
+  const gapX = 12, selH = 340, restH = 230;
   const selW = isRite ? 460 : 380;
   const others = offers.length - 1;
   const restW = others > 0 ? Math.min(300, Math.floor((1000 - selW - gapX * others) / others)) : 0;
   const widths = offers.map((_, i) => (i === chooser.cursor ? selW : restW));
   const totalW = widths.reduce((a, b) => a + b, 0) + gapX * others;
-  const midY = panelY + selH / 2;
+  // Centred on the canvas, not pinned under the title: this screen has no
+  // stat block below the row, so a top-anchored row leaves the bottom two
+  // thirds of the field black.
+  const midY = Math.round(CONFIG.canvasH * 0.45);
   let px = Math.round(CONFIG.canvasW / 2 - totalW / 2);
   offers.forEach((id, i) => {
     const sel = i === chooser.cursor;
