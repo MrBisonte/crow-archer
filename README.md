@@ -15,33 +15,63 @@
         A R C H E R
 ```
 
-Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it — and hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file. [Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
+Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it — and hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file: no engine, no account, no tracking.
 
 ![Gameplay: the Ranger fighting a crow swarm, a satchel blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
 
+- [The manual](#the-manual)
 - [Play](#play)
+- [Characters](#characters)
 - [Multiplayer](#multiplayer)
 - [Controls](#controls)
-- [Characters](#characters)
 - [Docs](#docs)
 - [License](#license)
 
+## The manual
+
+**[Read the manual](https://mrbisonte.github.io/crow-archer/manual.html)** — a paper manual for a live game, in the style of the ones that came in the box. It is the best way in: every kit, key and number in it is read off the real build, and it opens on a menu of what there is to play.
+
+```
+ © 2026 CROW ARCHER · MIT LICENCE · NO ENGINE, NO ACCOUNT, NO TRACKING
+
+ CROW ARCHER
+ SURVIVE THE FLOCK — GAME MANUAL
+
+   B  BRAWL        hunt 10 crows · boss fight · scarce drops
+   W  WAVES        survive escalating swarms · endless run
+   S  SIEGE        hold the bastion · ten waves · a retinue that grows
+   M  MULTIPLAYER  up to 4 players · co-op or 2v2 · needs a server
+   C  CONTROLS
+```
+
+It is a live document, not a screenshot of one: the reticle figure follows your
+pointer, and **§02 THE FIVE** is a picker — click a character's icon to read
+that one's kit on its own, instead of scrolling five of them.
+
 ## Play
 
-**Single-player**, offline, no server: download [`crow-archer.html`](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) from the [latest release](https://github.com/MrBisonte/crow-archer/releases/latest) and open it in any modern browser. Every dependency is inlined, so it plays with the network off.
-
-**Multiplayer** needs a server. See [Multiplayer](#multiplayer).
-
-To run either from source:
-
-```
-npm install
-npm run dev
-```
+| How | What you need |
+|---|---|
+| **In the browser** | Nothing — [play here](https://mrbisonte.github.io/crow-archer/) |
+| **Offline** | [`crow-archer.html`](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) from the [latest release](https://github.com/MrBisonte/crow-archer/releases/latest). Every dependency is inlined, so it plays with the network off |
+| **From source** | `npm install`, then `npm run dev` |
+| **Multiplayer** | A server. See [Multiplayer](#multiplayer) |
 
 `npm run dev` alone serves single-player. Multiplayer additionally needs `npm run server`, covered below.
 
-`npm run build` writes `dist/index.html`, which is gitignored. Releases are built by CI from the tagged commit and attached as `crow-archer.html`, so what people download is never a stale local copy: `git tag v0.1.0 && git push --tags` is the whole publish step.
+`npm run build` writes `dist/index.html`, which is gitignored. Releases are built by CI from the tagged commit and attached as `crow-archer.html`, so what people download is never a stale local copy: tagging a version and pushing the tag is the whole publish step.
+
+## Characters
+
+| | weapon | body | rhythm |
+|---|---|---|---|
+| **Archer** | bow | middling health, quick | fastest shots, weakest hit: about seven to kill the Crow King |
+| **Wizard** | staff | frailest, slow | hardest single hit, bolts that steer toward whoever is nearest |
+| **Knight** | spear | most health, slowest | nothing at range; a thrust that lands twice per swing |
+| **Ranger** | crossbow | frail, quickest | three smaller, weaker bolts per shot, each an independent hit; a net that pins a group |
+| **Sapper** | powder charge | middling health, quick | slowest throw, thrown at a place: it bounces, fuses, and blasts an area |
+
+The full kit of each — primary, special and pickups — is in [§02 of the manual](https://mrbisonte.github.io/crow-archer/manual.html#characters), one character at a time. The exact numbers are in [balance](docs/balance.md#character-stats).
 
 ## Multiplayer
 
@@ -74,28 +104,16 @@ See the [manual](docs/manual.md#multiplayer) for hosting others, deploying, and 
 
 Move, Shoot, Sniper mode and Pause are remappable from the Controls screen.
 
-## Characters
-
-| | weapon | body | rhythm |
-|---|---|---|---|
-| **Archer** | bow | middling health, quick | fastest shots, weakest hit: about seven to kill the Crow King |
-| **Wizard** | staff | frailest, slow | hardest single hit, bolts that steer toward whoever is nearest |
-| **Knight** | spear | most health, slowest | nothing at range; a thrust that lands twice per swing |
-| **Ranger** | crossbow | frail, quickest | three smaller, weaker bolts per shot, each an independent hit; a net that pins a group |
-| **Sapper** | powder charge | middling health, quick | slowest throw, thrown at a place: it bounces, fuses, and blasts an area |
-
-See the [manual](docs/manual.md#characters) for the full kit of each: primary, special, and pickups, and [balance](docs/balance.md#character-stats) for the exact numbers.
-
 ## Docs
 
 | Doc | For |
 |---|---|
-| [Manual (retro page)](https://mrbisonte.github.io/crow-archer/manual.html) | The same manual, styled — start here if you just want to play |
-| [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
+| [Game manual](docs/manual.md) | The same manual as plain markdown: character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Balance](docs/balance.md) | Character stats, boss health, and the one dial that relates them |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns |
 | [Playbooks](docs/playbooks/README.md) | What building this game has cost: one file per kind of work |
 | [Working rules](CLAUDE.md) | Contributing: the traps this codebase has already fallen into, and what is mechanically enforced |
+| [Coordination](COORDINATION.md) | Who is working on what, and the one branch that may push |
 
 ## License
 
