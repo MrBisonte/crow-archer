@@ -206,7 +206,7 @@ flowchart LR
 
 ## Map
 
-- 33 x 21 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT, SAPLING)
+- 55 x 33 procedural tile grid (EMPTY, ROCK, WATER, TREE, ASH, HUT, SAPLING)
 - Player spawns in a guaranteed clear zone, crows enter from the right corridor
 - Trees burn to ash on boss arrival, opening the arena
 - Dynamite, Lightning Storm and Whirlwind destroy ROCK, TREE and HUT tiles.

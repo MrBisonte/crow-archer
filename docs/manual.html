@@ -182,6 +182,29 @@
   .ret .bar .hint { font-size: 11px; color: var(--zx-green); letter-spacing: 1px; margin-right: 4px; }
   .ret .bar .key { cursor: pointer; }
 
+  /* ---------- 02 THE FIVE: pick one, read one ----------
+     The picker is display:none until the script adds .on, so with scripting
+     off every pane stays open and the section reads as it always did. This
+     hides no text the reader cannot get back. */
+  .picker { display: none; }
+  .picker.on { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 20px; }
+  .pick {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    width: 92px; padding: 9px 4px 7px; cursor: pointer;
+    font-family: var(--font); font-size: 11px; letter-spacing: 1px;
+    background: #000; border: 1px solid currentColor;
+  }
+  .pick svg { width: 34px; height: 34px; display: block; fill: currentColor; }
+  .pick .df { font-size: 9px; letter-spacing: 1px; color: var(--zx-grey); }
+  /* Selected swaps ink and paper  the convention the .key buttons already use. */
+  .pick.on { background: currentColor; }
+  .pick.on .nm, .pick.on .df { color: var(--zx-black); }
+  .pick.on svg { fill: var(--zx-black); }
+  .pick:focus-visible { outline: 2px solid var(--zx-magenta); outline-offset: 2px; }
+  .picker.on ~ .pane { display: none; }
+  .picker.on ~ .pane.on { display: block; }
+  .pane > h3:first-child { margin-top: 0; }
+
   footer {
     margin: 48px 34px 0; padding-top: 18px; border-top: 2px solid var(--zx-white);
     color: var(--zx-grey); font-size: 12px; letter-spacing: 1px; line-height: 1.7;
@@ -255,7 +278,7 @@
  <span class="d">&#9500;&#9472; score      &#9500;&#9472; kill count   &#9500;&#9472; health   &#9500;&#9472; ammo  &#9500;&#9472; feathers  &#9492;&#9472; mode</span>
 <span class="m">&#9484;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9488;</span>
 <span class="m">&#9474;</span>  <span class="d">&#9679;</span>      <span class="d">&#9650;</span>          <span class="b">&#9679;&#9679;</span>        <span class="d">&#9650;</span>     <span class="d">&#9679;</span>    <span class="y">&#9670;</span>       <span class="m">&#9474;</span>
-<span class="m">&#9474;</span>       <span class="c">&#9608;&#9608;</span>   <span class="grn">&#9650;</span>       <span class="d">&#9679;</span>      <span class="c">&#9608;&#9608;</span>            <span class="d">&#9650;</span>  <span class="m">&#9474;</span>   <span class="d">&#9472; arena, 33&times;21 tiles</span>
+<span class="m">&#9474;</span>       <span class="c">&#9608;&#9608;</span>   <span class="grn">&#9650;</span>       <span class="d">&#9679;</span>      <span class="c">&#9608;&#9608;</span>            <span class="d">&#9650;</span>  <span class="m">&#9474;</span>   <span class="d">&#9472; arena, 55&times;33 tiles</span>
 <span class="m">&#9474;</span>   <span class="d">&#9650;</span>       <span class="d">&#9679;</span>     <span class="r">&#9679;</span>          <span class="d">&#9650;</span>    <span class="c">&#9608;&#9608;</span>       <span class="m">&#9474;</span>
 <span class="m">&#9492;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9496;</span>
    <span class="grn">&#9650;</span> you    <span class="d">&#9679;</span> crow    <span class="c">&#9608;&#9608;</span> water    <span class="d">&#9650;</span> tree    <span class="y">&#9670;</span> pickup    <span class="r">&#9679;</span> white crow</pre>
@@ -286,6 +309,35 @@
     it, is in
     <a href="https://github.com/MrBisonte/crow-archer/blob/master/docs/balance.md">BALANCE</a>.</p>
 
+    <div class="picker" role="tablist" aria-label="Choose a character to read">
+      <button class="pick grn" type="button" role="tab" data-pick="archer" id="tab-archer" aria-controls="c-archer" aria-selected="false">
+        <span class="nm">ARCHER</span>
+        <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" shape-rendering="crispEdges"><rect x="6" y="0" width="1" height="1"/><rect x="4" y="1" width="2" height="1"/><rect x="7" y="1" width="1" height="1"/><rect x="3" y="2" width="1" height="1"/><rect x="7" y="2" width="1" height="1"/><rect x="2" y="3" width="1" height="1"/><rect x="7" y="3" width="1" height="1"/><rect x="2" y="4" width="1" height="1"/><rect x="7" y="4" width="1" height="1"/><rect x="2" y="5" width="1" height="1"/><rect x="5" y="5" width="7" height="1"/><rect x="2" y="6" width="1" height="1"/><rect x="7" y="6" width="1" height="1"/><rect x="2" y="7" width="1" height="1"/><rect x="7" y="7" width="1" height="1"/><rect x="3" y="8" width="1" height="1"/><rect x="7" y="8" width="1" height="1"/><rect x="4" y="9" width="2" height="1"/><rect x="7" y="9" width="1" height="1"/><rect x="6" y="10" width="1" height="1"/></svg>
+        <span class="df">MEDIUM</span>
+      </button>
+      <button class="pick cyn" type="button" role="tab" data-pick="wizard" id="tab-wizard" aria-controls="c-wizard" aria-selected="false">
+        <span class="nm">WIZARD</span>
+        <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" shape-rendering="crispEdges"><rect x="8" y="0" width="1" height="1"/><rect x="10" y="0" width="1" height="1"/><rect x="9" y="1" width="1" height="1"/><rect x="8" y="2" width="1" height="1"/><rect x="10" y="2" width="1" height="1"/><rect x="7" y="3" width="1" height="1"/><rect x="6" y="4" width="1" height="1"/><rect x="5" y="5" width="1" height="1"/><rect x="4" y="6" width="1" height="1"/><rect x="3" y="7" width="1" height="1"/><rect x="2" y="8" width="1" height="1"/><rect x="1" y="9" width="1" height="1"/><rect x="0" y="10" width="1" height="1"/></svg>
+        <span class="df">EXTRA HARD</span>
+      </button>
+      <button class="pick wht" type="button" role="tab" data-pick="knight" id="tab-knight" aria-controls="c-knight" aria-selected="false">
+        <span class="nm">KNIGHT</span>
+        <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" shape-rendering="crispEdges"><rect x="10" y="0" width="2" height="1"/><rect x="9" y="1" width="3" height="1"/><rect x="8" y="2" width="2" height="1"/><rect x="11" y="2" width="1" height="1"/><rect x="7" y="3" width="2" height="1"/><rect x="6" y="4" width="2" height="1"/><rect x="5" y="5" width="2" height="1"/><rect x="4" y="6" width="2" height="1"/><rect x="3" y="7" width="2" height="1"/><rect x="2" y="8" width="2" height="1"/><rect x="1" y="9" width="2" height="1"/><rect x="0" y="10" width="2" height="1"/><rect x="0" y="11" width="1" height="1"/></svg>
+        <span class="df">HARD</span>
+      </button>
+      <button class="pick ylw" type="button" role="tab" data-pick="ranger" id="tab-ranger" aria-controls="c-ranger" aria-selected="false">
+        <span class="nm">RANGER</span>
+        <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" shape-rendering="crispEdges"><rect x="5" y="0" width="2" height="1"/><rect x="0" y="1" width="1" height="1"/><rect x="5" y="1" width="2" height="1"/><rect x="11" y="1" width="1" height="1"/><rect x="0" y="2" width="2" height="1"/><rect x="5" y="2" width="2" height="1"/><rect x="10" y="2" width="2" height="1"/><rect x="1" y="3" width="2" height="1"/><rect x="5" y="3" width="2" height="1"/><rect x="9" y="3" width="2" height="1"/><rect x="2" y="4" width="8" height="1"/><rect x="5" y="5" width="2" height="1"/><rect x="5" y="6" width="2" height="1"/><rect x="4" y="7" width="4" height="1"/><rect x="5" y="8" width="2" height="1"/><rect x="5" y="9" width="2" height="1"/><rect x="4" y="10" width="4" height="1"/></svg>
+        <span class="df">EASY</span>
+      </button>
+      <button class="pick red" type="button" role="tab" data-pick="sapper" id="tab-sapper" aria-controls="c-sapper" aria-selected="false">
+        <span class="nm">SAPPER</span>
+        <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" shape-rendering="crispEdges"><rect x="10" y="0" width="1" height="1"/><rect x="9" y="1" width="1" height="1"/><rect x="8" y="2" width="1" height="1"/><rect x="5" y="3" width="3" height="1"/><rect x="3" y="4" width="2" height="1"/><rect x="2" y="5" width="6" height="1"/><rect x="1" y="6" width="8" height="1"/><rect x="0" y="7" width="10" height="1"/><rect x="0" y="8" width="10" height="1"/><rect x="1" y="9" width="8" height="1"/><rect x="2" y="10" width="6" height="1"/><rect x="3" y="11" width="4" height="1"/></svg>
+        <span class="df">HARD</span>
+      </button>
+    </div>
+
+    <div class="pane" id="c-archer" data-pane="archer" role="tabpanel" aria-labelledby="tab-archer">
     <h3><span class="grn">ARCHER</span> &mdash; <span class="ylw">MEDIUM</span></h3>
     <p>The classic. Fastest shots, smallest hit; about seven arrows to put the Crow
     King down, the longest count of anyone, and he never has to stand near him to
@@ -298,7 +350,9 @@
       <li><strong>Dynamite</strong> — hold to charge, release to throw. Clears tiles and hurts bosses.</li>
       <li><strong>Pickups</strong> — fire arrows (leave burning patches), ricochet arrows (bounce off walls, faster each bounce).</li>
     </ul>
+    </div>
 
+    <div class="pane" id="c-wizard" data-pane="wizard" role="tabpanel" aria-labelledby="tab-wizard">
     <h3><span class="cyn">WIZARD</span> &mdash; <span class="red">EXTRA HARD</span></h3>
     <p>Teleguided damage and area control, with nothing to hide behind up close. He
     hits harder than anyone and dies faster than anyone: four bolts put the Crow King
@@ -314,7 +368,9 @@
       <li><strong>Lightning Storm</strong> — instant AoE around you; levels rock, trees and huts.</li>
       <li><strong>Pickups</strong> — fire bolt (3 dmg, homing), laser (3 dmg, <em>passes through walls</em>).</li>
     </ul>
+    </div>
 
+    <div class="pane" id="c-knight" data-pane="knight" role="tabpanel" aria-labelledby="tab-knight">
     <h3><span class="wht">KNIGHT</span> &mdash; <span class="ylw">HARD</span></h3>
     <p>Frontline. No answer at range at all, and the only one who does not need one.
     One swing is the hardest single action in the game and the Crow King falls in
@@ -330,7 +386,9 @@
       <li><strong>Whirlwind</strong> — a spinning AoE that chews through terrain.</li>
       <li><strong>Pickups</strong> — Iron Javelin (thrown, pierces), Fire Sword (2&times; damage and reach, 8s).</li>
     </ul>
+    </div>
 
+    <div class="pane" id="c-ranger" data-pane="ranger" role="tabpanel" aria-labelledby="tab-ranger">
     <h3><span class="ylw">RANGER</span> &mdash; <span class="grn">EASY</span></h3>
     <p>Skirmisher. Three chances to land a hit instead of one, and the only hero who
     lands for less than a plain weapon's worth, bolt for bolt. The volley is his unit
@@ -344,7 +402,9 @@
       <li><strong>Satchel</strong> — first click throws it inert; second click arms a 3s fuse. Your own bolt sets it off early, armed or not.</li>
       <li><strong>Pickups</strong> — fire and ricochet bolts, same effects the archer gets.</li>
     </ul>
+    </div>
 
+    <div class="pane" id="c-sapper" data-pane="sapper" role="tabpanel" aria-labelledby="tab-sapper">
     <h3><span class="red">SAPPER</span> &mdash; <span class="ylw">HARD</span></h3>
     <p>Demolition. The only opening move in the game thrown at a <em>place</em> rather
     than at a person. A charge is worth two of anyone's arrows before anything scales
@@ -360,9 +420,10 @@
       <li><strong>The combo</strong> — the dart checks his own bombs still in the air before it checks enemies, so catching one sets that bomb off early into a wider blast: <em>1.33&times; the radius</em>, scaled from 10&times; damage at the centre down to 2&times; at the rim.</li>
       <li><strong>Pickups</strong> — fire bombs (the ground burns for 1.5s where the blast went off) and ice bombs (1 damage to everything caught, held still for 1.5s). Three of either, from the two slots that hand the archer fire and ricochet arrows.</li>
     </ul>
+    </div>
+
   </section>
 
-  <!-- ============ THE KEYS ============ -->
   <section id="keys">
     <h2><span class="n">03 ·</span> THE KEYS</h2>
     <p>The whole scheme in one rule: <strong>cursors move &middot; the mouse aims &middot;
@@ -516,7 +577,7 @@
   <!-- ============ THE MAP ============ -->
   <section id="map">
     <h2><span class="n">06 ·</span> THE MAP</h2>
-    <p>A <strong>33&times;21 grid</strong>, generated fresh from a new seed every run — no two
+    <p>A <strong>55&times;33 grid</strong>, generated fresh from a new seed every run — no two
     are the same, and none of them are hand-drawn.</p>
     <ul>
       <li><strong>Rock</strong> stops you and stops arrows. <strong>Water</strong> stops you but
@@ -858,6 +919,42 @@
   } else {
     start();
   }
+})();
+
+/* 02 THE FIVE  one pane at a time.
+   The markup ships with every pane visible and the picker hidden, so a reader
+   without scripting loses nothing. This turns the picker on and takes over. */
+(function () {
+  var picker = document.querySelector(".picker");
+  var panes = [].slice.call(document.querySelectorAll(".pane"));
+  if (!picker || !panes.length) return;
+  var tabs = [].slice.call(picker.querySelectorAll(".pick"));
+
+  function show(name) {
+    tabs.forEach(function (b) {
+      var on = b.getAttribute("data-pick") === name;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+      b.tabIndex = on ? 0 : -1;
+    });
+    panes.forEach(function (p) { p.classList.toggle("on", p.getAttribute("data-pane") === name); });
+  }
+
+  tabs.forEach(function (b, i) {
+    b.addEventListener("click", function () { show(b.getAttribute("data-pick")); });
+    /* Left and right walk the row, which is what a tablist is expected to do. */
+    b.addEventListener("keydown", function (e) {
+      var d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      var next = tabs[(i + d + tabs.length) % tabs.length];
+      show(next.getAttribute("data-pick"));
+      next.focus();
+    });
+  });
+
+  picker.classList.add("on");
+  show(tabs[0].getAttribute("data-pick"));
 })();
 </script>
 </body>
