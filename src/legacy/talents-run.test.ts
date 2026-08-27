@@ -628,6 +628,181 @@ describe('the colour code says what a talent does', () => {
   });
 });
 
+/**
+ * The unlocks, measured on the field.
+ *
+ * Two of these exist because the effect first written for them was already
+ * true of the base kit: the dash always wounded along its line, and barrage
+ * bombs never bounced. A talent that promises what the hero already does is
+ * the same defect as one nothing reads, so each test below is written to fail
+ * if the talent is doing nothing.
+ */
+describe('CHARGE THROUGH widens the charge', () => {
+  beforeEach(() => {
+    g.pick('knight');
+    for (const t of CHAR_TREES.knight.talents) talents().grant(t.id, 0);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  });
+
+  /** Puts one body directly BEHIND the knight and charges the other way. */
+  function bodyBehindAfterDash(): number {
+    const p = g.player() as { x: number; y: number };
+    (g.skeletons() as unknown[]).length = 0;
+    g.spawnSkeleton();
+    const sk = (g.skeletons() as { x: number; y: number; hp: number }[]).at(-1)!;
+    sk.x = p.x - 26; sk.y = p.y; sk.hp = 1;
+    aimAt(p.x + 400, p.y);          // charge away from it
+    g.shift();
+    g.shiftUp();
+    stepPast(Math.ceil(0.5 * 60));
+    return (g.skeletons() as unknown[]).length;
+  }
+
+  it('leaves a body behind him alone without it', () => {
+    expect(bodyBehindAfterDash(), 'the base charge only cuts ahead').toBe(1);
+  });
+
+  it('cuts a body behind him once drafted', () => {
+    talents().grant('chargeThrough', 1);
+    talents().draft('chargeThrough');
+    expect(bodyBehindAfterDash(), 'the charge should cut on every side').toBe(0);
+  });
+});
+
+describe('STICKY FAN leaves the fan on the ground', () => {
+  beforeEach(() => {
+    g.pick('sapper');
+    for (const t of CHAR_TREES.sapper.talents) talents().grant(t.id, 0);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  });
+
+  /** Fires the barrage into a body and reports the bombs still on the map. */
+  function barrageIntoBody(): number {
+    const c = g.config();
+    // Fired into the arena's border wall, not at bodies: crows reposition
+    // themselves, so a parked crow is gone by the time a bomb arrives — and
+    // measuring that reads as the talent working. A wall stays put.
+    const p = g.player() as { x: number; y: number };
+    p.x = c.tileSize * 2.5;
+    aimAt(0, p.y);
+    // One step between pointing and firing: aimAngle is recomputed from the
+    // pointer during the tick, so firing in the same breath throws the fan
+    // wherever he was already facing.
+    g.stepSim(1);
+    g.secondary();
+    stepPast(Math.ceil(0.5 * ONE_SECOND));
+    return (g.barrageBombs() as unknown[]).length;
+  }
+
+  it('spends the bombs on contact without it', () => {
+    expect(barrageIntoBody(), 'bombs should have gone off on the body').toBe(0);
+  });
+
+  it('parks them where they land once drafted', () => {
+    talents().grant('stickyFan', 1);
+    talents().draft('stickyFan');
+    expect(barrageIntoBody(), 'stuck bombs should still be on the map')
+      .toBeGreaterThan(0);
+  });
+});
+
+describe('the rite: the capstones that change the field', () => {
+  /** Everything the blast reached, as a count of bodies left alive. */
+  function crowsLeftAfter(run: () => void, plant: (i: number) => [number, number]): number {
+    (g.crows() as unknown[]).length = 0;
+    for (let i = 0; i < 8; i++) {
+      g.spawnCrow();
+      const c = (g.crows() as { x: number; y: number }[]).at(-1)!;
+      const [x, y] = plant(i);
+      c.x = x; c.y = y;
+    }
+    run();
+    g.stepSim(1);
+    return (g.crows() as unknown[]).length;
+  }
+
+  it('SPLINTER reaches bodies a single crater does not', () => {
+    g.pick('archer');
+    g.go('playing'); clearArena(); g.healHero();
+    const p = g.player() as { x: number; y: number };
+    const c = g.config();
+    // Just outside the parent crater, comfortably inside where a splinter
+    // lands plus its own reach. Both derived, because a guessed ring sat
+    // inside the base blast and killed everything either way.
+    const at = c.dynamiteBlastRadius + 6;
+    const ring = (i: number): [number, number] => {
+      const a = (i / 8) * Math.PI * 2;
+      return [p.x + 300 + Math.cos(a) * at, p.y + Math.sin(a) * at];
+    };
+    const plain = crowsLeftAfter(() => g.blast(p.x + 300, p.y), ring);
+    talents().sealCapstone('splinter');
+    const split = crowsLeftAfter(() => g.blast(p.x + 300, p.y), ring);
+    expect(split, 'the splinters should reach further than the one crater')
+      .toBeLessThan(plain);
+  });
+
+  it('SHOCKWAVE throws survivors clear of the blast', () => {
+    g.pick('sapper');
+    g.go('playing'); clearArena(); g.healHero();
+    const p = g.player() as { x: number; y: number };
+    (g.crows() as unknown[]).length = 0;
+    g.spawnCrow();
+    const c = (g.crows() as { x: number; y: number; hp: number }[])[0]!;
+    c.x = p.x + 260; c.y = p.y; c.hp = 9999;   // survives, so it can be thrown
+    const before = c.x;
+    talents().sealCapstone('shockwave');
+    g.sapperCombo(p.x + 250, p.y);
+    g.stepSim(1);
+    expect(c.x, 'a survivor should have been thrown outward').toBeGreaterThan(before);
+  });
+
+  it('SLIPSTREAM carries her through a body, and only for its window', () => {
+    g.pick('ranger');
+    for (const t of CHAR_TREES.ranger.talents) talents().grant(t.id, 0);
+    g.go('playing'); clearArena(); g.healHero();
+    talents().sealCapstone('slipstream');
+    const keys = g.keys() as Record<string, boolean>;
+    const p = g.player() as { x: number; y: number };
+    p.x = g.config().tileSize * 3;          // room to run without meeting the far wall
+
+    /**
+     * Three hits with frames between them.
+     *
+     * Between, because the first hit that lands sets an invulnerable flash and
+     * the ward eats one on top of that — hit twice in the same breath and HP
+     * is untouched whether or not she is phasing, which is a test that cannot
+     * fail. She keeps running throughout: the window is spent only while the
+     * meter is full, and a ranger standing still loses both.
+     */
+    function takeThree(): void {
+      for (let i = 0; i < 3; i++) { g.hurtHero(1); stepPast(14); }
+    }
+
+    keys['d'] = true;
+    stepPast(4 * ONE_SECOND);
+    expect((g.momentum() as { level: number }).level).toBe(1);
+    expect(g.slipstream() as number, 'a full meter should arm the window')
+      .toBeGreaterThan(0);
+
+    const hp = (g.counts() as { hp: number }).hp;
+    takeThree();
+    keys['d'] = false;
+    expect((g.counts() as { hp: number }).hp, 'she should have run through all three')
+      .toBe(hp);
+
+    // Standing still drops the meter, which closes the window at once.
+    stepPast(ONE_SECOND);
+    expect(g.slipstream() as number, 'stopping should close the window').toBe(0);
+    takeThree();
+    expect((g.counts() as { hp: number }).hp, 'a closed window should let one land')
+      .toBeLessThan(hp);
+  });
+});
+
 describe('buying goes through the FEATHERS wallet', () => {
   it('refuses an open-tier talent the wallet cannot cover', () => {
     // Tier 1 is open at any rank, so this pins the wallet coupling alone;

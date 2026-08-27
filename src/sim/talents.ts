@@ -163,7 +163,7 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       },
       {
         id: 'chargeThrough', label: 'CHARGE THROUGH',
-        desc: 'The dash wounds everything along its line, not only its end',
+        desc: 'The charge cuts on every side of him, not only ahead',
         tier: 2, costs: [32], effect: { kind: 'unlock' },
       },
     ],
@@ -221,7 +221,7 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       },
       {
         id: 'stickyFan', label: 'STICKY FAN',
-        desc: 'Barrage bombs cling to what they hit instead of bouncing off',
+        desc: 'Barrage bombs stop where they land and keep their fuse',
         tier: 2, costs: [30], effect: { kind: 'unlock' },
       },
     ],

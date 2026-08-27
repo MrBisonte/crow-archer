@@ -642,6 +642,14 @@ const CONFIG = {
   wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
   // The rite's Overchannel capstone: how long bolts cast free after a blink.
   wizOverchannelSecs: 4,
+  // The rest of the rite, and the two tier-II unlocks.
+  archerSplinterFrac: 0.6,       // each splinter's share of the parent blast
+  archerSplinterSpread: 62,      // px each splinter lands from the crater
+  knightJuggernautPush: 96,      // px the charge throws a body it reaches
+  rangerSlipstreamSecs: 3,       // owner's cap: a full meter phases this long
+  rangerShrapnelBolts: 8,        // bolts a satchel throws when it blows
+  sapperDemolitionGrowth: 0.30,  // each chain link widens the next blast by this
+  sapperShockwavePush: 120,      // px a combo blast throws a survivor
   // A rate, not a damage. What a bolt is worth is wizBoltDamage times the
   // wizard's multiplier; this is how long he spends unable to answer
   // anything, and two full seconds of it was most of why the fight was
@@ -1303,6 +1311,15 @@ let wizBlinkHops = 0, wizBlinkChainTimer = 0;
 // Overchannel's remaining free-bolt window, seconds. Only ever nonzero when
 // the rite sealed that capstone this run.
 let wizOverchannel = 0;
+/**
+ * Slipstream's remaining window, seconds.
+ *
+ * Armed when the ranger's meter first reaches full and spent while it stays
+ * there, so the capstone is three seconds of a full run rather than an
+ * indefinite one -- the owner's cap, and the reason it is a timer and not a
+ * flag. Dropping below full disarms it, so the next full meter re-arms.
+ */
+let rangerSlip = 0;
 // The same window for the knight, opened when a dash starts.
 let knightChainTimer = 0;
 let stormCD   = 0;   // 10-second cooldown for lightning storm
@@ -2077,6 +2094,30 @@ function probeAhead(fromX, fromY, angle, maxDistance) {
  * creep outright — which is what the storm, the whirlwind and the blast all
  * want. Only the net passes anything else, and it passes less on purpose.
  */
+/**
+ * Shoves every body within `radius` directly away from a point.
+ *
+ * Shared by Juggernaut and Shockwave rather than written twice: they throw
+ * bodies for different reasons but by the same rule, and the rule -- move
+ * only onto ground the body could stand on -- is the part worth having in one
+ * place. A shove into a wall stops at the wall instead of posting a crow
+ * inside it.
+ */
+function pushBodiesFrom(cx, cy, radius, px) {
+  const r2 = radius * radius;
+  for (const list of [crows, skeletons, soldiers]) {
+    for (const b of list) {
+      const d2 = dist2(cx, cy, b.x, b.y);
+      if (d2 > r2 || d2 === 0) continue;
+      const d = Math.sqrt(d2);
+      const nx = b.x + ((b.x - cx) / d) * px;
+      const ny = b.y + ((b.y - cy) / d) * px;
+      if (tilePassable(tileAt(nx, b.y))) b.x = clampArenaX(nx);
+      if (tilePassable(tileAt(b.x, ny))) b.y = clampArenaY(ny);
+    }
+  }
+}
+
 function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   const r2 = radius * radius;
 
@@ -2324,7 +2365,13 @@ const MOVEMENT_METERS = {
       dt / TALENTS.stat('longWind'));
     if (was < 1 && rangerMomentum >= 1) {
       events.emit({ type: 'RANGER_MOMENTUM', x: player.x, y: player.y });
+      // Arms on the rising edge only, so the window is three seconds per
+      // full meter rather than three seconds refreshed every frame she holds
+      // one.
+      if (TALENTS.capstoneActive('slipstream')) rangerSlip = CONFIG.rangerSlipstreamSecs;
     }
+    if (rangerMomentum >= 1) rangerSlip = Math.max(0, rangerSlip - dt);
+    else rangerSlip = 0;
   },
 };
 
@@ -2747,6 +2794,12 @@ function knightChargeWedge(angle) {
 function inKnightArc(x, y) {
   const wedge = knightChargeWedge(knightDash.angle);
   if (dist2(player.x, player.y, x, y) > wedge.radius ** 2) return false;
+  // CHARGE THROUGH turns the forward wedge into a full sweep: inside the
+  // reach is enough, whichever side of him it is on. The written effect --
+  // "wounds along its line rather than only at its end" -- was already true
+  // of the base dash, whose repeat ticks exist to catch what he advances
+  // into, so the talent had to buy something the dash does not already do.
+  if (TALENTS.held('chargeThrough')) return true;
   let d = Math.atan2(y - player.y, x - player.x) - wedge.angle;
   while (d >  Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
@@ -3747,6 +3800,7 @@ function initGame() {
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
+  rangerSlip = 0;
   chooser = null; chooserQueue = []; riteOffered = false;
 
   knightChainTimer = 0;
@@ -4232,6 +4286,12 @@ function updatePlayer(dt) {
       if (!knightDash.bossHit && bossInPlay() && !boss.shield && inKnightArc(boss.x, boss.y)) {
         knightDash.bossHit = true;
         damageBoss(knightDashBossDamage(), player.x, player.y, 'spear', 0.15);
+      }
+      // JUGGERNAUT throws aside what the charge reaches, so a body is an
+      // obstacle he goes through rather than one he grinds against.
+      if (TALENTS.capstoneActive('juggernaut')) {
+        pushBodiesFrom(player.x, player.y, knightChargeWedge(knightDash.angle).radius,
+          CONFIG.knightJuggernautPush * dt);
       }
     }
     if (knightDash.timer <= 0) knightDash.timer = 0;
@@ -5474,7 +5534,13 @@ function explodeExplosive(d, source, opts = {}) {
   // shot detonates one bomb wider than usual, and the point of the ability is
   // that the whole pile goes up that wide -- not just the one the dart touched.
   const mult = d.chainMult ?? 1;
-  const radius = opts.radius ?? CONFIG.dynamiteBlastRadius * mult;
+  // How deep into a chain this bomb sits, needed before the radius because
+  // DEMOLITIONIST grows the blast with it: each bomb a chain lights goes up
+  // wider than the one that lit it.
+  const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
+  const grow = TALENTS.capstoneActive('demolitionist')
+    ? 1 + link * CONFIG.sapperDemolitionGrowth : 1;
+  const radius = (opts.radius ?? CONFIG.dynamiteBlastRadius * mult) * grow;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
   events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius });
@@ -5489,13 +5555,46 @@ function explodeExplosive(d, source, opts = {}) {
   // multiplier reaches boss damage only, which is the point rather than a
   // limitation: everything else on the field dies to one hit of anything, so
   // against a crowd a chain is already worth exactly its coverage.
-  const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
   const bossDamage = baseBossDamage * (1 + link * CONFIG.sapperChainBossBonus);
   damageEnemiesInRadius(d.x, d.y, radius,
     { amount: bossDamage, source, flash: 0.25 },
     { falloff: opts.falloff, element: d.element });
 
   chainNearbyBombs(d, link);
+
+  // SHOCKWAVE: the combo blast clears the ground around him of whatever it
+  // did not kill. Only the combo -- an ordinary bomb keeps its old reach.
+  if (source === 'sapperShot' && TALENTS.capstoneActive('shockwave')) {
+    pushBodiesFrom(d.x, d.y, radius, CONFIG.sapperShockwavePush);
+  }
+  // SHRAPNEL: a satchel throws the ranger's own bolts outward as it goes.
+  if (source === 'satchel' && TALENTS.capstoneActive('shrapnel')) {
+    const n = CONFIG.rangerShrapnelBolts;
+    for (let i = 0; i < n && arrows.length < CONFIG.maxArrowsInFlight; i++) {
+      const a = (i / n) * Math.PI * 2;
+      arrows.push({ x: d.x, y: d.y,
+        vx: Math.cos(a) * CONFIG.arrowSpeed, vy: Math.sin(a) * CONFIG.arrowSpeed,
+        life: CONFIG.arrowLifetime, type: 'normal', bounces: 0,
+        initSpeed: CONFIG.arrowSpeed,
+        trailHistory: [], fireSeed: 0, trailTimer: 0,
+        bolt: true,
+        hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
+        dmgMult: CONFIG.crossbowBoltDamageMult });
+    }
+  }
+  // SPLINTER: one stick, three craters. The children are marked so they
+  // cannot splinter again -- an unmarked child would light three more, and
+  // the third generation is where a frame budget goes to die.
+  if (source === 'dynamite' && !d.splinterChild && TALENTS.capstoneActive('splinter')) {
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.4;
+      explodeExplosive({
+        x: d.x + Math.cos(a) * CONFIG.archerSplinterSpread,
+        y: d.y + Math.sin(a) * CONFIG.archerSplinterSpread,
+        vx: 0, vy: 0, life: 0, angle: 0, element: d.element, splinterChild: true,
+      }, 'dynamite', { radius: radius * CONFIG.archerSplinterFrac });
+    }
+  }
 
   // Fire leaves the ground burning where it went off.
   if (d.element === 'fire' && !onWater) {
@@ -5521,12 +5620,20 @@ function updateBarrageBombs(dt) {
     const blocked = !tilePassable(tileAt(nx, ny));
     if (!blocked) { b.x = nx; b.y = ny; }
 
-    let hit = blocked;
+    // A stuck bomb is already where it was going: it waits out its fuse.
+    let hit = b.stuck ? false : blocked;
     if (!hit) for (const c of crows) if (dist2(b.x, b.y, c.x, c.y) < hitR * hitR) { hit = true; break; }
     if (!hit) for (const s of skeletons) if (dist2(b.x, b.y, s.x, s.y) < hitR * hitR) { hit = true; break; }
     if (!hit && bossInPlay() && !boss.shield && dist2(b.x, b.y, boss.x, boss.y) < hitR * hitR) hit = true;
 
-    if (hit || b.life <= 0) {
+    // STICKY FAN: a bomb that touches something stops there and keeps its
+    // fuse instead of going off on contact, which turns the fan from a
+    // scatter into a placement -- and leaves five bombs on the ground for a
+    // chain to run through. Its written effect said they would stop bouncing;
+    // they never bounced, they detonated, so this is what it buys instead.
+    if (hit && TALENTS.held('stickyFan')) {
+      b.vx = 0; b.vy = 0; b.stuck = true;
+    } else if (hit || b.life <= 0) {
       explodeExplosive(b, 'barrage', { radius: CONFIG.sapperBarrageBlastRadius });
       barrageBombs.splice(i, 1);
     }
@@ -6156,6 +6263,8 @@ function damagePlayer(amount, crowIndex = -1) {
   // And the moment after a blink is the wizard's, for the same reason: an
   // escape that still eats the hit it escaped is not an escape.
   if (wizBlinkIFrame > 0) return;
+  // Slipstream: at a full meter she is running through them, not into them.
+  if (rangerSlip > 0) return;
   if (playerShield) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
@@ -12652,7 +12761,7 @@ const TALENT_LOOK = {
   // Knight.
   deeperCut:     { kind: 'direct',   sigil: '◆', hook: 'Every stack bites harder' },
   fourthBlood:   { kind: 'direct',   sigil: '◈', hook: 'A fourth drop to earn' },
-  chargeThrough: { kind: 'direct',   sigil: '⇒', hook: 'The whole charge cuts, not just its end' },
+  chargeThrough: { kind: 'direct',   sigil: '⇒', hook: 'He cuts on every side while charging' },
   berserker:     { kind: 'indirect', sigil: '◇', hook: 'A miss is no longer the end of it' },
   juggernaut:    { kind: 'mechanic', sigil: '█', hook: 'Nothing stops the charge' },
 
@@ -12666,7 +12775,7 @@ const TALENT_LOOK = {
   // Sapper.
   longFuse:      { kind: 'indirect', sigil: '∼', hook: 'A bomb reaches further for the next' },
   moreLinks:     { kind: 'direct',   sigil: '≡', hook: 'The chain runs longer before it dies' },
-  stickyFan:     { kind: 'mechanic', sigil: '∵', hook: 'The fan lands where you aimed it' },
+  stickyFan:     { kind: 'mechanic', sigil: '∵', hook: 'The fan stays where it lands' },
   demolitionist: { kind: 'direct',   sigil: '⊙', hook: 'Each blast louder than the last' },
   shockwave:     { kind: 'mechanic', sigil: '⊚', hook: 'What survives is thrown clear' },
 };
@@ -13988,6 +14097,14 @@ export const devHooks = {
   chooserPick(i) { if (!chooser) return false; chooser.cursor = i; confirmChooser(); return true; },
   /** Overchannel's remaining window, for pinning the rite's free bolts. */
   wizOverchannel: () => wizOverchannel,
+  /** Slipstream's remaining window, seconds. Zero whenever she is not phasing. */
+  slipstream: () => rangerSlip,
+  /** The sapper's combo blast at a point, the way `blast` stages a plain one:
+   *  same routine the shift shot reaches when it threads one of his bombs. */
+  sapperCombo(x, y) {
+    explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'sapperShot',
+      { radius: CONFIG.dynamiteBlastRadius * CONFIG.sapperComboRadiusMult });
+  },
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
   // clock, which no amount of stepSim moves.
@@ -14142,6 +14259,10 @@ export const devHooks = {
    * which is exactly how the ten-wave play-through first failed, on wave ten.
    */
   healHero() { playerHP = FEATHERS.maxHP(); return playerHP; },
+  /** Hurts the hero through the real damage path, so every guard that path
+   *  carries — shields, i-frames, Slipstream — is exercised rather than
+   *  bypassed by writing playerHP directly. */
+  hurtHero(n = 1) { damagePlayer(n); return playerHP; },
   /** Wounds every guard by n, never below 1, so the priest has work to do. */
   hurtGuards(n = 1) {
     for (const body of guards) body.guard.hp = Math.max(1, body.guard.hp - n);
