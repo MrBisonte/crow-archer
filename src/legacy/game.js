@@ -50,8 +50,9 @@ import {
   perkHeld, purchase, statValue,
 } from '../sim/upgrades';
 import {
-  CHAR_TREES, draftOffers, draftedValue, masteryAfter, ownedIds, purchaseTalent,
-  rankOf, riteEligible, talentBankFrom, talentLevel,
+  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedValue,
+  masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible, talentBankFrom,
+  talentLevel,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -8577,6 +8578,13 @@ const TALENTS = (() => {
     _bank[selectedChar] = { mastery: s.mastery, levels: { ...s.levels, [id]: level } };
   }
 
+  /** The same bypass for mastery, so a screen can be staged without playing
+   *  the four milestones that would otherwise be the only way to a rank. */
+  function grantMastery(points) {
+    const s = state();
+    _bank[selectedChar] = { mastery: Math.max(0, Math.trunc(points)), levels: s.levels };
+  }
+
   function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
   function draft(id) { if (!_drafted.includes(id)) _drafted.push(id); applyToRun(); }
   function drafted() { return _drafted.slice(); }
@@ -8600,7 +8608,7 @@ const TALENTS = (() => {
   }
 
   return {
-    init, state, award, buy, grant,
+    init, state, award, buy, grant, grantMastery,
     resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
     blinkDistance, stormRadius, focusMax, stormCooldown, applyToRun,
   };
@@ -14114,9 +14122,29 @@ export function boot() {
   window.retinue = () => devHooks.guards().map(
     (b) => (RANK_MARK[b.guard.rank] || '') + b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp,
   );
+  // The two chooser screens, staged in one word each. Both exist because the
+  // screens are otherwise unreachable by hand: nothing sells a talent yet, and
+  // the rite additionally wants a rank that four milestones pay for.
+  window.draft = (char = selectedChar) => {
+    devHooks.pick(char);
+    for (const t of CHAR_TREES[char].talents) TALENTS.grant(t.id, 1);
+    transitionTo('playing');   // initGame queues the run's opening draft itself
+    return chooser ? chooser.offers : `${char} owns no talents to draft`;
+  };
+  window.rite = (char = selectedChar) => {
+    devHooks.pick(char);
+    TALENTS.grantMastery(RANK_THRESHOLDS[CAPSTONE_RANK - 1]);
+    transitionTo('playing');
+    // The run just started, so an opening draft may be queued in front of the
+    // rite; this verb is for looking at the rite, so it goes first.
+    chooser = null; chooserQueue = []; riteOffered = false;
+    queueRite('playing');
+    openNextChooser();
+    return chooser ? chooser.offers : `${char} has no capstones`;
+  };
   // Printed once so the verbs are discoverable from the console itself rather
   // than only from a document the player would have to already be reading.
-  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue()');
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue() draft(char) rite(char)');
 
   FEATHERS.init();
   TALENTS.init();

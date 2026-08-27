@@ -159,4 +159,11 @@ a run stays with the game.
 
 Talents have no buy screen yet: `TALENTS.buy()` is reachable from the console
 (`__game.talents()`) and enforces both the mastery gate and the wallet, but
-nothing on the inventory screen offers a purchase.
+nothing on the inventory screen offers a purchase. Until one exists, the two
+chooser screens are staged by hand with the console verbs `draft(char)` and
+`rite(char)` — the same one-word shape `siege(n)` and `crack(hp)` use, and for
+the same reason: a screen nothing sells is a screen nobody can otherwise reach.
+`draft` grants every talent in that character's tree and starts a run so the
+opening draft has a full hand; `rite` puts the character at the rank the rite
+wants and opens it. A hero with an empty tree answers plainly and keeps
+playing, which is the empty-pool skip doing its job.

@@ -28,5 +28,11 @@ declare global {
     crack: (hp?: number) => unknown;
     /** The retinue as readable lines: rank marker, kind, HP. */
     retinue: () => string[];
+    /** Starts a run with every one of `char`'s talents owned, so the opening
+     *  draft has a full hand to deal. Returns the ids offered. */
+    draft: (char?: string) => unknown;
+    /** Puts `char` at the rank the rite wants and opens it. Returns the
+     *  capstones offered. */
+    rite: (char?: string) => unknown;
   }
 }
