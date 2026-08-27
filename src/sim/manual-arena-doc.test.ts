@@ -4,14 +4,14 @@
  *
  * `feat/playfield-55x33` changed `MAP_COLS`/`MAP_ROWS` from 33x21 to 55x33 and
  * shipped in v0.2.0. Both manuals kept saying 33x21 in three places, and the
- * retro page says of itself that every number in it is read off the real build
- * — so the one line selling the document's accuracy was the line that had
- * rotted. Nothing caught it: no test reads prose, and the sentence was never
- * edited, so there was no diff for a reviewer to notice either.
+ * retro page says of itself that every number in it is read off the real build.
+ * The one line selling the document's accuracy was the line that had rotted.
+ * Nothing caught it: no test reads prose, and the sentence was never edited, so
+ * there was no diff for a reviewer to notice either.
  *
- * This is the same shape as `src/legacy/balance-doc.test.ts` — read the
- * document as text, compare it against the code it describes — applied to the
- * field rather than the character table.
+ * This is the same shape as `src/legacy/balance-doc.test.ts`: read the document
+ * as text, compare it against the code it describes. Applied to the field
+ * rather than the character table.
  *
  * It matches on meaning rather than on the three known sentences: any "N x M"
  * that sits near the words grid, tile or arena is a claim about the field, so
