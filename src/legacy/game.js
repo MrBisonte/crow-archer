@@ -51,7 +51,7 @@ import {
 } from '../sim/upgrades';
 import {
   CHAR_TREES, draftOffers, draftedValue, masteryAfter, ownedIds, purchaseTalent,
-  talentBankFrom,
+  rankOf, riteEligible, talentBankFrom, talentLevel,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -849,6 +849,54 @@ function showStageIntro(kind) {
   appState = 'stage_intro';
 }
 
+// ── The mid-run choosers: the draft and the rite ─────────────────────────────
+//
+// One screen shape for both: the run-start and boss drafts wake an owned
+// talent for this run, and the rite seals a capstone the rank earned.
+// `resume` is the appState a pick returns to, so a chooser can sit over a
+// staged stage_intro or a boss entrance without either noticing — the same
+// direct-assignment reasoning showStageIntro gives above.
+let chooser = null;
+let chooserQueue = [];
+let riteOffered = false;   // once per run, taken or not
+
+function queueDraft(resume) {
+  const offers = TALENTS.offers(3);
+  if (offers.length === 0) return;   // an empty pool skips the ceremony
+  chooserQueue.push({ kind: 'draft', offers, cursor: 0, resume });
+}
+
+function queueRite(resume) {
+  if (riteOffered) return;
+  const capstones = CHAR_TREES[selectedChar].capstones;
+  if (capstones.length === 0 || !riteEligible(TALENTS.state().mastery)) return;
+  riteOffered = true;   // offered once, whether or not the pick is liked
+  chooserQueue.push({ kind: 'rite', offers: capstones.map((c) => c.id), cursor: 0, resume });
+}
+
+function openNextChooser() {
+  if (chooser !== null || chooserQueue.length === 0) return;
+  chooser = chooserQueue.shift();
+  appState = 'chooser';
+}
+
+/** A boss just died: the rite outranks the draft when both are owed. */
+function queueBossChoosers() {
+  if (appState === 'win' || appState === 'gameover') return;   // run over
+  queueRite(appState);
+  queueDraft(appState);
+  openNextChooser();
+}
+
+function confirmChooser() {
+  const id = chooser.offers[chooser.cursor];
+  if (chooser.kind === 'draft') TALENTS.draft(id); else TALENTS.sealCapstone(id);
+  const resume = chooser.resume;
+  chooser = null;
+  if (chooserQueue.length > 0) { chooser = chooserQueue.shift(); return; }
+  appState = resume;
+}
+
 const BOSS_ENTRY_TEXT = {
   1: '⚠  THE CROWS SUMMONED THEIR KING  ⚠',
   2: '⚠  A DARK ARCHER STIRS IN THE DEPTHS  ⚠',
@@ -1399,7 +1447,13 @@ function transitionTo(next) {
   // out of the screen (back, error, match start) must not leak the connection.
   if (next === 'multiplayer' && prev !== 'multiplayer') openMultiplayer();
   if (prev === 'multiplayer' && next !== 'multiplayer') closeMultiplayer();
-  if (next === 'playing' && prev !== 'paused' && prev !== 'controls' && prev !== 'inventory') initGame();
+  if (next === 'playing' && prev !== 'paused' && prev !== 'controls' && prev !== 'inventory') {
+    initGame();
+    // The run's opening draft, over whatever screen initGame staged. An
+    // empty pool queues nothing and the run starts undisturbed.
+    queueDraft(appState);
+    openNextChooser();
+  }
   // A charge/dash held into the pause menu has nowhere left to receive the
   // keyup that would normally release it — see cancelHeldActions().
   if (next === 'paused') cancelHeldActions();
@@ -3678,6 +3732,7 @@ function initGame() {
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
+  chooser = null; chooserQueue = []; riteOffered = false;
 
   knightChainTimer = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
@@ -7077,6 +7132,7 @@ function updateBossDeath(dt) {
       // that kills a boss either clears the wave first or never looks at what
       // the survivors do afterwards.
       for (const c of crows) c.frozen = false;
+      queueBossChoosers();
       return;
     }
     if (deadKind === 'crowking') {
@@ -7134,6 +7190,7 @@ function updateBossDeath(dt) {
       skeletons = [];
       transitionTo('win');
     }
+    queueBossChoosers();
   }
 }
 
@@ -12461,6 +12518,138 @@ function _drawCharDetail(p, top) {
   });
 }
 
+/**
+ * How each talent and capstone shows on the chooser screens: an accent in
+ * the char-select scheme, a sigil that depicts the effect, and the panel's
+ * hook line. Presentation only — the tree itself lives in sim/talents.ts —
+ * and checked loudly at load the way CHAR_PANELS checks CHARACTER_STATS: an
+ * id without a look would draw a blank panel, which is the sapper's old
+ * missing-portrait gap wearing new clothes.
+ */
+const TALENT_LOOK = {
+  focusDepth:  { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u25c9', hook: 'A full pool casts four bolts' },
+  blinkReach:  { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '\u293a', hook: 'The wall you could not reach is now cover' },
+  stormWidth:  { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '\u2608', hook: 'The storm stops asking where they are' },
+  overchannel: { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u21af', hook: 'The escape button becomes the attack button' },
+  stormcaller: { color: '#FFB400', dim: '#7a5a00', bg: 'rgba(255,180,0,0.10)',   sigil: '\u21bb', hook: 'The sky becomes a habit' },
+};
+for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
+  for (const entry of [...lookTree.talents, ...lookTree.capstones]) {
+    if (!TALENT_LOOK[entry.id]) throw new Error(`TALENT_LOOK has no row for '${lookChar}.${entry.id}'`);
+  }
+}
+
+/** Tier colours off the difficulty ladder, and the numerals the panels wear. */
+const TIER_COLORS = { 1: '#39FF14', 2: '#CCAA00', 3: '#FF8C00' };
+const TIER_ROMAN  = { 1: 'I', 2: 'II', 3: 'III' };
+
+/** The spec behind a chooser offer — a talent row or a capstone row. */
+function chooserSpec(id) {
+  const tree = CHAR_TREES[selectedChar];
+  const spec = tree.talents.find((t) => t.id === id) || tree.capstones.find((c) => c.id === id);
+  if (!spec) throw new Error(`chooser offer '${id}' is not in ${selectedChar}'s tree`);
+  return spec;
+}
+
+/** One LEVEL ■■□ row sized to the talent's own ladder, not STAT_SCALE. */
+function _drawOwnedPips(lx, ly, maxW, filled, total, color) {
+  ctx.textAlign = 'left';
+  ctx.font = '9.5px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText('LEVEL', lx, ly);
+  const pipW = 7, pipGap = 3, pipH = 7;
+  const rowW = total * pipW + (total - 1) * pipGap;
+  const x0 = lx + maxW - rowW, top = ly - pipH / 2;
+  for (let i = 0; i < total; i++) {
+    const px = x0 + i * (pipW + pipGap);
+    if (i < filled) { ctx.fillStyle = color; ctx.fillRect(px, top, pipW, pipH); }
+    else { ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 1; ctx.strokeRect(px + 0.5, top + 0.5, pipW - 1, pipH - 1); }
+  }
+}
+
+/** The selected panel's detail block: pips for a talent, then EFFECT rows. */
+function _drawChooserDetail(lx, ly, maxW, id, spec, look, isRite) {
+  let y = ly;
+  if (!isRite) {
+    _drawOwnedPips(lx, y, maxW, talentLevel(TALENTS.state(), id), spec.costs.length, look.color);
+    y += 26;
+  }
+  const rows = [
+    ['EFFECT', spec.desc],
+    isRite ? ['LASTS', 'This run only — no second asking until the next']
+           : ['DRAFT', 'Live this run only — the next wakes at each boss'],
+  ];
+  for (const [label, text] of rows) {
+    ctx.textAlign = 'left';
+    ctx.font = '9px "Courier New",monospace';
+    ctx.fillStyle = PANEL_LABEL_COLOR;
+    ctx.fillText(label, lx, y);
+    ctx.font = '10.5px "Courier New",monospace';
+    ctx.fillStyle = look.color;
+    ctx.fillText(_fitText(text, maxW), lx, y + 15);
+    y += 40;
+  }
+  ctx.textAlign = 'center';
+}
+
+function _drawChooserPanel(px, py, w, h, sel, id, index, isRite) {
+  const look = TALENT_LOOK[id], spec = chooserSpec(id);
+  const pad = 12, innerW = w - pad * 2, cx = px + w / 2;
+  _panelFrame(px, py, w, h, sel, { bg: look.bg, dimBg: DIM_PANEL_BG, color: look.color, dim: look.dim });
+  ctx.textAlign = 'center';
+  ctx.fillStyle = sel ? look.color : look.dim;
+  ctx.font = '19px "Courier New",monospace';
+  ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, py + 30);
+  ctx.font = '10.5px "Courier New",monospace';
+  ctx.fillText(_fitText(look.hook, innerW), cx, py + 56);
+  ctx.font = '44px "Courier New",monospace';
+  if (sel) { ctx.shadowColor = look.color; ctx.shadowBlur = 12; }
+  ctx.fillStyle = sel ? look.color : look.dim;
+  ctx.fillText(look.sigil, cx, py + 116);
+  ctx.shadowBlur = 0;
+  if (sel) _drawChooserDetail(px + pad, py + 172, innerW, id, spec, look, isRite);
+  const footColor = isRite ? '#FFB400' : TIER_COLORS[spec.tier];
+  ctx.font = '11px "Courier New",monospace';
+  ctx.shadowColor = footColor; ctx.shadowBlur = 6;
+  ctx.fillStyle = footColor;
+  ctx.fillText(isRite ? 'SEALS THE RUN' : `TIER ${TIER_ROMAN[spec.tier]}`, cx, py + h - 24);
+  ctx.shadowBlur = 0;
+}
+
+/**
+ * The draft and the rite, in the char-select screen's own anatomy: the
+ * chosen option expands about the row's midline while the rest dim, each
+ * offer wearing its own accent — the owner's pick of the five mocked styles.
+ */
+function drawChooser() {
+  const isRite = chooser.kind === 'rite';
+  const rank = rankOf(TALENTS.state().mastery);
+  _selectionScreenBackdrop(
+    isRite ? '── THE RITE ──' : '── THE DRAFT ──',
+    isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
+           : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
+  const offers = chooser.offers;
+  const gapX = 12, selH = 400, restH = 230, panelY = 150;
+  const selW = isRite ? 460 : 380;
+  const others = offers.length - 1;
+  const restW = others > 0 ? Math.min(300, Math.floor((1000 - selW - gapX * others) / others)) : 0;
+  const widths = offers.map((_, i) => (i === chooser.cursor ? selW : restW));
+  const totalW = widths.reduce((a, b) => a + b, 0) + gapX * others;
+  const midY = panelY + selH / 2;
+  let px = Math.round(CONFIG.canvasW / 2 - totalW / 2);
+  offers.forEach((id, i) => {
+    const sel = i === chooser.cursor;
+    const w = widths[i], h = sel ? selH : restH;
+    _drawChooserPanel(px, Math.round(midY - h / 2), w, h, sel, id, i, isRite);
+    px += w + gapX;
+  });
+  ctx.fillStyle = '#0d4d04'; ctx.font = '14px "Courier New",monospace';
+  ctx.textAlign = 'center';
+  const digits = offers.map((_, i) => `[${i + 1}]`).join(' ');
+  ctx.fillText(`← →  /  ${digits}  SWITCH    ENTER  ${isRite ? 'SEAL THE RITE' : 'WAKE IT'}`,
+    CONFIG.canvasW / 2, CONFIG.canvasH - 22);
+}
+
 function drawCharSelect(t) {
   _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
   const { slots, selected, stripTop, hintY } = charSelectLayout();
@@ -12995,6 +13184,7 @@ function render(t) {
   } else if (appState === 'gameover')   { drawGameOver(t);
   } else if (appState === 'win')        { drawWin(t);
   } else if (appState === 'stage_intro') { drawStageIntro(t);
+  } else if (appState === 'chooser')    { drawChooser();
   } else if (appState === 'inventory')  { FEATHERS.draw(); }
 }
 
@@ -13140,6 +13330,17 @@ function stepGame(dt) {
       selectedMapKind = cyclePanelSelection(MAP_PANELS, selectedMapKind, 'kind');
       if (keys['Enter']) { transitionTo('playing'); keys['Enter']=false; }
       if (keys['Escape']) { transitionTo('charselect'); keys['Escape']=false; }
+      break; }
+
+    case 'chooser': {
+      const picks = chooser ? chooser.offers.length : 0;
+      if (picks === 0) { appState = 'playing'; break; }   // belt: never staged empty
+      if (keys['ArrowLeft'])  { chooser.cursor = (chooser.cursor + picks - 1) % picks; keys['ArrowLeft'] = false; }
+      if (keys['ArrowRight']) { chooser.cursor = (chooser.cursor + 1) % picks; keys['ArrowRight'] = false; }
+      for (let i = 0; i < picks; i++) {
+        if (keys[String(i + 1)]) { chooser.cursor = i; keys[String(i + 1)] = false; }
+      }
+      if (keys['Enter']) { keys['Enter'] = false; confirmChooser(); }
       break; }
 
     case 'controls':
@@ -13556,6 +13757,9 @@ export const devHooks = {
   talents: () => TALENTS,
   /** The wallet TALENTS buys from, so a test can set up a poor buyer. */
   feathers: () => FEATHERS,
+  /** The mid-run chooser, and a pick that goes through the real confirm. */
+  chooser: () => chooser,
+  chooserPick(i) { if (!chooser) return false; chooser.cursor = i; confirmChooser(); return true; },
   /** Overchannel's remaining window, for pinning the rite's free bolts. */
   wizOverchannel: () => wizOverchannel,
   // Backdates a draw already in progress, so a test can loose a fully drawn

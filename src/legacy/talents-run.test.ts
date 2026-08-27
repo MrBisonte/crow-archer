@@ -16,12 +16,14 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { CHAR_TREES } from '../sim/talents';
 import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
 import { devHooks as g } from './game.js';
 
 interface TalentState { mastery: number; levels: Record<string, number> }
 interface Talents {
   state: () => TalentState;
+  award: (milestone: string) => void;
   grant: (id: string, level: number) => void;
   draft: (id: string) => void;
   drafted: () => string[];
@@ -70,6 +72,9 @@ beforeEach(() => {
   }
   g.takeClock();
   g.pick('wizard');
+  // Zero every ladder before entering play: grants persist across tests, and
+  // a non-empty pool would open the run-start draft over this beforeEach.
+  for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
   g.go('playing');
   g.generateMap('forest');
   // Open ground: a blink refuses a hop with no room, and the storm tests
@@ -211,6 +216,54 @@ describe('mastery is paid by real milestones', () => {
     const before = talents().state().mastery;
     g.go('win');
     expect(talents().state().mastery - before).toBe(3);
+  });
+});
+
+interface Chooser { kind: string; offers: string[]; cursor: number; resume: string }
+
+describe('the choosers', () => {
+  it('opens the draft at run start when something is owned, and a pick wakes it', () => {
+    talents().grant('blinkReach', 1);
+    g.go('menu');
+    g.go('playing');
+    expect(g.state()).toBe('chooser');
+    const c = g.chooser() as unknown as Chooser;
+    expect(c.kind).toBe('draft');
+    expect(c.offers).toEqual(['blinkReach']);
+    g.chooserPick(0);
+    expect(g.state()).toBe('playing');
+    expect(talents().drafted()).toEqual(['blinkReach']);
+  });
+
+  it('skips the ceremony entirely when nothing is owned', () => {
+    // beforeEach zeroed every ladder, so this run opened with no chooser.
+    expect(g.state()).toBe('playing');
+    expect(g.chooser()).toBeNull();
+  });
+
+  it('offers the rite before the boss draft, once, at the top rank', () => {
+    for (let i = 0; i < 6; i++) talents().award('siege_cleared');   // rank 3
+    talents().grant('blinkReach', 1);
+    g.spawnBossNow(2);
+    g.go('boss_fight');
+    (g.boss() as { hp: number }).hp = 1;
+    const b = g.boss() as { x: number; y: number };
+    g.blast(b.x, b.y);
+    stepPast(Math.ceil(1.5 * ONE_SECOND));
+    const rite = g.chooser() as unknown as Chooser;
+    expect(g.state()).toBe('chooser');
+    expect(rite.kind).toBe('rite');
+    expect(rite.offers).toEqual(['overchannel', 'stormcaller']);
+    g.chooserPick(1);
+    // The draft queued behind the rite opens without leaving the screen.
+    const draft = g.chooser() as unknown as Chooser;
+    expect(draft.kind).toBe('draft');
+    g.chooserPick(0);
+    // Both picks landed, and the screen handed back to the staged hand-off —
+    // the dark archer's death leads into the dark knight's entrance.
+    expect(talents().stormCooldown()).toBe(g.config().stormCooldown / 2);
+    expect(talents().drafted()).toEqual(['blinkReach']);
+    expect(g.state()).toBe('boss_entrance');
   });
 });
 
