@@ -8,6 +8,7 @@ this document is the per-character half that sits beside it.
 - [The three layers](#the-three-layers)
 - [Mastery and ranks](#mastery-and-ranks)
 - [The wizard's tree](#the-wizards-tree)
+- [Buying them](#buying-them)
 - [What a run looks like](#what-a-run-looks-like)
 - [The other four heroes](#the-other-four-heroes)
 - [What the colours mean](#what-the-colours-mean)
@@ -106,6 +107,33 @@ than a choice.
 | OVERCHANNEL | Bolts cost no Focus for 4 s after a blink lands — the escape button becomes the attack button |
 | STORMCALLER | Lightning Storm recharges in half the time, everywhere the wait is shown |
 
+## Buying them
+
+`[T]` from the pause menu, or `[T]` from the upgrade screen — the two shops
+sit beside each other because they spend the same wallet, and `[U]` goes back
+the other way. Arrows or a click move the cursor; `ENTER`, or a second click
+on the row you are already on, buys.
+
+A row shows its sigil, what kind of thing it is, its tier, what it does, the
+price of its *next* level, and how many levels are already held. A tier the
+character's mastery has not opened is dimmed and priced as `LOCKED · RANK n`
+rather than hidden: what you are climbing toward is the reason to climb. The
+rite sits under the rows, named and greyed until rank III, because it is
+earned and never bought.
+
+A refusal is always worded. Pressing `ENTER` on a talent you cannot afford
+prints how many feathers short you are; on a locked tier it prints the rank
+you need against the rank you hold. The one thing the screen must never do is
+nothing at all — the player pressed a key, and silence reads as a screen that
+did not hear them. `_talentBuyNote` throws on a purchase result it has no
+wording for, so a new outcome cannot arrive as a blank line.
+
+Both shops lay their rows out with `src/render/list-rows.ts`: widths off the
+canvas rather than a design width, a pitch that shrinks to fit but never
+spreads, a short list centred in its band, and the rects the click handler
+tests are the rects the draw used. Buying that geometry also fixed the upgrade
+screen, which had drawn a literal 560 px row whatever the canvas was.
+
 ## What a run looks like
 
 Both ceremonies sit over whatever screen the hand-off staged and give it back
@@ -188,6 +216,15 @@ drawing depends on nothing. They are generated from the design sheets into path
 data, so the shape has one home and the game never parses markup to draw a
 frame.
 
+Two trees currently read as one colour on the shop screen and in the draft.
+The knight's three buyable talents are all `direct`; the ranger's are all
+`indirect`. That is the trees being honest — his three really are all damage,
+hers really are all build-up — and it is the colour code working, not failing.
+It does mean the code carries no information for those two heroes until a
+second kind enters their tier list, which is worth knowing before adding to
+either. Recolouring for variety would say something untrue about what the
+talents do.
+
 A fourth kind — defensive, healing, damage taken — is **deliberately absent
 rather than empty**. Not one of the twenty-five does any of those things; the
 FEATHERS tree carries health and the ward. That is a fact about the trees, not
@@ -220,14 +257,14 @@ a run stays with the game.
 | Drawing one onto a canvas | `src/render/talent-sigil-paint.ts` |
 | Save file, mastery awards, the run's drafted set, the rite's seal, effective figures | `TALENTS` in `src/legacy/game.js` |
 | The draft and rite screens | `drawChooser()` and `TALENT_LOOK` in `src/legacy/game.js` |
+| The buy screen | `drawTalentTree()` and `talentTreeLayout()` in `src/legacy/game.js` |
+| Row geometry, shared with the upgrade screen | `src/render/list-rows.ts` |
 | Purchases, spending the wallet | `TALENTS.buy()`, which spends through `FEATHERS.spend()` |
 
-Talents have no buy screen yet: `TALENTS.buy()` is reachable from the console
-(`__game.talents()`) and enforces both the mastery gate and the wallet, but
-nothing on the inventory screen offers a purchase. Until one exists, the two
-chooser screens are staged by hand with the console verbs `draft(char)` and
-`rite(char)` — the same one-word shape `siege(n)` and `crack(hp)` use, and for
-the same reason: a screen nothing sells is a screen nobody can otherwise reach.
+The two chooser screens can still be staged by hand with the console verbs
+`draft(char)` and `rite(char)` — the same one-word shape `siege(n)` and
+`crack(hp)` use. They are reached in play by owning talents and starting a run,
+but a ceremony you have to earn twice over is a slow thing to look at.
 `draft` grants every talent in that character's tree and starts a run so the
 opening draft has a full hand; `rite` puts the character at the rank the rite
 wants and opens it. A hero with an empty tree answers plainly and keeps

@@ -44,6 +44,7 @@ import { Hitstop } from '../sim/hitstop';
 import { log, attachToEvents } from '../sim/log';
 import { SPANS, countingContext, trace } from '../render/trace';
 import { DEFAULT_POP, panelAt, panelSlots } from '../render/panel-row';
+import { listRows, rowAt } from '../render/list-rows';
 import {
   UPGRADES, UPGRADE_ORDER, NO_UPGRADES,
   featherYield, feathersFrom, isMaxed, levelOf, levelsFrom, maxLevel, nextCost,
@@ -52,7 +53,7 @@ import {
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
   draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
-  talentBankFrom, talentLevel,
+  clampCursor, talentBankFrom, talentLevel, tierOpenAt,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -938,7 +939,8 @@ const LOW_HP_FRACTION = 0.25;
 // ── STATE ─────────────────────────────────────────────────────────────────────
 
 // appState: menu | charselect | mapselect | multiplayer | controls | playing
-// | paused | boss_entrance | boss_fight | stage_intro | inventory | win | gameover
+// | paused | boss_entrance | boss_fight | stage_intro | inventory | talents
+// | win | gameover
 let appState = 'menu', controlsFrom = 'menu', pausedFrom = 'playing';
 
 let gameMode = 'brawl'; // a SinglePlayerMode; see MODE_RULES — persists across restarts
@@ -1473,7 +1475,8 @@ function transitionTo(next) {
   // out of the screen (back, error, match start) must not leak the connection.
   if (next === 'multiplayer' && prev !== 'multiplayer') openMultiplayer();
   if (prev === 'multiplayer' && next !== 'multiplayer') closeMultiplayer();
-  if (next === 'playing' && prev !== 'paused' && prev !== 'controls' && prev !== 'inventory') {
+  if (next === 'playing' && prev !== 'paused' && prev !== 'controls'
+      && prev !== 'inventory' && prev !== 'talents') {
     initGame();
     // The run's opening draft, over whatever screen initGame staged. An
     // empty pool queues nothing and the run starts undisturbed.
@@ -1854,6 +1857,11 @@ const inGame = () => appState === 'playing' || appState === 'boss_fight';
 let cursorStyle = 'crosshair';
 /** Whether the pointer is over something a click would act on. */
 function _overClickable() {
+  // The talent tree is a list rather than a panel row, so it answers through
+  // its own hit test. Same rule either way: the rects the draw used.
+  if (appState === 'talents') {
+    return rowAt(talentTreeLayout().rows, mouse.x, mouse.y) !== null;
+  }
   const layout = appState === 'charselect' ? charSelectLayout()
     : appState === 'chooser' && chooser !== null ? chooserLayout()
     : null;
@@ -2962,6 +2970,7 @@ function installInput() {
     initAudio();
     if (appState === 'charselect') { _clickCharSelect(e); return; }
     if (appState === 'chooser') { _clickChooser(e); return; }
+    if (appState === 'talents') { _clickTalentTree(e); return; }
     if (appState !== 'controls') return;
     const r  = canvas.getBoundingClientRect();
     const cy = (e.clientY - r.top) * (CONFIG.canvasH / r.height);
@@ -8496,6 +8505,29 @@ const STREAK = (() => {
 // — lives in ../sim/upgrades.ts, where it is pure and can be checked without a
 // canvas. What stays here is everything that needs a browser: the wallet, the
 // save file, the cursor and the screen.
+/**
+ * Where a shop screen's rows sit: the upgrade list and the talent tree.
+ *
+ * Both are a stack of bands you point at and buy from, so they read the same
+ * geometry rather than each carrying its own copy of the three figures. The
+ * arithmetic is in `render/list-rows.ts`, testable without a canvas; what
+ * lives here is only which figures this game hands it.
+ */
+function _shopRows(count, opts = {}) {
+  return listRows({
+    canvasW: CONFIG.canvasW, canvasH: CONFIG.canvasH,
+    count,
+    top: opts.top ?? 170,
+    // Clear of the key hint along the bottom.
+    bottom: opts.bottom ?? CONFIG.canvasH - 54,
+    maxPitch: opts.maxPitch ?? 96,
+    maxBandH: opts.maxBandH ?? 76,
+    // Wide enough for a label, a description and a price without running to
+    // the canvas edge on a wide screen.
+    widthFrac: 0.62,
+  });
+}
+
 const FEATHERS = (() => {
   const LS_KEY  = 'crow_archer_v1';
 
@@ -8537,6 +8569,11 @@ const FEATHERS = (() => {
   // TALENTS buys from this same wallet; the subtraction lives with the wallet
   // so no other module ever writes _feathers.
   function spend(n) { _feathers = Math.max(0, _feathers - n); _save(); }
+  /** Test-only wallet bypass, the sibling of TALENTS.grant. A shop test needs
+   *  an exact balance, and the only earning path rolls a random bonus per
+   *  kill; without this the alternative is spend(-n), which works by exploiting
+   *  a clamp and would break the moment spend grew a guard. */
+  function grant(n) { _feathers = Math.max(0, Math.trunc(n)); _save(); }
   // Whether a run opens with the shield already up, through the same
   // playerShield a pickup and the knight's block already raise.
   function wardStart() { return perkHeld(_levels, 'ward'); }
@@ -8586,14 +8623,12 @@ const FEATHERS = (() => {
     ctx.fillText(`◆ ${_feathers}  FEATHERS  (persists across runs)`, CONFIG.canvasW / 2, 96);
     ctx.shadowBlur = 0;
 
-    // Row pitch shrinks to fit however many upgrades the table holds today,
-    // the way the char-select panels size themselves to CHAR_PANELS. Four
-    // rows still lay out at the 96 this screen has always used; it only
-    // tightens once the tree grows past what the canvas fits at that pitch.
-    const rowTop = 170;
-    const rowFoot = CONFIG.canvasH - 54; // clear of the key hint along the bottom
-    const pitch = Math.min(96, Math.floor((rowFoot - rowTop) / UPGRADE_ORDER.length));
-    const bandH = Math.min(76, pitch - 8);
+    // The rows come off the shared list geometry, which is also what the
+    // talent shop reads. The pitch still shrinks to fit however many upgrades
+    // the table holds; what changed is the width, which was a literal 560 px
+    // whatever the canvas was — comfortable on the 1056 it was authored
+    // against, a third of a 1760 one with the rest of the screen empty.
+    const rows = _shopRows(UPGRADE_ORDER.length);
 
     // Upgrade rows
     UPGRADE_ORDER.forEach((id, i) => {
@@ -8602,13 +8637,14 @@ const FEATHERS = (() => {
       const sel   = i === _cursor;
       const maxed = isMaxed(_levels, id);
       const cost  = nextCost(_levels, id);
-      const oy    = rowTop + i * pitch;
-      const barX  = CONFIG.canvasW / 2 - 260;
-      const barR  = CONFIG.canvasW / 2 + 260;
+      const row   = rows[i];
+      const oy    = row.midY;
+      const barX  = row.x + 20;
+      const barR  = row.x + row.w - 20;
 
       if (sel) {
         ctx.fillStyle = 'rgba(57,255,20,0.08)';
-        ctx.fillRect(CONFIG.canvasW / 2 - 280, oy + 6 - bandH / 2, 560, bandH);
+        ctx.fillRect(row.x, row.y, row.w, row.h);
         ctx.shadowColor = '#39FF14'; ctx.shadowBlur = 14;
       }
 
@@ -8641,11 +8677,14 @@ const FEATHERS = (() => {
       ctx.shadowBlur = 0;
     });
 
-    ctx.textAlign = 'center'; ctx.font = '13px "Courier New", monospace'; ctx.fillStyle = '#0d4d04';
-    ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [B]  BACK', CONFIG.canvasW / 2, CONFIG.canvasH - 22);
+    // #0d4d04 is 2.1:1 against black; #6f8a6c is 5.5:1, and is what the
+    // selection screens settled on for the same line.
+    ctx.textAlign = 'center'; ctx.font = '13px "Courier New", monospace'; ctx.fillStyle = '#6f8a6c';
+    ctx.fillText('↑ ↓  NAVIGATE    ENTER  PURCHASE    [T]  TALENTS    [B]  BACK',
+      CONFIG.canvasW / 2, CONFIG.canvasH - 22);
   }
 
-  return { init, onCrowKill, maxHP, pfRange, speed, wallet, spend, wardStart, applyToGame, moveCursor, buyCurrent, draw };
+  return { init, onCrowKill, maxHP, pfRange, speed, wallet, spend, grant, wardStart, applyToGame, moveCursor, buyCurrent, draw };
 })();
 
 // ── HANDICAP: configurable rubber-band difficulty (0 = off, 100 = full) ───────
@@ -8680,6 +8719,13 @@ const TALENTS = (() => {
   // only, which is the whole reason ownership grows options rather than power.
   let _drafted = [];
   let _capstone = null;
+  // The shop screen's cursor, and the note it prints under the rows. The note
+  // is a purchase result rather than a string, so the screen decides its own
+  // wording and this module never grows a copy of the screen's vocabulary.
+  // It clears on any move, which is why it needs no timer: a message that
+  // outlives the thing it is about is worse than none.
+  let _cursor = 0;
+  let _lastBuy = null;
 
   function _save() {
     try { localStorage.setItem(LS_KEY, JSON.stringify(_bank)); } catch (_) {}
@@ -8700,6 +8746,38 @@ const TALENTS = (() => {
     const s = state();
     _bank[selectedChar] = { mastery: masteryAfter(s.mastery, [milestone]), levels: s.levels };
     _save();
+  }
+
+  /** Where the shop cursor sits, clamped to the tree actually on screen -
+   *  characters can be switched between visits and the trees need not be the
+   *  same length. */
+  function cursor() { return clampCursor(tree().talents.length, _cursor); }
+
+  /** Moves the cursor and drops the note the last purchase left. */
+  function moveCursor(dir) {
+    const n = tree().talents.length;
+    if (n === 0) return;
+    _cursor = (cursor() + dir + n) % n;
+    _lastBuy = null;
+  }
+
+  /** Puts the cursor on a row outright, for a click. */
+  function setCursor(i) {
+    const n = tree().talents.length;
+    if (n === 0 || i < 0 || i >= n) return;
+    _cursor = i;
+    _lastBuy = null;
+  }
+
+  /** The last purchase attempt, or null. The screen reads its `kind`. */
+  function lastBuy() { return _lastBuy; }
+
+  /** Buys whatever the cursor is on, and keeps the answer for the screen. */
+  function buyCurrent() {
+    const spec = tree().talents[cursor()];
+    if (!spec) return null;
+    _lastBuy = buy(spec.id);
+    return _lastBuy;
   }
 
   /** Buys with the FEATHERS wallet; the tree and the mastery gate decide. */
@@ -8783,6 +8861,7 @@ const TALENTS = (() => {
     init, state, award, buy, grant, grantMastery,
     resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
     stat, held, stormCooldown, applyToRun,
+    cursor, moveCursor, setCursor, buyCurrent, lastBuy,
   };
 })();
 
@@ -12992,6 +13071,189 @@ function _clickChooser(e) {
   chooser.cursor = hit;
 }
 
+/**
+ * Where the talent shop's rows and its rite footer sit.
+ *
+ * One function, read by the draw and by the click handler, for the reason
+ * `charSelectLayout` gives: a rect computed twice is a rect that drifts.
+ */
+function talentTreeLayout() {
+  const H = CONFIG.canvasH;
+  const hintY = H - 34;
+  // The rite footer is a fixed block, so the rows take what is left above it
+  // rather than the footer taking what the rows leave.
+  const riteY = hintY - 86;
+  return {
+    hintY, riteY,
+    cursor: TALENTS.cursor(),
+    rows: _shopRows(CHAR_TREES[selectedChar].talents.length, {
+      top: Math.round(H * 0.185),
+      bottom: riteY - 26,
+      // Taller than an upgrade row: a talent carries a sigil, a kind, a tier
+      // and a description where an upgrade carries a label and a line.
+      maxPitch: 116, maxBandH: 104,
+    }),
+  };
+}
+
+/** What the shop should say about the last thing the player tried to buy. */
+function _talentBuyNote(result) {
+  if (result === null) return null;
+  switch (result.kind) {
+    case 'bought':     return { text: `BOUGHT · ◆ ${result.spent} SPENT`, color: '#39FF14' };
+    case 'maxed':      return { text: 'ALREADY AT ITS LAST LEVEL', color: '#FFB400' };
+    case 'tooPoor':    return { text: `◆ ${result.short} SHORT OF ${result.cost}`, color: '#C86A2A' };
+    case 'tierLocked': return {
+      text: `TIER LOCKED · MASTERY RANK ${TIER_ROMAN[result.rankNeeded] || result.rankNeeded}`
+          + ` NEEDED, RANK ${TIER_ROMAN[result.rankHeld] || result.rankHeld || '—'} HELD`,
+      color: '#C86A2A',
+    };
+  }
+  // Every kind the model returns is named above. A new one arriving silently
+  // would be a screen that says nothing when a purchase fails.
+  throw new Error(`no shop note for purchase kind '${result.kind}'`);
+}
+
+/** How far along the mastery ladder this character is, in words. */
+function _masteryLine(points) {
+  const rank = rankOf(points);
+  if (rank >= RANK_THRESHOLDS.length) {
+    return `MASTERY RANK ${TIER_ROMAN[rank] || rank} · EVERY TIER OPEN`;
+  }
+  const next = RANK_THRESHOLDS[rank];
+  return `MASTERY RANK ${rank === 0 ? '—' : TIER_ROMAN[rank]}`
+       + ` · ${points}/${next} TO RANK ${TIER_ROMAN[rank + 1]}`;
+}
+
+/**
+ * One talent's row: sigil, name, what kind of thing it is, and its price.
+ *
+ * Coloured by kind, the same three colours the draft uses, so a player meets
+ * a talent's colour here and recognises it when the chooser deals it.
+ */
+function _drawTalentRow(row, spec, sel, mastery, wallet) {
+  const look = TALENT_LOOK[spec.id], kind = TALENT_KINDS[look.kind];
+  const open = tierOpenAt(mastery, spec.tier);
+  const level = talentLevel(TALENTS.state(), spec.id);
+  const maxed = level >= spec.costs.length;
+  const cost = maxed ? 0 : spec.costs[level];
+  // A locked row is dimmed rather than hidden: what you are climbing toward
+  // is the reason to climb. Dimmed, not unreadable — #5c6659 measured 3.3:1
+  // against black, under the 4.5 floor the screens playbook set, and a talent
+  // you cannot read yet is not a goal.
+  const tint = !open ? '#5c6b59' : sel ? kind.color : kind.dim;
+  const lockedInk = '#7a8877';
+
+  ctx.fillStyle = sel ? kind.bg : 'rgba(0,0,0,0)';
+  ctx.fillRect(row.x, row.y, row.w, row.h);
+  ctx.strokeStyle = tint; ctx.lineWidth = sel ? 1.5 : 1;
+  if (sel) { ctx.shadowColor = kind.color; ctx.shadowBlur = 12; }
+  ctx.strokeRect(row.x, row.y, row.w, row.h);
+  ctx.shadowBlur = 0;
+
+  const sigilBox = row.h;
+  paintTalentSigil(ctx, spec.id, {
+    x: row.x + sigilBox / 2, y: row.midY,
+    // Two thirds of the row. The chooser's picked panel draws its sigil at
+    // 74 px and this lands near it, so a talent looks the same size where you
+    // buy it as where you wake it.
+    size: Math.round(row.h * 0.64),
+    color: tint,
+    glow: sel ? 10 : 0,
+  });
+
+  const textX = row.x + sigilBox;
+  const rightX = row.x + row.w - 20;
+  const textW = rightX - textX - 150;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = open ? (sel ? kind.color : '#8f9a8c') : lockedInk;
+  ctx.font = `${sel ? 19 : 17}px "Courier New",monospace`;
+  ctx.fillText(_fitText(spec.label, textW), textX, row.midY - 18);
+
+  ctx.font = '10px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(`${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`, textX, row.midY + 2);
+
+  ctx.font = '11.5px "Courier New",monospace';
+  ctx.fillStyle = open ? '#93a08f' : lockedInk;
+  ctx.fillText(_fitText(spec.desc, textW), textX, row.midY + 22);
+
+  // Price and ladder, right-aligned, on the same two lines as the name and
+  // the description so the eye reads across rather than hunting.
+  ctx.textAlign = 'right';
+  ctx.font = '13px "Courier New",monospace';
+  if (!open) {
+    ctx.fillStyle = '#C86A2A';
+    ctx.fillText(`LOCKED · RANK ${TIER_ROMAN[spec.tier - 1] || spec.tier - 1}`, rightX, row.midY - 18);
+  } else if (maxed) {
+    ctx.fillStyle = '#FFB400';
+    ctx.fillText('◆ MAXED', rightX, row.midY - 18);
+  } else {
+    ctx.fillStyle = wallet >= cost ? '#FFB400' : '#5a3a00';
+    ctx.fillText(`◆ ${cost}`, rightX, row.midY - 18);
+  }
+  _drawOwnedPips(rightX - 130, row.midY + 20, 130, level, spec.costs.length,
+    open ? (sel ? kind.color : '#5c6b59') : lockedInk);
+}
+
+/**
+ * The talent shop: the one screen that spends feathers on a tree.
+ *
+ * `TALENTS.buy()` has enforced the mastery gate and the wallet since the model
+ * landed, and until this screen there was no way to reach it but the console.
+ */
+function drawTalentTree() {
+  const tree = CHAR_TREES[selectedChar];
+  const mastery = TALENTS.state().mastery;
+  const wallet = FEATHERS.wallet();
+  _selectionScreenBackdrop(`── ${selectedChar.toUpperCase()} TALENTS ──`,
+    `◆ ${wallet} FEATHERS  ·  ${_masteryLine(mastery)}`);
+
+  const { rows, cursor, hintY, riteY } = talentTreeLayout();
+  tree.talents.forEach((spec, i) => _drawTalentRow(rows[i], spec, i === cursor, mastery, wallet));
+
+  // Under the last row rather than above the rite: a message about a purchase
+  // belongs beside the thing that was bought, and the rows are centred in
+  // their band, so the foot of the block moves with the tree's length.
+  const note = _talentBuyNote(TALENTS.lastBuy());
+  if (note !== null && rows.length > 0) {
+    const foot = rows[rows.length - 1];
+    ctx.textAlign = 'center'; ctx.font = '13px "Courier New",monospace';
+    ctx.fillStyle = note.color;
+    ctx.fillText(note.text, CONFIG.canvasW / 2, foot.y + foot.h + 32);
+  }
+
+  // The rite, which is earned and not bought — shown so the ladder has a
+  // visible top, and greyed until the rank that opens it.
+  const earned = riteEligible(mastery);
+  ctx.textAlign = 'center';
+  ctx.font = '11px "Courier New",monospace';
+  ctx.fillStyle = PANEL_LABEL_COLOR;
+  ctx.fillText(`THE RITE · MASTERY RANK ${TIER_ROMAN[CAPSTONE_RANK]} · EARNED, NEVER BOUGHT`,
+    CONFIG.canvasW / 2, riteY);
+  ctx.font = '15px "Courier New",monospace';
+  ctx.fillStyle = earned ? '#FFB400' : '#7a8877';
+  ctx.fillText(tree.capstones.map((c) => c.label).join('   ·   ') || 'NONE YET',
+    CONFIG.canvasW / 2, riteY + 24);
+
+  ctx.font = '12px "Courier New",monospace'; ctx.fillStyle = '#6f8a6c';
+  ctx.fillText('CLICK OR ↑ ↓  NAVIGATE    ENTER  BUY    [U]  UPGRADES    [B]  BACK',
+    CONFIG.canvasW / 2, hintY);
+}
+
+/** Click a row to move to it; click the one you are on to buy it. The same
+ *  two-gesture rule char select and the chooser use, over the same rects. */
+function _clickTalentTree(e) {
+  const at = _canvasPoint(e);
+  if (at === null) return;
+  const { rows, cursor } = talentTreeLayout();
+  const hit = rowAt(rows, at.x, at.y);
+  if (hit === null) return;
+  if (hit === cursor) { TALENTS.buyCurrent(); return; }
+  TALENTS.setCursor(hit);
+}
+
 function drawCharSelect(t) {
   _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
   const { slots, selected, stripTop, hintY } = charSelectLayout();
@@ -13527,7 +13789,8 @@ function render(t) {
   } else if (appState === 'win')        { drawWin(t);
   } else if (appState === 'stage_intro') { drawStageIntro(t);
   } else if (appState === 'chooser')    { drawChooser();
-  } else if (appState === 'inventory')  { FEATHERS.draw(); }
+  } else if (appState === 'inventory')  { FEATHERS.draw();
+  } else if (appState === 'talents')    { drawTalentTree(); }
 }
 
 // ── LOOP ──────────────────────────────────────────────────────────────────────
@@ -13735,12 +13998,24 @@ function stepGame(dt) {
       if (keys['c']||keys['C']){ transitionTo('controls'); keys['c']=keys['C']=false; }
       if (keys['m']||keys['M']){ transitionTo('menu');     keys['m']=keys['M']=false; }
       if (keys['i']||keys['I']){ transitionTo('inventory'); keys['i']=keys['I']=false; }
+      if (keys['t']||keys['T']){ transitionTo('talents');   keys['t']=keys['T']=false; }
       break;
 
     case 'inventory':
       if (keys['ArrowUp'])   { FEATHERS.moveCursor(-1); keys['ArrowUp']   = false; }
       if (keys['ArrowDown']) { FEATHERS.moveCursor( 1); keys['ArrowDown'] = false; }
       if (keys['Enter'])     { FEATHERS.buyCurrent();   keys['Enter']     = false; }
+      if (keys['t']||keys['T']) { transitionTo('talents'); keys['t']=keys['T']=false; }
+      if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
+      break;
+
+    // The talent shop. Both shops spend the same wallet, so they sit next to
+    // each other rather than one being buried under the other.
+    case 'talents':
+      if (keys['ArrowUp'])   { TALENTS.moveCursor(-1); keys['ArrowUp']   = false; }
+      if (keys['ArrowDown']) { TALENTS.moveCursor( 1); keys['ArrowDown'] = false; }
+      if (keys['Enter'])     { TALENTS.buyCurrent();   keys['Enter']     = false; }
+      if (keys['u']||keys['U']) { transitionTo('inventory'); keys['u']=keys['U']=false; }
       if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
       break;
 
@@ -14110,6 +14385,13 @@ export const devHooks = {
    *  colour code can be held to a test — a scheme that drifts talent by
    *  talent is worse than no scheme, because it teaches the wrong thing. */
   talentLook: () => ({ kinds: TALENT_KINDS, look: TALENT_LOOK }),
+  /** The talent shop's row geometry, held to the same playbook: canvas-derived,
+   *  inside the canvas, and the exact rects the click handler tests. */
+  talentTreeLayout: () => talentTreeLayout(),
+  /** What the shop prints about a purchase. Exposed because the alternative
+   *  is driving the real painter, and a refusal the screen cannot word is a
+   *  screen that says nothing when a purchase fails. */
+  talentBuyNote: (result) => _talentBuyNote(result),
   /** The chooser row's geometry, so a test can hold it to the screens
    *  playbook: canvas-derived, inside the canvas, and centres that do not
    *  move when the cursor does. */

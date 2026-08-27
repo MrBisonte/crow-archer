@@ -328,6 +328,21 @@ export function talentHeld(tree: CharTree, state: CharTalentState, id: string): 
 }
 
 /**
+ * A cursor kept inside a list of `count` items.
+ *
+ * The shop screen's cursor outlives the character it was set on, and the
+ * trees are authored one per hero and need not be the same length. An
+ * unclamped cursor carried from a long tree onto a short one indexes past the
+ * end, and the screen buys `undefined`. Here rather than in the screen for
+ * this file's usual reason: it is arithmetic, and arithmetic is checkable
+ * without a canvas.
+ */
+export function clampCursor(count: number, index: number): number {
+  if (count <= 0) return 0;
+  return Math.min(Math.max(Math.trunc(index), 0), count - 1);
+}
+
+/**
  * A talent's stat at its current level, over the caller's base — the same
  * split `statValue` uses: bases belong to the game, arithmetic lives here.
  */

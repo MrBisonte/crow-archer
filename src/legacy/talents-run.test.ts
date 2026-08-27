@@ -18,8 +18,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
 import { CHAR_TREES } from '../sim/talents';
+import { rowAt } from '../render/list-rows';
 import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
 import { devHooks as g } from './game.js';
+
+/** Drives the same `keys` map a keyboard drives, one frame per press — the
+ *  helper game.test.ts uses, for the reason it gives: dispatching a real
+ *  KeyboardEvent needs a browser and this suite runs under node. */
+function press(key: string): void {
+  (g.keys() as Record<string, boolean>)[key] = true;
+  g.stepSim(1);
+}
 
 interface TalentState { mastery: number; levels: Record<string, number> }
 interface Talents {
@@ -37,6 +46,11 @@ interface Talents {
   stat: (id: string) => number;
   held: (id: string) => boolean;
   grantMastery: (points: number) => void;
+  cursor: () => number;
+  moveCursor: (dir: number) => void;
+  setCursor: (i: number) => void;
+  buyCurrent: () => { kind: string } | null;
+  lastBuy: () => { kind: string } | null;
 }
 
 const talents = (): Talents => g.talents() as unknown as Talents;
@@ -606,8 +620,16 @@ describe('the colour code says what a talent does', () => {
   });
 
   it('never colours by hero: a tree spends more than one kind', () => {
-    // The fault this replaced — every sapper offer in the same orange, which
-    // told the player only what they had already picked.
+    // The fault this replaced — a whole tree in one colour, which told the
+    // player only whose tree they were looking at.
+    //
+    // Deliberately counted over talents AND capstones, which is weaker than
+    // it looks: the knight's three buyable talents are all `direct` and the
+    // ranger's are all `indirect`, so those two shops and those two draft
+    // pools really are monochrome. That is the trees being honest — his three
+    // are all damage, hers are all build-up — and tightening this to
+    // talents-only would force a recolour that lied about what they do. It is
+    // a balance observation, recorded in docs/talents.md, not a bug here.
     const rows = look().look;
     for (const char of CHARACTERS) {
       const tree = CHAR_TREES[char];
@@ -800,6 +822,272 @@ describe('the rite: the capstones that change the field', () => {
     takeThree();
     expect((g.counts() as { hp: number }).hp, 'a closed window should let one land')
       .toBeLessThan(hp);
+  });
+});
+
+interface ShopRow { x: number; y: number; w: number; h: number; midY: number }
+interface ShopLayout { rows: ShopRow[]; cursor: number; hintY: number; riteY: number }
+
+/**
+ * The talent shop.
+ *
+ * `TALENTS.buy()` enforced the mastery gate and the wallet from the day the
+ * model landed, and until this screen the only way to reach it was the
+ * console. What is pinned here is the screen's own seams: that the cursor
+ * spends the row it is on, that a refusal is worded rather than swallowed,
+ * and that the rects the click handler tests are the rects the draw used.
+ *
+ * The painting itself is not driven here. The stub canvas knows `fillRect`
+ * and nothing else, and a screen asserted through a fake `fillText` tests the
+ * fake. It was looked at instead.
+ */
+describe('the talent shop', () => {
+  const layout = (): ShopLayout => g.talentTreeLayout() as unknown as ShopLayout;
+  const wallet = (): number => (g.feathers() as unknown as { wallet: () => number }).wallet();
+  const setWallet = (n: number): void => {
+    (g.feathers() as unknown as { grant: (n: number) => void }).grant(n);
+  };
+
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('talents');
+    g.talents().setCursor(0);
+  });
+
+  it('puts the cursor on a row and buys that row', () => {
+    const tree = CHAR_TREES.archer;
+    const spec = tree.talents[0]!;
+    talents().grantMastery(0);            // tier I is open at rank 0
+    talents().grant(spec.id, 0);
+    setWallet(spec.costs[0]! + 20);
+    const before = wallet();
+
+    talents().setCursor(0);
+    const result = talents().buyCurrent();
+
+    expect(result!.kind).toBe('bought');
+    expect(talents().state().levels[spec.id]).toBe(1);
+    expect(before - wallet(), 'the wallet paid the row\'s own price').toBe(spec.costs[0]);
+  });
+
+  it('buys the row the cursor moved to, not the one it started on', () => {
+    // The bug this exists for: a screen that draws a cursor and buys index 0.
+    const tree = CHAR_TREES.archer;
+    const second = tree.talents[1]!;
+    talents().grantMastery(0);
+    talents().grant(second.id, 0);
+    setWallet(200);
+
+    talents().setCursor(0);
+    talents().moveCursor(1);
+    expect(talents().cursor()).toBe(1);
+    talents().buyCurrent();
+
+    expect(talents().state().levels[second.id]).toBe(1);
+  });
+
+  it('wraps the cursor at both ends and never leaves the tree', () => {
+    const n = CHAR_TREES.archer.talents.length;
+    talents().setCursor(0);
+    talents().moveCursor(-1);
+    expect(talents().cursor()).toBe(n - 1);
+    talents().moveCursor(1);
+    expect(talents().cursor()).toBe(0);
+  });
+
+  it('never lets the cursor off the tree on screen', () => {
+    // Whichever character is picked, the cursor indexes a real row. The clamp
+    // itself is `clampCursor`, pinned against lists of differing length in
+    // sim/talents.test.ts -- every tree happens to be three rows today, so a
+    // test written only against the live trees could not fail.
+    for (const char of CHARACTERS) {
+      g.pick(char);
+      const tree = CHAR_TREES[char];
+      expect(tree.talents[talents().cursor()], `${char}'s cursor is off its tree`)
+        .toBeDefined();
+    }
+    g.pick('archer');
+  });
+
+  it('words every refusal the model can hand back', () => {
+    // A purchase kind with no note renders as a blank line: the player
+    // presses ENTER, nothing visible happens, and the screen has lied about
+    // whether it heard them. The painter throws on an unknown kind; this is
+    // what proves the known ones are all covered.
+    const kinds = [
+      { kind: 'bought', spent: 14 },
+      { kind: 'maxed' },
+      { kind: 'tooPoor', cost: 26, short: 12 },
+      { kind: 'tierLocked', rankNeeded: 1, rankHeld: 0 },
+    ];
+    for (const result of kinds) {
+      const note = (g.talentBuyNote as (r: unknown) => { text: string; color: string } | null)(result);
+      expect(note, `no note for '${result.kind}'`).not.toBeNull();
+      expect(note!.text.length, `an empty note for '${result.kind}'`).toBeGreaterThan(0);
+    }
+    expect((g.talentBuyNote as (r: unknown) => unknown)(null)).toBeNull();
+  });
+
+  it('says a tier is locked rather than doing nothing', () => {
+    const locked = CHAR_TREES.archer.talents.find((t) => t.tier > 1)!;
+    talents().grantMastery(0);
+    setWallet(500);
+    talents().setCursor(CHAR_TREES.archer.talents.indexOf(locked));
+
+    const result = talents().buyCurrent();
+
+    expect(result!.kind).toBe('tierLocked');
+    expect(talents().state().levels[locked.id] ?? 0).toBe(0);
+    expect((g.talentBuyNote as (r: unknown) => { text: string })(result).text).toContain('LOCKED');
+  });
+
+  it('says how short the wallet is rather than doing nothing', () => {
+    const spec = CHAR_TREES.archer.talents[0]!;
+    talents().grantMastery(0);
+    talents().grant(spec.id, 0);
+    setWallet(spec.costs[0]! - 3);
+    talents().setCursor(0);
+
+    const result = talents().buyCurrent();
+
+    expect(result!.kind).toBe('tooPoor');
+    expect((g.talentBuyNote as (r: unknown) => { text: string })(result).text).toContain('3');
+  });
+
+  it('drops the note as soon as the cursor moves', () => {
+    // A message about a row you are no longer on is worse than no message.
+    talents().grantMastery(0);
+    setWallet(0);
+    talents().setCursor(0);
+    talents().buyCurrent();
+    expect(talents().lastBuy()).not.toBeNull();
+
+    talents().moveCursor(1);
+
+    expect(talents().lastBuy()).toBeNull();
+  });
+
+  it('lays its rows out from the canvas, not from a pixel count', () => {
+    // The screens playbook's own rule. Widen the canvas and the row must
+    // widen with it; a literal width would report the same number twice.
+    const cfg = g.config() as { canvasW: number; canvasH: number };
+    const w0 = cfg.canvasW;
+    const narrow = layout().rows[0]!.w;
+    cfg.canvasW = w0 * 2;
+    const wide = layout().rows[0]!.w;
+    cfg.canvasW = w0;
+    expect(wide / narrow).toBeCloseTo(2, 5);
+  });
+
+  it('keeps every row inside the canvas and clear of the rite', () => {
+    const cfg = g.config() as { canvasW: number; canvasH: number };
+    for (const char of CHARACTERS) {
+      g.pick(char);
+      const { rows, riteY } = layout();
+      expect(rows.length, `${char} has no rows`).toBe(CHAR_TREES[char].talents.length);
+      for (const r of rows) {
+        expect(r.x, `${char} row starts off canvas`).toBeGreaterThanOrEqual(0);
+        expect(r.x + r.w, `${char} row runs off canvas`).toBeLessThanOrEqual(cfg.canvasW);
+        expect(r.y + r.h, `${char} row overlaps the rite`).toBeLessThanOrEqual(riteY);
+      }
+    }
+    g.pick('archer');
+  });
+
+  it('moves nothing when the cursor moves', () => {
+    // Char select's lesson, applied here: a row that shifts under the pointer
+    // is a row you cannot click.
+    const before = JSON.stringify(layout().rows);
+    talents().moveCursor(1);
+    talents().moveCursor(1);
+    expect(JSON.stringify(layout().rows)).toBe(before);
+  });
+
+  it('is clickable exactly where it is drawn', () => {
+    // The hit test and the draw read one layout; this is the round trip that
+    // proves it, and the guard against a recomputed approximation creeping
+    // back in.
+    const { rows } = layout();
+    rows.forEach((r, i) => {
+      expect(rowAt(rows, r.x + r.w / 2, r.midY), `row ${i} is not clickable`).toBe(i);
+    });
+    const gap = rows[0]!.y + rows[0]!.h + 1;
+    expect(rowAt(rows, rows[0]!.x + 4, gap), 'the gap between rows buys something').toBeNull();
+  });
+});
+
+describe('reaching the two shops', () => {
+  /**
+   * Starts a run and clears whatever the run staged in front of it.
+   *
+   * A character that owns talents is dealt the run's opening draft, so
+   * `go('playing')` lands on the chooser rather than on the field. Tests
+   * earlier in this file leave the archer owning most of his tree, which
+   * makes this the normal case here rather than the exception.
+   */
+  const enterRun = (): void => {
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    expect(g.state(), 'a chooser queue that will not drain').toBe('playing');
+  };
+
+  beforeEach(() => {
+    g.pick('archer');
+    enterRun();
+  });
+
+  it('opens the talent shop from the pause menu and comes back', () => {
+    g.go('paused');
+    press('t');
+    expect(g.state()).toBe('talents');
+    press('b');
+    expect(g.state()).toBe('paused');
+  });
+
+  it('crosses between the two shops without going through the pause menu', () => {
+    g.go('inventory');
+    press('t');
+    expect(g.state()).toBe('talents');
+    press('u');
+    expect(g.state()).toBe('inventory');
+  });
+
+  it('buys with ENTER and moves with the arrows', () => {
+    talents().grantMastery(0);
+    const spec = CHAR_TREES.archer.talents[0]!;
+    talents().grant(spec.id, 0);
+    (g.feathers() as unknown as { grant: (n: number) => void }).grant(500);
+    g.go('talents');
+    talents().setCursor(0);
+
+    press('ArrowDown');
+    expect(talents().cursor()).toBe(1);
+    press('ArrowUp');
+    expect(talents().cursor()).toBe(0);
+
+    const before = talents().state().levels[spec.id] ?? 0;
+    press('Enter');
+    expect(talents().state().levels[spec.id]).toBe(before + 1);
+  });
+
+  it('returns to a run in progress without restarting it', () => {
+    // Both shops are reached mid-run, so leaving one must not call initGame.
+    // The inventory was already exempt; the talent shop is the second door.
+    //
+    // Measured on the run clock rather than on the kill count: initGame zeroes
+    // both, and a run that has killed nothing starts at zero anyway, so a
+    // kill-count assertion here compares zero to zero and passes with the
+    // exemption removed.
+    enterRun();
+    stepPast(ONE_SECOND);
+    const clock = g.gameTime() as number;
+    expect(clock, 'the run clock never started').toBeGreaterThan(0);
+
+    g.go('talents');
+    g.go('playing');
+
+    expect(g.state()).toBe('playing');
+    expect(g.gameTime(), 'the run was restarted').toBeGreaterThanOrEqual(clock);
   });
 });
 

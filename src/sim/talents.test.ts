@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { CHARACTERS } from '../net/protocol';
 import { mulberry32 } from './rng';
 import {
-  CAPSTONE_RANK,
+  clampCursor,  CAPSTONE_RANK,
   CHAR_TREES,
   MASTERY_AWARDS,
   RANK_THRESHOLDS,
@@ -268,5 +268,32 @@ describe('the run draft', () => {
   it('deals the same offers for the same seed', () => {
     const pool = ['a', 'b', 'c', 'd', 'e', 'f'];
     expect(draftOffers(pool, mulberry32(41), 3)).toEqual(draftOffers(pool, mulberry32(41), 3));
+  });
+});
+
+describe('clampCursor', () => {
+  it('keeps a cursor inside the list it is pointing at', () => {
+    expect(clampCursor(3, 0)).toBe(0);
+    expect(clampCursor(3, 2)).toBe(2);
+  });
+
+  it('pulls a cursor carried from a longer list back onto the last row', () => {
+    // The real case: the shop cursor outlives a character switch, and the
+    // trees are authored one per hero. A cursor of 4 on a tree of three rows
+    // indexes past the end and the screen buys undefined.
+    expect(clampCursor(3, 4)).toBe(2);
+    expect(clampCursor(1, 9)).toBe(0);
+  });
+
+  it('answers zero for an empty list rather than minus one', () => {
+    // A hero with no tree yet is a real state - `capstones` is documented as
+    // allowed to be empty - and -1 would index from the end of the array.
+    expect(clampCursor(0, 0)).toBe(0);
+    expect(clampCursor(0, 7)).toBe(0);
+  });
+
+  it('refuses a negative or fractional cursor', () => {
+    expect(clampCursor(3, -1)).toBe(0);
+    expect(clampCursor(3, 1.9)).toBe(1);
   });
 });
