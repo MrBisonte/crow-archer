@@ -13483,7 +13483,7 @@ function drawPause() {
   ctx.font = '16px "Courier New", monospace'; ctx.fillStyle = '#1a7a08';
   ctx.fillText('[ESC] RESUME     [C] CONTROLS     [M] MENU', CONFIG.canvasW/2, CONFIG.canvasH/2+16);
   ctx.fillStyle = '#FFB400'; ctx.font = '14px "Courier New", monospace';
-  ctx.fillText(`[I] UPGRADES  [◆${FEATHERS.wallet()} FTH]`, CONFIG.canvasW/2, CONFIG.canvasH/2+44);
+  ctx.fillText(`[I] UPGRADES  [T] TALENTS  [◆${FEATHERS.wallet()} FTH]`, CONFIG.canvasW/2, CONFIG.canvasH/2+44);
 }
 
 function drawGameOver(t) {
