@@ -12598,51 +12598,92 @@ function _drawCharDetail(p, top) {
  * id without a look would draw a blank panel, which is the sapper's old
  * missing-portrait gap wearing new clothes.
  */
-const TALENT_LOOK = {
-  focusDepth:  { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u25c9', hook: 'A full pool casts four bolts' },
-  blinkReach:  { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '\u293a', hook: 'The wall you could not reach is now cover' },
-  stormWidth:  { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '\u25ce', hook: 'The storm stops asking where they are' },
-  overchannel: { color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)',  sigil: '\u21af', hook: 'The escape button becomes the attack button' },
-  stormcaller: { color: '#FFB400', dim: '#7a5a00', bg: 'rgba(255,180,0,0.10)',   sigil: '\u21bb', hook: 'The sky becomes a habit' },
+/**
+ * What a talent DOES to a run, and how that reads at a glance.
+ *
+ * Three kinds, one colour each. Inside a chooser every offer comes from the
+ * same hero, so colouring by hero spent the slot on something the player
+ * already knew — three sapper offers in three identical oranges. Colouring by
+ * kind spends it on the one thing the row is actually asking: what sort of
+ * talent is this.
+ *
+ * A fourth kind — defensive, healing, damage taken — is deliberately absent
+ * rather than empty. Not one of the twenty-five does any of those things; the
+ * FEATHERS tree carries health and the ward. The day a tree grows one, it
+ * gets a row here, and until then an unused colour would only be a promise
+ * the screen does not keep.
+ *
+ * `label` is on the panel beside the tier, because a colour code nobody can
+ * decode is decoration. The word teaches the colour; after a few runs the
+ * colour is doing the work alone.
+ */
+const TALENT_KINDS = {
+  /** Puts more damage on the target: reach, pierce, extra blasts, per-hit worth. */
+  direct:   { label: 'DAMAGE',   color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)' },
+  /** Pays for damage rather than dealing it: resources, uptime, meters, stacks. */
+  indirect: { label: 'BUILD-UP', color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)' },
+  /** Changes where bodies are: movement, placement, phasing, knockback. */
+  mechanic: { label: 'MOVEMENT', color: '#8888FF', dim: '#1a1a6a', bg: 'rgba(100,80,255,0.10)' },
+};
 
-  // Archer. His accent is the screen's own green, which drawCharSelect
-  // already records as reading like chrome rather than a choice; the panel's
-  // green selection bar is what keeps the two apart.
-  setFeet:       { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '▼', hook: 'Set faster, hit sooner' },
-  deepRoots:     { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '▬', hook: 'What you built takes longer to lose' },
-  splitShaft:    { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '»', hook: 'One shaft, a line of them' },
-  rooted:        { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '▣', hook: 'Braced, and free to walk' },
-  splinter:      { color: '#39FF14', dim: '#1a7a08', bg: 'rgba(57,255,20,0.08)',   sigil: '∴', hook: 'One stick, three craters' },
+/**
+ * Each talent's kind, its sigil, and the one line the panel leads with.
+ *
+ * Presentation only — the tree itself lives in sim/talents.ts — and checked
+ * loudly at load the way CHAR_PANELS checks CHARACTER_STATS: an id without a
+ * look would draw a blank panel, which is the sapper's old missing-portrait
+ * gap wearing new clothes.
+ */
+const TALENT_LOOK = {
+  // Wizard.
+  focusDepth:    { kind: 'indirect', sigil: '◉', hook: 'A full pool casts four bolts' },
+  blinkReach:    { kind: 'mechanic', sigil: '⤺', hook: 'The wall you could not reach is now cover' },
+  stormWidth:    { kind: 'direct',   sigil: '◎', hook: 'The storm stops asking where they are' },
+  overchannel:   { kind: 'indirect', sigil: '↯', hook: 'The escape button becomes the attack button' },
+  stormcaller:   { kind: 'indirect', sigil: '↻', hook: 'The sky becomes a habit' },
+
+  // Archer.
+  setFeet:       { kind: 'indirect', sigil: '▼', hook: 'Set faster, hit sooner' },
+  deepRoots:     { kind: 'indirect', sigil: '▬', hook: 'What you built takes longer to lose' },
+  splitShaft:    { kind: 'direct',   sigil: '»', hook: 'One shaft, a line of them' },
+  rooted:        { kind: 'indirect', sigil: '▣', hook: 'Braced, and free to walk' },
+  splinter:      { kind: 'direct',   sigil: '∴', hook: 'One stick, three craters' },
 
   // Knight.
-  deeperCut:     { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '◆', hook: 'Every stack bites harder' },
-  fourthBlood:   { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '◈', hook: 'A fourth drop to earn' },
-  chargeThrough: { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '⇒', hook: 'The whole charge cuts, not just its end' },
-  berserker:     { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '◇', hook: 'A miss is no longer the end of it' },
-  juggernaut:    { color: '#C8C8E8', dim: '#2a2a4a', bg: 'rgba(150,160,200,0.10)', sigil: '█', hook: 'Nothing stops the charge' },
+  deeperCut:     { kind: 'direct',   sigil: '◆', hook: 'Every stack bites harder' },
+  fourthBlood:   { kind: 'direct',   sigil: '◈', hook: 'A fourth drop to earn' },
+  chargeThrough: { kind: 'direct',   sigil: '⇒', hook: 'The whole charge cuts, not just its end' },
+  berserker:     { kind: 'indirect', sigil: '◇', hook: 'A miss is no longer the end of it' },
+  juggernaut:    { kind: 'mechanic', sigil: '█', hook: 'Nothing stops the charge' },
 
   // Ranger.
-  lightFoot:     { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '↗', hook: 'Less ground to reach full tilt' },
-  longWind:      { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '∿', hook: 'A pause no longer costs everything' },
-  fullTilt:      { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '≫', hook: 'The ceiling climbs with you' },
-  slipstream:    { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '◌', hook: 'At full speed, nothing is in the way' },
-  shrapnel:      { color: '#FFCC00', dim: '#7a5a00', bg: 'rgba(255,204,0,0.10)',   sigil: '∗', hook: 'The satchel answers outward' },
+  lightFoot:     { kind: 'indirect', sigil: '↗', hook: 'Less ground to reach full tilt' },
+  longWind:      { kind: 'indirect', sigil: '∿', hook: 'A pause no longer costs everything' },
+  fullTilt:      { kind: 'indirect', sigil: '≫', hook: 'The ceiling climbs with you' },
+  slipstream:    { kind: 'mechanic', sigil: '◌', hook: 'At full speed, nothing is in the way' },
+  shrapnel:      { kind: 'direct',   sigil: '∗', hook: 'The satchel answers outward' },
 
   // Sapper.
-  longFuse:      { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '∼', hook: 'A bomb reaches further for the next' },
-  moreLinks:     { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '≡', hook: 'The chain runs longer before it dies' },
-  stickyFan:     { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '∵', hook: 'The fan lands where you aimed it' },
-  demolitionist: { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '⊙', hook: 'Each blast louder than the last' },
-  shockwave:     { color: '#FF7A1A', dim: '#7a3300', bg: 'rgba(255,122,26,0.10)',  sigil: '⊚', hook: 'What survives is thrown clear' },
+  longFuse:      { kind: 'indirect', sigil: '∼', hook: 'A bomb reaches further for the next' },
+  moreLinks:     { kind: 'direct',   sigil: '≡', hook: 'The chain runs longer before it dies' },
+  stickyFan:     { kind: 'mechanic', sigil: '∵', hook: 'The fan lands where you aimed it' },
+  demolitionist: { kind: 'direct',   sigil: '⊙', hook: 'Each blast louder than the last' },
+  shockwave:     { kind: 'mechanic', sigil: '⊚', hook: 'What survives is thrown clear' },
 };
 for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
   for (const entry of [...lookTree.talents, ...lookTree.capstones]) {
-    if (!TALENT_LOOK[entry.id]) throw new Error(`TALENT_LOOK has no row for '${lookChar}.${entry.id}'`);
+    const row = TALENT_LOOK[entry.id];
+    if (!row) throw new Error(`TALENT_LOOK has no row for '${lookChar}.${entry.id}'`);
+    // A kind that is not in the table would paint `undefined` on every field
+    // the panel reads, which draws an invisible offer rather than failing.
+    if (!TALENT_KINDS[row.kind]) {
+      throw new Error(`TALENT_LOOK['${entry.id}'] has no such kind: '${row.kind}'`);
+    }
   }
 }
 
-/** Tier colours off the difficulty ladder, and the numerals the panels wear. */
-const TIER_COLORS = { 1: '#39FF14', 2: '#CCAA00', 3: '#FF8C00' };
+/** The numerals the tier footer wears. The colour left with them: tier is a
+ *  word, and the panel's colour now says what the talent does instead. */
 const TIER_ROMAN  = { 1: 'I', 2: 'II', 3: 'III' };
 
 /** The spec behind a chooser offer — a talent row or a capstone row. */
@@ -12693,9 +12734,9 @@ function _drawChooserRow(lx, y, maxW, label, text, color) {
  */
 function _drawChooserPanel(slot, id, index, sel, isRite) {
   const { x, y, w, h } = slot;
-  const look = TALENT_LOOK[id], spec = chooserSpec(id);
+  const look = TALENT_LOOK[id], kind = TALENT_KINDS[look.kind], spec = chooserSpec(id);
   const pad = 14, innerW = w - pad * 2, cx = x + w / 2;
-  _panelFrame(x, y, w, h, sel, { bg: look.bg, dimBg: DIM_PANEL_BG, color: look.color, dim: look.dim });
+  _panelFrame(x, y, w, h, sel, { bg: kind.bg, dimBg: DIM_PANEL_BG, color: kind.color, dim: kind.dim });
 
   // The green bar over the picked panel, for the reason _drawCharPanel gives:
   // an offer whose own accent is the screen's accent would read as chrome.
@@ -12708,7 +12749,7 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   }
 
   ctx.textAlign = 'center';
-  ctx.fillStyle = sel ? look.color : '#8f9a8c';
+  ctx.fillStyle = sel ? kind.color : '#8f9a8c';
   ctx.font = `${sel ? 18 : 15}px "Courier New",monospace`;
   ctx.fillText(_fitText(`[${index + 1}] ${spec.label}`, innerW), cx, y + 26);
 
@@ -12718,8 +12759,8 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   // The type sizes are deliberately NOT fractions: shrinking the box must not
   // shrink the reading.
   ctx.font = `${sel ? 46 : 38}px "Courier New",monospace`;
-  if (sel) { ctx.shadowColor = look.color; ctx.shadowBlur = 12; }
-  ctx.fillStyle = sel ? look.color : look.dim;
+  if (sel) { ctx.shadowColor = kind.color; ctx.shadowBlur = 12; }
+  ctx.fillStyle = sel ? kind.color : kind.dim;
   ctx.fillText(look.sigil, cx, y + h * (sel ? 0.34 : 0.46));
   ctx.shadowBlur = 0;
 
@@ -12740,16 +12781,16 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   // A capstone has no ladder, so only the draft shows a level.
   if (!isRite) {
     _drawOwnedPips(x + pad, y + h - 42, innerW,
-      talentLevel(TALENTS.state(), id), spec.costs.length, sel ? look.color : '#5c6b59');
+      talentLevel(TALENTS.state(), id), spec.costs.length, sel ? kind.color : '#5c6b59');
   }
 
-  const footColor = isRite ? '#FFB400' : TIER_COLORS[spec.tier];
+  // Grey, both of them: the panel's colour is spent on what the talent does,
+  // so tier says its piece in words rather than competing for the same hues.
   ctx.textAlign = 'center';
   ctx.font = '11px "Courier New",monospace';
-  if (sel) { ctx.shadowColor = footColor; ctx.shadowBlur = 6; }
-  ctx.fillStyle = sel ? footColor : '#5c6b59';
-  ctx.fillText(isRite ? 'SEALS THE RUN' : `TIER ${TIER_ROMAN[spec.tier]}`, cx, y + h - 22);
-  ctx.shadowBlur = 0;
+  ctx.fillStyle = sel ? PANEL_LABEL_COLOR : '#5c6b59';
+  ctx.fillText(isRite ? `${kind.label} · SEALS THE RUN`
+                      : `${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`, cx, y + h - 22);
 }
 
 /**
@@ -13936,6 +13977,10 @@ export const devHooks = {
   feathers: () => FEATHERS,
   /** The mid-run chooser, and a pick that goes through the real confirm. */
   chooser: () => chooser,
+  /** How each talent is presented: its kind, sigil and hook. Exposed so the
+   *  colour code can be held to a test — a scheme that drifts talent by
+   *  talent is worse than no scheme, because it teaches the wrong thing. */
+  talentLook: () => ({ kinds: TALENT_KINDS, look: TALENT_LOOK }),
   /** The chooser row's geometry, so a test can hold it to the screens
    *  playbook: canvas-derived, inside the canvas, and centres that do not
    *  move when the cursor does. */

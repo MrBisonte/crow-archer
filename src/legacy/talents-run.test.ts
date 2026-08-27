@@ -38,6 +38,7 @@ interface Talents {
   held: (id: string) => boolean;
   grantMastery: (points: number) => void;
 }
+
 const talents = (): Talents => g.talents() as unknown as Talents;
 
 interface Focus { points: number; spendable: number; max: number; melee: string }
@@ -575,6 +576,55 @@ describe('the choosers keep out of a siege', () => {
     expect(g.state(), 'a siege boss opened a chooser mid-wave').toBe('playing');
     expect(talents().state().mastery, 'the siege boss paid no mastery')
       .toBeGreaterThan(before);
+  });
+});
+
+interface Kind { label: string; color: string; dim: string; bg: string }
+interface LookRow { kind: string; sigil: string; hook: string }
+interface Look { kinds: Record<string, Kind>; look: Record<string, LookRow> }
+
+describe('the colour code says what a talent does', () => {
+  const look = (): Look => g.talentLook() as unknown as Look;
+
+  it('gives every talent and capstone a kind the table knows', () => {
+    const { kinds, look: rows } = look();
+    for (const char of CHARACTERS) {
+      const tree = CHAR_TREES[char];
+      for (const entry of [...tree.talents, ...tree.capstones]) {
+        const row = rows[entry.id];
+        expect(row, `${char}.${entry.id} has no look row`).toBeDefined();
+        expect(kinds[row!.kind], `${char}.${entry.id} has an unknown kind`).toBeDefined();
+      }
+    }
+  });
+
+  it('gives each kind its own colour, so the code can be read', () => {
+    // Two kinds sharing a colour is not a code, it is a coincidence.
+    const kinds = Object.values(look().kinds);
+    expect(new Set(kinds.map((k) => k.color)).size).toBe(kinds.length);
+    expect(new Set(kinds.map((k) => k.label)).size).toBe(kinds.length);
+  });
+
+  it('never colours by hero: a tree spends more than one kind', () => {
+    // The fault this replaced — every sapper offer in the same orange, which
+    // told the player only what they had already picked.
+    const rows = look().look;
+    for (const char of CHARACTERS) {
+      const tree = CHAR_TREES[char];
+      const all = [...tree.talents, ...tree.capstones];
+      if (all.length === 0) continue;
+      const kindsUsed = new Set(all.map((e) => rows[e.id]!.kind));
+      expect(kindsUsed.size, `${char}'s whole tree is one kind`).toBeGreaterThan(1);
+    }
+  });
+
+  it('keeps movement talents out of the damage colours', () => {
+    // The three the owner named as mechanics, pinned by id so a re-categorised
+    // teleport or cloak has to be a deliberate edit here.
+    const rows = look().look;
+    for (const id of ['blinkReach', 'slipstream', 'stickyFan']) {
+      expect(rows[id]!.kind, `${id} should read as movement`).toBe('mechanic');
+    }
   });
 });
 

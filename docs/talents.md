@@ -10,6 +10,7 @@ this document is the per-character half that sits beside it.
 - [The wizard's tree](#the-wizards-tree)
 - [What a run looks like](#what-a-run-looks-like)
 - [The other four heroes](#the-other-four-heroes)
+- [What the colours mean](#what-the-colours-mean)
 - [What a ceremony will not interrupt](#what-a-ceremony-will-not-interrupt)
 - [Where the code lives](#where-the-code-lives)
 
@@ -160,6 +161,31 @@ than derived. The ranger's FULL TILT adds **5% a level over three levels**, so
 her ceiling is **45%** rather than the 30% she starts with — and it still
 multiplies with pickups instead of replacing them. And the knight's FOURTH
 BLOOD is a single level: a fourth stack, not a fourth axis.
+
+## What the colours mean
+
+A talent's colour says what it *does*, not whose tree it came from. Inside a
+chooser every offer belongs to the same hero, so colouring by hero spent the
+slot on the one thing the player already knew — three sapper offers in three
+identical oranges. `TALENT_KINDS` spends it on the question the row is actually
+asking instead.
+
+| Kind | Colour | What it covers |
+|---|---|---|
+| `direct` — DAMAGE | orange `#FF7A1A` | Puts more damage on the target: reach, pierce, extra blasts, per-hit worth |
+| `indirect` — BUILD-UP | gold `#FFCC00` | Pays for damage rather than dealing it: resources, uptime, meters, stacks |
+| `mechanic` — MOVEMENT | periwinkle `#8888FF` | Changes where bodies are: movement, placement, phasing, knockback |
+
+The label prints beside the tier, because a colour code nobody can decode is
+decoration: the word teaches the colour, and after a few runs the colour works
+alone. Tier itself is grey now — it is a word, and it was competing for the
+same three hues.
+
+A fourth kind — defensive, healing, damage taken — is **deliberately absent
+rather than empty**. Not one of the twenty-five does any of those things; the
+FEATHERS tree carries health and the ward. That is a fact about the trees, not
+about the palette, and it is worth knowing before designing the next one. An
+unused colour would only be a promise the screen does not keep.
 
 ## What a ceremony will not interrupt
 
