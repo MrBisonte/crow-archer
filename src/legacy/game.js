@@ -13665,7 +13665,10 @@ export const devHooks = {
   reticleAt: () => reticleAt(),
   /** The world point the shot is aimed at. */
   aimWorld: () => aimWorld(),
-  counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, hp: playerHP }),
+  // `fires` is here rather than as its own accessor because a burning patch is
+  // only ever counted, never inspected: what a test wants to know is whether a
+  // shot lit one. Arrows are the other way round and already have `arrows()`.
+  counts: () => ({ crows: crows.length, skeletons: skeletons.length, particles: particles.length, fires: fires.length, hp: playerHP }),
   // The pixel art, as the data it is (see SPRITE_GRIDS). One reading of what
   // sprites exist, and one way to build any of their grids, so the art can be
   // checked headlessly the same way the simulation is.

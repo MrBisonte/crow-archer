@@ -4989,3 +4989,173 @@ describe('a siege boss dying leaves the wave running', () => {
   });
 });
 
+/**
+ * Characterisation tests for projectile flight.
+ *
+ * `updateArrows` is one loop shared by four projectile kinds, and until this
+ * block nothing in the suite touched a ricochet bounce, a javelin's pierce, a
+ * laser crossing a wall, or a fire arrow lighting the ground. These describe
+ * what it does today, so a refactor of that loop has to prove it changed
+ * nothing.
+ *
+ * They assert observable outcomes on purpose: did it stop, did it bounce, did
+ * it pierce, did it ignite. A rewrite is then free to change the shape of the
+ * loop entirely and still has to land on the same behaviour.
+ *
+ * Projectiles are pushed straight onto the arrows array rather than fired,
+ * because what is under test is flight rather than any weapon's decision to
+ * loose one. Firing would drag the aim ray and every character's ammo rules in
+ * with it.
+ */
+describe('projectile flight, as it behaves today', () => {
+  /** A clear run with nothing alive to wander into a shot. */
+  function emptyField(): void {
+    g.go('playing');
+    g.crows().length = 0;
+    g.skeletons().length = 0;
+    g.soldiers().length = 0;
+    g.arrows().length = 0;
+  }
+
+  /** Puts one projectile in flight from the player, aimed along +x. */
+  function launch(extra: Record<string, unknown>): Record<string, unknown> {
+    const p = g.player() as { x: number; y: number };
+    const a: Record<string, unknown> = {
+      x: p.x, y: p.y, vx: 400, vy: 0,
+      life: 3, type: 'normal', hitRadius: g.config().arrowHitRadius,
+      dmgMult: 1, trailTimer: 0, bounces: 0, trailHistory: [],
+      ...extra,
+    };
+    (g.arrows() as unknown[]).push(a);
+    return a;
+  }
+
+  beforeEach(emptyField);
+
+  // game.js is a module singleton, so the grid one test edits is the grid the
+  // next one runs on, and across files at that. The laser test walls a whole
+  // column; without this that wall outlives it and kills unrelated shots.
+  afterEach(() => { g.generateMap('forest'); });
+
+  it('expires a projectile when its life runs out', () => {
+    launch({ life: 0.05, vx: 0, vy: 0 });
+    g.stepSim(ONE_SECOND);
+    expect(g.arrows().length).toBe(0);
+  });
+
+  it('flies a plain arrow in the direction of its velocity', () => {
+    const a = launch({}) as { x: number };
+    const x0 = a.x;
+    g.stepSim(6);
+    expect(a.x).toBeGreaterThan(x0);
+  });
+
+  it('a ricochet bounce reverses a velocity component and counts the bounce', () => {
+    // Walled into the left border, which every generator keeps solid.
+    const a = launch({ type: 'ricochet', vx: -600, vy: 0 }) as
+      { vx: number; bounces: number };
+    for (let i = 0; i < ONE_SECOND * 2 && a.bounces === 0; i++) g.stepSim(1);
+    expect(a.bounces).toBeGreaterThan(0);
+    expect(a.vx).toBeGreaterThan(0);   // reversed off the wall
+  });
+
+  /** Plants `n` skeletons in a row to the player's right, 30px apart. */
+  function skeletonLine(n: number): void {
+    const p = g.player() as { x: number; y: number };
+    for (let k = 1; k <= n; k++) {
+      g.spawnSkeleton('normal');
+      const s = g.skeletons().at(-1) as { x: number; y: number } | undefined;
+      if (s === undefined) throw new Error('spawnSkeleton put nothing on the field');
+      s.x = p.x + 30 * k; s.y = p.y;
+    }
+  }
+
+  // Both of them, not just the first. Asserting only that the count dropped
+  // would pass on a javelin that stopped dead in the near skeleton, which is
+  // the exact behaviour pierce exists to be different from.
+  it('a javelin keeps flying through an enemy it kills, up to its pierce budget', () => {
+    skeletonLine(2);
+    launch({ type: 'javelin', pierceLeft: 2, vx: 500 });
+    g.stepSim(ONE_SECOND);
+    expect(g.skeletons().length).toBe(0);
+  });
+
+  it('a javelin stops once its pierce budget is spent', () => {
+    skeletonLine(2);
+    launch({ type: 'javelin', pierceLeft: 1, vx: 500 });
+    g.stepSim(ONE_SECOND);
+    expect(g.skeletons().length).toBe(1);
+  });
+
+  it('a wizard bolt homes toward a crow rather than flying straight', () => {
+    const p = g.player() as { x: number; y: number };
+    g.spawnCrow();
+    const c = g.crows()[0] as { x: number; y: number };
+    c.x = p.x + 120; c.y = p.y - 120;          // off to one side
+    const a = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    g.stepSim(10);
+    expect(Math.abs(a.vy)).toBeGreaterThan(0);  // steered off the straight line
+  });
+
+  // Characterising a real gap, not endorsing it. Homing checks the boss and
+  // then walks `crows`, and no other population, so the wizard's defining
+  // mechanic is inert wherever the enemies are not birds: the castle gauntlet
+  // and the maze, where crows are deleted outright and everything is a
+  // skeleton, and the cavern, whose whole garrison is soldiers.
+  //
+  // Locked in here so a refactor of updateArrows cannot change it by accident.
+  // Fixing it is a separate decision with balance consequences, and belongs to
+  // whoever owns the wizard rather than to a test.
+  it('does NOT home toward a skeleton or a soldier, which is a known gap', () => {
+    const p = g.player() as { x: number; y: number };
+    g.spawnSkeleton('normal');
+    const s = g.skeletons()[0] as { x: number; y: number };
+    s.x = p.x + 120; s.y = p.y - 120;
+    const atSkeleton = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    g.stepSim(10);
+    expect(atSkeleton.vy).toBe(0);              // flew perfectly straight past it
+
+    emptyField();
+    g.spawnSoldier('spearman');
+    const sol = g.soldiers()[0] as { x: number; y: number } | undefined;
+    expect(sol, 'spawnSoldier put nothing on the field').toBeDefined();
+    if (sol === undefined) return;
+    sol.x = p.x + 120; sol.y = p.y - 120;
+    const atSoldier = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    g.stepSim(10);
+    expect(atSoldier.vy).toBe(0);
+  });
+
+  it('a laser bolt crosses ground a plain arrow is stopped by', () => {
+    const p = g.player() as { x: number; y: number };
+    const ts = g.config().tileSize as number;
+    // Wall the whole column two tiles to the right of the player.
+    const col = Math.floor(p.x / ts) + 2;
+    const tiles = g.tiles() as {
+      rows: number; set: (r: number, c: number, t: TileId) => void;
+    };
+    for (let r = 0; r < tiles.rows; r++) tiles.set(r, col, TILE.ROCK);
+
+    launch({ vx: 500 });                                  // plain arrow: stopped
+    g.stepSim(ONE_SECOND);
+    const plainSurvived = g.arrows().length;
+    g.arrows().length = 0;
+
+    const laser = launch({ wiz: true, passesTiles: true, homing: false, vx: 500 }) as { x: number };
+    const startX = laser.x;
+    g.stepSim(8);
+    expect(laser.x).toBeGreaterThan(startX + ts * 2);     // through the wall
+    expect(plainSurvived).toBe(0);
+  });
+
+  it('a fire arrow ignites where it expires, a plain one does not', () => {
+    launch({ type: 'fire', life: 0.05, vx: 0, vy: 0 });
+    g.stepSim(4);
+    const litByFire = g.counts().fires;
+    emptyField();
+    launch({ type: 'normal', life: 0.05, vx: 0, vy: 0 });
+    g.stepSim(4);
+    expect(litByFire).toBeGreaterThan(g.counts().fires);
+  });
+});
+
