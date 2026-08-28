@@ -17,7 +17,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
-import { CHAR_TREES } from '../sim/talents';
+import { CHAR_TREES, RANK_THRESHOLDS } from '../sim/talents';
 import { rowAt } from '../render/list-rows';
 import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
 import { devHooks as g } from './game.js';
@@ -46,6 +46,7 @@ interface Talents {
   stat: (id: string) => number;
   held: (id: string) => boolean;
   grantMastery: (points: number) => void;
+  purse: () => number;
   cursor: () => number;
   moveCursor: (dir: number) => void;
   setCursor: (i: number) => void;
@@ -240,48 +241,124 @@ describe('mastery is paid by real milestones', () => {
 
 interface Chooser { kind: string; offers: string[]; cursor: number; resume: string }
 
+/**
+ * Kills a boss through the real death sequence, which is the only thing that
+ * offers a talent choice.
+ *
+ * It used to be reachable far more cheaply — a run opened with a draft, so
+ * `go('playing')` was enough. That opening ceremony is gone: a choice between
+ * three names, offered before anything has happened, asks the player to prefer
+ * one for no reason and delays the run to do it. The first boss pays for the
+ * first choice now, so every test that wants a chooser has to earn one.
+ *
+ * The 1.5 s is the death sequence: the tail pays out at 1.2 s and hands off.
+ */
+function killABoss(): void {
+  g.spawnBossNow(2);
+  g.go('boss_fight');
+  const boss = g.boss() as { hp: number; x: number; y: number };
+  boss.hp = 1;
+  g.blast(boss.x, boss.y);
+  stepPast(Math.ceil(1.5 * ONE_SECOND));
+}
+
 describe('the choosers', () => {
-  it('opens the draft at run start when something is owned, and a pick wakes it', () => {
-    talents().grant('blinkReach', 1);
+  it('offers nothing at run start, however much is owned', () => {
+    // The rule this replaced: a run opened on the chooser. Owning the whole
+    // tree is the strongest case for a ceremony and it still must not fire.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
     g.go('menu');
     g.go('playing');
-    expect(g.state()).toBe('chooser');
-    const c = g.chooser() as unknown as Chooser;
-    expect(c.kind).toBe('draft');
-    expect(c.offers).toEqual(['blinkReach']);
-    g.chooserPick(0);
-    expect(g.state()).toBe('playing');
-    expect(talents().drafted()).toEqual(['blinkReach']);
+    expect(g.state(), 'the run opened on a ceremony').toBe('playing');
+    expect(g.chooser()).toBeNull();
+    expect(talents().drafted(), 'a run start woke a talent').toEqual([]);
   });
 
-  it('skips the ceremony entirely when nothing is owned', () => {
-    // beforeEach zeroed every ladder, so this run opened with no chooser.
+  it('opens the tree when the first boss pays and nothing is owned yet', () => {
+    // The gap this closes, reported from a real play-through: the draft deals
+    // from OWNED talents and mastery is what buys ownership, so a new player
+    // killed the boss, banked the mastery and was handed straight to the next
+    // stage. The pool was empty, the ceremony skipped itself, and nothing
+    // invited them to spend what they had just been paid.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+    talents().grantMastery(0);
+    g.go('menu');
+    g.go('playing');
     expect(g.state()).toBe('playing');
+
+    killABoss();
+
+    expect(g.state(), 'the boss paid mastery and offered nothing').toBe('talents');
+    expect((g.chooser() as unknown as Chooser).kind).toBe('tree');
+    expect(talents().purse(), 'the boss paid nothing to spend').toBeGreaterThan(0);
+  });
+
+  it('hands the run back when the tree is done with', () => {
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+    talents().grantMastery(0);
+    g.go('menu');
+    g.go('playing');
+    killABoss();
+    expect(g.state()).toBe('talents');
+
+    press('b');
+
+    // The dark archer's death leads into the dark knight's entrance, and the
+    // ceremony has to give that hand-off back rather than strand the player.
+    expect(g.state(), 'the tree kept the run').toBe('boss_entrance');
     expect(g.chooser()).toBeNull();
   });
 
-  it('offers the rite before the boss draft, once, at the top rank', () => {
+  it('skips the tree when the purse can buy nothing', () => {
+    // Every ladder at its top, so there is nothing to spend on. A screen
+    // offering only prices the purse cannot meet is a stop with no decision.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.go('menu');
+    g.go('playing');
+    killABoss();
+
+    const c = g.chooser() as unknown as Chooser | null;
+    expect(c, 'a boss offered nothing at all').not.toBeNull();
+    expect(c!.kind, 'the tree opened with nothing to sell').toBe('draft');
+  });
+
+  it('opens the draft once something is owned, and a pick wakes it', () => {
+    // Maxed, so the tree is skipped and the draft is what a boss opens.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.go('menu');
+    g.go('playing');
+    killABoss();
+
+    expect(g.state()).toBe('chooser');
+    const c = g.chooser() as unknown as Chooser;
+    expect(c.kind).toBe('draft');
+    g.chooserPick(0);
+    expect(talents().drafted().length).toBe(1);
+  });
+
+  it('offers the rite, then the tree, then the draft', () => {
     for (let i = 0; i < 6; i++) talents().award('siege_cleared');   // rank 3
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
     talents().grant('blinkReach', 1);
-    g.spawnBossNow(2);
-    g.go('boss_fight');
-    (g.boss() as { hp: number }).hp = 1;
-    const b = g.boss() as { x: number; y: number };
-    g.blast(b.x, b.y);
-    stepPast(Math.ceil(1.5 * ONE_SECOND));
+    killABoss();
+
     const rite = g.chooser() as unknown as Chooser;
     expect(g.state()).toBe('chooser');
     expect(rite.kind).toBe('rite');
     expect(rite.offers).toEqual(['overchannel', 'stormcaller']);
     g.chooserPick(1);
-    // The draft queued behind the rite opens without leaving the screen.
+
+    // The tree comes next: the rank is spent, and the mastery is not.
+    expect(g.state(), 'the tree did not follow the rite').toBe('talents');
+    expect((g.chooser() as unknown as Chooser).kind).toBe('tree');
+    press('b');
+
+    // And the draft behind it, without leaving the ceremony.
     const draft = g.chooser() as unknown as Chooser;
     expect(draft.kind).toBe('draft');
     g.chooserPick(0);
-    // Both picks landed, and the screen handed back to the staged hand-off —
-    // the dark archer's death leads into the dark knight's entrance.
+
     expect(talents().stormCooldown()).toBe(g.config().stormCooldown / 2);
-    expect(talents().drafted()).toEqual(['blinkReach']);
     expect(g.state()).toBe('boss_entrance');
   });
 });
@@ -297,6 +374,7 @@ describe('the chooser row obeys the screens playbook', () => {
     for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
     g.go('menu');
     g.go('playing');
+    killABoss();
     expect(g.state()).toBe('chooser');
   }
 
@@ -843,10 +921,12 @@ interface ShopLayout { rows: ShopRow[]; cursor: number; hintY: number; riteY: nu
  */
 describe('the talent shop', () => {
   const layout = (): ShopLayout => g.talentTreeLayout() as unknown as ShopLayout;
-  const wallet = (): number => (g.feathers() as unknown as { wallet: () => number }).wallet();
-  const setWallet = (n: number): void => {
-    (g.feathers() as unknown as { grant: (n: number) => void }).grant(n);
-  };
+  /** What the shop can spend: mastery earned and not yet spent. */
+  const purse = (): number => talents().purse();
+  /** Earns exactly `n` mastery and clears any debt, so the purse is `n`. */
+  const setPurse = (n: number): void => talents().grantMastery(n);
+  /** The feather wallet, which a talent must never touch. */
+  const coins = (): number => (g.feathers() as unknown as { wallet: () => number }).wallet();
 
   beforeEach(() => {
     g.pick('archer');
@@ -857,26 +937,27 @@ describe('the talent shop', () => {
   it('puts the cursor on a row and buys that row', () => {
     const tree = CHAR_TREES.archer;
     const spec = tree.talents[0]!;
-    talents().grantMastery(0);            // tier I is open at rank 0
     talents().grant(spec.id, 0);
-    setWallet(spec.costs[0]! + 20);
-    const before = wallet();
+    setPurse(spec.costs[0]! + 4);         // tier I is open at rank 0
+    const before = purse();
+    const feathersBefore = coins();
 
     talents().setCursor(0);
     const result = talents().buyCurrent();
 
     expect(result!.kind).toBe('bought');
     expect(talents().state().levels[spec.id]).toBe(1);
-    expect(before - wallet(), 'the wallet paid the row\'s own price').toBe(spec.costs[0]);
+    expect(before - purse(), 'the purse paid the price on the row').toBe(spec.costs[0]);
+    expect(coins(), 'a talent spent feathers, which belong to the upgrades')
+      .toBe(feathersBefore);
   });
 
   it('buys the row the cursor moved to, not the one it started on', () => {
     // The bug this exists for: a screen that draws a cursor and buys index 0.
     const tree = CHAR_TREES.archer;
     const second = tree.talents[1]!;
-    talents().grantMastery(0);
     talents().grant(second.id, 0);
-    setWallet(200);
+    setPurse(20);
 
     talents().setCursor(0);
     talents().moveCursor(1);
@@ -930,8 +1011,7 @@ describe('the talent shop', () => {
 
   it('says a tier is locked rather than doing nothing', () => {
     const locked = CHAR_TREES.archer.talents.find((t) => t.tier > 1)!;
-    talents().grantMastery(0);
-    setWallet(500);
+    setPurse(0);
     talents().setCursor(CHAR_TREES.archer.talents.indexOf(locked));
 
     const result = talents().buyCurrent();
@@ -941,23 +1021,25 @@ describe('the talent shop', () => {
     expect((g.talentBuyNote as (r: unknown) => { text: string })(result).text).toContain('LOCKED');
   });
 
-  it('says how short the wallet is rather than doing nothing', () => {
-    const spec = CHAR_TREES.archer.talents[0]!;
-    talents().grantMastery(0);
-    talents().grant(spec.id, 0);
-    setWallet(spec.costs[0]! - 3);
-    talents().setCursor(0);
+  it('says how short the purse is rather than doing nothing', () => {
+    // A second level, so the price is not 1: a note printing only "1" would
+    // satisfy a test asking for the cost and the shortfall at the same time.
+    const spec = CHAR_TREES.archer.talents.find((t) => t.costs.length > 1)!;
+    talents().grant(spec.id, 1);
+    setPurse(0);
+    talents().setCursor(CHAR_TREES.archer.talents.indexOf(spec));
 
     const result = talents().buyCurrent();
 
     expect(result!.kind).toBe('tooPoor');
-    expect((g.talentBuyNote as (r: unknown) => { text: string })(result).text).toContain('3');
+    const note = (g.talentBuyNote as (r: unknown) => { text: string })(result).text;
+    expect(note, 'the note never says the price').toContain(String(spec.costs[1]));
+    expect(note).toContain('MASTERY');
   });
 
   it('drops the note as soon as the cursor moves', () => {
     // A message about a row you are no longer on is worse than no message.
-    talents().grantMastery(0);
-    setWallet(0);
+    setPurse(0);
     talents().setCursor(0);
     talents().buyCurrent();
     expect(talents().lastBuy()).not.toBeNull();
@@ -1053,10 +1135,9 @@ describe('reaching the two shops', () => {
   });
 
   it('buys with ENTER and moves with the arrows', () => {
-    talents().grantMastery(0);
     const spec = CHAR_TREES.archer.talents[0]!;
     talents().grant(spec.id, 0);
-    (g.feathers() as unknown as { grant: (n: number) => void }).grant(500);
+    talents().grantMastery(20);
     g.go('talents');
     talents().setCursor(0);
 
@@ -1091,15 +1172,56 @@ describe('reaching the two shops', () => {
   });
 });
 
-describe('buying goes through the FEATHERS wallet', () => {
-  it('refuses an open-tier talent the wallet cannot cover', () => {
-    // Tier 1 is open at any rank, so this pins the wallet coupling alone;
-    // the mastery gate itself is pinned pure in sim/talents.test.ts.
-    const purse = g.feathers() as unknown as { wallet: () => number; spend: (n: number) => void };
-    purse.spend(purse.wallet());
+describe('talents are bought with mastery, never with feathers', () => {
+  it('refuses an open-tier talent an empty purse cannot cover', () => {
+    // Tier 1 is open at any rank, so this pins the purse coupling alone; the
+    // mastery gate itself is pinned pure in sim/talents.test.ts.
+    talents().grantMastery(0);
     // Ungranted first: an earlier test walked this ladder to its top, and a
-    // maxed talent would answer before the wallet got to.
+    // maxed talent would answer before the purse got to.
     talents().grant('blinkReach', 0);
     expect(talents().buy('blinkReach').kind).toBe('tooPoor');
+  });
+
+  it('leaves the feather wallet alone when a talent is taken', () => {
+    // The whole point of the split. Feathers buy upgrades; a talent that also
+    // spent them would make the player choose between a talent and a heart,
+    // which is not a choice either tree was built to ask.
+    const wallet = g.feathers() as unknown as { wallet: () => number; grant: (n: number) => void };
+    wallet.grant(120);
+    talents().grantMastery(20);
+    talents().grant('blinkReach', 0);
+
+    expect(talents().buy('blinkReach').kind).toBe('bought');
+
+    expect(wallet.wallet(), 'a talent charged the upgrade wallet').toBe(120);
+  });
+
+  it('never lets spending shut a tier the rank already opened', () => {
+    // The whole reason mastery and spent are two figures rather than one
+    // balance. Earn exactly the rank that opens tier II, spend every point of
+    // it on tier I, and tier II must still answer "you cannot afford this"
+    // rather than "you have not earned this".
+    const tier2 = CHAR_TREES.wizard.talents.find((t) => t.tier === 2)!;
+    const tier1 = CHAR_TREES.wizard.talents.filter((t) => t.tier === 1);
+    const earned = RANK_THRESHOLDS[0]!;          // exactly rank I: tier II opens
+    talents().grantMastery(earned);
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+    expect(talents().buy(tier2.id).kind, 'tier II was shut before a point was spent')
+      .not.toBe('tierLocked');
+    talents().grant(tier2.id, 0);                // undo that probe purchase
+    talents().grantMastery(earned);
+
+    // Spend the lot on tier I, which is priced to absorb exactly this much.
+    let spent = 0;
+    for (const t of tier1) {
+      for (let lvl = 0; lvl < t.costs.length && spent < earned; lvl++) {
+        if (talents().buy(t.id).kind === 'bought') spent += t.costs[lvl]!;
+      }
+    }
+    expect(talents().purse(), 'the purse should be spent out').toBe(0);
+
+    expect(talents().buy(tier2.id).kind, 'an empty purse shut a tier the rank opened')
+      .toBe('tooPoor');
   });
 });

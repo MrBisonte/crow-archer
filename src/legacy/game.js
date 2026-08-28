@@ -53,7 +53,8 @@ import {
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
   draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
-  clampCursor, talentBankFrom, talentLevel, tierOpenAt,
+  anyAffordable, bossMastery, clampCursor, masteryAvailable, talentBankFrom,
+  talentLevel, tierOpenAt,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -878,6 +879,18 @@ function queueDraft(resume) {
   chooserQueue.push({ kind: 'draft', offers, cursor: 0, resume });
 }
 
+/**
+ * The tree, if the boss just paid for something buyable.
+ *
+ * Queued rather than opened, so it takes its turn behind a rite the same way
+ * a draft does. Skipped when nothing is affordable: a screen offering only
+ * prices the purse cannot meet is a stop with no decision in it.
+ */
+function queueTree(resume) {
+  if (!anyAffordable(CHAR_TREES[selectedChar], TALENTS.state())) return;
+  chooserQueue.push({ kind: 'tree', resume });
+}
+
 function queueRite(resume) {
   if (riteOffered) return;
   const capstones = CHAR_TREES[selectedChar].capstones;
@@ -889,7 +902,32 @@ function queueRite(resume) {
 function openNextChooser() {
   if (chooser !== null || chooserQueue.length === 0) return;
   chooser = chooserQueue.shift();
-  appState = 'chooser';
+  // The tree is a screen of its own rather than a row of three panels, so it
+  // gets its own appState. It still travels through this queue, because what
+  // matters is that ceremonies take turns and the last one hands back to the
+  // screen the run was on.
+  appState = chooser.kind === 'tree' ? 'talents' : 'chooser';
+}
+
+/**
+ * Finishes whichever ceremony is open and moves to the next, or hands the run
+ * back if that was the last.
+ *
+ * One home for the hand-back, because a ceremony that forgot it would strand
+ * the player on a screen with no way out -- and the tree, unlike the chooser,
+ * is a screen the player can also open from the pause menu, where the way out
+ * is somewhere else entirely.
+ */
+function finishCeremony() {
+  const resume = chooser === null ? null : chooser.resume;
+  chooser = null;
+  openNextChooser();
+  if (chooser !== null || resume === null) return;
+  // Assigned directly rather than through transitionTo, for the reason the
+  // section header gives: a ceremony sat over a hand-off the run had already
+  // staged and is giving it back untouched. transitionTo('playing') from here
+  // would see a prev of 'chooser', call initGame, and restart the run.
+  appState = resume;
 }
 
 /** A boss just died: the rite outranks the draft when both are owed. */
@@ -902,17 +940,22 @@ function queueBossChoosers() {
   // ceremony about it. CLAUDE.md's siege rule, applied to a screen.
   if (siegeRun) return;
   queueRite(appState);
+  // The tree before the draft: what a boss just paid for can be spent now,
+  // and the draft that follows deals from a pool the spending may have grown.
+  queueTree(appState);
   queueDraft(appState);
   openNextChooser();
+}
+
+/** Whether the talent screen is open as a ceremony rather than as a shop. */
+function inCeremony() {
+  return chooser !== null && chooser.kind === 'tree';
 }
 
 function confirmChooser() {
   const id = chooser.offers[chooser.cursor];
   if (chooser.kind === 'draft') TALENTS.draft(id); else TALENTS.sealCapstone(id);
-  const resume = chooser.resume;
-  chooser = null;
-  if (chooserQueue.length > 0) { chooser = chooserQueue.shift(); return; }
-  appState = resume;
+  finishCeremony();
 }
 
 const BOSS_ENTRY_TEXT = {
@@ -1481,10 +1524,10 @@ function transitionTo(next) {
   if (next === 'playing' && prev !== 'paused' && prev !== 'controls'
       && prev !== 'inventory' && prev !== 'talents') {
     initGame();
-    // The run's opening draft, over whatever screen initGame staged. An
-    // empty pool queues nothing and the run starts undisturbed.
-    queueDraft(appState);
-    openNextChooser();
+    // No opening draft. A run starts on the field, and the first talent
+    // choice is a thing the first boss pays for -- a ceremony before anything
+    // has happened asks the player to choose between three names they have no
+    // reason to prefer yet, and it delays the run to do it.
   }
   // A charge/dash held into the pause menu has nowhere left to receive the
   // keyup that would normally release it — see cancelHeldActions().
@@ -7299,8 +7342,11 @@ function updateBossDeath(dt) {
     const deadKind = boss.kind;
     boss = null; hostileBolts = [];
     // A boss down pays mastery whether it ends a stage or sits inside a siege
-    // wave; the stage hand-offs below pay their own milestone on top.
-    TALENTS.award('boss_down');
+    // wave; the stage hand-offs below pay their own milestone on top. What it
+    // pays is the boss's own figure, the way its HP and its on-hit behaviour
+    // already are: the crow king is worth one, so a first kill buys exactly
+    // one tier-I talent and asks for one decision rather than five.
+    TALENTS.awardBoss(deadKind);
     // On a siege the boss is one enemy inside a wave, not the end of a stage.
     // Every branch below hands off to another map or to a win screen, so
     // running any of them here would load the castle in the middle of wave 7.
@@ -8813,10 +8859,24 @@ const TALENTS = (() => {
 
   /** Banks a run milestone for the character playing it. */
   function award(milestone) {
+    _addMastery(masteryAfter(0, [milestone]));
+  }
+
+  /** Banks what a boss of this kind is worth. See BOSS_MASTERY. */
+  function awardBoss(kind) {
+    _addMastery(bossMastery(kind));
+  }
+
+  /** Adds to what has been earned. `spent` is untouched: earning never pays
+   *  off a debt, it just widens the gap the purse is measured across. */
+  function _addMastery(points) {
     const s = state();
-    _bank[selectedChar] = { mastery: masteryAfter(s.mastery, [milestone]), levels: s.levels };
+    _bank[selectedChar] = { mastery: s.mastery + points, spent: s.spent, levels: s.levels };
     _save();
   }
+
+  /** Mastery this character can still spend. */
+  function purse() { return masteryAvailable(state()); }
 
   /** Where the shop cursor sits, clamped to the tree actually on screen -
    *  characters can be switched between visits and the trees need not be the
@@ -8850,12 +8910,16 @@ const TALENTS = (() => {
     return _lastBuy;
   }
 
-  /** Buys with the FEATHERS wallet; the tree and the mastery gate decide. */
+  /**
+   * Buys with mastery. Feathers are the upgrade tree's currency and are not
+   * touched here: two ladders funded from one purse would have the player
+   * choosing between a talent and a heart, which is not the choice either
+   * tree was built to ask.
+   */
   function buy(id) {
-    const result = purchaseTalent(tree(), state(), FEATHERS.wallet(), id);
+    const result = purchaseTalent(tree(), state(), id);
     if (result.kind !== 'bought') return result;
     _bank[selectedChar] = result.state;
-    FEATHERS.spend(result.spent);
     _save();
     return result;
   }
@@ -8863,14 +8927,19 @@ const TALENTS = (() => {
   /** Test-only ladder bypass — this module's healHero. */
   function grant(id, level) {
     const s = state();
-    _bank[selectedChar] = { mastery: s.mastery, levels: { ...s.levels, [id]: level } };
+    _bank[selectedChar] = { mastery: s.mastery, spent: s.spent, levels: { ...s.levels, [id]: level } };
   }
 
   /** The same bypass for mastery, so a screen can be staged without playing
    *  the four milestones that would otherwise be the only way to a rank. */
   function grantMastery(points) {
     const s = state();
-    _bank[selectedChar] = { mastery: Math.max(0, Math.trunc(points)), levels: s.levels };
+    // Sets what has been EARNED and clears the debt with it, so a staged rank
+    // is also a full purse -- a test that wants rank III wants to be able to
+    // spend at it, and clamping `spent` to the new total is what the save
+    // loader would do anyway.
+    const mastery = Math.max(0, Math.trunc(points));
+    _bank[selectedChar] = { mastery, spent: Math.min(s.spent, mastery), levels: s.levels };
   }
 
   function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
@@ -8928,7 +8997,7 @@ const TALENTS = (() => {
   }
 
   return {
-    init, state, award, buy, grant, grantMastery,
+    init, state, award, awardBoss, purse, buy, grant, grantMastery,
     resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
     stat, held, stormCooldown, applyToRun,
     cursor, moveCursor, setCursor, buyCurrent, lastBuy,
@@ -13188,9 +13257,11 @@ function talentTreeLayout() {
 function _talentBuyNote(result) {
   if (result === null) return null;
   switch (result.kind) {
-    case 'bought':     return { text: `BOUGHT · ◆ ${result.spent} SPENT`, color: '#39FF14' };
+    case 'bought':     return { text: `TAKEN · ${result.spent} MASTERY SPENT`, color: '#39FF14' };
     case 'maxed':      return { text: 'ALREADY AT ITS LAST LEVEL', color: '#FFB400' };
-    case 'tooPoor':    return { text: `◆ ${result.short} SHORT OF ${result.cost}`, color: '#C86A2A' };
+    case 'tooPoor':    return {
+      text: `${result.short} MORE MASTERY · ${result.cost} NEEDED`, color: '#C86A2A',
+    };
     case 'tierLocked': return {
       text: `TIER LOCKED · MASTERY RANK ${TIER_ROMAN[result.rankNeeded] || result.rankNeeded}`
           + ` NEEDED, RANK ${TIER_ROMAN[result.rankHeld] || result.rankHeld || '—'} HELD`,
@@ -13206,11 +13277,11 @@ function _talentBuyNote(result) {
 function _masteryLine(points) {
   const rank = rankOf(points);
   if (rank >= RANK_THRESHOLDS.length) {
-    return `MASTERY RANK ${TIER_ROMAN[rank] || rank} · EVERY TIER OPEN`;
+    return `RANK ${TIER_ROMAN[rank] || rank} · EVERY TIER OPEN`;
   }
   const next = RANK_THRESHOLDS[rank];
-  return `MASTERY RANK ${rank === 0 ? '—' : TIER_ROMAN[rank]}`
-       + ` · ${points}/${next} TO RANK ${TIER_ROMAN[rank + 1]}`;
+  return `RANK ${rank === 0 ? '—' : TIER_ROMAN[rank]}`
+       + ` · ${points}/${next} EARNED TOWARD RANK ${TIER_ROMAN[rank + 1]}`;
 }
 
 /**
@@ -13219,7 +13290,7 @@ function _masteryLine(points) {
  * Coloured by kind, the same three colours the draft uses, so a player meets
  * a talent's colour here and recognises it when the chooser deals it.
  */
-function _drawTalentRow(row, spec, sel, mastery, wallet) {
+function _drawTalentRow(row, spec, sel, mastery, purse) {
   const look = TALENT_LOOK[spec.id], kind = TALENT_KINDS[look.kind];
   const open = tierOpenAt(mastery, spec.tier);
   const level = talentLevel(TALENTS.state(), spec.id);
@@ -13278,8 +13349,8 @@ function _drawTalentRow(row, spec, sel, mastery, wallet) {
     ctx.fillStyle = '#FFB400';
     ctx.fillText('◆ MAXED', rightX, row.midY - 18);
   } else {
-    ctx.fillStyle = wallet >= cost ? '#FFB400' : '#5a3a00';
-    ctx.fillText(`◆ ${cost}`, rightX, row.midY - 18);
+    ctx.fillStyle = purse >= cost ? '#8ED1FF' : '#31506b';
+    ctx.fillText(`${cost} MASTERY`, rightX, row.midY - 18);
   }
   _drawOwnedPips(rightX - 130, row.midY + 20, 130, level, spec.costs.length,
     open ? (sel ? kind.color : '#5c6b59') : lockedInk);
@@ -13294,12 +13365,16 @@ function _drawTalentRow(row, spec, sel, mastery, wallet) {
 function drawTalentTree() {
   const tree = CHAR_TREES[selectedChar];
   const mastery = TALENTS.state().mastery;
-  const wallet = FEATHERS.wallet();
-  _selectionScreenBackdrop(`── ${selectedChar.toUpperCase()} TALENTS ──`,
-    `◆ ${wallet} FEATHERS  ·  ${_masteryLine(mastery)}`);
+  const purse = TALENTS.purse();
+  // Feathers are deliberately absent from this screen. They buy upgrades, and
+  // naming them here would invite the player to look for a price in the wrong
+  // currency.
+  _selectionScreenBackdrop(
+    inCeremony() ? '── SPEND WHAT THE FIGHT PAID ──' : `── ${selectedChar.toUpperCase()} TALENTS ──`,
+    `${purse} MASTERY TO SPEND  ·  ${_masteryLine(mastery)}`);
 
   const { rows, cursor, hintY, riteY } = talentTreeLayout();
-  tree.talents.forEach((spec, i) => _drawTalentRow(rows[i], spec, i === cursor, mastery, wallet));
+  tree.talents.forEach((spec, i) => _drawTalentRow(rows[i], spec, i === cursor, mastery, purse));
 
   // Under the last row rather than above the rite: a message about a purchase
   // belongs beside the thing that was bought, and the rows are centred in
@@ -13325,8 +13400,14 @@ function drawTalentTree() {
   ctx.fillText(tree.capstones.map((c) => c.label).join('   ·   ') || 'NONE YET',
     CONFIG.canvasW / 2, riteY + 24);
 
+  // The hint has to match what the keys actually do. Inside a ceremony the
+  // crossing to the upgrades is refused and [B] hands the run back, so
+  // advertising UPGRADES and BACK there would be the screen lying about
+  // itself.
   ctx.font = '12px "Courier New",monospace'; ctx.fillStyle = '#6f8a6c';
-  ctx.fillText('CLICK OR ↑ ↓  NAVIGATE    ENTER  BUY    [U]  UPGRADES    [B]  BACK',
+  ctx.fillText(inCeremony()
+    ? 'CLICK OR ↑ ↓  NAVIGATE    ENTER  TAKE IT    [B]  DONE'
+    : 'CLICK OR ↑ ↓  NAVIGATE    ENTER  BUY    [U]  UPGRADES    [B]  BACK',
     CONFIG.canvasW / 2, hintY);
 }
 
@@ -14103,8 +14184,14 @@ function stepGame(dt) {
       if (keys['ArrowUp'])   { TALENTS.moveCursor(-1); keys['ArrowUp']   = false; }
       if (keys['ArrowDown']) { TALENTS.moveCursor( 1); keys['ArrowDown'] = false; }
       if (keys['Enter'])     { TALENTS.buyCurrent();   keys['Enter']     = false; }
-      if (keys['u']||keys['U']) { transitionTo('inventory'); keys['u']=keys['U']=false; }
-      if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
+      // Only a shop visit can cross to the upgrades. A boss opened this to be
+      // spent and handed back, and wandering into another screen from inside a
+      // ceremony loses the hand-off it was holding.
+      if (!inCeremony() && (keys['u']||keys['U'])) { transitionTo('inventory'); keys['u']=keys['U']=false; }
+      if (keys['b']||keys['B']) {
+        keys['b'] = keys['B'] = false;
+        if (inCeremony()) finishCeremony(); else transitionTo('paused');
+      }
       break;
 
     case 'gameover':

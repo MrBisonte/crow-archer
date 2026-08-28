@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { CHARACTERS } from '../net/protocol';
 import { mulberry32 } from './rng';
 import {
-  clampCursor,  CAPSTONE_RANK,
+  masteryAvailable,  clampCursor,  CAPSTONE_RANK,
   CHAR_TREES,
   MASTERY_AWARDS,
   RANK_THRESHOLDS,
@@ -40,7 +40,11 @@ import {
 } from './talents';
 
 /** A fresh character: no mastery, nothing bought. */
-const fresh = (): CharTalentState => ({ mastery: 0, levels: {} });
+const fresh = (): CharTalentState => ({ mastery: 0, spent: 0, levels: {} });
+
+/** A character who has earned `points` and spent none of them. */
+const withPurse = (points: number): CharTalentState =>
+  ({ mastery: points, spent: 0, levels: {} });
 
 /** Mastery points that put a character at exactly `rank`. */
 const pointsForRank = (rank: number): number =>
@@ -81,7 +85,7 @@ describe('the tree table', () => {
     expect(depth).toBeDefined();
     expect(depth?.tier).toBe(1);
     expect(depth?.effect).toEqual({ kind: 'linear', per: 1 });
-    expect(talentValue(CHAR_TREES.wizard, { mastery: 0, levels: { focusDepth: 1 } }, 'focusDepth', 3)).toBe(4);
+    expect(talentValue(CHAR_TREES.wizard, { mastery: 0, spent: 0, levels: { focusDepth: 1 } }, 'focusDepth', 3)).toBe(4);
   });
 
   it('gives the wizard a rite worth holding', () => {
@@ -139,7 +143,7 @@ describe('buying a talent', () => {
   it('refuses a tier the mastery rank has not opened', () => {
     const t2 = tree.talents.find((t) => t.tier === 2);
     expect(t2, 'the pilot tree needs a tier-2 talent to test the gate').toBeDefined();
-    const result = purchaseTalent(tree, fresh(), 1000, t2!.id);
+    const result = purchaseTalent(tree, fresh(), t2!.id);
     expect(result.kind).toBe('tierLocked');
     if (result.kind === 'tierLocked') {
       expect(result.rankNeeded).toBeGreaterThan(0);
@@ -147,40 +151,57 @@ describe('buying a talent', () => {
     }
   });
 
-  it('refuses what the wallet cannot cover, and says how short', () => {
+  it('refuses what the purse cannot cover, and says how short', () => {
     const t1 = tree.talents.find((t) => t.tier === 1)!;
     const cost = t1.costs[0]!;
-    const result = purchaseTalent(tree, fresh(), cost - 1, t1.id);
+    const result = purchaseTalent(tree, withPurse(cost - 1), t1.id);
     expect(result.kind).toBe('tooPoor');
     if (result.kind === 'tooPoor') expect(result.short).toBe(1);
   });
 
-  it('buys a level, spends the feathers, and stays pure', () => {
+  it('buys a level, spends the mastery, and stays pure', () => {
     const t1 = tree.talents.find((t) => t.tier === 1)!;
-    const before = fresh();
-    const result = purchaseTalent(tree, before, 1000, t1.id);
+    const before = withPurse(50);
+    const result = purchaseTalent(tree, before, t1.id);
     expect(result.kind).toBe('bought');
     if (result.kind === 'bought') {
       expect(result.spent).toBe(t1.costs[0]);
       expect(talentLevel(result.state, t1.id)).toBe(1);
+      expect(result.state.spent, 'the debt did not grow by the price').toBe(t1.costs[0]);
+      expect(result.state.mastery, 'buying cost the player earned rank').toBe(50);
     }
     // The state handed in was not written to.
     expect(talentLevel(before, t1.id)).toBe(0);
+    expect(before.spent).toBe(0);
+  });
+
+  it('never lets a purchase close a tier the player already opened', () => {
+    // The whole reason `mastery` and `spent` are two figures. Spend a rank-III
+    // character down to nothing and every tier they reached stays reachable.
+    const rich = { mastery: pointsForRank(CAPSTONE_RANK), spent: 0, levels: {} };
+    const t1 = tree.talents.find((t) => t.tier === 1)!;
+    const r = purchaseTalent(tree, rich, t1.id);
+    expect(r.kind).toBe('bought');
+    if (r.kind !== 'bought') return;
+    const broke = { ...r.state, spent: r.state.mastery };
+    expect(masteryAvailable(broke), 'the purse should be empty').toBe(0);
+    expect(rankOf(broke.mastery), 'spending cost them their rank').toBe(CAPSTONE_RANK);
+    expect(tierOpenAt(broke.mastery, 2), 'a tier closed when the purse emptied').toBe(true);
   });
 
   it('stops at the top of the cost ladder', () => {
     const t1 = tree.talents.find((t) => t.tier === 1)!;
-    let state = fresh();
+    let state = withPurse(10_000);
     for (let i = 0; i < t1.costs.length; i++) {
-      const r = purchaseTalent(tree, state, 10_000, t1.id);
+      const r = purchaseTalent(tree, state, t1.id);
       expect(r.kind).toBe('bought');
       if (r.kind === 'bought') state = r.state;
     }
-    expect(purchaseTalent(tree, state, 10_000, t1.id).kind).toBe('maxed');
+    expect(purchaseTalent(tree, state, t1.id).kind).toBe('maxed');
   });
 
   it('throws on an id the tree does not hold, rather than inventing a row', () => {
-    expect(() => purchaseTalent(tree, fresh(), 1000, 'notATalent')).toThrow();
+    expect(() => purchaseTalent(tree, fresh(), 'notATalent')).toThrow();
   });
 });
 
@@ -225,11 +246,11 @@ describe('reading the save file', () => {
 
 describe('the run layer arithmetic', () => {
   const tree = CHAR_TREES.wizard;
-  const owned: CharTalentState = { mastery: 0, levels: { blinkReach: 1, focusDepth: 1 } };
+  const owned: CharTalentState = { mastery: 0, spent: 0, levels: { blinkReach: 1, focusDepth: 1 } };
 
   it('lists exactly the talents held at level one or higher as the pool', () => {
     expect(new Set(ownedIds(tree, owned))).toEqual(new Set(['blinkReach', 'focusDepth']));
-    expect(ownedIds(tree, { mastery: 9, levels: {} })).toEqual([]);
+    expect(ownedIds(tree, { mastery: 9, spent: 0, levels: {} })).toEqual([]);
   });
 
   it('pays a talent only if this run drafted it', () => {

@@ -96,17 +96,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'setFeet', label: 'SET FEET',
         desc: '-0.25 s to reach a full brace / level',
-        tier: 1, costs: [14, 26], effect: { kind: 'linear', per: -0.25 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -0.25 },
       },
       {
         id: 'deepRoots', label: 'DEEP ROOTS',
         desc: 'Brace bleeds away slower once he moves',
-        tier: 1, costs: [12, 22], effect: { kind: 'linear', per: -1 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -1 },
       },
       {
         id: 'splitShaft', label: 'SPLIT SHAFT',
         desc: '+1 body a full power shot passes through / level',
-        tier: 2, costs: [20, 34], effect: { kind: 'linear', per: 1 },
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
       },
     ],
     capstones: [
@@ -125,17 +125,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'focusDepth', label: 'FOCUS DEPTH',
         desc: '+1 Focus: a full pool casts four bolts',
-        tier: 1, costs: [26], effect: { kind: 'linear', per: 1 },
+        tier: 1, costs: [1], effect: { kind: 'linear', per: 1 },
       },
       {
         id: 'blinkReach', label: 'LONG STEP',
         desc: '+20 px blink distance / level',
-        tier: 1, costs: [12, 24], effect: { kind: 'linear', per: 20 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 20 },
       },
       {
         id: 'stormWidth', label: 'WIDER SKY',
         desc: '+50 px storm radius / level',
-        tier: 2, costs: [20, 38], effect: { kind: 'linear', per: 50 },
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 50 },
       },
     ],
     capstones: [
@@ -154,17 +154,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'deeperCut', label: 'DEEPER CUT',
         desc: '+3% damage and swing speed per Bloodlust stack / level',
-        tier: 1, costs: [16, 28], effect: { kind: 'linear', per: 0.03 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 0.03 },
       },
       {
         id: 'fourthBlood', label: 'FOURTH BLOOD',
         desc: 'A fourth Bloodlust stack to fill',
-        tier: 1, costs: [30], effect: { kind: 'linear', per: 1 },
+        tier: 1, costs: [1], effect: { kind: 'linear', per: 1 },
       },
       {
         id: 'chargeThrough', label: 'CHARGE THROUGH',
         desc: 'The charge cuts on every side of him, not only ahead',
-        tier: 2, costs: [32], effect: { kind: 'unlock' },
+        tier: 2, costs: [2], effect: { kind: 'unlock' },
       },
     ],
     capstones: [
@@ -183,17 +183,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'lightFoot', label: 'LIGHT FOOT',
         desc: '-75 px of ground to fill Momentum / level',
-        tier: 1, costs: [13, 24], effect: { kind: 'linear', per: -75 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -75 },
       },
       {
         id: 'longWind', label: 'LONG WIND',
         desc: '+1 s before a standing ranger loses Momentum / level',
-        tier: 1, costs: [12, 22], effect: { kind: 'linear', per: 1 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 1 },
       },
       {
         id: 'fullTilt', label: 'FULL TILT',
         desc: '+5% to the Momentum ceiling / level',
-        tier: 2, costs: [18, 26, 36], effect: { kind: 'linear', per: 0.05 },
+        tier: 2, costs: [2, 3, 4], effect: { kind: 'linear', per: 0.05 },
       },
     ],
     capstones: [
@@ -212,17 +212,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'longFuse', label: 'LONG FUSE',
         desc: '+18 px of reach for a bomb to light the next / level',
-        tier: 1, costs: [14, 25], effect: { kind: 'linear', per: 18 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 18 },
       },
       {
         id: 'moreLinks', label: 'MORE LINKS',
         desc: '+2 bombs one chain may run through / level',
-        tier: 1, costs: [16, 28], effect: { kind: 'linear', per: 2 },
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 2 },
       },
       {
         id: 'stickyFan', label: 'STICKY FAN',
         desc: 'Barrage bombs stop where they land and keep their fuse',
-        tier: 2, costs: [30], effect: { kind: 'unlock' },
+        tier: 2, costs: [2], effect: { kind: 'unlock' },
       },
     ],
     capstones: [
@@ -240,14 +240,58 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
 
 /** What one character has: mastery points banked and talent levels bought. */
 export interface CharTalentState {
+  /**
+   * Mastery ever earned. Never falls, because this is what opens tiers.
+   *
+   * Two figures rather than one balance: a single counter cannot both open a
+   * tier and pay for what is inside it. Spending it would shut a tier the
+   * player had already reached, so a talent would cost them the rank they
+   * bought it with.
+   */
   readonly mastery: number;
+  /** Mastery already spent on talents. `mastery - spent` is what is buyable. */
+  readonly spent: number;
   readonly levels: Readonly<Record<string, number>>;
+}
+
+/** What this character can still spend. Never negative, whatever a save holds. */
+export function masteryAvailable(state: CharTalentState): number {
+  return Math.max(0, state.mastery - state.spent);
 }
 
 // ── Mastery ──────────────────────────────────────────────────────────────────
 
 /** The run milestones that pay mastery. Nothing else does, by design. */
 export type MasteryMilestone = 'boss_down' | 'stage_cleared' | 'siege_cleared' | 'run_won';
+
+/**
+ * What each boss is worth in mastery, decided by the boss.
+ *
+ * Loot, in other words: the crow king pays one, so a first kill buys exactly
+ * one tier-I talent and the player makes one choice rather than five. What the
+ * later ones pay is a dial per row, which is the point of a table — raising
+ * the minotaur is an edit here and nothing else.
+ *
+ * Keyed by boss kind, the same shape `BOSS_ON_HIT` and `BOSS_HP_KEY` in
+ * `game.js` already use, so a sixth boss is a row in each rather than a new
+ * kind of lookup.
+ */
+export const BOSS_MASTERY: Record<string, number> = {
+  crowking: 1,
+  dark_archer: 2,
+  dark_knight: 2,
+  minotaur: 3,
+  commander: 3,
+};
+
+/**
+ * What downing `kind` pays. An unknown boss pays the floor rather than
+ * throwing: a boss that pays nothing is a boss nobody notices killing, and a
+ * crash in the death sequence is worse than a cheap kill.
+ */
+export function bossMastery(kind: string): number {
+  return BOSS_MASTERY[kind] ?? 1;
+}
 
 /**
  * Points per milestone. Chunky on purpose: mastery pays for *finishing
@@ -355,6 +399,18 @@ export function talentValue(tree: CharTree, state: CharTalentState, id: string, 
 }
 
 /**
+ * Whether anything in this tree can be bought right now.
+ *
+ * The question a boss asks before it opens the tree: paying mastery is only
+ * worth stopping the run for if there is something to spend it on. A tree
+ * fully bought, or a purse that covers nothing in an open tier, answers no
+ * and the run carries on.
+ */
+export function anyAffordable(tree: CharTree, state: CharTalentState): boolean {
+  return tree.talents.some((spec) => purchaseTalent(tree, state, spec.id).kind === 'bought');
+}
+
+/**
  * Buys the next level of a talent, if mastery has opened its tier and the
  * wallet covers it. Pure: the state handed in is left alone and a new one
  * comes back; the caller owns the wallet and subtracts `spent` itself, the
@@ -365,23 +421,30 @@ export function talentValue(tree: CharTree, state: CharTalentState, id: string, 
  * `tooPoor` for it would be a bug wearing a price tag.
  */
 export function purchaseTalent(
-  tree: CharTree, state: CharTalentState, feathers: number, id: string,
+  tree: CharTree, state: CharTalentState, id: string,
 ): TalentPurchase {
   const spec = tree.talents.find((t) => t.id === id);
   if (!spec) throw new Error(`no talent '${id}' in this tree`);
 
+  // Tiers read mastery EARNED, never what is left. A player who spent down to
+  // nothing keeps every tier their kills opened.
   if (!tierOpenAt(state.mastery, spec.tier)) {
     return { kind: 'tierLocked', rankNeeded: spec.tier - 1, rankHeld: rankOf(state.mastery) };
   }
   const level = talentLevel(state, id);
   if (level >= spec.costs.length) return { kind: 'maxed' };
   const cost = spec.costs[level]!;
-  if (feathers < cost) return { kind: 'tooPoor', cost, short: cost - feathers };
+  const purse = masteryAvailable(state);
+  if (purse < cost) return { kind: 'tooPoor', cost, short: cost - purse };
 
   return {
     kind: 'bought',
     spent: cost,
-    state: { mastery: state.mastery, levels: { ...state.levels, [id]: level + 1 } },
+    state: {
+      mastery: state.mastery,
+      spent: state.spent + cost,
+      levels: { ...state.levels, [id]: level + 1 },
+    },
   };
 }
 
@@ -408,7 +471,11 @@ export function talentStateFrom(tree: CharTree, raw: unknown): CharTalentState {
   }
   const mastery = typeof source.mastery === 'number' && Number.isFinite(source.mastery)
     ? Math.max(Math.trunc(source.mastery), 0) : 0;
-  return { mastery, levels };
+  // Never more than was earned. A save claiming otherwise would report a
+  // negative purse, and every price would read as affordable.
+  const rawSpent = typeof source.spent === 'number' && Number.isFinite(source.spent)
+    ? Math.max(Math.trunc(source.spent), 0) : 0;
+  return { mastery, spent: Math.min(rawSpent, mastery), levels };
 }
 
 /**
