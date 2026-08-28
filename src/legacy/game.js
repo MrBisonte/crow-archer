@@ -53,7 +53,8 @@ import {
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
   draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
-  bossMastery, clampCursor, masteryAvailable, talentBankFrom, talentLevel, tierOpenAt,
+  anyAffordable, bossMastery, clampCursor, masteryAvailable, talentBankFrom,
+  talentLevel, tierOpenAt,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -878,6 +879,18 @@ function queueDraft(resume) {
   chooserQueue.push({ kind: 'draft', offers, cursor: 0, resume });
 }
 
+/**
+ * The tree, if the boss just paid for something buyable.
+ *
+ * Queued rather than opened, so it takes its turn behind a rite the same way
+ * a draft does. Skipped when nothing is affordable: a screen offering only
+ * prices the purse cannot meet is a stop with no decision in it.
+ */
+function queueTree(resume) {
+  if (!anyAffordable(CHAR_TREES[selectedChar], TALENTS.state())) return;
+  chooserQueue.push({ kind: 'tree', resume });
+}
+
 function queueRite(resume) {
   if (riteOffered) return;
   const capstones = CHAR_TREES[selectedChar].capstones;
@@ -889,7 +902,32 @@ function queueRite(resume) {
 function openNextChooser() {
   if (chooser !== null || chooserQueue.length === 0) return;
   chooser = chooserQueue.shift();
-  appState = 'chooser';
+  // The tree is a screen of its own rather than a row of three panels, so it
+  // gets its own appState. It still travels through this queue, because what
+  // matters is that ceremonies take turns and the last one hands back to the
+  // screen the run was on.
+  appState = chooser.kind === 'tree' ? 'talents' : 'chooser';
+}
+
+/**
+ * Finishes whichever ceremony is open and moves to the next, or hands the run
+ * back if that was the last.
+ *
+ * One home for the hand-back, because a ceremony that forgot it would strand
+ * the player on a screen with no way out -- and the tree, unlike the chooser,
+ * is a screen the player can also open from the pause menu, where the way out
+ * is somewhere else entirely.
+ */
+function finishCeremony() {
+  const resume = chooser === null ? null : chooser.resume;
+  chooser = null;
+  openNextChooser();
+  if (chooser !== null || resume === null) return;
+  // Assigned directly rather than through transitionTo, for the reason the
+  // section header gives: a ceremony sat over a hand-off the run had already
+  // staged and is giving it back untouched. transitionTo('playing') from here
+  // would see a prev of 'chooser', call initGame, and restart the run.
+  appState = resume;
 }
 
 /** A boss just died: the rite outranks the draft when both are owed. */
@@ -902,17 +940,22 @@ function queueBossChoosers() {
   // ceremony about it. CLAUDE.md's siege rule, applied to a screen.
   if (siegeRun) return;
   queueRite(appState);
+  // The tree before the draft: what a boss just paid for can be spent now,
+  // and the draft that follows deals from a pool the spending may have grown.
+  queueTree(appState);
   queueDraft(appState);
   openNextChooser();
+}
+
+/** Whether the talent screen is open as a ceremony rather than as a shop. */
+function inCeremony() {
+  return chooser !== null && chooser.kind === 'tree';
 }
 
 function confirmChooser() {
   const id = chooser.offers[chooser.cursor];
   if (chooser.kind === 'draft') TALENTS.draft(id); else TALENTS.sealCapstone(id);
-  const resume = chooser.resume;
-  chooser = null;
-  if (chooserQueue.length > 0) { chooser = chooserQueue.shift(); return; }
-  appState = resume;
+  finishCeremony();
 }
 
 const BOSS_ENTRY_TEXT = {
@@ -13284,7 +13327,8 @@ function drawTalentTree() {
   // Feathers are deliberately absent from this screen. They buy upgrades, and
   // naming them here would invite the player to look for a price in the wrong
   // currency.
-  _selectionScreenBackdrop(`── ${selectedChar.toUpperCase()} TALENTS ──`,
+  _selectionScreenBackdrop(
+    inCeremony() ? '── SPEND WHAT THE FIGHT PAID ──' : `── ${selectedChar.toUpperCase()} TALENTS ──`,
     `${purse} MASTERY TO SPEND  ·  ${_masteryLine(mastery)}`);
 
   const { rows, cursor, hintY, riteY } = talentTreeLayout();
@@ -13314,8 +13358,14 @@ function drawTalentTree() {
   ctx.fillText(tree.capstones.map((c) => c.label).join('   ·   ') || 'NONE YET',
     CONFIG.canvasW / 2, riteY + 24);
 
+  // The hint has to match what the keys actually do. Inside a ceremony the
+  // crossing to the upgrades is refused and [B] hands the run back, so
+  // advertising UPGRADES and BACK there would be the screen lying about
+  // itself.
   ctx.font = '12px "Courier New",monospace'; ctx.fillStyle = '#6f8a6c';
-  ctx.fillText('CLICK OR ↑ ↓  NAVIGATE    ENTER  BUY    [U]  UPGRADES    [B]  BACK',
+  ctx.fillText(inCeremony()
+    ? 'CLICK OR ↑ ↓  NAVIGATE    ENTER  TAKE IT    [B]  DONE'
+    : 'CLICK OR ↑ ↓  NAVIGATE    ENTER  BUY    [U]  UPGRADES    [B]  BACK',
     CONFIG.canvasW / 2, hintY);
 }
 
@@ -14092,8 +14142,14 @@ function stepGame(dt) {
       if (keys['ArrowUp'])   { TALENTS.moveCursor(-1); keys['ArrowUp']   = false; }
       if (keys['ArrowDown']) { TALENTS.moveCursor( 1); keys['ArrowDown'] = false; }
       if (keys['Enter'])     { TALENTS.buyCurrent();   keys['Enter']     = false; }
-      if (keys['u']||keys['U']) { transitionTo('inventory'); keys['u']=keys['U']=false; }
-      if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
+      // Only a shop visit can cross to the upgrades. A boss opened this to be
+      // spent and handed back, and wandering into another screen from inside a
+      // ceremony loses the hand-off it was holding.
+      if (!inCeremony() && (keys['u']||keys['U'])) { transitionTo('inventory'); keys['u']=keys['U']=false; }
+      if (keys['b']||keys['B']) {
+        keys['b'] = keys['B'] = false;
+        if (inCeremony()) finishCeremony(); else transitionTo('paused');
+      }
       break;
 
     case 'gameover':

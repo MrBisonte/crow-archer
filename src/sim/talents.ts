@@ -399,6 +399,18 @@ export function talentValue(tree: CharTree, state: CharTalentState, id: string, 
 }
 
 /**
+ * Whether anything in this tree can be bought right now.
+ *
+ * The question a boss asks before it opens the tree: paying mastery is only
+ * worth stopping the run for if there is something to spend it on. A tree
+ * fully bought, or a purse that covers nothing in an open tier, answers no
+ * and the run carries on.
+ */
+export function anyAffordable(tree: CharTree, state: CharTalentState): boolean {
+  return tree.talents.some((spec) => purchaseTalent(tree, state, spec.id).kind === 'bought');
+}
+
+/**
  * Buys the next level of a talent, if mastery has opened its tier and the
  * wallet covers it. Pure: the state handed in is left alone and a new one
  * comes back; the caller owns the wallet and subtracts `spent` itself, the

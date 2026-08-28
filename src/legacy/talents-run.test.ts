@@ -274,47 +274,91 @@ describe('the choosers', () => {
     expect(talents().drafted(), 'a run start woke a talent').toEqual([]);
   });
 
-  it('opens the draft when the first boss dies, and a pick wakes it', () => {
-    talents().grant('blinkReach', 1);
+  it('opens the tree when the first boss pays and nothing is owned yet', () => {
+    // The gap this closes, reported from a real play-through: the draft deals
+    // from OWNED talents and mastery is what buys ownership, so a new player
+    // killed the boss, banked the mastery and was handed straight to the next
+    // stage. The pool was empty, the ceremony skipped itself, and nothing
+    // invited them to spend what they had just been paid.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+    talents().grantMastery(0);
     g.go('menu');
     g.go('playing');
     expect(g.state()).toBe('playing');
 
     killABoss();
 
-    expect(g.state()).toBe('chooser');
-    const c = g.chooser() as unknown as Chooser;
-    expect(c.kind).toBe('draft');
-    expect(c.offers).toEqual(['blinkReach']);
-    g.chooserPick(0);
-    expect(talents().drafted()).toEqual(['blinkReach']);
+    expect(g.state(), 'the boss paid mastery and offered nothing').toBe('talents');
+    expect((g.chooser() as unknown as Chooser).kind).toBe('tree');
+    expect(talents().purse(), 'the boss paid nothing to spend').toBeGreaterThan(0);
   });
 
-  it('skips the ceremony entirely when nothing is owned', () => {
-    // A boss dies and the pool is empty, so there is nothing to offer.
+  it('hands the run back when the tree is done with', () => {
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+    talents().grantMastery(0);
     g.go('menu');
     g.go('playing');
     killABoss();
+    expect(g.state()).toBe('talents');
+
+    press('b');
+
+    // The dark archer's death leads into the dark knight's entrance, and the
+    // ceremony has to give that hand-off back rather than strand the player.
+    expect(g.state(), 'the tree kept the run').toBe('boss_entrance');
     expect(g.chooser()).toBeNull();
   });
 
-  it('offers the rite before the boss draft, once, at the top rank', () => {
+  it('skips the tree when the purse can buy nothing', () => {
+    // Every ladder at its top, so there is nothing to spend on. A screen
+    // offering only prices the purse cannot meet is a stop with no decision.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.go('menu');
+    g.go('playing');
+    killABoss();
+
+    const c = g.chooser() as unknown as Chooser | null;
+    expect(c, 'a boss offered nothing at all').not.toBeNull();
+    expect(c!.kind, 'the tree opened with nothing to sell').toBe('draft');
+  });
+
+  it('opens the draft once something is owned, and a pick wakes it', () => {
+    // Maxed, so the tree is skipped and the draft is what a boss opens.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.go('menu');
+    g.go('playing');
+    killABoss();
+
+    expect(g.state()).toBe('chooser');
+    const c = g.chooser() as unknown as Chooser;
+    expect(c.kind).toBe('draft');
+    g.chooserPick(0);
+    expect(talents().drafted().length).toBe(1);
+  });
+
+  it('offers the rite, then the tree, then the draft', () => {
     for (let i = 0; i < 6; i++) talents().award('siege_cleared');   // rank 3
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
     talents().grant('blinkReach', 1);
     killABoss();
+
     const rite = g.chooser() as unknown as Chooser;
     expect(g.state()).toBe('chooser');
     expect(rite.kind).toBe('rite');
     expect(rite.offers).toEqual(['overchannel', 'stormcaller']);
     g.chooserPick(1);
-    // The draft queued behind the rite opens without leaving the screen.
+
+    // The tree comes next: the rank is spent, and the mastery is not.
+    expect(g.state(), 'the tree did not follow the rite').toBe('talents');
+    expect((g.chooser() as unknown as Chooser).kind).toBe('tree');
+    press('b');
+
+    // And the draft behind it, without leaving the ceremony.
     const draft = g.chooser() as unknown as Chooser;
     expect(draft.kind).toBe('draft');
     g.chooserPick(0);
-    // Both picks landed, and the screen handed back to the staged hand-off —
-    // the dark archer's death leads into the dark knight's entrance.
+
     expect(talents().stormCooldown()).toBe(g.config().stormCooldown / 2);
-    expect(talents().drafted()).toEqual(['blinkReach']);
     expect(g.state()).toBe('boss_entrance');
   });
 });
