@@ -27,7 +27,8 @@ declare global {
     siege: (wave?: number) => unknown;
     /** Takes `n` HP off every guard, for watching the retinue thin out. */
     hurt: (n?: number) => unknown;
-    /** Takes `hp` off both towers, for watching one fall. */
+    /** Puts both towers at `hp`, for watching one fall. Unlike `hurt`, it sets
+     *  the figure rather than subtracting it. */
     crack: (hp?: number) => unknown;
     /** The retinue as readable lines: rank marker, kind, HP. */
     retinue: () => string[];

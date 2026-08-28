@@ -28,10 +28,19 @@ import { describe, expect, it } from 'vitest';
  * softer failure than a missing assignment -- an unlisted verb is
  * undiscoverable, not undefined -- and it is the same shape: a claim about
  * `game.js` that `game.js` never has to honour.
+ *
+ * The console-verb table in `docs/architecture.md` is the fourth, and the
+ * reasoning transfers whole. The banner is one line and cannot say what a verb
+ * answers with or what it costs, so the table is where a person finds that out;
+ * a verb it omits is one they will not know to type, and a name it carries that
+ * `game.js` does not sends them to type a no-op and conclude the build is
+ * broken. Documents in this repo record what is built, and nothing was checking
+ * that this one still did.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const dtsSrc = readFileSync(resolve(here, 'globals.d.ts'), 'utf8');
 const legacySrc = readFileSync(resolve(here, 'game.js'), 'utf8');
+const docSrc = readFileSync(resolve(here, '../../docs/architecture.md'), 'utf8');
 
 /**
  * The body of `interface Window { ... }`.
@@ -93,6 +102,38 @@ function advertisedVerbs(src: string): string[] {
     .sort();
 }
 
+/** The heading the verb table sits under, and the whole of the anchor. Moving
+ *  the section is allowed; moving it silently is not. */
+const DOC_HEADING = '## The console verbs';
+
+/**
+ * The one section of `architecture.md` that documents the verbs.
+ *
+ * Sliced to the next `## ` rather than read whole, so a backticked call in
+ * another section cannot be counted as a documented verb -- the same reason
+ * `windowInterfaceBody` brace-matches instead of reading to the end.
+ */
+function consoleVerbSection(src: string): string {
+  const at = src.indexOf(DOC_HEADING);
+  if (at < 0) throw new Error(`docs/architecture.md has no \`${DOC_HEADING}\` section`);
+  const rest = src.slice(at + DOC_HEADING.length);
+  const next = rest.search(/^## /m);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+/**
+ * The verbs that section documents: the leading cell of each table row.
+ *
+ * Anchored on the row's own pipe, so the prose below the table can name a verb
+ * as many times as it reads well without either adding a row or duplicating
+ * one.
+ */
+function documentedVerbs(src: string): string[] {
+  return [...consoleVerbSection(src).matchAll(/^\|\s*`([A-Za-z_$][\w$]*)\(/gm)]
+    .map(m => m[1] as string)
+    .sort();
+}
+
 describe('window surface coverage', () => {
   /**
    * A source-text test that matches nothing passes everything after it, so
@@ -126,5 +167,28 @@ describe('window surface coverage', () => {
    */
   it('advertises every verb, and only verbs that exist', () => {
     expect(advertisedVerbs(legacySrc)).toEqual(verbs);
+  });
+
+  /**
+   * The doc parse, pinned the way the `.d.ts` parse above is.
+   *
+   * Two ways this could match nothing and take the assertion below with it: the
+   * heading could move, which throws, and the slice could run past the section
+   * into tables that are not this one, which the header row and the absent
+   * second `## ` catch between them. Neither is a shape a reader would notice.
+   */
+  it('parses the doc section it is walking', () => {
+    const section = consoleVerbSection(docSrc);
+    expect(section).toMatch(/^\| Verb \| Argument defaults to \| What it does \| Answers with \|$/m);
+    expect(section).not.toMatch(/^## /m);
+  });
+
+  /**
+   * Both directions again, and they fail the same two ways the banner does. An
+   * undocumented verb is one a reader never learns exists; a documented one
+   * that does not sends them to type a no-op.
+   */
+  it('documents every verb, and only verbs that exist', () => {
+    expect(documentedVerbs(docSrc)).toEqual(verbs);
   });
 });

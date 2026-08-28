@@ -311,4 +311,6 @@ but a ceremony you have to earn twice over is a slow thing to look at.
 `draft` grants every talent in that character's tree and starts a run so the
 opening draft has a full hand; `rite` puts the character at the rank the rite
 wants and opens it. A hero with an empty tree answers plainly and keeps
-playing, which is the empty-pool skip doing its job.
+playing, which is the empty-pool skip doing its job. All six verbs, with what
+each answers with, are in
+[Architecture](architecture.md#the-console-verbs).
