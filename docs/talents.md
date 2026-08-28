@@ -18,20 +18,27 @@ this document is the per-character half that sits beside it.
 
 ## The three layers
 
-Two currencies and one filter. **Feathers** are the shared wallet already
-earned from kills; **mastery** is per character and comes from finishing
-things, never from grinding; and the **draft** decides which of the talents
-you own are actually live this run.
+Two currencies that never meet, and one filter. **Feathers** are the shared
+wallet earned from kills, and they buy *upgrades* — health, speed, capacity.
+They buy no talents at all. **Mastery** is per character, comes from bosses,
+and is what talents cost. The **draft** then decides which of the talents you
+own are actually live this run.
+
+Keeping them apart is the whole point. One purse funding both ladders would
+make the player choose between a talent and a heart, which is not a choice
+either tree was built to ask.
 
 ```mermaid
 flowchart LR
     kills["crows killed"] --> feathers["FEATHERS\none shared wallet"]
-    miles["run milestones\nboss down, stage cleared,\nsiege survived, run won"] --> mastery["MASTERY\nper character"]
+    feathers --> upg["UPGRADES\nhealth, speed, capacity"]
+    bosses["bosses downed\neach worth what its own row says"] --> mastery["MASTERY EARNED\nper character, never falls"]
     mastery --> rank["rank 0 to III\nopens tiers, earns the rite"]
-    feathers --> buy["buy a level"]
+    mastery --> purse["purse\nearned minus spent"]
+    purse --> buy["take a level"]
     rank --> buy
     buy --> owned["owned talents\nthe pool the draft draws from"]
-    owned --> draft["THE DRAFT\n1 of 3, at run start\nand at every boss"]
+    owned --> draft["THE DRAFT\n1 of 3, when a level is finished"]
     rank --> riteScr["THE RITE\none capstone, mid-run"]
     draft --> live["live for this run only"]
     riteScr --> live
@@ -42,6 +49,30 @@ run did not draft is worth exactly its base figure.** Buying a level does not
 make the wizard stronger everywhere — it adds a card the run may deal you.
 Ownership grows options, not raw power, so a long-played character has a wider
 draft rather than a bigger number.
+
+## What a boss is worth
+
+Mastery is loot. Each boss pays what its own row says, so the curve is a table
+rather than a constant:
+
+| Boss | Mastery |
+|---|---|
+| Crow King | 1 |
+| Dark Archer | 2 |
+| Dark Knight | 2 |
+| Minotaur | 3 |
+| Commander | 3 |
+
+The crow king pays one, which is exactly the price of a tier-I first level. A
+first kill therefore buys one talent and asks for one decision, rather than
+dropping five at once. Raising a later boss is an edit to one row of
+`BOSS_MASTERY` and nothing else.
+
+**Earned and spent are two figures, not one balance.** Mastery earned never
+falls, because it is what opens tiers; spending is tracked separately and the
+purse is the gap between them. A single counter could not do both jobs — paying
+for a talent would shut the tier it was bought in, so a player would lose the
+rank their kills had already won.
 
 ## Mastery and ranks
 
@@ -79,20 +110,20 @@ flowchart BT
         sc["STORMCALLER\nLightning Storm recharges\ntwice as fast"]
     end
     subgraph t2["Tier II - needs rank I"]
-        ws["WIDER SKY\n+50 px storm radius per level\n20 then 38 feathers"]
+        ws["WIDER SKY\n+50 px storm radius per level\n2 then 3 mastery"]
     end
     subgraph t1["Tier I - open from the start"]
-        fd["FOCUS DEPTH\n+1 Focus, one level only\n26 feathers"]
-        ls["LONG STEP\n+20 px blink per level\n12 then 24 feathers"]
+        fd["FOCUS DEPTH\n+1 Focus, one level only\n1 mastery"]
+        ls["LONG STEP\n+20 px blink per level\n1 then 2 mastery"]
     end
     t1 --> t2 --> rite
 ```
 
 | Talent | Tier | Levels | Costs | Each level | Base it stacks on |
 |---|---|---|---|---|---|
-| FOCUS DEPTH | I | 1 | 26 | +1 Focus | a pool of 3 |
-| LONG STEP | I | 2 | 12, 24 | +20 px blink | 160 px |
-| WIDER SKY | II | 2 | 20, 38 | +50 px storm radius | 450 px |
+| FOCUS DEPTH | I | 1 | 1 | +1 Focus | a pool of 3 |
+| LONG STEP | I | 2 | 1, 2 | +20 px blink | 160 px |
+| WIDER SKY | II | 2 | 2, 3 | +50 px storm radius | 450 px |
 
 FOCUS DEPTH is one level on purpose: a full pool buying a fourth bolt is the
 whole of what it promises, and a second level would quietly rewrite what Focus
@@ -123,7 +154,7 @@ rite sits under the rows, named and greyed until rank III, because it is
 earned and never bought.
 
 A refusal is always worded. Pressing `ENTER` on a talent you cannot afford
-prints how many feathers short you are; on a locked tier it prints the rank
+prints how much more mastery you need; on a locked tier it prints the rank
 you need against the rank you hold. The one thing the screen must never do is
 nothing at all — the player pressed a key, and silence reads as a screen that
 did not hear them. `_talentBuyNote` throws on a purchase result it has no
@@ -167,7 +198,7 @@ until somebody gives the knight a crossbow.
 Until the split happens the shop greys a dead cell, labels it `NOTHING FOR THE
 <HERO>` and refuses the purchase. The wallet is shared, so the same level
 bought while playing a hero it serves is worth exactly as much — this costs the
-player nothing and stops the shop taking 45 feathers for a keg the sapper's
+player nothing and stops the shop taking 45 mastery for a keg the sapper's
 pouch never reads.
 
 **The split itself is not decided.** Moving these four out means choosing, per
@@ -302,7 +333,8 @@ a run stays with the game.
 | The buy screen | `drawTalentTree()` and `talentTreeLayout()` in `src/legacy/game.js` |
 | Row geometry, shared with the upgrade screen | `src/render/list-rows.ts` |
 | Which upgrade axes reach which hero | `AXIS_HEROES` in `src/sim/upgrades.ts`, measured by `src/legacy/upgrades-reach.test.ts` |
-| Purchases, spending the wallet | `TALENTS.buy()`, which spends through `FEATHERS.spend()` |
+| Purchases, spending mastery | `TALENTS.buy()`; feathers are never touched |
+| What each boss pays | `BOSS_MASTERY` in `src/sim/talents.ts` |
 
 The two chooser screens can still be staged by hand with the console verbs
 `draft(char)` and `rite(char)` — the same one-word shape `siege(n)` and

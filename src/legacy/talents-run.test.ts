@@ -17,7 +17,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
-import { CHAR_TREES } from '../sim/talents';
+import { CHAR_TREES, RANK_THRESHOLDS } from '../sim/talents';
 import { rowAt } from '../render/list-rows';
 import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
 import { devHooks as g } from './game.js';
@@ -46,6 +46,7 @@ interface Talents {
   stat: (id: string) => number;
   held: (id: string) => boolean;
   grantMastery: (points: number) => void;
+  purse: () => number;
   cursor: () => number;
   moveCursor: (dir: number) => void;
   setCursor: (i: number) => void;
@@ -876,10 +877,12 @@ interface ShopLayout { rows: ShopRow[]; cursor: number; hintY: number; riteY: nu
  */
 describe('the talent shop', () => {
   const layout = (): ShopLayout => g.talentTreeLayout() as unknown as ShopLayout;
-  const wallet = (): number => (g.feathers() as unknown as { wallet: () => number }).wallet();
-  const setWallet = (n: number): void => {
-    (g.feathers() as unknown as { grant: (n: number) => void }).grant(n);
-  };
+  /** What the shop can spend: mastery earned and not yet spent. */
+  const purse = (): number => talents().purse();
+  /** Earns exactly `n` mastery and clears any debt, so the purse is `n`. */
+  const setPurse = (n: number): void => talents().grantMastery(n);
+  /** The feather wallet, which a talent must never touch. */
+  const coins = (): number => (g.feathers() as unknown as { wallet: () => number }).wallet();
 
   beforeEach(() => {
     g.pick('archer');
@@ -890,26 +893,27 @@ describe('the talent shop', () => {
   it('puts the cursor on a row and buys that row', () => {
     const tree = CHAR_TREES.archer;
     const spec = tree.talents[0]!;
-    talents().grantMastery(0);            // tier I is open at rank 0
     talents().grant(spec.id, 0);
-    setWallet(spec.costs[0]! + 20);
-    const before = wallet();
+    setPurse(spec.costs[0]! + 4);         // tier I is open at rank 0
+    const before = purse();
+    const feathersBefore = coins();
 
     talents().setCursor(0);
     const result = talents().buyCurrent();
 
     expect(result!.kind).toBe('bought');
     expect(talents().state().levels[spec.id]).toBe(1);
-    expect(before - wallet(), 'the wallet paid the row\'s own price').toBe(spec.costs[0]);
+    expect(before - purse(), 'the purse paid the price on the row').toBe(spec.costs[0]);
+    expect(coins(), 'a talent spent feathers, which belong to the upgrades')
+      .toBe(feathersBefore);
   });
 
   it('buys the row the cursor moved to, not the one it started on', () => {
     // The bug this exists for: a screen that draws a cursor and buys index 0.
     const tree = CHAR_TREES.archer;
     const second = tree.talents[1]!;
-    talents().grantMastery(0);
     talents().grant(second.id, 0);
-    setWallet(200);
+    setPurse(20);
 
     talents().setCursor(0);
     talents().moveCursor(1);
@@ -963,8 +967,7 @@ describe('the talent shop', () => {
 
   it('says a tier is locked rather than doing nothing', () => {
     const locked = CHAR_TREES.archer.talents.find((t) => t.tier > 1)!;
-    talents().grantMastery(0);
-    setWallet(500);
+    setPurse(0);
     talents().setCursor(CHAR_TREES.archer.talents.indexOf(locked));
 
     const result = talents().buyCurrent();
@@ -974,23 +977,25 @@ describe('the talent shop', () => {
     expect((g.talentBuyNote as (r: unknown) => { text: string })(result).text).toContain('LOCKED');
   });
 
-  it('says how short the wallet is rather than doing nothing', () => {
-    const spec = CHAR_TREES.archer.talents[0]!;
-    talents().grantMastery(0);
-    talents().grant(spec.id, 0);
-    setWallet(spec.costs[0]! - 3);
-    talents().setCursor(0);
+  it('says how short the purse is rather than doing nothing', () => {
+    // A second level, so the price is not 1: a note printing only "1" would
+    // satisfy a test asking for the cost and the shortfall at the same time.
+    const spec = CHAR_TREES.archer.talents.find((t) => t.costs.length > 1)!;
+    talents().grant(spec.id, 1);
+    setPurse(0);
+    talents().setCursor(CHAR_TREES.archer.talents.indexOf(spec));
 
     const result = talents().buyCurrent();
 
     expect(result!.kind).toBe('tooPoor');
-    expect((g.talentBuyNote as (r: unknown) => { text: string })(result).text).toContain('3');
+    const note = (g.talentBuyNote as (r: unknown) => { text: string })(result).text;
+    expect(note, 'the note never says the price').toContain(String(spec.costs[1]));
+    expect(note).toContain('MASTERY');
   });
 
   it('drops the note as soon as the cursor moves', () => {
     // A message about a row you are no longer on is worse than no message.
-    talents().grantMastery(0);
-    setWallet(0);
+    setPurse(0);
     talents().setCursor(0);
     talents().buyCurrent();
     expect(talents().lastBuy()).not.toBeNull();
@@ -1086,10 +1091,9 @@ describe('reaching the two shops', () => {
   });
 
   it('buys with ENTER and moves with the arrows', () => {
-    talents().grantMastery(0);
     const spec = CHAR_TREES.archer.talents[0]!;
     talents().grant(spec.id, 0);
-    (g.feathers() as unknown as { grant: (n: number) => void }).grant(500);
+    talents().grantMastery(20);
     g.go('talents');
     talents().setCursor(0);
 
@@ -1124,15 +1128,56 @@ describe('reaching the two shops', () => {
   });
 });
 
-describe('buying goes through the FEATHERS wallet', () => {
-  it('refuses an open-tier talent the wallet cannot cover', () => {
-    // Tier 1 is open at any rank, so this pins the wallet coupling alone;
-    // the mastery gate itself is pinned pure in sim/talents.test.ts.
-    const purse = g.feathers() as unknown as { wallet: () => number; spend: (n: number) => void };
-    purse.spend(purse.wallet());
+describe('talents are bought with mastery, never with feathers', () => {
+  it('refuses an open-tier talent an empty purse cannot cover', () => {
+    // Tier 1 is open at any rank, so this pins the purse coupling alone; the
+    // mastery gate itself is pinned pure in sim/talents.test.ts.
+    talents().grantMastery(0);
     // Ungranted first: an earlier test walked this ladder to its top, and a
-    // maxed talent would answer before the wallet got to.
+    // maxed talent would answer before the purse got to.
     talents().grant('blinkReach', 0);
     expect(talents().buy('blinkReach').kind).toBe('tooPoor');
+  });
+
+  it('leaves the feather wallet alone when a talent is taken', () => {
+    // The whole point of the split. Feathers buy upgrades; a talent that also
+    // spent them would make the player choose between a talent and a heart,
+    // which is not a choice either tree was built to ask.
+    const wallet = g.feathers() as unknown as { wallet: () => number; grant: (n: number) => void };
+    wallet.grant(120);
+    talents().grantMastery(20);
+    talents().grant('blinkReach', 0);
+
+    expect(talents().buy('blinkReach').kind).toBe('bought');
+
+    expect(wallet.wallet(), 'a talent charged the upgrade wallet').toBe(120);
+  });
+
+  it('never lets spending shut a tier the rank already opened', () => {
+    // The whole reason mastery and spent are two figures rather than one
+    // balance. Earn exactly the rank that opens tier II, spend every point of
+    // it on tier I, and tier II must still answer "you cannot afford this"
+    // rather than "you have not earned this".
+    const tier2 = CHAR_TREES.wizard.talents.find((t) => t.tier === 2)!;
+    const tier1 = CHAR_TREES.wizard.talents.filter((t) => t.tier === 1);
+    const earned = RANK_THRESHOLDS[0]!;          // exactly rank I: tier II opens
+    talents().grantMastery(earned);
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+    expect(talents().buy(tier2.id).kind, 'tier II was shut before a point was spent')
+      .not.toBe('tierLocked');
+    talents().grant(tier2.id, 0);                // undo that probe purchase
+    talents().grantMastery(earned);
+
+    // Spend the lot on tier I, which is priced to absorb exactly this much.
+    let spent = 0;
+    for (const t of tier1) {
+      for (let lvl = 0; lvl < t.costs.length && spent < earned; lvl++) {
+        if (talents().buy(t.id).kind === 'bought') spent += t.costs[lvl]!;
+      }
+    }
+    expect(talents().purse(), 'the purse should be spent out').toBe(0);
+
+    expect(talents().buy(tier2.id).kind, 'an empty purse shut a tier the rank opened')
+      .toBe('tooPoor');
   });
 });

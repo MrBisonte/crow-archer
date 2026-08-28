@@ -53,7 +53,7 @@ import {
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
   draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
-  clampCursor, talentBankFrom, talentLevel, tierOpenAt,
+  bossMastery, clampCursor, masteryAvailable, talentBankFrom, talentLevel, tierOpenAt,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -7257,8 +7257,11 @@ function updateBossDeath(dt) {
     const deadKind = boss.kind;
     boss = null; hostileBolts = [];
     // A boss down pays mastery whether it ends a stage or sits inside a siege
-    // wave; the stage hand-offs below pay their own milestone on top.
-    TALENTS.award('boss_down');
+    // wave; the stage hand-offs below pay their own milestone on top. What it
+    // pays is the boss's own figure, the way its HP and its on-hit behaviour
+    // already are: the crow king is worth one, so a first kill buys exactly
+    // one tier-I talent and asks for one decision rather than five.
+    TALENTS.awardBoss(deadKind);
     // On a siege the boss is one enemy inside a wave, not the end of a stage.
     // Every branch below hands off to another map or to a win screen, so
     // running any of them here would load the castle in the middle of wave 7.
@@ -8771,10 +8774,24 @@ const TALENTS = (() => {
 
   /** Banks a run milestone for the character playing it. */
   function award(milestone) {
+    _addMastery(masteryAfter(0, [milestone]));
+  }
+
+  /** Banks what a boss of this kind is worth. See BOSS_MASTERY. */
+  function awardBoss(kind) {
+    _addMastery(bossMastery(kind));
+  }
+
+  /** Adds to what has been earned. `spent` is untouched: earning never pays
+   *  off a debt, it just widens the gap the purse is measured across. */
+  function _addMastery(points) {
     const s = state();
-    _bank[selectedChar] = { mastery: masteryAfter(s.mastery, [milestone]), levels: s.levels };
+    _bank[selectedChar] = { mastery: s.mastery + points, spent: s.spent, levels: s.levels };
     _save();
   }
+
+  /** Mastery this character can still spend. */
+  function purse() { return masteryAvailable(state()); }
 
   /** Where the shop cursor sits, clamped to the tree actually on screen -
    *  characters can be switched between visits and the trees need not be the
@@ -8808,12 +8825,16 @@ const TALENTS = (() => {
     return _lastBuy;
   }
 
-  /** Buys with the FEATHERS wallet; the tree and the mastery gate decide. */
+  /**
+   * Buys with mastery. Feathers are the upgrade tree's currency and are not
+   * touched here: two ladders funded from one purse would have the player
+   * choosing between a talent and a heart, which is not the choice either
+   * tree was built to ask.
+   */
   function buy(id) {
-    const result = purchaseTalent(tree(), state(), FEATHERS.wallet(), id);
+    const result = purchaseTalent(tree(), state(), id);
     if (result.kind !== 'bought') return result;
     _bank[selectedChar] = result.state;
-    FEATHERS.spend(result.spent);
     _save();
     return result;
   }
@@ -8821,14 +8842,19 @@ const TALENTS = (() => {
   /** Test-only ladder bypass — this module's healHero. */
   function grant(id, level) {
     const s = state();
-    _bank[selectedChar] = { mastery: s.mastery, levels: { ...s.levels, [id]: level } };
+    _bank[selectedChar] = { mastery: s.mastery, spent: s.spent, levels: { ...s.levels, [id]: level } };
   }
 
   /** The same bypass for mastery, so a screen can be staged without playing
    *  the four milestones that would otherwise be the only way to a rank. */
   function grantMastery(points) {
     const s = state();
-    _bank[selectedChar] = { mastery: Math.max(0, Math.trunc(points)), levels: s.levels };
+    // Sets what has been EARNED and clears the debt with it, so a staged rank
+    // is also a full purse -- a test that wants rank III wants to be able to
+    // spend at it, and clamping `spent` to the new total is what the save
+    // loader would do anyway.
+    const mastery = Math.max(0, Math.trunc(points));
+    _bank[selectedChar] = { mastery, spent: Math.min(s.spent, mastery), levels: s.levels };
   }
 
   function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
@@ -8886,7 +8912,7 @@ const TALENTS = (() => {
   }
 
   return {
-    init, state, award, buy, grant, grantMastery,
+    init, state, award, awardBoss, purse, buy, grant, grantMastery,
     resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
     stat, held, stormCooldown, applyToRun,
     cursor, moveCursor, setCursor, buyCurrent, lastBuy,
@@ -13146,9 +13172,11 @@ function talentTreeLayout() {
 function _talentBuyNote(result) {
   if (result === null) return null;
   switch (result.kind) {
-    case 'bought':     return { text: `BOUGHT · ◆ ${result.spent} SPENT`, color: '#39FF14' };
+    case 'bought':     return { text: `TAKEN · ${result.spent} MASTERY SPENT`, color: '#39FF14' };
     case 'maxed':      return { text: 'ALREADY AT ITS LAST LEVEL', color: '#FFB400' };
-    case 'tooPoor':    return { text: `◆ ${result.short} SHORT OF ${result.cost}`, color: '#C86A2A' };
+    case 'tooPoor':    return {
+      text: `${result.short} MORE MASTERY · ${result.cost} NEEDED`, color: '#C86A2A',
+    };
     case 'tierLocked': return {
       text: `TIER LOCKED · MASTERY RANK ${TIER_ROMAN[result.rankNeeded] || result.rankNeeded}`
           + ` NEEDED, RANK ${TIER_ROMAN[result.rankHeld] || result.rankHeld || '—'} HELD`,
@@ -13164,11 +13192,11 @@ function _talentBuyNote(result) {
 function _masteryLine(points) {
   const rank = rankOf(points);
   if (rank >= RANK_THRESHOLDS.length) {
-    return `MASTERY RANK ${TIER_ROMAN[rank] || rank} · EVERY TIER OPEN`;
+    return `RANK ${TIER_ROMAN[rank] || rank} · EVERY TIER OPEN`;
   }
   const next = RANK_THRESHOLDS[rank];
-  return `MASTERY RANK ${rank === 0 ? '—' : TIER_ROMAN[rank]}`
-       + ` · ${points}/${next} TO RANK ${TIER_ROMAN[rank + 1]}`;
+  return `RANK ${rank === 0 ? '—' : TIER_ROMAN[rank]}`
+       + ` · ${points}/${next} EARNED TOWARD RANK ${TIER_ROMAN[rank + 1]}`;
 }
 
 /**
@@ -13177,7 +13205,7 @@ function _masteryLine(points) {
  * Coloured by kind, the same three colours the draft uses, so a player meets
  * a talent's colour here and recognises it when the chooser deals it.
  */
-function _drawTalentRow(row, spec, sel, mastery, wallet) {
+function _drawTalentRow(row, spec, sel, mastery, purse) {
   const look = TALENT_LOOK[spec.id], kind = TALENT_KINDS[look.kind];
   const open = tierOpenAt(mastery, spec.tier);
   const level = talentLevel(TALENTS.state(), spec.id);
@@ -13236,8 +13264,8 @@ function _drawTalentRow(row, spec, sel, mastery, wallet) {
     ctx.fillStyle = '#FFB400';
     ctx.fillText('◆ MAXED', rightX, row.midY - 18);
   } else {
-    ctx.fillStyle = wallet >= cost ? '#FFB400' : '#5a3a00';
-    ctx.fillText(`◆ ${cost}`, rightX, row.midY - 18);
+    ctx.fillStyle = purse >= cost ? '#8ED1FF' : '#31506b';
+    ctx.fillText(`${cost} MASTERY`, rightX, row.midY - 18);
   }
   _drawOwnedPips(rightX - 130, row.midY + 20, 130, level, spec.costs.length,
     open ? (sel ? kind.color : '#5c6b59') : lockedInk);
@@ -13252,12 +13280,15 @@ function _drawTalentRow(row, spec, sel, mastery, wallet) {
 function drawTalentTree() {
   const tree = CHAR_TREES[selectedChar];
   const mastery = TALENTS.state().mastery;
-  const wallet = FEATHERS.wallet();
+  const purse = TALENTS.purse();
+  // Feathers are deliberately absent from this screen. They buy upgrades, and
+  // naming them here would invite the player to look for a price in the wrong
+  // currency.
   _selectionScreenBackdrop(`── ${selectedChar.toUpperCase()} TALENTS ──`,
-    `◆ ${wallet} FEATHERS  ·  ${_masteryLine(mastery)}`);
+    `${purse} MASTERY TO SPEND  ·  ${_masteryLine(mastery)}`);
 
   const { rows, cursor, hintY, riteY } = talentTreeLayout();
-  tree.talents.forEach((spec, i) => _drawTalentRow(rows[i], spec, i === cursor, mastery, wallet));
+  tree.talents.forEach((spec, i) => _drawTalentRow(rows[i], spec, i === cursor, mastery, purse));
 
   // Under the last row rather than above the rite: a message about a purchase
   // belongs beside the thing that was bought, and the rows are centred in

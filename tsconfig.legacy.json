@@ -18,10 +18,5 @@
     "noImplicitAny": false,
     "noUncheckedIndexedAccess": false
   },
-  // `files`, not `include`: this is an explicit two-item list, not a glob, and
-  // `include` was silently dropping `globals.d.ts` from the program. The whole
-  // point of that file is to declare the `window.*` surface `game.js` attaches
-  // at boot, so losing it turns nine real declarations into nine errors and
-  // the check that exists to bind names stops binding them.
-  "files": ["src/legacy/game.js", "src/legacy/globals.d.ts"]
+  "include": ["src/legacy/game.js", "src/legacy/globals.d.ts"]
 }
