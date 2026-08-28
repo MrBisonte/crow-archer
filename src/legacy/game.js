@@ -1481,10 +1481,10 @@ function transitionTo(next) {
   if (next === 'playing' && prev !== 'paused' && prev !== 'controls'
       && prev !== 'inventory' && prev !== 'talents') {
     initGame();
-    // The run's opening draft, over whatever screen initGame staged. An
-    // empty pool queues nothing and the run starts undisturbed.
-    queueDraft(appState);
-    openNextChooser();
+    // No opening draft. A run starts on the field, and the first talent
+    // choice is a thing the first boss pays for -- a ceremony before anything
+    // has happened asks the player to choose between three names they have no
+    // reason to prefer yet, and it delays the run to do it.
   }
   // A charge/dash held into the pause menu has nowhere left to receive the
   // keyup that would normally release it — see cancelHeldActions().

@@ -240,35 +240,67 @@ describe('mastery is paid by real milestones', () => {
 
 interface Chooser { kind: string; offers: string[]; cursor: number; resume: string }
 
+/**
+ * Kills a boss through the real death sequence, which is the only thing that
+ * offers a talent choice.
+ *
+ * It used to be reachable far more cheaply — a run opened with a draft, so
+ * `go('playing')` was enough. That opening ceremony is gone: a choice between
+ * three names, offered before anything has happened, asks the player to prefer
+ * one for no reason and delays the run to do it. The first boss pays for the
+ * first choice now, so every test that wants a chooser has to earn one.
+ *
+ * The 1.5 s is the death sequence: the tail pays out at 1.2 s and hands off.
+ */
+function killABoss(): void {
+  g.spawnBossNow(2);
+  g.go('boss_fight');
+  const boss = g.boss() as { hp: number; x: number; y: number };
+  boss.hp = 1;
+  g.blast(boss.x, boss.y);
+  stepPast(Math.ceil(1.5 * ONE_SECOND));
+}
+
 describe('the choosers', () => {
-  it('opens the draft at run start when something is owned, and a pick wakes it', () => {
+  it('offers nothing at run start, however much is owned', () => {
+    // The rule this replaced: a run opened on the chooser. Owning the whole
+    // tree is the strongest case for a ceremony and it still must not fire.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
+    g.go('menu');
+    g.go('playing');
+    expect(g.state(), 'the run opened on a ceremony').toBe('playing');
+    expect(g.chooser()).toBeNull();
+    expect(talents().drafted(), 'a run start woke a talent').toEqual([]);
+  });
+
+  it('opens the draft when the first boss dies, and a pick wakes it', () => {
     talents().grant('blinkReach', 1);
     g.go('menu');
     g.go('playing');
+    expect(g.state()).toBe('playing');
+
+    killABoss();
+
     expect(g.state()).toBe('chooser');
     const c = g.chooser() as unknown as Chooser;
     expect(c.kind).toBe('draft');
     expect(c.offers).toEqual(['blinkReach']);
     g.chooserPick(0);
-    expect(g.state()).toBe('playing');
     expect(talents().drafted()).toEqual(['blinkReach']);
   });
 
   it('skips the ceremony entirely when nothing is owned', () => {
-    // beforeEach zeroed every ladder, so this run opened with no chooser.
-    expect(g.state()).toBe('playing');
+    // A boss dies and the pool is empty, so there is nothing to offer.
+    g.go('menu');
+    g.go('playing');
+    killABoss();
     expect(g.chooser()).toBeNull();
   });
 
   it('offers the rite before the boss draft, once, at the top rank', () => {
     for (let i = 0; i < 6; i++) talents().award('siege_cleared');   // rank 3
     talents().grant('blinkReach', 1);
-    g.spawnBossNow(2);
-    g.go('boss_fight');
-    (g.boss() as { hp: number }).hp = 1;
-    const b = g.boss() as { x: number; y: number };
-    g.blast(b.x, b.y);
-    stepPast(Math.ceil(1.5 * ONE_SECOND));
+    killABoss();
     const rite = g.chooser() as unknown as Chooser;
     expect(g.state()).toBe('chooser');
     expect(rite.kind).toBe('rite');
@@ -297,6 +329,7 @@ describe('the chooser row obeys the screens playbook', () => {
     for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
     g.go('menu');
     g.go('playing');
+    killABoss();
     expect(g.state()).toBe('chooser');
   }
 
