@@ -1,8 +1,9 @@
 # Architecture
 
-Tech stack, dependencies and the framework decisions behind them. See the [README](../README.md) for the quick start and the [manual](manual.md) for how to play.
+Tech stack, dependencies, the framework decisions behind them, and the surface the build attaches at boot. See the [README](../README.md) for the quick start and the [manual](manual.md) for how to play.
 
 - [Tech](#tech)
+- [The console verbs](#the-console-verbs)
 - [Object composition](#object-composition)
 - [Netcode](#netcode)
 - [Dependencies](#dependencies)
@@ -19,6 +20,59 @@ Tech stack, dependencies and the framework decisions behind them. See the [READM
 - All tunable values centralized in the `CONFIG` object at the top of `src/legacy/game.js`
 - rot.js FOV cache invalidates only when the player moves to a new tile
 - `vitest` covers the extracted sim modules; `npm test` and `npm run typecheck` gate changes
+
+## The console verbs
+
+Six words `src/legacy/game.js` attaches to `window` at boot, for driving the
+game by hand from the browser console. They are declared on `interface Window`
+in `src/legacy/globals.d.ts` and printed once at boot, so they are also
+findable without this page.
+
+They are short on purpose. The useful sequence is three chained calls on
+`__game`, and every browser now refuses a pasted console line until you type
+"allow pasting" at it, so the long form has to be typed out. Each of these is
+one word and a number.
+
+| Verb | Argument defaults to | What it does | Answers with |
+|---|---|---|---|
+| `siege(n)` | wave `1` | Switches to siege mode, opens a run on the bastion, and fast-forwards to the start of wave `n` | `{ wave, outcome, guards }` |
+| `hurt(n)` | `1` | Takes `n` HP off every guard, never below 1, so the priest has work to do | one `kind hp/maxHp` line per guard |
+| `crack(hp)` | `1` | Puts both towers **at** `hp`, to watch cover come off as one falls. It sets the figure rather than subtracting it | the two tower HPs |
+| `retinue()` | | The retinue as readable lines: rank marker, kind, `hp/maxHp` | one string per guard |
+| `draft(char)` | the selected hero | Grants every talent in `char`'s tree and starts a run, so the opening draft has a full hand to deal | the talent ids offered |
+| `rite(char)` | the selected hero | Puts `char` at rank III and opens the rite ahead of the opening draft | the capstone ids offered |
+
+`char` is a `CharacterKind`: `archer`, `wizard`, `knight`, `ranger` or
+`sapper`. A hero with an empty tree or no capstones gets a plain sentence back
+instead of a list, and the run starts undisturbed.
+
+`siege(n)` walks the real `completeWave` for every wave it skips rather than
+assigning the number, so the retinue that greets you on wave 9 is the one nine
+cleared waves would have produced, ranks and recruits and all. `outcome` is a
+`SiegeOutcome` and `guards` is a count.
+
+`retinue()`'s rank marker is one `*` per rank, `RANK_MARK` in
+`src/sim/guards.ts`, and rank 0 has none.
+
+`hurt`, `crack` and `retinue` read the siege field, and that field only exists
+while a siege is running. Anywhere else there are no guards and no towers, so
+all three answer with an empty list; `siege(n)` is what puts you somewhere they
+mean something.
+
+`draft` and `rite` grant into the in-memory talent bank without writing it, but
+a purchase or a banked milestone later in the same page saves the whole bank.
+Stage a tree on a save you care about and it can reach `localStorage`.
+[Talents](talents.md#where-the-code-lives) says what the two screens are for.
+
+`window.__game` is the other half of this surface: the dev-hook object the
+headless tests drive, over a hundred members wide. A dev hook is for a test,
+which can afford to be explicit; these six are for a person at a console who
+cannot. It is not a curated set and it is not listed here.
+
+`src/legacy/globals.coverage.test.ts` holds the table above to the same set as
+the declarations in `globals.d.ts`, the assignments in `game.js` and the boot
+banner. A verb missing from any of the four fails by name, and so does a name
+in any of them that no longer exists.
 
 ## Object composition
 
