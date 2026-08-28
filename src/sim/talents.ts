@@ -11,12 +11,12 @@
  * the generic axes — health, speed, plume, ward. It is not modelled here; the
  * kit-specific axes migrate out of it into the trees below in a later pass.
  *
- * **A character's tree** is tiers climbed with feathers and *gated by
- * mastery*: a purchase costs feathers from the one shared wallet, but a tier
- * only opens once that character's mastery rank reaches it. Mastery is earned
- * from run milestones only — bosses downed, stages cleared, sieges survived —
- * never from grinding kills, so a bad run pays nothing and a finished one
- * pays well.
+ * **A character's tree** is tiers bought with mastery and gated by it too: a
+ * purchase spends that character's own purse, and a tier only opens once the
+ * mastery it has earned reaches that rank. Feathers buy no talents at all;
+ * they keep the generic axes above. Mastery comes from finishing things as
+ * that character, never from grinding kills, so a bad run pays nothing and a
+ * finished one pays well.
  *
  * **The run layer** is drafting what you own. Owned talents form a pool;
  * a run offers a pick of three at the start and another at each boss, and

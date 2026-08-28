@@ -2,8 +2,8 @@
  * The talent system's pure half, checked as data and arithmetic.
  *
  * Three structures share this model and the tests hold their seams honest:
- * the per-character trees (tiers climbed with feathers, gated by mastery),
- * mastery itself (earned from run milestones only), and the run layer (owned
+ * the per-character trees (tiers bought with mastery, which also gates them),
+ * mastery itself (earned from finishing things only), and the run layer (owned
  * talents are drafted into a loadout, and the capstone is chosen mid-run at
  * the rite). Everything here runs without a canvas, a frame loop or a save
  * file, the same way upgrades.test.ts holds the FEATHERS tree.
