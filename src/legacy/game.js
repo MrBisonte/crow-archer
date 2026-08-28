@@ -14742,9 +14742,11 @@ export function boot() {
   window.retinue = () => devHooks.guards().map(
     (b) => (RANK_MARK[b.guard.rank] || '') + b.guard.kind + ' ' + b.guard.hp + '/' + b.guard.maxHp,
   );
-  // The two chooser screens, staged in one word each. Both exist because the
-  // screens are otherwise unreachable by hand: nothing sells a talent yet, and
-  // the rite additionally wants a rank that four milestones pay for.
+  // The two chooser screens, staged in one word each. The shop [T] opens off
+  // the pause menu and the upgrade screen sells talents now, so neither screen
+  // is unreachable any more. Both still sit at the end of a grind: the draft
+  // deals only from talents already owned, and the rite wants rank III on top
+  // of that. One word each is the short way in.
   window.draft = (char = selectedChar) => {
     devHooks.pick(char);
     for (const t of CHAR_TREES[char].talents) TALENTS.grant(t.id, 1);
