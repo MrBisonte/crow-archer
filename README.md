@@ -17,7 +17,7 @@
 
 Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it. Hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file.
 
-![Gameplay: the Ranger fighting a crow swarm, a satchel blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
+![Gameplay: the Archer fighting a crow swarm, a dynamite blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
 
 - [The manual](#the-manual)
 - [Play](#play)
