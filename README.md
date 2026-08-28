@@ -6,13 +6,30 @@
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 
 ```
-  ██████╗██████╗  ██████╗ ██╗    ██╗
- ██╔════╝██╔══██╗██╔═══██╗██║    ██║
- ██║     ██████╔╝██║   ██║██║ █╗ ██║
- ██║     ██╔══██╗██║   ██║██║███╗██║
- ╚██████╗██║  ██║╚██████╔╝╚███╔███╔╝
-  ╚═════╝╚═╝  ╚═╝ ╚═════╝  ╚══╝╚══╝
-        A R C H E R
+              ,;;;;;;;,
+            ;;;;;;;;;;;;;
+           ;;;;;;N;;;;;;
+          ;;;;;;;;;;;;;;;
+         ;;;;;;;;;;;;;;;;;
+        ;;;;;;ooooo;;;;;;;   ->---
+       ;;;;;;;ooooo;;;;;;|      ~~~
+      ;;;;;;;;ooooo;;;;;;o\
+     ;;;;;;;;;;;;;;;;;;;;;o\
+    ;;;;;;;;;;;;;;;;;;;;;;oo\
+   ;;;;;;;;;;;;;;;;;;;;;;;ooo\
+  ;;;;;;;;;;;;;;;;;;;;;;;;oooo\
+   ;;;;;;;;;;.;;;;;;;;;;;oooo
+    ;;;;;;.....;;;;;;;oooo
+     ;;;;;.....;;;;;;;o
+      ;;;;.....;;;;;;
+       ;;;.....;;;;;
+        ;;.....;;;;
+         ;.....;;;
+          .....;;
+           ....;
+            ...
+
+       C R O W   A R C H E R
 ```
 
 Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it. Hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file.
