@@ -732,6 +732,133 @@ describe('cover grows back', () => {
   });
 });
 
+/**
+ * The other half of cover coming back: what it does to bodies already walking
+ * across the tile it lands on.
+ *
+ * `chaseAlongPath` follows waypoints and never asks the grid whether they are
+ * still walkable, which was correct for as long as it was true that terrain
+ * only ever opened up. Every mutation this game had turned a tile to EMPTY or
+ * ASH, both passable, so a cached route could not go stale. Regrowth is the
+ * first thing that closes ground, and it does it on the three maps that grow
+ * cover back, under the routes of the populations that walk them.
+ */
+describe('routes drop when cover closes across them', () => {
+  interface Walker {
+    x: number; y: number; state: string; heldTimer: number;
+    path: Array<{ x: number; y: number }> | null; pathTimer: number;
+  }
+
+  /** Seconds of simulation, rounded up to whole frames and one over. */
+  const seconds = (s: number): number => Math.ceil(s * ONE_SECOND) + 1;
+
+  /** The row every staging below walks along, clear of the border wall. */
+  const ROW = 5;
+
+  /**
+   * An aggro skeleton at column 20 holding a served route west to the player
+   * at column 5, over ground cleared so the route is a straight line and the
+   * generator is not a second input to the assertion.
+   *
+   * It is re-planted each step of the wait because the scheduler serves the
+   * frame *after* the request: updateCrows drains the queue before
+   * updateSkeletons fills it, so the first frame only ever asks.
+   */
+  function stagedWalker(): { s: Walker; tileSize: number } {
+    g.go('playing');
+    clearArena();
+    g.respawnPlayer();
+    const { tileSize } = g.config() as { tileSize: number };
+    const centre = (i: number): number => i * tileSize + tileSize / 2;
+    const player = g.player() as { x: number; y: number };
+    player.x = centre(5);
+    player.y = centre(ROW);
+
+    g.spawnSkeleton();
+    const list = g.skeletons() as Walker[];
+    const s = list.at(-1);
+    if (s === undefined) throw new Error('spawnSkeleton put nothing on the field');
+    for (let i = 0; i < 10 && (s.path === null || s.path.length === 0); i++) {
+      s.x = centre(20); s.y = centre(ROW); s.state = 'aggro';
+      g.stepSim(1);
+    }
+    expect(s.path?.length, 'the walker never got a route to invalidate').toBeGreaterThan(0);
+    return { s, tileSize };
+  }
+
+  /** Is `col` on this walker's cached route, at the row it is walking? */
+  const routedThrough = (s: Walker, col: number, tileSize: number): boolean =>
+    (s.path ?? []).some((wp) => Math.floor(wp.y / tileSize) === ROW
+                             && Math.floor(wp.x / tileSize) === col);
+
+  // The outcome the player would see: an enemy strolling through a tree.
+  //
+  // Without invalidation the skeleton holds its stale waypoints for whatever
+  // is left of the 0.4 s recompute interval, and spends that walking inside
+  // the trunk. Fourteen frames of it, when this was first measured.
+  it('does not walk an enemy through cover that closed under its route', () => {
+    const { s, tileSize } = stagedWalker();
+    const col = 18;
+    expect(routedThrough(s, col, tileSize)).toBe(true);
+
+    g.tiles().set(ROW, col, TILE.TREE);
+    expect(tilePassable(g.tiles().get(ROW, col))).toBe(false);
+
+    let framesInsideSolid = 0;
+    for (let i = 0; i < 40; i++) {
+      g.stepSim(1);
+      const tile = g.tiles().get(Math.floor(s.y / tileSize), Math.floor(s.x / tileSize));
+      if (!tilePassable(tile)) framesInsideSolid++;
+    }
+    expect(framesInsideSolid).toBe(0);
+  });
+
+  // The same thing driven by the real cause rather than by a hand-placed tree,
+  // so the two halves are known to meet: regrowth is what sets a tile solid,
+  // and a sapling on the way up is passable and must NOT cost anyone a route.
+  //
+  // The walker is netted so it keeps its cached route and stops moving. That
+  // is a state the game actually reaches, being what the ranger's net does,
+  // and it is what makes a thirty second wait observable at the end.
+  it('drops it when a sapling on the route matures, and not before', () => {
+    const { s, tileSize } = stagedWalker();
+    s.heldTimer = 600;
+    const col = 15;
+    expect(routedThrough(s, col, tileSize)).toBe(true);
+
+    g.tiles().set(ROW, col, TILE.ASH);
+    g.stepSim(seconds(regrowthDelay(DEFAULT_REGROWTH, 'sprout', ROW, col)));
+    expect(g.tiles().get(ROW, col)).toBe(TILE.SAPLING);
+    expect(routedThrough(s, col, tileSize), 'a sapling is walkable').toBe(true);
+
+    g.stepSim(seconds(regrowthDelay(DEFAULT_REGROWTH, 'mature', ROW, col)));
+    expect(g.tiles().get(ROW, col)).toBe(TILE.TREE);
+    expect(routedThrough(s, col, tileSize)).toBe(false);
+    // Zero rather than the interval, so it re-solves on the next step instead
+    // of walking blind for whatever was left on the clock.
+    expect(s.pathTimer).toBe(0);
+  });
+
+  // Ground opening up cannot invalidate anything, and the gate that says so is
+  // what keeps this off every blast, every fire and every falling tower.
+  it('leaves routes alone when terrain opens instead of closing', () => {
+    const { s, tileSize } = stagedWalker();
+    const col = 18;
+    const before = s.path;
+    const timer = s.pathTimer;
+
+    g.tiles().set(ROW, col, TILE.ASH);   // passable to passable
+    expect(s.path).toBe(before);
+    expect(s.pathTimer).toBe(timer);
+
+    g.tiles().set(ROW + 1, col, TILE.TREE);
+    g.tiles().set(ROW + 1, col, TILE.EMPTY);   // solid to passable, off the route anyway
+    expect(s.path).toBe(before);
+    expect(s.pathTimer).toBe(timer);
+    expect(routedThrough(s, col, tileSize)).toBe(true);
+  });
+});
+
 describe('the population follows MAP_RULES, not the map name', () => {
   it('takes the birds to a map that has them and leaves them behind on one that does not', () => {
     g.go('playing'); // forest, with the pace preset's opening crows

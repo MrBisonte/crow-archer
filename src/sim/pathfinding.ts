@@ -68,9 +68,52 @@ export class PathScheduler<A extends PathAgent = PathAgent> {
     this.queue.length = 0;
   }
 
+  /**
+   * Drops any cached path that walks through tile (row, col), so its agent
+   * re-solves instead of following a route that no longer exists.
+   *
+   * A cached route stays valid while ground only opens up, which is why
+   * following waypoints without re-checking passability was right for as long
+   * as it was: every terrain change this game had turned a tile to EMPTY or
+   * ASH, and both are passable. Regrowth ended that. A sapling maturing into a
+   * tree closes ground under routes already in flight, and the follower does
+   * not consult the grid, so without this an agent walks through the new trunk
+   * until its own recompute interval happens to expire.
+   *
+   * Takes the agents to check rather than tracking them, so the scheduler
+   * still owns nothing but its queue. Returns how many were dropped, which is
+   * what a test and a diagnostic both want.
+   */
+  invalidateThrough(agents: Iterable<A>, row: number, col: number, tileSize: number): number {
+    let dropped = 0;
+    for (const agent of agents) {
+      const path = agent.path;
+      if (path === null || path.length === 0) continue;
+      if (!crossesTile(path, row, col, tileSize)) continue;
+      agent.path = null;
+      agent.pathTimer = 0;   // re-request on the next step rather than after the interval
+      dropped++;
+    }
+    return dropped;
+  }
+
   get pending(): number {
     return this.queue.length;
   }
+}
+
+/**
+ * Does this path pass through the given tile?
+ *
+ * Waypoint centres only, not the segments between them. A* emits one waypoint
+ * per tile step, so a route that enters a tile always has a waypoint in it,
+ * and checking segments would cost more for no extra coverage.
+ */
+function crossesTile(path: Waypoint[], row: number, col: number, tileSize: number): boolean {
+  for (const wp of path) {
+    if (Math.floor(wp.y / tileSize) === row && Math.floor(wp.x / tileSize) === col) return true;
+  }
+  return false;
 }
 
 /**

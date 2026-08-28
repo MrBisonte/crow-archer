@@ -1720,6 +1720,48 @@ function computeAStarPath(fromPx, fromPy, toPx, toPy) {
 
 const pathScheduler = new PathScheduler(computeAStarPath);
 
+/**
+ * Every body that follows a cached pathScheduler route.
+ *
+ * Four populations with four update loops and three separate arrays, so this
+ * is the one place that has to know all of them. A boss is yielded only while
+ * it actually holds a route: the kinds that walk are set up with `path: null`,
+ * and the kinds that do not have no such field at all.
+ *
+ * Guards are deliberately absent. They cache their own route under `route`
+ * rather than `path`, and `moveGuard` refuses a step into solid ground, so a
+ * stale guard route costs that guard time instead of putting it inside a
+ * trunk. The bastion is also the one map regrowth never runs on.
+ */
+function* pathingAgents() {
+  yield* crows;
+  yield* skeletons;
+  yield* soldiers;
+  if (boss && Array.isArray(boss.path)) yield boss;
+}
+
+/**
+ * Drops cached routes through a tile that just stopped being walkable.
+ *
+ * Regrowth is what closes ground: a sapling maturing into a tree puts a trunk
+ * on a tile agents may already be routed through, and `chaseAlongPath` follows
+ * waypoints without ever consulting the grid. Without this they walk through
+ * the new tree until their own 0.4 s recompute happens to come round.
+ *
+ * The gate is the whole contract. Only a passable to solid transition can
+ * invalidate a route, so every other mutation this game makes returns here
+ * immediately: a blast clearing rock, fire charring a tree to ash, a tower
+ * falling, a sapling sprouting on burnt ground.
+ *
+ * Registered once here rather than called from each mutation site, so a
+ * future one cannot forget to.
+ */
+tileMap.onChange((r, c, oldTile, nextTile) => {
+  if (!tilePassable(oldTile) || tilePassable(nextTile)) return;
+  const dropped = pathScheduler.invalidateThrough(pathingAgents(), r, c, CONFIG.tileSize);
+  if (dropped > 0) log.debug('path', 'terrain closed a route', { r, c, dropped });
+});
+
 // ── INPUT ─────────────────────────────────────────────────────────────────────
 
 const keys  = {};
