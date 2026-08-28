@@ -786,6 +786,12 @@ describe('routes drop when cover closes across them', () => {
     return { s, tileSize };
   }
 
+  // Every test here flattens the arena and then plants something solid on it,
+  // and game.js is a module singleton, so that tree is still standing for
+  // whatever runs next. It only stays harmless while every following block
+  // happens to regenerate first, which is not a thing to rely on.
+  afterEach(() => { g.generateMap('forest'); });
+
   /** Is `col` on this walker's cached route, at the row it is walking? */
   const routedThrough = (s: Walker, col: number, tileSize: number): boolean =>
     (s.path ?? []).some((wp) => Math.floor(wp.y / tileSize) === ROW
