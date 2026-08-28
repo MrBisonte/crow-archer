@@ -8,19 +8,26 @@ reasoning and nothing makes you read it before writing a draw function —
 which is how the rule at its line 216 was broken by the person who had
 just read it.
 
-## Coordination — do this before your first commit
+## Coordination: do this before your first commit
 
 - **Starting work in this repo?** Add your row to `COORDINATION.md` before
   you commit anything, and update it on every commit after that. Several
   sessions share these branches and a branch nobody logged is a branch that
   gets clobbered.
-- **Pushing anything?** Only `integration/round-4` may push to `origin`, and
-  `master` moves only by a merged PR. Everything else reaches the remote
-  through the integration branch.
+- **Cutting a branch?** Fetch and fast-forward `master` first, every time:
+  `git -C <clone> fetch origin --prune --tags && git -C <clone> fetch origin
+  master:master`. The local ref goes stale silently and a branch cut from it
+  starts a release behind. Two clones of this repo sit on disk and both were
+  stale at the end of round 4. `master:master` refuses a non-fast-forward,
+  which is the guard you want; `git pull` on a checked-out `master` merges.
+- **Pushing anything?** Only the current integration branch may push to
+  `origin`, and `master` moves only by a merged PR. `COORDINATION.md` names
+  that branch, and it is the one home for the round number. Everything else
+  reaches the remote through it.
 - **Colliding with another branch?** Merger is the coordinating session and
   decides merge order; it can ask any session in the ledger to update its row
   or resolve a gap. A structural collision is resolved by the author of the
-  branch that caused it, with both diffs open — not by whoever merges last.
+  branch that caused it, with both diffs open. Not by whoever merges last.
 
 ## What is enforced mechanically, and what is not
 
