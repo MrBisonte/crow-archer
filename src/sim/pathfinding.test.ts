@@ -52,6 +52,70 @@ describe('PathScheduler', () => {
       expect(p).toBeLessThan(0.4);
     }
   });
+
+  describe('invalidateThrough', () => {
+    const TS = 32;
+    /** A route along row 3, walking right through columns 1 to 4. */
+    const walker = (): PathAgent => ({
+      x: 48, y: 112, state: 'aggro', pathTimer: 0.4,
+      path: [
+        { x: 1 * TS + 16, y: 3 * TS + 16 },
+        { x: 2 * TS + 16, y: 3 * TS + 16 },
+        { x: 3 * TS + 16, y: 3 * TS + 16 },
+        { x: 4 * TS + 16, y: 3 * TS + 16 },
+      ],
+    });
+
+    it('drops a route that walks through the tile that just turned solid', () => {
+      const s = new PathScheduler(() => []);
+      const a = walker();
+      expect(s.invalidateThrough([a], 3, 2, TS)).toBe(1);
+      expect(a.path).toBeNull();
+    });
+
+    it('re-requests immediately rather than after the interval', () => {
+      const s = new PathScheduler(() => []);
+      const a = walker();
+      s.invalidateThrough([a], 3, 2, TS);
+      expect(a.pathTimer).toBe(0);
+    });
+
+    it('leaves a route that does not touch that tile alone', () => {
+      const s = new PathScheduler(() => []);
+      const a = walker();
+      const before = a.path;
+      expect(s.invalidateThrough([a], 9, 9, TS)).toBe(0);
+      expect(a.path).toBe(before);
+      expect(a.pathTimer).toBe(0.4);
+    });
+
+    it('drops only the agents actually routed through it', () => {
+      const s = new PathScheduler(() => []);
+      const through = walker();
+      const elsewhere = walker();
+      elsewhere.path = [{ x: 9 * TS + 16, y: 9 * TS + 16 }];
+      expect(s.invalidateThrough([through, elsewhere], 3, 2, TS)).toBe(1);
+      expect(through.path).toBeNull();
+      expect(elsewhere.path).not.toBeNull();
+    });
+
+    it('ignores agents with no route yet', () => {
+      const s = new PathScheduler(() => []);
+      const idle: PathAgent = { x: 0, y: 0, state: 'aggro', path: null, pathTimer: 0.4 };
+      expect(s.invalidateThrough([idle], 3, 2, TS)).toBe(0);
+      expect(idle.pathTimer).toBe(0.4);
+    });
+
+    // A tile is a square, and only one of its two coordinates matching is the
+    // same column on a different row. Walking the route's own row one tile up
+    // is the cheapest way to say so.
+    it('does not confuse a tile with its neighbour in the other axis', () => {
+      const s = new PathScheduler(() => []);
+      const a = walker();
+      expect(s.invalidateThrough([a], 2, 2, TS)).toBe(0);
+      expect(a.path).not.toBeNull();
+    });
+  });
 });
 
 describe('FovMap', () => {
