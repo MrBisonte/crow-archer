@@ -186,119 +186,117 @@ Four clocks appear in the file.
 
 ### Record kinds
 
-Types below are JSON types with their precision and unit. JSON carries no
-fixed field lengths; the size bounds that exist are the array caps on the
-relations, the enum cardinalities, and the sink's 1,000,000-byte limit per
-line (the constant `MAX_BODY_BYTES` in `src/dev/flight-sink.ts`).
+The wire is JSON, so the types below are the closest SQL equivalents:
+`bigint` for ms-epoch integers, `double` for floats, `varchar(n)` where a
+closed value set bounds the length (n is the longest member), `text` where
+nothing does, and `json` for free structure. `PK` marks the one real key;
+the key column stays empty everywhere else because records nest by
+containment, and no line references another. The remaining size bounds are
+the array caps on the relations and the sink's 1,000,000-byte limit per
+line (`MAX_BODY_BYTES` in `src/dev/flight-sink.ts`).
 
 ```mermaid
-classDiagram
-  class Line {
-    srv number int, ms epoch
+erDiagram
+  hello {
+    bigint srv "sink receive time, ms epoch"
+    bigint wall "page clock, ms epoch"
+    text href "page URL"
+    text ua "user agent"
+    double dpr "device pixel ratio"
   }
-  class hello {
-    wall number int, ms epoch
-    href string, page URL
-    ua string, user agent
-    dpr number float, ratio
+  beat {
+    bigint srv "sink receive time, ms epoch"
+    bigint wall "page clock, ms epoch"
+    bigint perf "performance.now, ms, rounded"
+    int raf "recorder rAF count"
+    varchar(7) vis "visible or hidden"
+    int dropped "events discarded; optional"
   }
-  class beat {
-    wall number int, ms epoch
-    perf number int, ms
-    raf number int, count
-    vis string, enum of 2
-    dropped number int, optional
+  alarm {
+    bigint srv "sink receive time, ms epoch"
+    bigint wall "page clock, ms epoch"
+    bigint perf "performance.now, ms, rounded"
+    varchar(11) class "loop-dead, logic-freeze, no-frames"
   }
-  class alarm {
-    class string, enum of 3
-    wall number int, ms epoch
-    perf number int, ms
+  err {
+    bigint srv "sink receive time, ms epoch"
+    bigint wall "page clock, ms epoch"
+    text msg "error message"
+    text stack "stack trace; optional"
   }
-  class err {
-    wall number int, ms epoch
-    msg string
-    stack string multiline, optional
+  bye {
+    bigint srv "sink receive time, ms epoch"
+    bigint wall "page clock, ms epoch"
   }
-  class bye {
-    wall number int, ms epoch
-  }
-  class Pulse
-  class LogEvent
-  class Blockers
-  class Trace
-  Line <|-- hello
-  Line <|-- beat
-  Line <|-- alarm
-  Line <|-- err
-  Line <|-- bye
-  beat --> Pulse : pulse, or null pre-boot
-  beat --> LogEvent : events, 0 to 400
-  alarm --> Pulse : pulse
-  alarm --> Blockers : blockers
-  alarm --> Trace : trace
-  alarm --> LogEvent : events
-  err --> LogEvent : events
-  bye --> LogEvent : events, last 100
+  beat ||--o| Pulse : "pulse; null before boot"
+  beat ||--o{ LogEvent : "events, 0 to 400"
+  alarm ||--|| Pulse : "pulse"
+  alarm ||--|| Blockers : "blockers"
+  alarm ||--|| Trace : "trace"
+  alarm ||--o{ LogEvent : "events"
+  err ||--o{ LogEvent : "events"
+  bye ||--o{ LogEvent : "events, last 100"
 ```
 
 The nested objects, fully typed:
 
 ```mermaid
-classDiagram
-  class Pulse {
-    state string, enum of 15
-    mode string, enum of 3
-    map string, a MAP_KINDS value
-    char string, enum of 5
-    t number float, s, 3 decimals
-    lastTs number int, ms
-    live boolean
-    held number int, frames
-    hp number int, hit points
-    kills number int, count
-    crows number int, count
-    skels number int, count
-    soldiers number int, count
-    arrows number int, count
-    boss string or null, boss kind
+erDiagram
+  Pulse {
+    varchar(13) state "one of the 15 appStates"
+    varchar(5) mode "brawl, waves, siege"
+    varchar map "a MAP_KINDS value"
+    varchar(6) char "archer, wizard, knight, ranger, sapper"
+    double t "sim seconds, 3 decimals"
+    bigint lastTs "loop frame clock, ms"
+    boolean live "false under a harness clock"
+    int held "hitstop frames owed"
+    int hp "player hit points"
+    int kills "kills this run"
+    int crows "crows array length"
+    int skels "skeletons array length"
+    int soldiers "soldiers array length"
+    int arrows "player projectile count"
+    varchar(11) boss "boss kind; null when none"
   }
-  class LogEvent {
-    id number int, from 1, monotonic
-    level string, enum of 4
-    timestamp number int, ms epoch
-    source string, short identifier
-    message string, freeform
-    code string kebab tag, optional
-    data object, arbitrary JSON, optional
+  LogEvent {
+    int id PK "monotonic from 1 per page session"
+    varchar(5) level "debug, info, warn, error"
+    bigint timestamp "ms epoch at record time"
+    varchar source "caller name, for example EventBus"
+    text message "freeform"
+    varchar code "kebab tag; only on error; optional"
+    json data "structured context; optional"
   }
-  class Blockers {
-    frozen number float, s
-    charging boolean
-    dashing number float, s
-    buried boolean
-    snipeKeyHeld boolean
-    snipeKeyName string, key name
-    heldKeys string array, key names
-    x number float, px
-    y number float, px
-    state string
-    char string
-    map string
+  Blockers {
+    double frozen "freeze seconds left on the player"
+    boolean charging "knight wind-up active"
+    double dashing "knight dash seconds left"
+    boolean buried "player does not fit at its position"
+    boolean snipeKeyHeld "snipe key currently down"
+    varchar snipeKeyName "default Shift"
+    json heldKeys "array of names down in the keys map"
+    double x "player x, px"
+    double y "player y, px"
+    varchar(13) state "as in Pulse"
+    varchar(6) char "as in Pulse"
+    varchar map "as in Pulse"
   }
-  class Trace {
-    level string, enum of 3
-    frames number int, 0 to 120
+  Trace {
+    varchar(4) level "off, time, ops"
+    int frames "held frames, 0 to 120"
   }
-  class SpanStats {
-    ms number float, mean ms
-    msMax number float, worst ms
-    fillRect number float, mean count
-    drawImage number float, mean count
-    fill number float, mean count
-    stroke number float, mean count
-    px number float, mean px area
+  SpanStats {
+    varchar(8) span_name PK "sim, tiles, fog, bodies, vignette, hud"
+    double ms "mean ms per frame"
+    double msMax "worst single frame, ms"
+    double fillRect "mean call count; 0 unless ops"
+    double drawImage "mean call count; 0 unless ops"
+    double fill "mean call count; 0 unless ops"
+    double stroke "mean call count; 0 unless ops"
+    double px "mean fill area, px; 0 unless ops"
   }
-  Trace --> SpanStats : spans, keyed by 6 span names
+  Trace ||--|{ SpanStats : "spans, keyed by span_name"
 ```
 
 | `kind` | Sent when | Fields beyond `srv` and `kind` |
