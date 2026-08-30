@@ -11,7 +11,10 @@ export interface PathAgent {
   x: number;
   y: number;
   state: string;
-  path: Waypoint[] | null;
+  /** Optional because rosters mix walkers with agents that never path — the
+   * boss's bats ride in `crows` with no such field at all — and a scheduler
+   * handed the whole roster must treat a missing route like an empty one. */
+  path?: Waypoint[] | null;
   pathTimer: number;
   _pathQueued?: boolean;
 }
@@ -88,7 +91,10 @@ export class PathScheduler<A extends PathAgent = PathAgent> {
     let dropped = 0;
     for (const agent of agents) {
       const path = agent.path;
-      if (path === null || path.length === 0) continue;
+      // == on purpose: `undefined` (an agent that never paths, like the
+      // boss's bats) is as routeless as `null`, and one field-less agent in
+      // the roster must not take the frame loop down with it.
+      if (path == null || path.length === 0) continue;
       if (!crossesTile(path, row, col, tileSize)) continue;
       agent.path = null;
       agent.pathTimer = 0;   // re-request on the next step rather than after the interval

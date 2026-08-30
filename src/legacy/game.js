@@ -36,7 +36,7 @@ import {
   SOLDIER_SPRITE, buildCommanderGrid,
 } from '../render/soldier-grids';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
-import { LocalInput, Button, hasButton } from '../sim/input';
+import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp } from '../sim/input';
 import { CHARACTER_STATS } from '../sim/arena';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
@@ -1867,7 +1867,11 @@ const pathScheduler = new PathScheduler(computeAStarPath);
  * Four populations with four update loops and three separate arrays, so this
  * is the one place that has to know all of them. A boss is yielded only while
  * it actually holds a route: the kinds that walk are set up with `path: null`,
- * and the kinds that do not have no such field at all.
+ * and the kinds that do not have no such field at all. The rank and file get
+ * no such filter because they need none — the crow king's bats ride in
+ * `crows` without a `path` field, and the scheduler treats a missing route
+ * like an empty one. That is the contract, not an accident: it froze a boss
+ * fight solid the one time it wasn't.
  *
  * Guards are deliberately absent. They cache their own route under `route`
  * rather than `path`, and `moveGuard` refuses a step into solid ground, so a
@@ -3032,24 +3036,15 @@ function installInput() {
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
     if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
-    keys[e.key] = true;
-    // Which name this physical key went down under. e.key is what the key
-    // *produces*, so it depends on the modifiers held at the time, and the
-    // matching keyup can therefore report a different name — press a key with
-    // shift down, let shift go first, and the release arrives under the other
-    // name. Whatever the map was keyed by has to be recoverable from the
-    // hardware, or that entry stays true forever.
-    keyDownAs[e.code] = e.key;
+    // The name bookkeeping — including the held key that starts repeating
+    // under a new name once shift comes down mid-hold — lives in
+    // src/sim/input.ts, where its awkward cases are unit-tested without a
+    // document.
+    noteKeyDown(keys, keyDownAs, e.code, e.key);
     if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
   document.addEventListener('keyup', e => {
-    keys[e.key] = false;
-    // Clear the name it actually went down under too, which is the one the
-    // rest of the game is reading. A key left stuck down is not a dead key:
-    // held against its own opposite it cancels that whole axis out, and the
-    // character stops answering up and down while left and right still work.
-    const wentDownAs = keyDownAs[e.code];
-    if (wentDownAs !== undefined) { keys[wentDownAs] = false; delete keyDownAs[e.code]; }
+    const wentDownAs = noteKeyUp(keys, keyDownAs, e.code, e.key);
     if (e.key === 'f' || e.key === 'F' || wentDownAs === 'f' || wentDownAs === 'F') releaseCharge();
     if (e.key === CONFIG.keys.snipe || wentDownAs === CONFIG.keys.snipe) releaseShift();
   });
@@ -14380,6 +14375,18 @@ export const devHooks = {
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
+  // The run's vitals in one read, one line per heartbeat of a monitored
+  // playtest: the flight recorder (src/dev/flight-recorder.ts) polls this
+  // rather than reaching into a dozen getters. `lastTs` is the loop's own
+  // frame clock — stalled while the page's rAF still ticks means the loop
+  // died; `t` stalled while `state` says a run is on means the sim is held.
+  pulse: () => ({
+    state: appState, mode: gameMode, map: mapKind, char: selectedChar,
+    t: +gameTime.toFixed(3), lastTs: Math.round(lastTs), live: liveLoop,
+    held: hitstop.held, hp: playerHP, kills: killCount,
+    crows: crows.length, skels: skeletons.length, soldiers: soldiers.length,
+    arrows: arrows.length, boss: boss ? boss.kind : null,
+  }),
   // Everything that can refuse the player movement, in one place. A stuck
   // player is always one of these, so a harness that catches one can say which
   // rather than guessing.
