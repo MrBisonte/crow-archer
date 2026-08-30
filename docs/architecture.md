@@ -95,6 +95,8 @@ the log floor to `debug` and turns the `?perf` tracer on at `time`, so the
 beats carry per-section frame costs without either being asked for.
 `scripts/flight-watch.mjs` (`npm run flight:watch`) follows the newest log and
 turns it into one line per event, that beat-gap hang detection included.
+Running one, and the log's line-by-line wire format:
+[the monitored-playtest playbook](playbooks/monitored-playtest.md).
 
 ## Object composition
 
