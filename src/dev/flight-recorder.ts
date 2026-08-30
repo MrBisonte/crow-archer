@@ -52,8 +52,8 @@ export interface Pulse {
   readonly boss: string | null;
 }
 
-/** The two stops the page can diagnose from inside. */
-export type AlarmClass = 'loop-dead' | 'logic-freeze';
+/** The stops the page can diagnose from inside. */
+export type AlarmClass = 'loop-dead' | 'logic-freeze' | 'no-frames';
 
 /** The states in which sim time owes progress (`gameTime += dt` branches). */
 const RUNNING_STATES: readonly string[] = ['playing', 'boss_fight'];
@@ -63,9 +63,11 @@ const RUNNING_STATES: readonly string[] = ['playing', 'boss_fight'];
  *
  * 'loop-dead' says the game's frame clock stalled while this module's own
  * requestAnimationFrame kept ticking — the browser is still animating, so the
- * loop itself died (an exception unhooked it). If the page stopped animating
- * too, that is throttling or worse, not the loop's fault, and the beat gap
- * covers it. 'logic-freeze' says frames arrive but sim time is stuck during
+ * loop itself died (an exception unhooked it). 'no-frames' says nothing
+ * animates at all while the tab still claims visible: not the loop's fault,
+ * but exactly what a player calls a freeze, so it gets a line rather than
+ * silence — an embedded or throttled view (the hidden Browser-pane trap)
+ * looks like this. 'logic-freeze' says frames arrive but sim time is stuck during
  * a run with no state change to excuse it. Hitstop looks exactly like that
  * for a sample or two, deliberately: the caller's streak threshold outlasts
  * anything the hitstop ladder can owe, so a held world never alarms — and a
@@ -80,7 +82,7 @@ export function classify(
   visible: boolean,
 ): AlarmClass | null {
   if (prev === null || !visible || !cur.live || !prev.live) return null;
-  if (cur.lastTs === prev.lastTs) return rafTicked ? 'loop-dead' : null;
+  if (cur.lastTs === prev.lastTs) return rafTicked ? 'loop-dead' : 'no-frames';
   if (RUNNING_STATES.includes(cur.state) && cur.state === prev.state && cur.t === prev.t) {
     return 'logic-freeze';
   }
@@ -99,9 +101,12 @@ const BEAT_MS = 1000;
 const WATCH_MS = 500;
 /** Consecutive suspicious samples before each alarm raises. A dead loop is
  * certain fast; a quiet second of sim time has innocent look-alikes (a long
- * hitstop tail, a modal about to open), so it gets two. */
-const ALARM_AFTER: Record<AlarmClass, number> = { 'loop-dead': 2, 'logic-freeze': 4 };
-const ALARM_KINDS: readonly AlarmClass[] = ['loop-dead', 'logic-freeze'];
+ * hitstop tail, a modal about to open), so it gets two; a whole page not
+ * animating has the most (window occlusion, a dragged tab), so it gets five. */
+const ALARM_AFTER: Record<AlarmClass, number> = {
+  'loop-dead': 2, 'logic-freeze': 4, 'no-frames': 10,
+};
+const ALARM_KINDS: readonly AlarmClass[] = ['loop-dead', 'logic-freeze', 'no-frames'];
 /** A beat carries at most this many log events; the rest become a count. */
 const MAX_EVENTS_PER_BEAT = 400;
 /** After this many straight send failures the sink is gone; stop asking. */
@@ -114,7 +119,9 @@ let rafCount = 0;
 let rafSeen = 0;
 let failures = 0;
 let lastSample: Pulse | null = null;
-const streaks: Record<AlarmClass, number> = { 'loop-dead': 0, 'logic-freeze': 0 };
+const streaks: Record<AlarmClass, number> = {
+  'loop-dead': 0, 'logic-freeze': 0, 'no-frames': 0,
+};
 
 /** Everything `log` holds that has not been shipped yet, watermarked by id. */
 function drain(): readonly LogEvent[] {

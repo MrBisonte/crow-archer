@@ -26,10 +26,12 @@ describe('classify', () => {
     expect(classify(pulse(), pulse(), true, true)).toBe('loop-dead');
   });
 
-  it('is quiet on a stalled game clock when the page stopped animating too', () => {
-    // The browser throttled everything (or the tab lost the frame clock):
-    // not the game loop's fault, and the server-side beat gap covers it.
-    expect(classify(pulse(), pulse(), false, true)).toBeNull();
+  it('names a page-wide stall when nothing animates but the tab claims visible', () => {
+    // Not the loop's fault — but it is what a player calls a freeze, and it
+    // is exactly how an embedded, throttled view presents. Caught live the
+    // first time this recorder ran: the hidden Browser pane starves rAF while
+    // visibilityState still says 'visible'.
+    expect(classify(pulse(), pulse(), false, true)).toBe('no-frames');
   });
 
   it('is quiet while the tab is hidden', () => {
