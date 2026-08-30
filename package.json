@@ -11,6 +11,7 @@
     "start": "node dist-server/index.js",
     "preview": "vite preview",
     "test": "vitest run",
+    "flight:watch": "node scripts/flight-watch.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.legacy.json",
     "hooks:install": "node scripts/install-hooks.mjs"
   },

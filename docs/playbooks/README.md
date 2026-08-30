@@ -22,6 +22,9 @@ restate it.
   canvas coordinates and clicked.
 - [proving-a-change.md](proving-a-change.md) — making a test, a probe or a
   measurement mean what you think it means.
+- [monitored-playtest.md](monitored-playtest.md) — running a playtest that
+  records itself: the launch recipe, the flight log's wire format, and what
+  each kind of stop looks like in it.
 
 Pending: the character-art playbook is `docs/character-rebuild-playbook.md` on
 `feat/char-redesign`. Whoever merges that branch moves it in here as

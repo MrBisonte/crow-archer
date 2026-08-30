@@ -13,3 +13,10 @@ boot();
 // scaling it — the HUD first, then whole columns, with nothing to say so.
 const canvas = document.getElementById('game');
 if (canvas) keepCanvasFitted(canvas, window);
+
+// A monitored playtest ships the diagnostic log to the dev server as it
+// happens — src/dev/flight-recorder.ts is the how and the why. Behind the DEV
+// gate the release build carries none of it; ?rec=0 opts a dev session out.
+if (import.meta.env.DEV && new URLSearchParams(location.search).get('rec') !== '0') {
+  void import('./dev/flight-recorder').then((m) => m.startFlightRecorder());
+}
