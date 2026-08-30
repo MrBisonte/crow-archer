@@ -222,6 +222,29 @@ classDiagram
   class bye {
     wall number int, ms epoch
   }
+  class Pulse
+  class LogEvent
+  class Blockers
+  class Trace
+  Line <|-- hello
+  Line <|-- beat
+  Line <|-- alarm
+  Line <|-- err
+  Line <|-- bye
+  beat --> Pulse : pulse, or null pre-boot
+  beat --> LogEvent : events, 0 to 400
+  alarm --> Pulse : pulse
+  alarm --> Blockers : blockers
+  alarm --> Trace : trace
+  alarm --> LogEvent : events
+  err --> LogEvent : events
+  bye --> LogEvent : events, last 100
+```
+
+The nested objects, fully typed:
+
+```mermaid
+classDiagram
   class Pulse {
     state string, enum of 15
     mode string, enum of 3
@@ -275,19 +298,6 @@ classDiagram
     stroke number float, mean count
     px number float, mean px area
   }
-  Line <|-- hello
-  Line <|-- beat
-  Line <|-- alarm
-  Line <|-- err
-  Line <|-- bye
-  beat --> Pulse : pulse, or null pre-boot
-  beat --> LogEvent : events, 0 to 400
-  alarm --> Pulse : pulse
-  alarm --> Blockers : blockers
-  alarm --> Trace : trace
-  alarm --> LogEvent : events
-  err --> LogEvent : events
-  bye --> LogEvent : events, last 100
   Trace --> SpanStats : spans, keyed by 6 span names
 ```
 
@@ -306,7 +316,12 @@ classDiagram
 - `dpr` (number) is `devicePixelRatio`.
 
 ```json
-{"kind":"hello","wall":1788101911786,"href":"http://localhost:8090/","ua":"Mozilla/5.0 ...","dpr":1,"srv":1788101911788}
+{"kind": "hello",
+ "wall": 1788101911786,
+ "href": "http://localhost:8090/",
+ "ua": "Mozilla/5.0 ...",
+ "dpr": 1,
+ "srv": 1788101911788}
 ```
 
 ### beat
@@ -329,9 +344,11 @@ A real beat from a boss fight, second event abridged:
  "pulse":{"state":"boss_fight","mode":"brawl","map":"forest","char":"ranger",
           "t":35.133,"lastTs":45311,"live":true,"held":0,"hp":8,"kills":10,
           "crows":6,"skels":0,"soldiers":0,"arrows":3,"boss":"crowking"},
- "events":[{"id":126,"level":"info","timestamp":1788102821670,"source":"transitionTo",
+ "events":[{"id":126,"level":"info","timestamp":1788102821670,
+            "source":"transitionTo",
             "message":"boss_entrance -> boss_fight",
-            "data":{"prev":"boss_entrance","next":"boss_fight","gameMode":"brawl","mapKind":"forest"}}],
+            "data":{"prev":"boss_entrance","next":"boss_fight",
+                    "gameMode":"brawl","mapKind":"forest"}}],
  "srv":1788102822417}
 ```
 
@@ -404,11 +421,17 @@ Sources observed in practice:
 Two real entries:
 
 ```json
-{"id":4,"level":"info","timestamp":1788101933171,"source":"transitionTo","message":"menu -> playing","data":{"prev":"menu","next":"playing","gameMode":"brawl","mapKind":"forest"}}
+{"id": 4, "level": "info", "timestamp": 1788101933171,
+ "source": "transitionTo", "message": "menu -> playing",
+ "data": {"prev": "menu", "next": "playing",
+          "gameMode": "brawl", "mapKind": "forest"}}
 ```
 
 ```json
-{"id":3,"level":"debug","timestamp":1788101913262,"source":"trace","message":"1 frames","data":{"map":"forest","worst":"sim","rows":["sim        0.10ms   max 0.10     0 fill    0 img   0.00Mpx"]}}
+{"id": 3, "level": "debug", "timestamp": 1788101913262,
+ "source": "trace", "message": "1 frames",
+ "data": {"map": "forest", "worst": "sim",
+          "rows": ["sim   0.10ms   max 0.10   0 fill   0 img   0.00Mpx"]}}
 ```
 
 ### alarm
@@ -451,12 +474,15 @@ A real alarm, `spans` and later events elided:
 
 ```json
 {"kind":"alarm","class":"loop-dead","wall":1788102842916,"perf":65813,
- "pulse":{"state":"boss_fight","t":53.85,"lastTs":64488,"live":true,"held":0,"boss":"crowking","...":"..."},
- "blockers":{"frozen":0,"charging":false,"dashing":0,"buried":false,"snipeKeyHeld":false,
-             "snipeKeyName":"Shift","heldKeys":[],"x":678.87,"y":190.09,
+ "pulse":{"state":"boss_fight","t":53.85,"lastTs":64488,"live":true,
+          "held":0,"boss":"crowking","...":"..."},
+ "blockers":{"frozen":0,"charging":false,"dashing":0,"buried":false,
+             "snipeKeyHeld":false,"snipeKeyName":"Shift","heldKeys":[],
+             "x":678.87,"y":190.09,
              "state":"boss_fight","char":"ranger","map":"forest"},
  "trace":{"level":"time","frames":120,"spans":"..."},
- "events":[{"id":280,"level":"error","timestamp":1788102842916,"source":"recorder",
+ "events":[{"id":280,"level":"error","timestamp":1788102842916,
+            "source":"recorder",
             "message":"loop-dead after 1000ms","code":"loop-dead"}],
  "srv":1788102842917}
 ```
@@ -473,7 +499,7 @@ The line that identified the brawl freeze, stack abridged to two frames:
 ```json
 {"kind":"err","wall":1788102841592,
  "msg":"Uncaught TypeError: Cannot read properties of undefined (reading 'length')",
- "stack":"TypeError: ... at PathScheduler.invalidateThrough (src/sim/pathfinding.ts:67:30) at game.js:1902:33 ...",
+ "stack":"TypeError ... at invalidateThrough (pathfinding.ts:67:30) ...",
  "srv":1788102841594}
 ```
 
