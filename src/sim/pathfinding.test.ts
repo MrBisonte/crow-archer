@@ -106,6 +106,18 @@ describe('PathScheduler', () => {
       expect(idle.pathTimer).toBe(0.4);
     });
 
+    // The freeze the flight recorder caught on 2026-08-30: the Crow King's
+    // bats ride in `crows` with no `path` field at all, and a sapling maturing
+    // mid-boss-fight walked exactly that roster through here. `undefined` must
+    // be as ignorable as `null`, or one field-less agent kills the frame loop.
+    it('shrugs at an agent that has no path field at all', () => {
+      const s = new PathScheduler(() => []);
+      const bat: PathAgent = { x: 0, y: 0, state: 'aggro', pathTimer: 0 };
+      const routed = walker();
+      expect(s.invalidateThrough([bat, routed], 3, 2, TS)).toBe(1);
+      expect(routed.path).toBeNull();
+    });
+
     // A tile is a square, and only one of its two coordinates matching is the
     // same column on a different row. Walking the route's own row one tile up
     // is the cheapest way to say so.
