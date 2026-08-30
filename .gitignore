@@ -17,6 +17,10 @@ dist-server/
 # checking the art, not the art itself, and the art lives in src/render.
 _design/
 
+# Flight-recorder playtest logs: JSONL the dev-server sink appends, one file
+# per server session. Diagnostic exhaust, not source; see src/dev/flight-sink.ts.
+_flightlogs/
+
 # OS artifacts
 Thumbs.db
 .DS_Store

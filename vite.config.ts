@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
 import { WS_PATH } from './src/net/protocol';
+import { flightSink } from './src/dev/flight-sink';
 
 /** Where `npm run server` listens, which is what the dev proxy forwards to. */
 const SERVER_PORT = 8082;
@@ -9,7 +10,7 @@ const SERVER_PORT = 8082;
 // The build inlines everything into one dist/index.html, so the game keeps its
 // "download one file and play" property with no network access at runtime.
 export default defineConfig({
-  plugins: [viteSingleFile()],
+  plugins: [viteSingleFile(), flightSink()],
   server: {
     port: 8081,
     // In production one process serves the page and the socket, so the client

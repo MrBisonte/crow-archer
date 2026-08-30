@@ -74,6 +74,25 @@ the declarations in `globals.d.ts`, the assignments in `game.js` and the boot
 banner. A verb missing from any of the four fails by name, and so does a name
 in any of them that no longer exists.
 
+## The flight recorder
+
+Dev-only telemetry for monitored playtests: while `npm run dev` serves the
+game, the page POSTs a once-a-second beat — the run's vitals from
+`devHooks.pulse()`, plus everything `src/sim/log.ts` recorded since the last
+beat — to `/__flight`, and the dev server appends each one to a JSONL file
+under `_flightlogs/`, stamped with its own receive time. A freeze then reads
+from the outside: an exception arrives as an `err` line with the stack, a dead
+loop or a held sim raises an `alarm` line that classifies itself and attaches
+`movementBlockers()`, and a hard hang is the one that sends nothing — the gap
+between `srv` stamps is its timestamp, and a closed tab tells itself apart by
+the goodbye it sends on the way out.
+
+`src/dev/flight-recorder.ts` is the page half and states the decision table;
+`src/dev/flight-sink.ts` is the server half. On by default under `npm run dev`
+(`?rec=0` opts out); the release build carries none of it. The recorder raises
+the log floor to `debug` and turns the `?perf` tracer on at `time`, so the
+beats carry per-section frame costs without either being asked for.
+
 ## Object composition
 
 Reference for every kind-tagged content system: what the tag is, which

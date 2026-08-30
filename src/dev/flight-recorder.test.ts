@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest';
+
+import { classify } from './flight-recorder';
+import type { Pulse } from './flight-recorder';
+
+/** A healthy mid-brawl sample; each case states only what it breaks. */
+function pulse(over: Partial<Pulse> = {}): Pulse {
+  return {
+    state: 'playing', mode: 'brawl', map: 'forest', char: 'archer',
+    t: 10, lastTs: 1000, live: true, held: 0, hp: 10, kills: 3,
+    crows: 5, skels: 0, soldiers: 0, arrows: 1, boss: null,
+    ...over,
+  };
+}
+
+describe('classify', () => {
+  it('is quiet on a healthy advancing sample', () => {
+    expect(classify(pulse(), pulse({ lastTs: 1500, t: 10.5 }), true, true)).toBeNull();
+  });
+
+  it('is quiet on the very first sample', () => {
+    expect(classify(null, pulse(), true, true)).toBeNull();
+  });
+
+  it('names a dead loop when the game clock stalls but the page still animates', () => {
+    expect(classify(pulse(), pulse(), true, true)).toBe('loop-dead');
+  });
+
+  it('is quiet on a stalled game clock when the page stopped animating too', () => {
+    // The browser throttled everything (or the tab lost the frame clock):
+    // not the game loop's fault, and the server-side beat gap covers it.
+    expect(classify(pulse(), pulse(), false, true)).toBeNull();
+  });
+
+  it('is quiet while the tab is hidden', () => {
+    expect(classify(pulse(), pulse(), true, false)).toBeNull();
+  });
+
+  it('is quiet while a harness owns the clock', () => {
+    expect(classify(pulse({ live: false }), pulse({ live: false }), true, true)).toBeNull();
+  });
+
+  it('names a logic freeze when frames tick but sim time is stuck in play', () => {
+    expect(classify(pulse(), pulse({ lastTs: 1500 }), true, true)).toBe('logic-freeze');
+  });
+
+  it('also watches the boss fight for a logic freeze', () => {
+    const prev = pulse({ state: 'boss_fight' });
+    expect(classify(prev, pulse({ state: 'boss_fight', lastTs: 1500 }), true, true)).toBe('logic-freeze');
+  });
+
+  it('calls a hitstop sample a logic freeze — the streak is the hitstop filter', () => {
+    // A held world is stuck time too, and deliberately so: ALARM_AFTER
+    // outlasts the whole hitstop ladder, so a real hitstop never becomes an
+    // alarm, while a hitstop that never drains still does.
+    expect(classify(pulse(), pulse({ lastTs: 1500, held: 4 }), true, true)).toBe('logic-freeze');
+  });
+
+  it('is quiet on stuck sim time outside a run', () => {
+    const prev = pulse({ state: 'menu' });
+    expect(classify(prev, pulse({ state: 'menu', lastTs: 1500 }), true, true)).toBeNull();
+  });
+
+  it('is quiet across a state change even when sim time is stuck', () => {
+    // Entering play from the intro: t has not moved yet and should not alarm.
+    const prev = pulse({ state: 'stage_intro' });
+    expect(classify(prev, pulse({ lastTs: 1500 }), true, true)).toBeNull();
+  });
+});

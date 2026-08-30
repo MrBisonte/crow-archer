@@ -14380,6 +14380,18 @@ export const devHooks = {
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },
   frozenTimer: () => playerFrozenTimer,
+  // The run's vitals in one read, one line per heartbeat of a monitored
+  // playtest: the flight recorder (src/dev/flight-recorder.ts) polls this
+  // rather than reaching into a dozen getters. `lastTs` is the loop's own
+  // frame clock — stalled while the page's rAF still ticks means the loop
+  // died; `t` stalled while `state` says a run is on means the sim is held.
+  pulse: () => ({
+    state: appState, mode: gameMode, map: mapKind, char: selectedChar,
+    t: +gameTime.toFixed(3), lastTs: Math.round(lastTs), live: liveLoop,
+    held: hitstop.held, hp: playerHP, kills: killCount,
+    crows: crows.length, skels: skeletons.length, soldiers: soldiers.length,
+    arrows: arrows.length, boss: boss ? boss.kind : null,
+  }),
   // Everything that can refuse the player movement, in one place. A stuck
   // player is always one of these, so a harness that catches one can say which
   // rather than guessing.
