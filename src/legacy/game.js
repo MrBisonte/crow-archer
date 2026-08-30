@@ -36,7 +36,7 @@ import {
   SOLDIER_SPRITE, buildCommanderGrid,
 } from '../render/soldier-grids';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
-import { LocalInput, Button, hasButton } from '../sim/input';
+import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp } from '../sim/input';
 import { CHARACTER_STATS } from '../sim/arena';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
@@ -3032,24 +3032,15 @@ function installInput() {
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
     if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
-    keys[e.key] = true;
-    // Which name this physical key went down under. e.key is what the key
-    // *produces*, so it depends on the modifiers held at the time, and the
-    // matching keyup can therefore report a different name — press a key with
-    // shift down, let shift go first, and the release arrives under the other
-    // name. Whatever the map was keyed by has to be recoverable from the
-    // hardware, or that entry stays true forever.
-    keyDownAs[e.code] = e.key;
+    // The name bookkeeping — including the held key that starts repeating
+    // under a new name once shift comes down mid-hold — lives in
+    // src/sim/input.ts, where its awkward cases are unit-tested without a
+    // document.
+    noteKeyDown(keys, keyDownAs, e.code, e.key);
     if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
   });
   document.addEventListener('keyup', e => {
-    keys[e.key] = false;
-    // Clear the name it actually went down under too, which is the one the
-    // rest of the game is reading. A key left stuck down is not a dead key:
-    // held against its own opposite it cancels that whole axis out, and the
-    // character stops answering up and down while left and right still work.
-    const wentDownAs = keyDownAs[e.code];
-    if (wentDownAs !== undefined) { keys[wentDownAs] = false; delete keyDownAs[e.code]; }
+    const wentDownAs = noteKeyUp(keys, keyDownAs, e.code, e.key);
     if (e.key === 'f' || e.key === 'F' || wentDownAs === 'f' || wentDownAs === 'F') releaseCharge();
     if (e.key === CONFIG.keys.snipe || wentDownAs === CONFIG.keys.snipe) releaseShift();
   });
