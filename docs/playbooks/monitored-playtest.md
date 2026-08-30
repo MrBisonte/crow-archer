@@ -34,6 +34,74 @@ flowchart LR
 The endpoint path `/__flight` is defined once, in `src/dev/flight-path.ts`,
 and imported by both halves.
 
+### Topology
+
+The complete system, producers to consumers:
+
+```
++---------------------------- game page (dev build only) ---------------------+
+|                                                                             |
+|  producers                          src/sim/log.ts                          |
+|    game.js transitionTo()   info --+                                        |
+|    EventBus, every emit    debug --+--> Logger ring, 500 entries            |
+|    logTraceSummary, 1/s    debug --+    {id, level, timestamp, source,      |
+|    route invalidation      debug --+     message, code?, data?}             |
+|    window error hooks      error --+           |                            |
+|    recorder lifecycle   info/err --+           |  drained by id watermark   |
+|                                                v                            |
+|  window.__game.pulse() ----------->  src/dev/flight-recorder.ts             |
+|    state, t, lastTs, counts          |  beat timer  1000 ms -> beat         |
+|                                      |  watchdog     500 ms -> classify     |
+|  own requestAnimationFrame  ------>  |     -> alarm, once per episode       |
+|    the page-alive reference          |  error hooks         -> err          |
+|                                      |  pagehide            -> bye          |
++--------------------------------------+--------------------------------------+
+                                       |
+                    fetch POST /__flight      (beat)
+                    sendBeacon /__flight      (alarm, err, bye; survives
+                                               page unload)
+                    one JSON object per request; the sender goes quiet
+                    after 5 consecutive failures
+                                       |
+                                       v
++---------------------------- vite dev server --------------------------------+
+|  src/dev/flight-sink.ts   plugin, apply 'serve'; absent from builds         |
+|    /__flight middleware:  non-POST -> 405, body over 1 MB -> dropped,       |
+|    non-object JSON -> 400, else wrap {...body, srv: Date.now()} -> 204      |
+|    append one line -> _flightlogs/session-<server-start>.jsonl              |
++--------------------------------------+--------------------------------------+
+                                       |
+                                       |  poll every 500 ms: pick the newest
+                                       |  *.jsonl, read from the last offset
+                                       v
++------------------------------- consumers -----------------------------------+
+|  scripts/flight-watch.mjs  (npm run flight:watch)                           |
+|    prints hello, bye, transitions, alarms, uncaught errors;                 |
+|    emits HANG? after 3.5 s without a beat while the last state was a run    |
+|  an agent monitor wrapping the same script: one notification per line       |
+|  ad-hoc readers: the commands in the section "Reading a log"                |
++-----------------------------------------------------------------------------+
+```
+
+Component notes, top to bottom:
+
+- The six producers write into one shared `Logger` instance
+  (`src/sim/log.ts`). The `EventBus` subscription is registered at module
+  load by `attachToEvents`; it costs nothing until the recorder raises the
+  log floor to `debug`.
+- The recorder polls `devHooks.pulse()` for game state and keeps its own
+  `requestAnimationFrame` counter as the page-alive reference. It never
+  imports `game.js`; it reads `window.__game`.
+- Beats use `fetch` with `keepalive`. Alarms, errors and the goodbye prefer
+  `navigator.sendBeacon`, which the browser completes even while the page
+  unloads. Both carry one JSON object per request.
+- The sink is the only writer of the log file. It answers 405 to non-POST,
+  400 to a body that is not a JSON object, and 204 on append. It creates
+  `_flightlogs/` on first use.
+- The watcher is stateless across restarts except for its read offset; on
+  attach it re-reads the newest file from the start, so its first burst is
+  history.
+
 ## Running a monitored session
 
 1. Create a worktree for the branch under test and arm the git hooks. Hooks
@@ -118,66 +186,109 @@ Four clocks appear in the file.
 
 ### Record kinds
 
+Types below are JSON types with their precision and unit. JSON carries no
+fixed field lengths; the size bounds that exist are the array caps on the
+relations, the enum cardinalities, and the sink's 1,000,000-byte limit per
+line (the constant `MAX_BODY_BYTES` in `src/dev/flight-sink.ts`).
+
 ```mermaid
 classDiagram
   class Line {
-    srv number
+    srv number int, ms epoch
   }
   class hello {
-    wall
-    href
-    ua
-    dpr
+    wall number int, ms epoch
+    href string, page URL
+    ua string, user agent
+    dpr number float, ratio
   }
   class beat {
-    wall
-    perf
-    raf
-    vis
-    dropped optional
+    wall number int, ms epoch
+    perf number int, ms
+    raf number int, count
+    vis string, enum of 2
+    dropped number int, optional
   }
   class alarm {
-    class
-    wall
-    perf
+    class string, enum of 3
+    wall number int, ms epoch
+    perf number int, ms
   }
   class err {
-    wall
-    msg
-    stack optional
+    wall number int, ms epoch
+    msg string
+    stack string multiline, optional
   }
   class bye {
-    wall
+    wall number int, ms epoch
   }
-  class Pulse
+  class Pulse {
+    state string, enum of 15
+    mode string, enum of 3
+    map string, a MAP_KINDS value
+    char string, enum of 5
+    t number float, s, 3 decimals
+    lastTs number int, ms
+    live boolean
+    held number int, frames
+    hp number int, hit points
+    kills number int, count
+    crows number int, count
+    skels number int, count
+    soldiers number int, count
+    arrows number int, count
+    boss string or null, boss kind
+  }
   class LogEvent {
-    id
-    level
-    timestamp
-    source
-    message
-    code optional
-    data optional
+    id number int, from 1, monotonic
+    level string, enum of 4
+    timestamp number int, ms epoch
+    source string, short identifier
+    message string, freeform
+    code string kebab tag, optional
+    data object, arbitrary JSON, optional
   }
-  class Blockers
+  class Blockers {
+    frozen number float, s
+    charging boolean
+    dashing number float, s
+    buried boolean
+    snipeKeyHeld boolean
+    snipeKeyName string, key name
+    heldKeys string array, key names
+    x number float, px
+    y number float, px
+    state string
+    char string
+    map string
+  }
   class Trace {
-    level
-    frames
-    spans
+    level string, enum of 3
+    frames number int, 0 to 120
+  }
+  class SpanStats {
+    ms number float, mean ms
+    msMax number float, worst ms
+    fillRect number float, mean count
+    drawImage number float, mean count
+    fill number float, mean count
+    stroke number float, mean count
+    px number float, mean px area
   }
   Line <|-- hello
   Line <|-- beat
   Line <|-- alarm
   Line <|-- err
   Line <|-- bye
-  beat --> Pulse : pulse
-  beat --> LogEvent : events, 0..400
+  beat --> Pulse : pulse, or null pre-boot
+  beat --> LogEvent : events, 0 to 400
   alarm --> Pulse : pulse
   alarm --> Blockers : blockers
   alarm --> Trace : trace
   alarm --> LogEvent : events
   err --> LogEvent : events
   bye --> LogEvent : events, last 100
+  Trace --> SpanStats : spans, keyed by 6 span names
 ```
 
 | `kind` | Sent when | Fields beyond `srv` and `kind` |
