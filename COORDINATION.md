@@ -4,8 +4,10 @@ Every session working this repo owns a row here. Keeping it current is not
 optional and not a courtesy: it is how several branches reach `origin` without
 losing each other's work.
 
-**Current round: `integration/round-5`, cut from `master` at `09f42f6`
-(released as `v0.2.0`).** That branch name is written here once; everything
+**Current round: `integration/round-6`, cut from `master` at `f6890a5`.**
+Round 5 landed as PR #40 (`10a5302`) and is not yet tagged: the release
+download still serves `v0.2.0` while gh-pages already deploys the merge.
+That branch name is written here once; everything
 else refers to "the current integration branch" so this file is the only
 thing that has to change when a round closes.
 
@@ -56,7 +58,7 @@ is one thing: `origin` stays clean, and `master` above all.
 ## The ledger
 
 `Head` is your branch tip, short SHA. `Base` is `current` if you are cut from
-`master` at `09f42f6`, `STALE` otherwise. `In r5` is whether Merger has merged
+`master` at `f6890a5`, `STALE` otherwise. `In r5` is whether Merger has merged
 you into the integration branch yet. Merger maintains that column, not you.
 
 | Session | Branch | Task | Status | Head | Base | In r5 | Updated | Notes |
@@ -66,6 +68,8 @@ you into the integration branch yet. Merger maintains that column, not you.
 | `loving-archimedes-1a5e3d` | `fix/globals-verb-coverage` | Drop the dead `window.knights` declaration from `src/legacy/globals.d.ts`, and add a coverage test so the next stale verb fails the build | `finished` | `5461d4d` | current | **yes** | 08-27 | Claimed by message before its first commit, and deliberately does not touch this file: it is cut from `master` `09f42f6`, where this is still the round-4 ledger, so a row on its side is the hazard `4c1b889` recorded. Its status travels here instead. **Merger verified the diagnosis:** `906440b` ("one knight, and it is the destrier", 08-25) deleted `window.knights` and the console banner that advertised it, and touched no `.d.ts` at all, so the declaration is the leftover and deleting it is the fix rather than assigning it. Confirmed live on r5: `typeof window.knights` is `undefined` while every sibling verb is a function. Two files. **Merged `fa737e3`.** `globals.d.ts` was the one file it shared with the talent trees, which had added `draft` and `rite` eight lines below the deletion; the auto-merge kept both and the interface now holds nine members. Merger re-proved the guard on the merged tree rather than on the report: cutting the live `window.rite` assignment turned it red naming `rite`, so the two members the talent branch added are held to the same rule as the rest. Gate after: typecheck 0, 72 files, 1909 tests, which is exactly the one file and two tests this branch claims. Two follow-ups the author raised and correctly left alone: nothing holds the boot banner at `game.js:14767` to the verbs that exist (accurate today, unguarded), and no doc anywhere lists the console verbs, so that banner is their only advertisement. Alex asked for the banner one, so it exists: `test/console-banner-coverage`, tip `5469808`, `finished`, **merged `aa9dfce`**, one file, test-only, no fix in it because the banner is accurate today. Cut from `5461d4d` rather than from a fresh `master`, which departs from the rule above and was flagged rather than slipped: on `master` the banner test is red on `knights`, so branching there would have meant re-deleting two lines r5 already carries. `5461d4d` is a direct child of `09f42f6` and was already merged, so the merge brought exactly one commit. Merger allowed it; the departure is sound where the base is an ancestor of the integration branch, and only there. The doc gap stands: still nothing lists the console verbs, which is round-6 material. |
 | `console-verbs` | `docs/console-verbs` | Give the boot console verbs a home, and guard the doc against drift | `finished` | `83c74b6` | r5 `f4cc6b5` | **yes** | 08-28 | Merged `3e9e069`, 4 commits. Spawned by Merger. The banner was the only advertisement these six verbs had; they now have a section in `docs/architecture.md`, and `globals.coverage.test.ts` holds four sets to each other: the declarations, the assignments, the banner and now the table. Chose that doc over a new file and made `talents.md` and the README link to it rather than restate it. **Found a real defect by reading each verb to its implementation rather than to its comment:** `crack(hp)` SETS both towers to `hp` and the declaration said it takes `hp` off them. Merger confirmed before merging: `hurtTowers` assigns `t.hp = hp`, `hurtGuards` computes `Math.max(1, hp - n)`, so `hurt` is the sibling that really subtracts. The inline comment beside `hurtTowers` had been right all along and only the `.d.ts` was wrong. Also carries the stale "nothing sells a talent yet" comment above `window.draft`. Cut from r5 rather than master, flagged not slipped, on the same terms as `test/console-banner-coverage`: the verbs, the shop and the test file it extends are all r5-only. Merger re-proved the guard on the merged tree both directions: dropping the `rite(char)` row named it, and a fictional `banish(n)` row named that. |
 | `route-salvage` | `perf/route-invalidation` | Salvage `perf/projectiles-and-pathing` onto current master, or judge it dead | `finished` | `8a14870` | current | **yes** | 08-28 | Merged `2ea8896`, 3 commits, re-cut from `09f42f6`. Spawned by Merger. **Supersedes the unclaimed `perf/projectiles-and-pathing` (`ff95304`) in the other clone, which can now be deleted.** Told to judge before porting, and the judgement is the value here: `b74109e` shipped *deliberately inert*, its own message saying no terrain mutation had ever made a tile solid. `sim/regrowth.ts` (`1aa1ca6`, #36) landed after that base and matures SAPLING into TREE at runtime, which is passable to solid under routes already served, and `chaseAlongPath` never re-reads the grid. Merger verified the ancestry (`559c61f` is an ancestor of `1aa1ca6`) and the `mature` rule before merging, then re-proved the fix load-bearing on the merged tree: cutting the `invalidateThrough` call turns both bug tests red at `expected 14 to be +0`, the same 14 frames the report gives, while the "terrain opens instead of closing" negative control stays green. Ported as intent: `pathingAgents()` gains **soldiers** because the cavern garrison rides the shared scheduler and postdates the original agent list; guards stay out because they cache under `route` and `moveGuard` already refuses solid ground; the doc comments were rewritten because the original's claim is now false. +18 tests, no new files. |
+
+| `Merger` | `feat/flight-recorder` | Flight recorder: ship the diagnostic log to a dev-server JSONL sink, with watchdogs that classify a stop (loop-dead / logic-freeze / hard hang), for monitored playtests of the brawl freeze | `started` | — | current | no | 08-30 | Spawned by Alex's brawl-freeze report (mid-game, first map, most characters). Reuses `src/sim/log.ts` — already event-bus-fed and transition-fed — and the `?perf` tracer; new files under `src/dev/`, sink inside the vite dev server, lines land in gitignored `_flightlogs/`. Worktree `.claude/worktrees/flight-recorder`. |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.
@@ -94,6 +98,10 @@ session saying so. Replace it with the real value.
 
 ## Landed
 
+- **PR #40** (`10a5302`): round 5 — the talent trees, the route-invalidation
+  fix, and three source-reading guards. 1932 tests across 73 files at the
+  merge. Untagged so far: the downloadable release is still `v0.2.0` while
+  gh-pages already deploys this merge.
 - **`v0.2.0`**: round 4, merged as `09f42f6` (PR #39). Seven branches: the
   roster rebuild, the char-select screen, the 55x33 playfield, two siege flake
   fixes, the balance-doc drift test. 1757 tests across 66 files.
