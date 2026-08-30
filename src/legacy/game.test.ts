@@ -845,6 +845,34 @@ describe('routes drop when cover closes across them', () => {
     expect(s.pathTimer).toBe(0);
   });
 
+  // The production freeze of 2026-08-30, replayed at the exact seam: the crow
+  // king's bats ride in `crows` with no `path` field until the scheduler
+  // serves them, and a tile closing in that window walks the whole roster
+  // through invalidateThrough. One field-less agent in the mix must cost
+  // nothing — it cost the entire frame loop the day the guard read only
+  // `null`. The bat mirrors spawnBossBats' literal, minus the boss it would
+  // orbit; TileMap.set fires the walk synchronously (it is the very frame in
+  // the production stack), so pushing and closing with no step between is the
+  // conjunction itself, not a race for it. Regrowth reaching this same set()
+  // is the previous test's business.
+  it('survives a routeless bat in the roster when cover closes', () => {
+    const { s, tileSize } = stagedWalker();
+    const col = 18;
+    expect(routedThrough(s, col, tileSize)).toBe(true);
+
+    (g.crows() as Array<Record<string, unknown>>).push({
+      x: 40, y: 40, baseY: 40,
+      state: 'aggro', aggroTimer: 8, team: Team.ENEMY,
+      wingPhase: 0, phaseOff: 0, entityPhase: 0,
+      white: true, frozen: false,
+    });
+    const bat = (g.crows() as Array<Record<string, unknown>>).at(-1);
+    expect(bat?.path, 'the summon literal grew a path').toBeUndefined();
+
+    g.tiles().set(ROW, col, TILE.TREE);
+    expect(routedThrough(s, col, tileSize), 'the routed walker still dropped').toBe(false);
+  });
+
   // Ground opening up cannot invalidate anything, and the gate that says so is
   // what keeps this off every blast, every fire and every falling tower.
   it('leaves routes alone when terrain opens instead of closing', () => {

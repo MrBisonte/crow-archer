@@ -1867,7 +1867,11 @@ const pathScheduler = new PathScheduler(computeAStarPath);
  * Four populations with four update loops and three separate arrays, so this
  * is the one place that has to know all of them. A boss is yielded only while
  * it actually holds a route: the kinds that walk are set up with `path: null`,
- * and the kinds that do not have no such field at all.
+ * and the kinds that do not have no such field at all. The rank and file get
+ * no such filter because they need none — the crow king's bats ride in
+ * `crows` without a `path` field, and the scheduler treats a missing route
+ * like an empty one. That is the contract, not an accident: it froze a boss
+ * fight solid the one time it wasn't.
  *
  * Guards are deliberately absent. They cache their own route under `route`
  * rather than `path`, and `moveGuard` refuses a step into solid ground, so a
