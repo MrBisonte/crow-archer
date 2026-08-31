@@ -116,7 +116,7 @@ Component notes, top to bottom:
    ```
 
    where
-   - `<repo>` is the clone root, for example `C:\Users\bison\OneDrive\labs\robinhood`.
+   - `<repo>` is the clone root, the directory holding `package.json`.
    - `<name>` is the worktree directory name.
    - `<branch>` is the branch to serve.
 

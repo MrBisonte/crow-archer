@@ -117,6 +117,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 | [Talents](docs/talents.md) | Per-character trees, mastery, and the run draft |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns, the console verbs |
 | [Playbooks](docs/playbooks/README.md) | What building this game has cost: one file per kind of work |
+| [Monitored playtests](docs/playbooks/monitored-playtest.md) | The flight recorder: wire format, record kinds, the four clocks, and how to read a log |
 | [Working rules](CLAUDE.md) | Contributing: the traps this codebase has already fallen into, and what is mechanically enforced |
 
 ## License

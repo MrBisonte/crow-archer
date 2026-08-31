@@ -24,3 +24,6 @@ _flightlogs/
 # OS artifacts
 Thumbs.db
 .DS_Store
+
+# Internal multi-agent coordination ledger. Kept locally, not published.
+COORDINATION.md
