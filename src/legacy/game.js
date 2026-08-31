@@ -470,6 +470,15 @@ const CONFIG = {
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
+  // How far his own stick throws him, standing on top of it. Falls to nothing
+  // at the blast's edge, so where he puts the stick is the whole control.
+  archerBlastHopPx: 150,
+  // A powered fire arrow drops a patch this often while it flies, which is
+  // what turns one landing spot into a burning lane.
+  archerFireTrailSecs: 0.09,
+  // Bounces a powered ricochet gets before it gives up, against the 9 an
+  // ordinary one gets.
+  archerPowerBounces: 26,
   // 70% of dynamite's, same cut the crossbow bolt takes against the arrow. Blast
   // radius stays shared with dynamiteBlastRadius; only boss damage is softer.
   satchelBossDamage: 1,
@@ -2370,6 +2379,10 @@ function releaseArcherDraw() {
     initSpeed: spd,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     power: true,
+    // What the pickup is worth on a powered shot. Fire lays a lane instead of
+    // one patch; ricochet stops running out of bounces. Each is the arrow
+    // type doing more of its own thing, so a pickup still reads as itself.
+    fireTrail: type === 'fire' ? 0 : null,
     pierceLeft: 1 + Math.round(drawn * (TALENTS.stat('splitShaft') - 1)),
     // Draw and brace multiply: a fully drawn shot from a braced stance is
     // the most committed thing he can do, and it is paid for in seconds.
@@ -4561,13 +4574,18 @@ function startWhirlwind() {
  * so the two throws can never drift into being two slightly different
  * explosives.
  */
-function launchCharge(speed, kind = 'dynamite', element = 'none') {
+function launchCharge(speed, kind = 'dynamite', element = 'none', opts = {}) {
   const lifetime = kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime;
   dynamites.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * speed,
     vy: Math.sin(player.aimAngle) * speed,
     life: lifetime, fuseTotal: lifetime, kind, element,
+    // Marks a stick as one HE threw, so only that one throws him back. The
+    // blast alone cannot answer this: `explodeExplosive` sees source
+    // 'dynamite' for a splinter child and for the `blast()` dev hook too, and
+    // launching the player off either would be a surprise rather than a move.
+    hop: opts.hop === true,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
 }
@@ -4575,7 +4593,38 @@ function launchCharge(speed, kind = 'dynamite', element = 'none') {
 function throwDynamite(chargeFrac) {
   if (inv.dynamites <= 0) return;
   inv.dynamites--;
-  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2));
+  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2), 'dynamite', 'none', { hop: true });
+}
+
+/**
+ * Throws the player clear of his own blast. No damage: the stick has never
+ * hurt him and this does not change that, it only moves him.
+ *
+ * The push falls off with distance, so standing on the stick throws him
+ * furthest and catching the edge barely moves him. That makes the placement
+ * the whole control -- a stick at his feet is a leap, a stick thrown long is
+ * an attack he happens to be standing near.
+ *
+ * Walls are respected per axis, the way `pushBodiesFrom` does it, so a hop
+ * into a rock slides along it rather than posting him inside it.
+ */
+function hopFromBlast(cx, cy, radius) {
+  const d = Math.hypot(player.x - cx, player.y - cy);
+  // Dead centre has no direction to push along. Rather than pick one, nudge
+  // him the way he is facing, which is the only intent available.
+  const angle = d < 0.001 ? player.aimAngle + Math.PI : Math.atan2(player.y - cy, player.x - cx);
+  if (d > radius) return 0;
+  const push = CONFIG.archerBlastHopPx * (1 - d / radius);
+  // Clamped into the arena BEFORE the tile is read, not after. Asking whether
+  // a point beyond the wall is standable answers no, and the hop cancels
+  // itself -- which is how a stick thrown at his feet while he stood on the
+  // spawn tile moved him nowhere at all. Clamped first, the same hop carries
+  // him up to the wall and stops there, which is what sliding means.
+  const nx = clampArenaX(player.x + Math.cos(angle) * push);
+  const ny = clampArenaY(player.y + Math.sin(angle) * push);
+  if (tilePassable(tileAt(nx, player.y))) player.x = nx;
+  if (tilePassable(tileAt(player.x, ny))) player.y = ny;
+  return push;
 }
 
 /**
@@ -4794,6 +4843,18 @@ function updateArrows(dt) {
       continue; // done with wizard bolt — skip archer logic below
     }
 
+    // A powered fire arrow leaves fire behind it rather than only where it
+    // lands, so a full draw burns a lane through whatever it pierced. Spaced
+    // on a timer rather than dropped per frame: a patch every frame would be
+    // a hundred of them down one flight.
+    if (a.fireTrail !== null && a.fireTrail !== undefined) {
+      a.fireTrail -= dt;
+      if (a.fireTrail <= 0) {
+        a.fireTrail += CONFIG.archerFireTrailSecs;
+        spawnFire(a.x, a.y);
+      }
+    }
+
     // Fire trail — 1 particle every 0.03s, rises like heat
     if (a.type === 'fire') {
       a.trailTimer -= dt;
@@ -4880,7 +4941,8 @@ function updateArrows(dt) {
         a.trailHistory.push({ x: a.x, y: a.y, angle: Math.atan2(a.vy, a.vx) });
         if (a.trailHistory.length > 6) a.trailHistory.shift();
       }
-      if (!removed && (a.bounces > 9 || a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows * CONFIG.tileSize))
+      const bounceCap = a.power === true ? CONFIG.archerPowerBounces : 9;
+      if (!removed && (a.bounces > bounceCap || a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows * CONFIG.tileSize))
         { arrows.splice(i, 1); removed = true; }
     } else {
       a.x += a.vx * dt; a.y += a.vy * dt;
@@ -5657,6 +5719,9 @@ function explodeExplosive(d, source, opts = {}) {
   damageEnemiesInRadius(d.x, d.y, radius,
     { amount: bossDamage, source, flash: 0.25 },
     { falloff: opts.falloff, element: d.element });
+
+  // His own stick throws him. Nothing else does, and it costs him no health.
+  if (d.hop === true) hopFromBlast(d.x, d.y, radius);
 
   chainNearbyBombs(d, link);
 

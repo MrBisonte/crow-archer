@@ -95,18 +95,18 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
     talents: [
       {
         id: 'setFeet', label: 'SET FEET',
-        desc: '-0.25 s to reach a full brace / level',
-        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -0.25 },
+        desc: '-0.35 s to reach a full brace / level',
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -0.35 },
       },
       {
         id: 'deepRoots', label: 'DEEP ROOTS',
-        desc: 'Brace bleeds away slower once he moves',
-        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -1 },
+        desc: 'Brace bleeds away far slower once he moves',
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -1.4 },
       },
       {
         id: 'splitShaft', label: 'SPLIT SHAFT',
-        desc: '+1 body a full power shot passes through / level',
-        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+        desc: '+2 bodies a full power shot passes through / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 2 },
       },
     ],
     capstones: [

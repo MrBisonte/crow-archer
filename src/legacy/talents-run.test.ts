@@ -467,10 +467,22 @@ describe('the archer tree reaches Brace', () => {
   });
 
   it('punches through more bodies with SPLIT SHAFT drafted', () => {
+    // Read off the tree rather than written down: this asserted a literal 5,
+    // which is a figure a balance pass moves, and a test that fails on tuning
+    // teaches nothing about whether the talent works.
+    const spec = CHAR_TREES.archer.talents.find((t) => t.id === 'splitShaft')!;
+    const per = spec.effect.kind === 'linear' ? spec.effect.per : 0;
     const base = g.config().archerPowerPierce;
-    talents().grant('splitShaft', 2);
+    const levels = spec.costs.length;
+
+    talents().grant('splitShaft', levels);
+    expect(talents().stat('splitShaft'), 'owned but undrafted should be the base')
+      .toBe(base);
+
     talents().draft('splitShaft');
-    expect(talents().stat('splitShaft')).toBe(base + 2);
+    expect(talents().stat('splitShaft')).toBe(base + per * levels);
+    expect(talents().stat('splitShaft'), 'the talent bought no pierce at all')
+      .toBeGreaterThan(base);
   });
 
   it('holds a full brace through movement only once ROOTED is sealed', () => {
@@ -807,6 +819,154 @@ describe('STICKY FAN leaves the fan on the ground', () => {
     talents().draft('stickyFan');
     expect(barrageIntoBody(), 'stuck bombs should still be on the map')
       .toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The archer's round: his own stick moves him, and a powered pickup carries
+ * further than a plain one.
+ *
+ * Measured on the field rather than off the config, because both of these are
+ * the kind of change that reads as done in a diff and does nothing in a game:
+ * a push applied to the wrong object, a trail dropped by an arrow nobody
+ * powered.
+ */
+describe('the archer rides his own blast', () => {
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+  });
+
+  /**
+   * Throws a stick at an offset from him and reports how far he moved.
+   *
+   * He is stood in open ground first. The spawn tile is x=80, a stride from
+   * the left wall, and a push away from a stick to his right lands outside
+   * the arena — which is a real case, but not the one these tests are about.
+   */
+  function hopWithStickAt(dx: number): { moved: number; hp: number } {
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+    const from = { x: p.x, y: p.y };
+    const hpBefore = (g.counts() as { hp: number }).hp;
+    (g.inv() as Record<string, number>).dynamites = 5;
+    aimAt(p.x + 400, p.y);
+    g.stepSim(1);
+    g.secondary();
+    g.stepSim(2);
+    g.secondaryUp();
+    // Park the thrown stick exactly where the test wants it and set it off.
+    const stick = (g.dynamites() as { x: number; y: number; life: number }[]).at(-1)!;
+    stick.x = from.x + dx; stick.y = from.y;
+    stick.life = 0;
+    stepPast(4);
+    const after = g.player() as { x: number; y: number };
+    return {
+      moved: Math.hypot(after.x - from.x, after.y - from.y),
+      hp: hpBefore - (g.counts() as { hp: number }).hp,
+    };
+  }
+
+  it('throws him clear, and costs him nothing to do it', () => {
+    const { moved, hp } = hopWithStickAt(10);
+    expect(moved, 'his own stick did not move him').toBeGreaterThan(20);
+    expect(hp, 'the hop cost him health').toBe(0);
+  });
+
+  it('throws him hardest from underfoot and barely at all from the edge', () => {
+    // The control the owner picked: where the stick lands is the whole dial.
+    const near = hopWithStickAt(6).moved;
+    const edge = hopWithStickAt(Math.round(g.config().dynamiteBlastRadius * 0.85)).moved;
+    expect(near, 'a stick at his feet should launch him').toBeGreaterThan(edge * 2);
+  });
+
+  it('throws him away from the stick, never towards it', () => {
+    // Stick to his RIGHT, so any push must carry him left. hopWithStickAt
+    // centres him first, so read the start position after it has done so.
+    let startX = 0;
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    startX = p.x;
+    hopWithStickAt(20);
+    expect((g.player() as { x: number }).x, 'he was pulled into the blast')
+      .toBeLessThan(startX);
+  });
+
+  it('leaves a stick outside the blast unable to move him', () => {
+    const { moved } = hopWithStickAt(g.config().dynamiteBlastRadius + 40);
+    expect(moved, 'a stick out of range still threw him').toBeLessThan(1);
+  });
+
+  it('does not throw him off a blast he did not throw', () => {
+    // `blast()` is the dev hook, and a splinter child carries no mark either.
+    // Only the stick that left his hand moves him.
+    const p = g.player() as { x: number; y: number };
+    const from = { x: p.x, y: p.y };
+    g.blast(p.x + 8, p.y);
+    stepPast(2);
+    const after = g.player() as { x: number; y: number };
+    expect(Math.hypot(after.x - from.x, after.y - from.y),
+      'an explosion he did not throw moved him').toBeLessThan(1);
+  });
+});
+
+describe('a powered arrow carries its pickup further', () => {
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+  });
+
+  /**
+   * Fires one shot with only fire arrows in the quiver, and reports the fires
+   * it left: how many, and how far apart.
+   *
+   * The spread is the point. Counting alone is not enough — an arrow that
+   * lights one patch where it stops still beats an arrow that lights none, so
+   * a count test passes with the trail deleted. A lane is fires in DIFFERENT
+   * PLACES, and that is what this measures.
+   */
+  function fireLaneFrom(powered: boolean): { count: number; spread: number } {
+    (g.fires() as unknown[]).length = 0;
+    const bag = g.inv() as Record<string, number>;
+    bag.arrows = 0; bag.ricochetArrows = 0; bag.fireArrows = 5;
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+    aimAt(p.x + 400, p.y);
+    g.stepSim(1);
+    if (powered) { g.shift(); stepPast(40); g.shiftUp(); } else { g.shoot(); }
+    stepPast(60);
+    const xs = (g.fires() as { x: number }[]).map((f) => f.x);
+    return {
+      count: xs.length,
+      spread: xs.length === 0 ? 0 : Math.max(...xs) - Math.min(...xs),
+    };
+  }
+
+  it('lays a lane of fire on a power shot, not a single patch', () => {
+    const lane = fireLaneFrom(true);
+    expect(lane.count, 'a powered fire arrow lit no lane').toBeGreaterThan(2);
+    expect(lane.spread, 'every fire it lit landed in one place').toBeGreaterThan(100);
+  });
+
+  it('leaves a plain fire arrow lighting nothing like a lane', () => {
+    // The contrast that makes the lane a power-shot thing rather than a fire
+    // thing: an ordinary fire arrow spreads no fire along its flight at all.
+    expect(fireLaneFrom(false).spread, 'a plain fire arrow laid a lane too')
+      .toBeLessThan(100);
+  });
+
+  it('lets a powered ricochet outlast the bounces an ordinary one gets', () => {
+    // The cap itself, since a bounce count depends on where the walls are and
+    // this suite clears the arena. What matters is that powered reads higher.
+    expect(g.config().archerPowerBounces).toBeGreaterThan(9);
   });
 });
 
