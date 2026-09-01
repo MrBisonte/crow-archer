@@ -23,7 +23,7 @@ import {
   towerCentre, towerStanding, towerTiles,
 } from '../sim/towers';
 import { barrierGates, towerSites } from '../sim/bastion-terrain';
-import { nearestHostile, nearestHostileWithin } from '../sim/targeting';
+import { nearestHostile, nearestHostileAmong, nearestHostileWithin } from '../sim/targeting';
 import {
   GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITES,
 } from '../render/guard-grids';
@@ -4730,19 +4730,24 @@ function updateArrows(dt) {
     if (a.wiz) {
       // Life expiry — must be checked here since we `continue` before the shared check below
       if (a.life <= 0) { arrows.splice(i, 1); continue; }
-      // Homing: the boss during a boss fight, otherwise the nearest crow. A
-      // boss fight is what the player is there for — a leftover passive crow
-      // stealing the bolt mid-fight is a bug, not a targeting choice, so the
-      // boss is checked first rather than only as a fallback when no crow
-      // exists at all.
+      // Homing: the boss during a boss fight, otherwise the nearest hostile of
+      // any kind. A boss fight is what the player is there for — a leftover
+      // passive crow stealing the bolt mid-fight is a bug, not a targeting
+      // choice, so the boss is checked first rather than only as a fallback
+      // when nothing else exists at all.
+      //
+      // The fallback used to walk `crows` and no other population, which left
+      // the wizard's defining mechanic inert wherever the enemies are not
+      // birds: the castle gauntlet and the maze, where crows are deleted
+      // outright, and the cavern, whose whole garrison is soldiers. A bolt
+      // that flew straight past a skeleton also read as broken rather than as
+      // a rule, since the README has always sold it as steering toward
+      // whoever is nearest.
       if (a.homing) {
-        let tgt = null;
-        if (bossInPlay()) {
-          tgt = boss;
-        } else {
-          let tDist2 = Infinity;
-          for (const c of crows) { const d = dist2(a.x,a.y,c.x,c.y); if (d<tDist2){tDist2=d;tgt=c;} }
-        }
+        const tgt = bossInPlay()
+          ? boss
+          : nearestHostileAmong({ x: a.x, y: a.y, team: Team.A },
+                                [crows, skeletons, soldiers]);
         if (tgt) {
           const tA = Math.atan2(tgt.y - a.y, tgt.x - a.x);
           const cA = Math.atan2(a.vy, a.vx);
@@ -4791,6 +4796,27 @@ function updateArrows(dt) {
         }
       }
       if (wizHitSkeleton) continue;
+      // The garrison was missed here the same way it was missed in the area
+      // helper above (see its own note): this loop was written when a crow and
+      // a skeleton were the whole roster, and the soldiers that arrived with
+      // the cavern were never added, so the wizard's primary passed straight
+      // through every one of them. The heading is handed over rather than
+      // recomputed from the two positions, because it is what a shieldman's
+      // guard is measured against and where a bolt came from is not where it
+      // was pointed.
+      for (let j = soldiers.length-1; j >= 0; j--) {
+        if (dist2(a.x,a.y,soldiers[j].x,soldiers[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
+          // Worth one hit, not `a.dmg`. That is the rule every player
+          // projectile follows — see arrowDamage below — and it is what the
+          // crow and skeleton loops above already do by taking the default.
+          // Only a soldier has the health for the difference to show, so
+          // reading a.dmg here would quietly make a fire bolt worth three
+          // against the garrison and one against everything else.
+          damageSoldier(j, 1, knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx));
+          arrows.splice(i, 1);
+          break;
+        }
+      }
       continue; // done with wizard bolt — skip archer logic below
     }
 
@@ -5204,6 +5230,11 @@ function spawnSkeleton(kind = 'normal') {
     kind, // 'normal' | 'fire' | 'ice' | 'rat' — see the wave table below
     state: 'aggro', // always hostile — the only state a skeleton has, and
                      // what pathScheduler.serve() requires to path it at all
+    // Says out loud what `state` only implies, so a skeleton satisfies
+    // Targetable and can be weighed up where it lies. A crow has carried this
+    // since the bastion; the two populations that arrived later did not, which
+    // is why siegeHostiles still has to wrap every body it hands out.
+    team: Team.ENEMY,
     hp: 1, maxHp: 1, hitFlash: 0, heldTimer: 0,
     walkPhase: Math.random() * Math.PI * 2,
     path: null, pathTimer: 0,
@@ -5370,6 +5401,7 @@ function spawnSoldier(kind) {
     x: at.x, y: at.y, kind,
     // Always hostile, and the state pathScheduler.serve() requires to path it.
     state: 'aggro',
+    team: Team.ENEMY,   // see spawnSkeleton: stated, not inferred from `state`
     hp: stats.hp, maxHp: stats.hp, hitFlash: 0,
     walkPhase: Math.random() * Math.PI * 2,
     // Which way it is looking, which is the whole of the shieldman's guard.

@@ -5131,33 +5131,65 @@ describe('projectile flight, as it behaves today', () => {
     expect(Math.abs(a.vy)).toBeGreaterThan(0);  // steered off the straight line
   });
 
-  // Characterising a real gap, not endorsing it. Homing checks the boss and
-  // then walks `crows`, and no other population, so the wizard's defining
-  // mechanic is inert wherever the enemies are not birds: the castle gauntlet
-  // and the maze, where crows are deleted outright and everything is a
-  // skeleton, and the cavern, whose whole garrison is soldiers.
-  //
-  // Locked in here so a refactor of updateArrows cannot change it by accident.
-  // Fixing it is a separate decision with balance consequences, and belongs to
-  // whoever owns the wizard rather than to a test.
-  it('does NOT home toward a skeleton or a soldier, which is a known gap', () => {
+  // This used to be a characterisation test asserting the opposite: homing
+  // checked the boss and then walked `crows` alone, so the wizard's defining
+  // mechanic was inert wherever the enemies are not birds — the castle
+  // gauntlet and the maze, where crows are deleted outright and everything is
+  // a skeleton, and the cavern, whose whole garrison is soldiers.
+  it('a wizard bolt homes toward a skeleton, the same as toward a crow', () => {
     const p = g.player() as { x: number; y: number };
     g.spawnSkeleton('normal');
     const s = g.skeletons()[0] as { x: number; y: number };
     s.x = p.x + 120; s.y = p.y - 120;
-    const atSkeleton = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    const bolt = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
     g.stepSim(10);
-    expect(atSkeleton.vy).toBe(0);              // flew perfectly straight past it
+    expect(bolt.vy).toBeLessThan(0);            // steered up, toward the skeleton
+  });
 
-    emptyField();
+  it('a wizard bolt homes toward a soldier, the same as toward a crow', () => {
+    const p = g.player() as { x: number; y: number };
     g.spawnSoldier('spearman');
     const sol = g.soldiers()[0] as { x: number; y: number } | undefined;
     expect(sol, 'spawnSoldier put nothing on the field').toBeDefined();
     if (sol === undefined) return;
     sol.x = p.x + 120; sol.y = p.y - 120;
-    const atSoldier = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    const bolt = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
     g.stepSim(10);
-    expect(atSoldier.vy).toBe(0);
+    expect(bolt.vy).toBeLessThan(0);
+  });
+
+  // Steering at a body it cannot damage would be the worse half of the bug
+  // rather than a fix, so the hit is asserted separately from the turn. This
+  // is the loop that never mentioned soldiers at all: the bolt flew through
+  // the whole garrison and out the other side.
+  it('a wizard bolt damages a soldier it flies into', () => {
+    const p = g.player() as { x: number; y: number };
+    g.spawnSoldier('spearman');
+    const sol = g.soldiers()[0] as { x: number; y: number; hp: number } | undefined;
+    expect(sol, 'spawnSoldier put nothing on the field').toBeDefined();
+    if (sol === undefined) return;
+    sol.x = p.x + 100; sol.y = p.y;             // dead ahead, on the flight line
+    const before = sol.hp;
+    launch({ wiz: true, homing: false, vx: 400, vy: 0, dmg: 1 });
+    g.stepSim(ONE_SECOND);
+    expect(sol.hp).toBeLessThan(before);
+    expect(g.arrows().length).toBe(0);          // and the bolt stopped on it
+  });
+
+  // A spearman has more than one health, so what a bolt is worth against the
+  // garrison is a number that can be got wrong rather than a formality. One,
+  // the same as every other player projectile — a fire bolt is worth three to
+  // a boss and one to a body, which is the rule the archer's quiver states.
+  it('a wizard bolt is worth one hit to a soldier, whatever it carries', () => {
+    const p = g.player() as { x: number; y: number };
+    g.spawnSoldier('spearman');
+    const sol = g.soldiers()[0] as { x: number; y: number; hp: number } | undefined;
+    if (sol === undefined) throw new Error('spawnSoldier put nothing on the field');
+    sol.x = p.x + 100; sol.y = p.y;
+    const before = sol.hp;
+    launch({ wiz: true, homing: false, vx: 400, vy: 0, dmg: g.config().wizFireBoltDamage });
+    g.stepSim(ONE_SECOND);
+    expect(sol.hp).toBe(before - 1);
   });
 
   it('a laser bolt crosses ground a plain arrow is stopped by', () => {
