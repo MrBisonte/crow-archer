@@ -29,6 +29,20 @@ just read it.
   or resolve a gap. A structural collision is resolved by the author of the
   branch that caused it, with both diffs open. Not by whoever merges last.
 
+## Lessons: write down what cost you time
+
+- **A trap, a bug, or a practice here just cost you real time?** Append one
+  line to `LESSONS.jsonl` before you move on, so the next session meets the
+  hazard already warned rather than paying for it again. One self-contained
+  JSON object per line; `AGENTS.md` shows the shape and `src/lessons.test.ts`
+  is the one home for the rules and enforces them.
+- **Tempted to restate a lesson as a rule in this file?** Keep one home for
+  each: this file is the imperative rule (*when X, do Y*), `LESSONS.jsonl` is
+  the dated episode that earned it. Link the two by the lesson's `id`.
+- **Editing `LESSONS.jsonl`?** Append only — never rewrite a past line.
+  Several sessions share it, and an append rarely collides where a rewrite
+  clobbers, the same reason the session ledger is written the way it is.
+
 ## What is enforced mechanically, and what is not
 
 | Rule | Enforced by |
@@ -37,6 +51,7 @@ just read it.
 | `game.js` binds every name it calls | `tsconfig.legacy.json` |
 | Every event declared, handled and emitted | `events.coverage.test.ts` |
 | A siege run can be finished | the ten-wave play-through |
+| Every `LESSONS.jsonl` line parses and conforms | `src/lessons.test.ts` |
 | Everything below | nothing. You. |
 
 Run `npm run hooks:install` once per clone **and once per worktree** —
