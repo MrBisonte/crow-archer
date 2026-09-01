@@ -132,3 +132,44 @@ export function noteKeyUp(
   }
   return wentDownAs;
 }
+
+/**
+ * The part of a laid-out canvas this needs. Structural rather than a DOMRect,
+ * so the mapping below stays testable without a DOM.
+ */
+export interface DisplayRect {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Where a pointer event lands, in canvas pixels.
+ *
+ * The canvas is displayed at whatever size fits the window and is letterboxed
+ * inside it, so client pixels and canvas pixels are neither the same scale nor
+ * the same origin. Scaling by `canvasW / rect.width` is what lets the aim
+ * survive the canvas being shown at any size.
+ *
+ * **Deliberately unclamped, and that is the whole point of the function.** The
+ * result is allowed to fall outside the canvas, because the pointer is allowed
+ * to: there is letterbox margin on all four sides. Clamping here is what made
+ * players report the aim "sticking" — past the edge both axes pinned, so moving
+ * further out changed nothing and the shot stayed at the angle the pointer had
+ * crossed the border at. Keeping the crosshair visible is a drawing concern and
+ * belongs to `reticleAt`, which pins it to the point the aim ray leaves the
+ * playfield so it still sits on the line the shot travels.
+ */
+export function pointerToCanvas(
+  clientX: number,
+  clientY: number,
+  rect: DisplayRect,
+  canvasW: number,
+  canvasH: number,
+): { x: number; y: number } {
+  return {
+    x: (clientX - rect.left) * (canvasW / rect.width),
+    y: (clientY - rect.top) * (canvasH / rect.height),
+  };
+}

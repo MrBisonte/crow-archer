@@ -4821,7 +4821,17 @@ describe('allies are visibly the hero\u2019s', () => {
 // the reticle a full 48px below the point the arrow flew at. Lining the reticle
 // up on a crow shot a clean 48px over its head, on a target 16 pixels tall.
 describe('the reticle sits where the shot goes', () => {
-  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+  afterEach(() => {
+    g.setMode('brawl');
+    g.pickMap('forest');
+    // Put the pointer back on the picture. `mouse` is unclamped now, so a test
+    // that leaves it out in the margin hands the next one a reticle that is
+    // pinned rather than under the pointer, and anything deriving an offset
+    // from `mouse - reticleAt()` silently reads that pin as its offset.
+    const mouse = g.mouse() as { x: number; y: number };
+    mouse.x = g.config().canvasW / 2;
+    mouse.y = g.config().canvasH / 2;
+  });
 
   const MOUSE_POINTS = [
     { x: 100, y: 100 }, { x: 528, y: 360 }, { x: 900, y: 640 }, { x: 0, y: 48 },
@@ -4839,6 +4849,58 @@ describe('the reticle sits where the shot goes', () => {
       expect(reticle.x, `x at ${at.x},${at.y}`).toBe(world.x);
       expect(reticle.y, `reticle is not on the aim point at ${at.x},${at.y}`)
         .toBe(world.y + hud);
+    }
+  });
+
+  // Players reported the aim "sticking" the moment the pointer left the picture.
+  // The canvas is letterboxed, so there is margin on all four sides to wander
+  // into, and the listener clamped mouse.x/y to the canvas bounds: once both
+  // axes pinned, moving further out changed nothing and the shot kept firing at
+  // the point the pointer had crossed the edge at.
+  it('keeps following the pointer once it has left the picture', () => {
+    g.setMode('brawl');
+    g.pickMap('forest');
+    g.go('playing');
+    const p = g.player() as { x: number; y: number };
+    const mouse = g.mouse() as { x: number; y: number };
+
+    const aimAt = (mx: number, my: number): number => {
+      mouse.x = mx; mouse.y = my;
+      const w = g.aimWorld() as { x: number; y: number };
+      return Math.atan2(w.y - p.y, w.x - p.x);
+    };
+
+    // Both of these clamp to x = 0, so the old code handed them one angle.
+    expect(aimAt(-50, 200)).not.toBeCloseTo(aimAt(-400, 200), 5);
+    // And the same collapse happened past every other edge.
+    expect(aimAt(5000, 300)).not.toBeCloseTo(aimAt(9000, 300), 5);
+    expect(aimAt(600, -200)).not.toBeCloseTo(aimAt(600, -900), 5);
+  });
+
+  it('pins the crosshair to the edge, still on the line the shot travels', () => {
+    g.setMode('brawl');
+    g.pickMap('forest');
+    g.go('playing');
+    const p = g.player() as { x: number; y: number };
+    const mouse = g.mouse() as { x: number; y: number };
+    const cfg = g.config() as { hudHeight: number; canvasW: number; canvasH: number };
+
+    for (const at of [{ x: -400, y: 200 }, { x: 9000, y: -500 }, { x: 700, y: 9000 }]) {
+      mouse.x = at.x; mouse.y = at.y;
+      const r = g.reticleAt() as { x: number; y: number };
+      const where = `pointer at ${at.x},${at.y}`;
+
+      // Visible: a crosshair drawn off the canvas is no aiming reference at all.
+      expect(r.x, `${where} x`).toBeGreaterThanOrEqual(0);
+      expect(r.x, `${where} x`).toBeLessThanOrEqual(cfg.canvasW);
+      expect(r.y, `${where} y`).toBeGreaterThanOrEqual(cfg.hudHeight);
+      expect(r.y, `${where} y`).toBeLessThanOrEqual(cfg.canvasH);
+
+      // Honest: on the ray, not merely at the nearest point on the border. A
+      // plain clamp satisfies the four bounds above and still lies about angle.
+      const eye = { x: p.x, y: p.y + cfg.hudHeight };
+      expect(Math.atan2(r.y - eye.y, r.x - eye.x), `${where} is off the aim line`)
+        .toBeCloseTo(Math.atan2(at.y - eye.y, at.x - eye.x), 5);
     }
   });
 

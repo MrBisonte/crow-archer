@@ -36,7 +36,7 @@ import {
   SOLDIER_SPRITE, buildCommanderGrid,
 } from '../render/soldier-grids';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
-import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp } from '../sim/input';
+import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp, pointerToCanvas } from '../sim/input';
 import { CHARACTER_STATS } from '../sim/arena';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
@@ -3081,12 +3081,17 @@ function installInput() {
   // something off to the side went where the pointer had last been seen rather
   // than where it was pointing. Clamping pins aim to the nearest edge instead,
   // which is what a player means by pushing past the border.
-  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   window.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return;   // canvas not laid out yet
-    mouse.x = clamp((e.clientX - r.left) * (CONFIG.canvasW / r.width), 0, CONFIG.canvasW);
-    mouse.y = clamp((e.clientY - r.top) * (CONFIG.canvasH / r.height), 0, CONFIG.canvasH);
+    // Deliberately unclamped. The canvas is letterboxed, so there is margin on
+    // every side to wander into, and clamping the aim here froze it the moment
+    // the pointer left the picture: both axes pinned, so pushing further out
+    // changed nothing and the shot kept going where you used to be pointing.
+    // Keeping the crosshair on screen is reticleAt's job, not the aim's.
+    const at = pointerToCanvas(e.clientX, e.clientY, r, CONFIG.canvasW, CONFIG.canvasH);
+    mouse.x = at.x;
+    mouse.y = at.y;
   });
   canvas.addEventListener('mousedown', e => {
     initAudio();
@@ -13968,9 +13973,34 @@ const RETICLE_PAINTERS = {
  *
  * One function so the two can never disagree again, and exposed on devHooks so
  * the agreement is checkable without a canvas.
+ *
+ * The two do differ in one way, and only one: `mouse` is unclamped, so the aim
+ * follows the pointer out into the letterbox margin and beyond, while the
+ * crosshair has to stay on the picture to be seen at all. Where they differ the
+ * crosshair is pinned to the point the aim ray crosses the playfield edge, so
+ * it still sits on the line the shot travels. Players reported the aim
+ * "sticking" precisely because the old code clamped the aim instead: once both
+ * axes pinned, moving further out changed nothing.
  */
 function reticleAt() {
-  return { x: mouse.x, y: mouse.y };
+  const top = CONFIG.hudHeight, bottom = CONFIG.canvasH, right = CONFIG.canvasW;
+  if (mouse.x >= 0 && mouse.x <= right && mouse.y >= top && mouse.y <= bottom) {
+    return { x: mouse.x, y: mouse.y };
+  }
+  // Off the picture, so pin the crosshair where the aim ray leaves the
+  // playfield rather than at the nearest edge point. Nearest-point is what a
+  // plain clamp gives, and it puts the crosshair off the line the shot travels
+  // -- the same lie as the old 48px offset above, just in the other axis.
+  const px = player.x, py = player.y + top;
+  const dx = mouse.x - px, dy = mouse.y - py;
+  let t = 1;
+  if (dx > 0) t = Math.min(t, (right - px) / dx);
+  else if (dx < 0) t = Math.min(t, -px / dx);
+  if (dy > 0) t = Math.min(t, (bottom - py) / dy);
+  else if (dy < 0) t = Math.min(t, (top - py) / dy);
+  if (!Number.isFinite(t)) t = 0;
+  t = Math.max(0, Math.min(1, t));
+  return { x: px + dx * t, y: py + dy * t };
 }
 
 /** The world point the aim ray is pointed at. */

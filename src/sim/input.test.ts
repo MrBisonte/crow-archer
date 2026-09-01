@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { AIController, Button, hasButton, LocalInput, noteKeyDown, noteKeyUp, type RawInput } from './input';
+import {
+  AIController, Button, hasButton, LocalInput, noteKeyDown, noteKeyUp, pointerToCanvas,
+  type RawInput,
+} from './input';
 
 const raw = (over: Partial<RawInput> = {}): RawInput => ({
   up: false,
@@ -99,5 +102,37 @@ describe('key name bookkeeping', () => {
     const { keys, downAs } = maps();
     expect(noteKeyUp(keys, downAs, 'KeyW', 'w')).toBeUndefined();
     expect(held(keys)).toEqual([]);
+  });
+});
+
+describe('pointerToCanvas', () => {
+  // The canvas is 1760x1104 shown at 1137x713 and centred, which is what
+  // scale-to-fit does in a window too small to hold it at 1:1.
+  const RECT = { left: 311, top: 190, width: 1137, height: 713 };
+  const W = 1760, H = 1104;
+
+  it('scales a point inside the picture to canvas pixels', () => {
+    expect(pointerToCanvas(311, 190, RECT, W, H)).toEqual({ x: 0, y: 0 });
+    const middle = pointerToCanvas(311 + 1137 / 2, 190 + 713 / 2, RECT, W, H);
+    expect(middle.x).toBeCloseTo(W / 2, 6);
+    expect(middle.y).toBeCloseTo(H / 2, 6);
+  });
+
+  // The bug players reported. Clamping here pinned both axes past the edge, so
+  // two very different pointer positions produced one aim and the shot froze at
+  // whatever angle the pointer had crossed the border at.
+  it('keeps reporting movement out in the letterbox margin', () => {
+    const near = pointerToCanvas(RECT.left - 20, 400, RECT, W, H);
+    const far = pointerToCanvas(RECT.left - 300, 400, RECT, W, H);
+    expect(near.x).toBeLessThan(0);
+    expect(far.x).toBeLessThan(near.x);
+
+    const below = pointerToCanvas(700, RECT.top + RECT.height + 250, RECT, W, H);
+    expect(below.y).toBeGreaterThan(H);
+  });
+
+  it('reports past every edge, not just the left one', () => {
+    expect(pointerToCanvas(RECT.left + RECT.width + 400, 400, RECT, W, H).x).toBeGreaterThan(W);
+    expect(pointerToCanvas(700, RECT.top - 400, RECT, W, H).y).toBeLessThan(0);
   });
 });
