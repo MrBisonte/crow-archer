@@ -215,7 +215,12 @@ const CONFIG = {
   killsToTriggerBoss: 10,
   // The retinue. Reach and interval are the cavern garrison's numbers, so an
   // allied foot soldier and an enemy shieldman trade blows at the same rhythm.
-  guardSpeed: 74, guardMeleeReach: 26, guardArcherReach: 260,
+  // guardSpeed was 74, tuned when the map was 33x21. The playfield is 2.62x
+  // that area now, and at 74 a guard needed 23.8s to cross it -- longer than a
+  // wave, so a breach on the far side was not answered late, it was never
+  // answered at all. 110 puts the crossing back near 16s while still reading
+  // as armour rather than a sprint; 123 would restore the old time exactly.
+  guardSpeed: 110, guardMeleeReach: 26, guardArcherReach: 260,
   // Far enough that a boss does not land on top of the hero, near enough
   // that it is on screen and reachable the moment its wave begins.
   siegeBossSpawnDistance: 260,
@@ -404,7 +409,10 @@ const CONFIG = {
   // Which preset to run. Override at runtime with ?pace=nightmare.
   pace: 'fast',
 
-  maxPickupsOnMap: 3,
+  // Three was the count on a 0.71 Mpx playfield. The playfield is 1.86 Mpx now,
+  // so three meant a third of the old density and a much longer walk between
+  // them; eight restores what it was.
+  maxPickupsOnMap: 8,
   waterShimmerMs: 800,
 
   // One pool, the same whoever is fighting him. Who is holding the weapon is
