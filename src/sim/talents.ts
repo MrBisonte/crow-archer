@@ -158,20 +158,39 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   wizard: {
     talents: [
+      // THE POOL OR THE STEP. More casting, or more getting away with it.
       {
-        id: 'focusDepth', label: 'FOCUS DEPTH',
+        id: 'focusDepth', label: 'FOCUS DEPTH', slot: 'reserve',
         desc: '+1 Focus: a full pool casts four bolts',
         tier: 1, costs: [1], effect: { kind: 'linear', per: 1 },
       },
       {
-        id: 'blinkReach', label: 'LONG STEP',
+        id: 'blinkReach', label: 'LONG STEP', slot: 'reserve',
         desc: '+20 px blink distance / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 20 },
       },
+      // THE STORM OR THE BOLT. One big answer on a long timer, or a small one
+      // he can give more often.
       {
-        id: 'stormWidth', label: 'WIDER SKY',
+        id: 'stormWidth', label: 'WIDER SKY', slot: 'weapon',
         desc: '+50 px storm radius / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 50 },
+      },
+      {
+        id: 'quickTongue', label: 'QUICK TONGUE', slot: 'weapon',
+        desc: '-0.18 s between bolts / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: -0.18 },
+      },
+      // THE BLINK. Take it more often, or survive longer inside it.
+      {
+        id: 'farSight', label: 'FAR SIGHT', slot: 'blink',
+        desc: '-1 s off the blink cooldown / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -1 },
+      },
+      {
+        id: 'longPhase', label: 'LONG PHASE', slot: 'blink',
+        desc: '+0.25 s untouchable after a blink / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 0.25 },
       },
     ],
     capstones: [
@@ -187,20 +206,38 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   knight: {
     talents: [
+      // WHAT A STACK IS WORTH, OR HOW MANY. The same meter asked two ways.
       {
-        id: 'deeperCut', label: 'DEEPER CUT',
+        id: 'deeperCut', label: 'DEEPER CUT', slot: 'bloodlust',
         desc: '+3% damage and swing speed per Bloodlust stack / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 0.03 },
       },
       {
-        id: 'fourthBlood', label: 'FOURTH BLOOD',
+        id: 'fourthBlood', label: 'FOURTH BLOOD', slot: 'bloodlust',
         desc: 'A fourth Bloodlust stack to fill',
         tier: 1, costs: [1], effect: { kind: 'linear', per: 1 },
       },
+      // THE CHARGE. Cut on every side of one, or take it far more often.
       {
-        id: 'chargeThrough', label: 'CHARGE THROUGH',
+        id: 'chargeThrough', label: 'CHARGE THROUGH', slot: 'charge',
         desc: 'The charge cuts on every side of him, not only ahead',
         tier: 2, costs: [2], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'hardCharge', label: 'HARD CHARGE', slot: 'charge',
+        desc: '-0.8 s off the charge cooldown / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: -0.8 },
+      },
+      // THE GUARD OR THE SWING. His shield back sooner, or his whirlwind wider.
+      {
+        id: 'towerGuard', label: 'TOWER GUARD', slot: 'guard',
+        desc: '-2 s before his block charges again / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -2 },
+      },
+      {
+        id: 'wideArc', label: 'WIDE ARC', slot: 'guard',
+        desc: '+18 px of whirlwind reach / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 18 },
       },
     ],
     capstones: [
@@ -216,20 +253,39 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   ranger: {
     talents: [
+      // REACH FULL TILT SOONER, OR HOLD IT LONGER. The archer's stance fork,
+      // asked of the hero who is paid for never standing still.
       {
-        id: 'lightFoot', label: 'LIGHT FOOT',
+        id: 'lightFoot', label: 'LIGHT FOOT', slot: 'momentum',
         desc: '-75 px of ground to fill Momentum / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -75 },
       },
       {
-        id: 'longWind', label: 'LONG WIND',
+        id: 'longWind', label: 'LONG WIND', slot: 'momentum',
         desc: '+1 s before a standing ranger loses Momentum / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 1 },
       },
+      // WHAT THE METER BUYS. A higher ceiling on every bolt, or one more bolt.
       {
-        id: 'fullTilt', label: 'FULL TILT',
+        id: 'fullTilt', label: 'FULL TILT', slot: 'payoff',
         desc: '+5% to the Momentum ceiling / level',
         tier: 2, costs: [2, 3, 4], effect: { kind: 'linear', per: 0.05 },
+      },
+      {
+        id: 'fourthBolt', label: 'FOURTH BOLT', slot: 'payoff',
+        desc: '+1 bolt in every crossbow burst / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      // THE SATCHEL. Armed sooner, or thrown further.
+      {
+        id: 'quickArm', label: 'QUICK ARM', slot: 'satchel',
+        desc: '-0.9 s off the satchel fuse / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -0.9 },
+      },
+      {
+        id: 'longArm', label: 'LONG ARM', slot: 'satchel',
+        desc: '+90 px/s on a thrown satchel / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 90 },
       },
     ],
     capstones: [
@@ -245,20 +301,38 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   sapper: {
     talents: [
+      // A CHAIN THAT REACHES, OR A CHAIN THAT RUNS ON. His passive, both ways.
       {
-        id: 'longFuse', label: 'LONG FUSE',
+        id: 'longFuse', label: 'LONG FUSE', slot: 'chain',
         desc: '+18 px of reach for a bomb to light the next / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 18 },
       },
       {
-        id: 'moreLinks', label: 'MORE LINKS',
+        id: 'moreLinks', label: 'MORE LINKS', slot: 'chain',
         desc: '+2 bombs one chain may run through / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 2 },
       },
+      // THE FAN. Bombs that stay where they land, or simply more of them.
       {
-        id: 'stickyFan', label: 'STICKY FAN',
+        id: 'stickyFan', label: 'STICKY FAN', slot: 'fan',
         desc: 'Barrage bombs stop where they land and keep their fuse',
         tier: 2, costs: [2], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'wideFan', label: 'WIDE FAN', slot: 'fan',
+        desc: '+1 bomb in every barrage / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      // THE COMBO SHOT. Back sooner, or bigger when it lands.
+      {
+        id: 'quickShot', label: 'QUICK SHOT', slot: 'combo',
+        desc: '-2 s off the combo shot cooldown / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -2 },
+      },
+      {
+        id: 'bigCombo', label: 'BIG COMBO', slot: 'combo',
+        desc: '+25% to the combo blast radius / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 0.25 },
       },
     ],
     capstones: [

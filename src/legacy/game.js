@@ -2369,8 +2369,8 @@ function tryWizardBlink() {
   player.x = hop.x; player.y = hop.y;
   wizBlinkHops       = chaining ? wizBlinkHops - 1 : CONFIG.wizBlinkMaxHops - 1;
   wizBlinkChainTimer = CONFIG.shiftChainSecs;
-  wizBlinkCD         = CONFIG.wizBlinkCooldown;
-  wizBlinkIFrame     = CONFIG.wizBlinkIFrames;
+  wizBlinkCD         = TALENTS.stat('farSight');
+  wizBlinkIFrame     = TALENTS.stat('longPhase');
   // The rite's Overchannel: a landed blink opens the free-bolt window.
   if (TALENTS.capstoneActive('overchannel')) wizOverchannel = CONFIG.wizOverchannelSecs;
 
@@ -2812,7 +2812,7 @@ function drawAbilityFx() {
   if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
     paintWhirlwind(ctx, {
       x: player.x, y: player.y + CONFIG.hudHeight,
-      radius: CONFIG.knightWhirlwindRadius,
+      radius: TALENTS.stat('wideArc'),
       age:  1 - knightWhirlwindTimer / CONFIG.knightWhirlwindDuration,
       tick: 1 - knightWhirlwindTick / CONFIG.knightWhirlwindTickRate,
       t: loopT,
@@ -2940,7 +2940,7 @@ function releaseKnightCharge() {
   knightDash.frac    = held;
   knightDash.angle   = player.aimAngle;   // committed here, not re-read per frame
   knightChargeTick = 0;   // first arc sweep lands immediately, as whirlwind's does
-  knightChargeCD   = CONFIG.knightChargeCooldown;
+  knightChargeCD   = TALENTS.stat('hardCharge');
   events.emit({ type: 'KNIGHT_CHARGE', x: player.x, y: player.y, power: held });
 }
 
@@ -3637,7 +3637,7 @@ events.on(e => {
         // The sapper's shift-detonated combo reaches a bigger radius than a
         // normal blast, so its burst travels 33% further to match rather than
         // reading like a normal explosion sitting inside a bigger ring.
-        const m = e.big ? CONFIG.sapperComboRadiusMult : 1;
+        const m = e.big ? TALENTS.stat('bigCombo') : 1;
         burst(e.x, e.y, { count: Math.round(12 * m), colors: ['#FFFFFF','#FFB400'],
           speedMin: 200 * m, speedMax: 360 * m, decay: 4.0,
           shape: 'circle', sizeMin: 2, sizeMax: 5, shadowBlur: 16, shadowColor: '#FFB400' });
@@ -3815,7 +3815,7 @@ events.on(e => {
       break;
 
     case 'WHIRLWIND_TICK': {
-      const wr = CONFIG.knightWhirlwindRadius;
+      const wr = TALENTS.stat('wideArc');
       burst(e.x, e.y, {
         count: 6, colors: ['#C0C0D0','#8090B0','#ffffff'],
         speedMin: wr * 0.5, speedMax: wr * 0.95, decay: 4.0, shape: 'spark',
@@ -4301,7 +4301,7 @@ function updatePlayer(dt) {
   // playerShield until something hits the knight from the front.
   if (selectedChar === 'knight' && !playerShield) {
     knightBlockCD = Math.max(0, knightBlockCD - dt);
-    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = CONFIG.knightBlockCooldown; }
+    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = TALENTS.stat('towerGuard'); }
   }
   if (pfSwing > 0) {
     pfSwing = Math.max(0, pfSwing - dt);
@@ -4416,7 +4416,7 @@ function updatePlayer(dt) {
     knightWhirlwindTick  -= dt;
     if (knightWhirlwindTick <= 0) {
       knightWhirlwindTick = CONFIG.knightWhirlwindTickRate;
-      const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
+      const wr = TALENTS.stat('wideArc'), wr2 = wr * wr;
       damageEnemiesInRadius(player.x, player.y, wr,
         { amount: 1, source: 'whirlwind', flash: 0.1 });
       // Break tiles in radius
@@ -4530,10 +4530,14 @@ function tryCrossbowBolt() {
   if (!hasShaft()) { tryPitchfork(); return; }
   // Reserve room for the whole burst up front — a partial push would let
   // arrows.length overshoot maxArrowsInFlight and stall the next press.
-  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  const bolts = TALENTS.stat('fourthBolt');
+  // Gated on one bolt's room, the archer's rule: reserving the whole burst
+  // makes a wider burst fire less often than a narrow one, which turns the
+  // talent that widens it into a penalty.
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
-  const half = (CONFIG.crossbowBoltCount - 1) / 2;
-  for (let i = 0; i < CONFIG.crossbowBoltCount; i++) {
+  const half = (bolts - 1) / 2;
+  for (let i = 0; i < bolts; i++) {
     const boltAngle = player.aimAngle + (i - half) * CONFIG.crossbowSpreadRadians;
     arrows.push({ x: player.x, y: player.y,
       vx: Math.cos(boltAngle) * CONFIG.arrowSpeed,
@@ -4563,7 +4567,7 @@ function tryWizardBolt() {
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
   else if (inv.fireBolts    > 0) { inv.fireBolts--;   type = 'wiz_fire';  dmg = CONFIG.wizFireBoltDamage; }
-  wizBoltCD = CONFIG.wizBoltCooldown;
+  wizBoltCD = TALENTS.stat('quickTongue');
   const spd = CONFIG.wizBoltSpeed;
   arrows.push({
     x: player.x, y: player.y,
@@ -4809,7 +4813,7 @@ function trySapperBarrage() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperBarrageCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   sapperBarrageCD = CONFIG.sapperBarrageCooldown;
-  const n = CONFIG.sapperBarrageCount, half = CONFIG.sapperBarrageArcRadians / 2;
+  const n = TALENTS.stat('wideFan'), half = CONFIG.sapperBarrageArcRadians / 2;
   for (let i = 0; i < n; i++) {
     // n-1 equal steps across the arc, symmetric about aim angle, so an odd
     // count always puts one bomb on the aim line rather than straddling it.
@@ -4834,7 +4838,7 @@ function trySapperBarrage() {
 function trySapperShot() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperShotCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  sapperShotCD = CONFIG.sapperShotCooldown;
+  sapperShotCD = TALENTS.stat('quickShot');
   sapperShots.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * CONFIG.sapperShotSpeed,
@@ -5945,7 +5949,7 @@ function updateSapperShots(dt) {
         // Marked rather than given a one-off radius: chainNearbyBombs copies
         // this onto everything it lights, so the whole cluster goes up at the
         // wider size instead of one wide blast surrounded by ordinary ones.
-        d.chainMult = CONFIG.sapperComboRadiusMult;
+        d.chainMult = TALENTS.stat('bigCombo');
         explodeExplosive(d, 'sapperShot', {
           falloff: { max: CONFIG.sapperComboFalloffMax, min: CONFIG.sapperComboFalloffMin },
         });
@@ -5991,13 +5995,13 @@ function useSatchel() {
   const own = satchels.find(s => !s.armed);
   if (own) {
     own.armed = true;
-    own.life  = CONFIG.satchelArmFuse;
+    own.life  = TALENTS.stat('quickArm');
     events.emit({ type: 'SATCHEL_ARMED', x: own.x, y: own.y });
     return;
   }
   if (inv.satchels <= 0) return;
   inv.satchels--;
-  const spd = CONFIG.satchelThrowSpeed;
+  const spd = TALENTS.stat('longArm');
   satchels.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * spd, vy: Math.sin(player.aimAngle) * spd,
@@ -9153,6 +9157,21 @@ const TALENTS = (() => {
     fullTilt:    { key: 'rangerMomentumMax' },
     longFuse:    { key: 'sapperChainRadius' },
     moreLinks:   { key: 'sapperChainMaxLinks' },
+    // The forks added in the redesign. Every floor below exists because the
+    // talent subtracts: a cooldown taken to zero is a weapon with no rhythm,
+    // and a fuse taken to zero arms in the thrower's hand.
+    quickTongue: { key: 'wizBoltCooldown', min: 0.45 },
+    farSight:    { key: 'wizBlinkCooldown', min: 2 },
+    longPhase:   { key: 'wizBlinkIFrames' },
+    hardCharge:  { key: 'knightChargeCooldown', min: 1.5 },
+    towerGuard:  { key: 'knightBlockCooldown', min: 4 },
+    wideArc:     { key: 'knightWhirlwindRadius' },
+    fourthBolt:  { key: 'crossbowBoltCount' },
+    quickArm:    { key: 'satchelArmFuse', min: 0.6 },
+    longArm:     { key: 'satchelThrowSpeed' },
+    wideFan:     { key: 'sapperBarrageCount' },
+    quickShot:   { key: 'sapperShotCooldown', min: 4 },
+    bigCombo:    { key: 'sapperComboRadiusMult' },
   };
 
   /** A talent's effective figure: its CONFIG base, plus the levels this run
@@ -9944,7 +9963,7 @@ function drawKnight() {
       ctx.shadowColor  = fsColor ? '#FF5500' : '#6080C0';
       ctx.shadowBlur   = 10;
       ctx.lineWidth    = 3;
-      const r = CONFIG.knightWhirlwindRadius;
+      const r = TALENTS.stat('wideArc');
       ctx.beginPath(); ctx.arc(0, 0, r * 0.42, baseA,          baseA + 1.15); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, r * 0.72, baseA + 0.38,   baseA + 1.55); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, r * 0.93, baseA + 0.65,   baseA + 1.80); ctx.stroke();
@@ -12223,7 +12242,7 @@ const CHIP = {
   // or falling away, and the label is the figure the bolts are multiplied by.
   momentum:  () => ({
     glyph: 'momentum', color: '#FFCC00', lit: rangerMomentum >= 1,
-    label: rangerMomentum <= 0 ? '' : '+' + Math.round(rangerMomentum * CONFIG.rangerMomentumMax * 100) + '%',
+    label: rangerMomentum <= 0 ? '' : '+' + Math.round(rangerMomentum * TALENTS.stat('fullTilt') * 100) + '%',
     frac: rangerMomentum >= 1 ? null : rangerMomentum,
   }),
   brace:     () => ({
@@ -13179,6 +13198,20 @@ const TALENT_LOOK = {
   // Sapper.
   longFuse:      { kind: 'indirect', hook: 'A bomb reaches further for the next' },
   moreLinks:     { kind: 'direct',   hook: 'The chain runs longer before it dies' },
+
+  // The forks.
+  quickTongue:   { kind: 'direct',   hook: 'The small answer, given often' },
+  farSight:      { kind: 'mechanic', hook: 'The way out comes back sooner' },
+  longPhase:     { kind: 'mechanic', hook: 'Longer spent where nothing can reach' },
+  hardCharge:    { kind: 'mechanic', hook: 'He runs at them again, and again' },
+  towerGuard:    { kind: 'indirect', hook: 'The shield is rarely down' },
+  wideArc:       { kind: 'direct',   hook: 'The whirl takes in more of the room' },
+  fourthBolt:    { kind: 'direct',   hook: 'One more bolt on every string' },
+  quickArm:      { kind: 'indirect', hook: 'It is live almost as it lands' },
+  longArm:       { kind: 'mechanic', hook: 'The satchel reaches across the field' },
+  wideFan:       { kind: 'direct',   hook: 'A wider spread of the same fan' },
+  quickShot:     { kind: 'indirect', hook: 'The combo comes round again' },
+  bigCombo:      { kind: 'direct',   hook: 'What the combo touches, it takes' },
   stickyFan:     { kind: 'mechanic', hook: 'The fan stays where it lands' },
   demolitionist: { kind: 'direct',   hook: 'Each blast louder than the last' },
   shockwave:     { kind: 'mechanic', hook: 'What survives is thrown clear' },
@@ -14746,7 +14779,7 @@ export const devHooks = {
   })),
   /** Momentum's meter and what it multiplies a bolt by. */
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
-                     max: CONFIG.rangerMomentumMax }),
+                     max: TALENTS.stat('fullTilt') }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress
    *  has touched anything yet. Enough to check a stack or a reset without
    *  reconstructing the swing. */
@@ -14796,7 +14829,7 @@ export const devHooks = {
    *  same routine the shift shot reaches when it threads one of his bombs. */
   sapperCombo(x, y) {
     explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'sapperShot',
-      { radius: CONFIG.dynamiteBlastRadius * CONFIG.sapperComboRadiusMult });
+      { radius: CONFIG.dynamiteBlastRadius * TALENTS.stat('bigCombo') });
   },
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
