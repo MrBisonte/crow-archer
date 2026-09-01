@@ -38,6 +38,7 @@ interface Talents {
   draft: (id: string) => void;
   drafted: () => string[];
   sealCapstone: (id: string) => void;
+  resetRun: () => void;
   buy: (id: string) => { kind: string };
   blinkDistance: () => number;
   stormRadius: () => number;
@@ -1026,6 +1027,99 @@ describe('a braced archer looses a volley', () => {
   });
 });
 
+/**
+ * The three talents the fork added, measured on the field.
+ *
+ * Each is one side of a question: width or depth, weapon or vehicle. A talent
+ * that reads right in the tree and does nothing in the game would make the
+ * fork a decision about nothing.
+ */
+describe('the archer forks change the field', () => {
+  const brace = (): number => (g.brace() as { level: number }).level;
+
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+    for (const t of CHAR_TREES.archer.talents) talents().grant(t.id, 0);
+    talents().resetRun();
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+  });
+
+  /** Arrows one fully braced press puts in the air. */
+  function volleyAtFullBrace(): number {
+    stepPast(3 * ONE_SECOND);
+    expect(brace(), 'he never braced').toBe(1);
+    (g.arrows() as unknown[]).length = 0;
+    (g.inv() as Record<string, number>).arrows = 30;
+    g.shoot();
+    g.stepSim(1);
+    return (g.arrows() as unknown[]).length;
+  }
+
+  it('WIDE VOLLEY puts another arrow in the braced volley', () => {
+    const plain = volleyAtFullBrace();
+    talents().grant('wideVolley', 1);
+    talents().draft('wideVolley');
+    expect(volleyAtFullBrace(), 'the extra arrow never left the bow')
+      .toBeGreaterThan(plain);
+  });
+
+  it('LONG THROW throws him further off the same stick', () => {
+    const hop = (): number => {
+      const p = g.player() as { x: number; y: number };
+      p.x = Math.round(g.config().canvasW / 2);
+      p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+      const from = { x: p.x, y: p.y };
+      (g.inv() as Record<string, number>).dynamites = 5;
+      aimAt(p.x + 400, p.y);
+      g.stepSim(1);
+      g.secondary(); g.stepSim(2); g.secondaryUp();
+      const stick = (g.dynamites() as { x: number; y: number; life: number }[]).at(-1)!;
+      stick.x = from.x + 10; stick.y = from.y; stick.life = 0;
+      stepPast(3);
+      const now = g.player() as { x: number; y: number };
+      return Math.hypot(now.x - from.x, now.y - from.y);
+    };
+
+    const plain = hop();
+    talents().grant('longThrow', 2);
+    talents().draft('longThrow');
+    expect(hop(), 'the talent bought no distance').toBeGreaterThan(plain + 20);
+  });
+
+  it('SHORT FUSE blows the stick where it lands instead of waiting', () => {
+    // Thrown at nothing on open ground, so the only thing that can set it off
+    // early is coming to rest. Measured as the frame the blast is announced.
+    const framesUntilBlast = (): number => {
+      const p = g.player() as { x: number; y: number };
+      (g.inv() as Record<string, number>).dynamites = 5;
+      aimAt(p.x + 120, p.y);
+      g.stepSim(1);
+      let at = -1, frame = 0;
+      const off = g.onEvent((e: { type: string }) => {
+        if (e.type === 'EXPLOSION' && at < 0) at = frame;
+      }) as unknown as (() => void) | undefined;
+      g.secondary(); g.stepSim(2); g.secondaryUp();
+      for (frame = 0; frame < 200 && at < 0; frame++) g.stepSim(1);
+      if (typeof off === 'function') off();
+      return at < 0 ? 999 : at;
+    };
+
+    const fused = framesUntilBlast();
+    talents().grant('shortFuse', 1);
+    talents().draft('shortFuse');
+    const short = framesUntilBlast();
+
+    expect(fused, 'the plain stick never went off at all').toBeLessThan(999);
+    expect(short, 'a short fuse waited as long as a full one').toBeLessThan(fused);
+  });
+});
+
 describe('his stick throws what survives it', () => {
   beforeEach(() => {
     g.pick('archer');
@@ -1274,17 +1368,25 @@ describe('the talent shop', () => {
 
   it('buys the row the cursor moved to, not the one it started on', () => {
     // The bug this exists for: a screen that draws a cursor and buys index 0.
+    //
+    // The two rows have to sit in DIFFERENT forks. Rows 0 and 1 are both the
+    // stance fork now, so buying the first would shut the second and the test
+    // would be measuring exclusivity instead of the cursor.
     const tree = CHAR_TREES.archer;
-    const second = tree.talents[1]!;
-    talents().grant(second.id, 0);
-    setPurse(20);
+    const first = tree.talents[0]!;
+    const other = tree.talents.find((t) => t.slot !== first.slot)!;
+    const otherRow = tree.talents.indexOf(other);
+    for (const t of tree.talents) talents().grant(t.id, 0);
+    talents().grantMastery(40);
 
     talents().setCursor(0);
-    talents().moveCursor(1);
-    expect(talents().cursor()).toBe(1);
+    for (let i = 0; i < otherRow; i++) talents().moveCursor(1);
+    expect(talents().cursor()).toBe(otherRow);
     talents().buyCurrent();
 
-    expect(talents().state().levels[second.id]).toBe(1);
+    expect(talents().state().levels[other.id]).toBe(1);
+    expect(talents().state().levels[first.id] ?? 0, 'it bought the row it started on')
+      .toBe(0);
   });
 
   it('wraps the cursor at both ends and never leaves the tree', () => {
@@ -1330,7 +1432,11 @@ describe('the talent shop', () => {
   });
 
   it('says a tier is locked rather than doing nothing', () => {
-    const locked = CHAR_TREES.archer.talents.find((t) => t.tier > 1)!;
+    // Highest tier available, so no rank the earlier tests granted can have
+    // opened it, and ungranted so a level left over cannot answer first.
+    const top = Math.max(...CHAR_TREES.archer.talents.map((t) => t.tier));
+    const locked = CHAR_TREES.archer.talents.find((t) => t.tier === top)!;
+    for (const t of CHAR_TREES.archer.talents) talents().grant(t.id, 0);
     setPurse(0);
     talents().setCursor(CHAR_TREES.archer.talents.indexOf(locked));
 

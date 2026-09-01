@@ -218,5 +218,36 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
   stormcaller: [
     { d: 'M9.6 2.8 L5.4 11.4 h2.6 l-1.1 8 5-9.8h-2.6z', fill: true },
     { d: 'M18 2.8 L13.8 11.4 h2.6 l-1.1 8 5-9.8h-2.6z', dash: true },
+  ],  // WIDE VOLLEY: three shafts leaving one string at once, the outer pair
+  // fanned. Reads against SPLIT SHAFT's single line through many bodies --
+  // width where that one is depth.
+  wideVolley: [
+    { d: 'M3 12 L15.5 12' },
+    { d: 'M15 9.4 L19.4 12 L15 14.6z', fill: true },
+    { d: 'M3.4 10.4 L14.6 6.2' },
+    { d: 'M14.4 3.9 L18.6 5.2 L15.5 8.2z', fill: true },
+    { d: 'M3.4 13.6 L14.6 17.8' },
+    { d: 'M14.4 20.1 L18.6 18.8 L15.5 15.8z', fill: true },
   ],
+  // SHORT FUSE: the stick, and a spark already at its mouth -- no length of
+  // fuse left to run. The burst lines say it is going off now.
+  shortFuse: [
+    { d: 'M8.5 10.5 h7 v10 h-7 z' },
+    { d: 'M12 10.3 L12 7.6' },
+    { d: 'M12 6.6 A1.6 1.6 0 1 0 15.2 6.6 A1.6 1.6 0 1 0 12 6.6', fill: true },
+    { d: 'M12 2.4 L12 4.6' },
+    { d: 'M7.4 4.2 L9 5.8' },
+    { d: 'M16.6 4.2 L15 5.8' },
+  ],
+  // LONG THROW: a long arc out to a burst, with the thrower shoved the other
+  // way. The short dash behind is him going backwards.
+  longThrow: [
+    { d: 'M3.2 18.5 Q11.5 1.5 20 14.5', dash: true },
+    { d: 'M20 14.5 A2.6 2.6 0 1 0 25.2 14.5 A2.6 2.6 0 1 0 20 14.5', alpha: 0.55 },
+    { d: 'M17.6 12.6 L22.4 16.4' },
+    { d: 'M22.4 12.6 L17.6 16.4' },
+    { d: 'M6.6 18.9 L2 20.6' },
+    { d: 'M2.6 17.9 L1 20.7 L4 21.4z', fill: true },
+  ],
+
 };

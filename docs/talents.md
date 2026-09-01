@@ -8,6 +8,7 @@ this document is the per-character half that sits beside it.
 - [The three layers](#the-three-layers)
 - [Mastery and ranks](#mastery-and-ranks)
 - [The wizard's tree](#the-wizards-tree)
+- [The fork](#the-fork)
 - [Buying them](#buying-them)
 - [The axes that have not moved yet](#the-axes-that-have-not-moved-yet)
 - [What a run looks like](#what-a-run-looks-like)
@@ -138,6 +139,35 @@ than a choice.
 |---|---|
 | OVERCHANNEL | Bolts cost no Focus for 4 s after a blink lands — the escape button becomes the attack button |
 | STORMCALLER | Lightning Storm recharges in half the time, everywhere the wait is shown |
+
+## The fork
+
+Two talents that share a `slot` are **exclusive**: buying into one shuts the
+other for that character, permanently. This is what makes the thing a tree
+rather than a shopping list — before it, every talent was eventually bought
+and the screen asked nothing.
+
+The archer is the pilot, and carries three forks, one per tier:
+
+| Tier | The question | One side | The other |
+|---|---|---|---|
+| I · open | how he earns his brace | SET FEET, reaches it sooner | DEEP ROOTS, loses it slower |
+| II · rank I | what the brace buys | SPLIT SHAFT, depth | WIDE VOLLEY, width |
+| III · rank II | what his stick is for | SHORT FUSE, a weapon | LONG THROW, a vehicle |
+
+Three forks is eight permanent archers. **Tier III also gives rank II something
+to open** — before the fork, no tree used tier 3 at all, so reaching 10 mastery
+unlocked precisely nothing.
+
+`slot` is optional, so a hero may carry an unforked talent where their kit has
+only one thing to say, and **trees need not be the same size**: `clampCursor`,
+the row layout and the shop all read the tree's own length.
+
+Two rules the screen must keep, because a closed door nobody can see is a trap:
+every forked row names its rival before a choice is made, and a row that lost
+its fork says which talent took it. `purchaseTalent` answers the fork **before**
+it answers the purse — telling a player to come back richer for something they
+can never buy would be a lie.
 
 ## Buying them
 

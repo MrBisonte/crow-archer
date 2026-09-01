@@ -53,8 +53,8 @@ import {
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
   draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
-  anyAffordable, bossMastery, clampCursor, masteryAvailable, talentBankFrom,
-  talentLevel, tierOpenAt,
+  anyAffordable, bossMastery, clampCursor, masteryAvailable, slotTakenBy,
+  talentBankFrom, talentLevel, tierOpenAt,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -377,6 +377,14 @@ const CONFIG = {
   // and a crow dies to any arrow either way, so before this the passive was
   // dark for most of a run.
   archerBraceVolley: 3,
+  // What SHORT FUSE leaves of the stick's fuse.
+  //
+  // A fraction rather than a rest threshold. The first version blew the stick
+  // when it slowed below 45 px/s, and friction of 0.985 a frame takes about
+  // 136 frames to get there from a throw -- well past the 90-frame fuse it was
+  // meant to beat, so the talent did nothing at all. The name was the better
+  // specification: a short fuse is a short fuse.
+  archerShortFuseMult: 0.35,
   archerVolleySpreadRadians: Math.PI / 44,   // ~4 degrees between arrows
   // What a full brace takes off the power shot's wait, as a fraction.
   archerBracedCooldownCut: 0.4,
@@ -2584,7 +2592,7 @@ function knightBloodlustMult() {
  * One at a standstill of zero, `archerBraceVolley` at a full one.
  */
 function braceVolleyCount() {
-  return 1 + Math.floor(braceLevel * (CONFIG.archerBraceVolley - 1));
+  return 1 + Math.floor(braceLevel * (TALENTS.stat('wideVolley') - 1));
 }
 
 function braceBossMult() {
@@ -4651,7 +4659,8 @@ function startWhirlwind() {
  * explosives.
  */
 function launchCharge(speed, kind = 'dynamite', element = 'none', opts = {}) {
-  const lifetime = kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime;
+  const lifetime = (kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime)
+    * (opts.fuseMult ?? 1);
   dynamites.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * speed,
@@ -4662,6 +4671,9 @@ function launchCharge(speed, kind = 'dynamite', element = 'none', opts = {}) {
     // 'dynamite' for a splinter child and for the `blast()` dev hook too, and
     // launching the player off either would be a surprise rather than a move.
     hop: opts.hop === true,
+    // Read at the throw, not at the landing, so a talent drafted while a
+    // stick is in the air cannot reach back and detonate it early.
+    shortFuse: opts.shortFuse === true,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
 }
@@ -4669,7 +4681,21 @@ function launchCharge(speed, kind = 'dynamite', element = 'none', opts = {}) {
 function throwDynamite(chargeFrac) {
   if (inv.dynamites <= 0) return;
   inv.dynamites--;
-  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2), 'dynamite', 'none', { hop: true });
+  const short = dynamiteBlowsOnLanding();
+  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2), 'dynamite', 'none',
+    { hop: true, shortFuse: short, fuseMult: short ? CONFIG.archerShortFuseMult : 1 });
+}
+
+/**
+ * Whether the stick he just threw goes off on contact.
+ *
+ * SHORT FUSE trades the hop for the hit: no fuse means no time to walk into
+ * the blast, so the fork asks whether his dynamite is a weapon or a way to
+ * travel. Read where the stick is built rather than where it lands, so a
+ * talent drafted mid-flight cannot detonate one already in the air.
+ */
+function dynamiteBlowsOnLanding() {
+  return TALENTS.held('shortFuse');
 }
 
 /**
@@ -4690,7 +4716,7 @@ function hopFromBlast(cx, cy, radius) {
   // him the way he is facing, which is the only intent available.
   const angle = d < 0.001 ? player.aimAngle + Math.PI : Math.atan2(player.y - cy, player.x - cx);
   if (d > radius) return 0;
-  const push = blastPush(d, radius, CONFIG.archerBlastHopPx);
+  const push = blastPush(d, radius, TALENTS.stat('longThrow'));
   // Clamped into the arena BEFORE the tile is read, not after. Asking whether
   // a point beyond the wall is standable answers no, and the hop cancels
   // itself -- which is how a stick thrown at his feet while he stood on the
@@ -5651,18 +5677,29 @@ function updateDynamites(dt) {
     if (d.life <= 0) { explodeExplosive(d, 'dynamite'); dynamites.splice(i, 1); continue; }
 
     let splashed = false;
+    let struck = false;
     const nx = d.x + d.vx * dt;
     const tx = tileAt(nx, d.y);
     if      (tx === TILE.WATER)              splashed = true;
-    else if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) d.vx *= -0.65;
+    else if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) { d.vx *= -0.65; struck = true; }
     else d.x = Math.max(0, Math.min(CONFIG.canvasW - 1, nx));
 
     if (!splashed) {
       const ny = d.y + d.vy * dt;
       const ty = tileAt(d.x, ny);
       if      (ty === TILE.WATER)              splashed = true;
-      else if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) d.vy *= -0.65;
+      else if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) { d.vy *= -0.65; struck = true; }
       else d.y = Math.max(0, Math.min(CONFIG.rows * CONFIG.tileSize - 1, ny));
+    }
+
+    // SHORT FUSE also blows on the first thing the stick touches, on top of
+    // the shortened fuse it was launched with. A stick has no notion of the
+    // ground -- it slides on friction until its fuse runs out -- so "lands" is
+    // whatever it hits.
+    if (!splashed && d.shortFuse === true && struck) {
+      explodeExplosive(d, 'dynamite');
+      dynamites.splice(i, 1);
+      continue;
     }
 
     if (splashed) {
@@ -5802,7 +5839,7 @@ function explodeExplosive(d, source, opts = {}) {
   // to be moved.
   if (d.hop === true) {
     hopFromBlast(d.x, d.y, radius);
-    pushSurvivorsFrom(d.x, d.y, radius, CONFIG.archerBlastHopPx);
+    pushSurvivorsFrom(d.x, d.y, radius, TALENTS.stat('longThrow'));
   }
 
   chainNearbyBombs(d, link);
@@ -9107,6 +9144,8 @@ const TALENTS = (() => {
     setFeet:     { key: 'braceFillSecs', min: 0.35 },
     deepRoots:   { key: 'braceDrainMult', min: 1 },
     splitShaft:  { key: 'archerPowerPierce' },
+    wideVolley:  { key: 'archerBraceVolley' },
+    longThrow:   { key: 'archerBlastHopPx' },
     deeperCut:   { key: 'knightBloodlustPer' },
     fourthBlood: { key: 'knightBloodlustMax' },
     lightFoot:   { key: 'rangerMomentumFullPx', min: 120 },
@@ -13117,6 +13156,9 @@ const TALENT_LOOK = {
   setFeet:       { kind: 'indirect', hook: 'Set faster, hit sooner' },
   deepRoots:     { kind: 'indirect', hook: 'What you built takes longer to lose' },
   splitShaft:    { kind: 'direct',   hook: 'One shaft, a line of them' },
+  wideVolley:    { kind: 'direct',   hook: 'The stance answers with more of them' },
+  shortFuse:     { kind: 'direct',   hook: 'It goes off where it lands' },
+  longThrow:     { kind: 'mechanic', hook: 'The blast carries further, him included' },
   rooted:        { kind: 'indirect', hook: 'Braced, and free to walk' },
   splinter:      { kind: 'direct',   hook: 'One stick, three craters' },
 
@@ -13404,6 +13446,9 @@ function _talentBuyNote(result) {
     case 'tooPoor':    return {
       text: `${result.short} MORE MASTERY · ${result.cost} NEEDED`, color: '#C86A2A',
     };
+    case 'slotTaken':  return {
+      text: `THIS FORK WENT TO ${result.takenBy}`, color: '#C86A2A',
+    };
     case 'tierLocked': return {
       text: `TIER LOCKED · MASTERY RANK ${TIER_ROMAN[result.rankNeeded] || result.rankNeeded}`
           + ` NEEDED, RANK ${TIER_ROMAN[result.rankHeld] || result.rankHeld || '—'} HELD`,
@@ -13434,7 +13479,12 @@ function _masteryLine(points) {
  */
 function _drawTalentRow(row, spec, sel, mastery, purse) {
   const look = TALENT_LOOK[spec.id], kind = TALENT_KINDS[look.kind];
-  const open = tierOpenAt(mastery, spec.tier);
+  const tierOpen = tierOpenAt(mastery, spec.tier);
+  // The fork, if this one lost it. A closed door the player cannot see is a
+  // trap: they would read a price, press ENTER, and be refused by something
+  // the screen never mentioned.
+  const shutBy = slotTakenBy(CHAR_TREES[selectedChar], TALENTS.state(), spec.id);
+  const open = tierOpen && shutBy === null;
   const level = talentLevel(TALENTS.state(), spec.id);
   const maxed = level >= spec.costs.length;
   const cost = maxed ? 0 : spec.costs[level];
@@ -13474,7 +13524,12 @@ function _drawTalentRow(row, spec, sel, mastery, purse) {
 
   ctx.font = '10px "Courier New",monospace';
   ctx.fillStyle = PANEL_LABEL_COLOR;
-  ctx.fillText(`${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`, textX, row.midY + 2);
+  // The rival is named on every forked row, taken or not, so the player reads
+  // what a purchase costs them before they make it rather than after.
+  const rival = CHAR_TREES[selectedChar].talents.find(
+    (t) => t.slot !== undefined && t.slot === spec.slot && t.id !== spec.id);
+  ctx.fillText(`${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`
+    + (rival ? `  ·  OR ${rival.label}` : ''), textX, row.midY + 2);
 
   ctx.font = '11.5px "Courier New",monospace';
   ctx.fillStyle = open ? '#93a08f' : lockedInk;
@@ -13484,7 +13539,10 @@ function _drawTalentRow(row, spec, sel, mastery, purse) {
   // the description so the eye reads across rather than hunting.
   ctx.textAlign = 'right';
   ctx.font = '13px "Courier New",monospace';
-  if (!open) {
+  if (shutBy !== null) {
+    ctx.fillStyle = '#8a6a55';
+    ctx.fillText(`GAVE THIS UP FOR ${shutBy.label}`, rightX, row.midY - 18);
+  } else if (!tierOpen) {
     ctx.fillStyle = '#C86A2A';
     ctx.fillText(`LOCKED · RANK ${TIER_ROMAN[spec.tier - 1] || spec.tier - 1}`, rightX, row.midY - 18);
   } else if (maxed) {

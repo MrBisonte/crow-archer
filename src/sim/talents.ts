@@ -50,9 +50,19 @@ export interface TalentSpec {
   readonly label: string;
   readonly desc: string;
   readonly tier: TalentTier;
-  /** Feathers per level, cheapest first. Length is the maximum level. */
+  /** Mastery per level, cheapest first. Length is the maximum level. */
   readonly costs: readonly number[];
   readonly effect: UpgradeEffect;
+  /**
+   * The fork this talent belongs to. Two talents sharing a slot are
+   * exclusive: buying into one shuts the other for that character, for good.
+   *
+   * This is what makes the thing a tree rather than a shopping list. Without
+   * it every talent is eventually bought and the screen asks nothing; with it
+   * a tier is a question. Optional, so a hero can carry an unforked talent
+   * where their kit has only one thing to say.
+   */
+  readonly slot?: string;
 }
 
 /**
@@ -91,22 +101,48 @@ export interface CharTree {
  * commits; a row whose effect nothing reads yet must not ship past that.
  */
 export const CHAR_TREES: Record<CharacterKind, CharTree> = {
+  // Three forks, one per tier, and every one of them a question rather than a
+  // purchase. The pilot for the shape: see `slot` on TalentSpec.
   archer: {
     talents: [
+      // THE STANCE. How he earns his brace: reach it sooner, or lose it later.
+      // These two were already a natural pair -- one shortens the fill, the
+      // other softens the drain -- which is what made the archer the tree to
+      // pilot the fork on.
       {
-        id: 'setFeet', label: 'SET FEET',
+        id: 'setFeet', label: 'SET FEET', slot: 'stance',
         desc: '-0.35 s to reach a full brace / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -0.35 },
       },
       {
-        id: 'deepRoots', label: 'DEEP ROOTS',
+        id: 'deepRoots', label: 'DEEP ROOTS', slot: 'stance',
         desc: 'Brace bleeds away far slower once he moves',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -1.4 },
       },
+      // WHAT THE BRACE BUYS. One shot through many bodies, or many arrows at
+      // once: the same stance spent on depth or on width.
       {
-        id: 'splitShaft', label: 'SPLIT SHAFT',
+        id: 'splitShaft', label: 'SPLIT SHAFT', slot: 'payoff',
         desc: '+2 bodies a full power shot passes through / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 2 },
+      },
+      {
+        id: 'wideVolley', label: 'WIDE VOLLEY', slot: 'payoff',
+        desc: '+1 arrow in a fully braced volley / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      // THE STICK. Whether his dynamite is a weapon or a way to travel. Short
+      // fuse gives up the hop -- there is no time to stand where it lands --
+      // and long throw gives up the certainty of hitting anything with it.
+      {
+        id: 'shortFuse', label: 'SHORT FUSE', slot: 'stick',
+        desc: 'Dynamite blows the moment it lands, with no fuse to wait out',
+        tier: 3, costs: [3], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'longThrow', label: 'LONG THROW', slot: 'stick',
+        desc: '+45 px the blast throws him and everything near it / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 45 },
       },
     ],
     capstones: [
@@ -351,7 +387,10 @@ export type TalentPurchase =
   | { readonly kind: 'bought'; readonly state: CharTalentState; readonly spent: number }
   | { readonly kind: 'maxed' }
   | { readonly kind: 'tooPoor'; readonly cost: number; readonly short: number }
-  | { readonly kind: 'tierLocked'; readonly rankNeeded: number; readonly rankHeld: number };
+  | { readonly kind: 'tierLocked'; readonly rankNeeded: number; readonly rankHeld: number }
+  /** The fork was already taken the other way. Carries the talent that took
+   *  it, so the screen can name what shut this door rather than only refuse. */
+  | { readonly kind: 'slotTaken'; readonly takenBy: string };
 
 /** Levels held in a talent, clamped into the range its ladder allows. */
 export function talentLevel(state: CharTalentState, id: string): number {
@@ -399,6 +438,23 @@ export function talentValue(tree: CharTree, state: CharTalentState, id: string, 
 }
 
 /**
+ * The talent that has already claimed `id`'s fork, or null if it is still open.
+ *
+ * A talent with no slot forks nothing and always answers null. A talent
+ * answers null for itself, too: buying a second level of what you already own
+ * is climbing the ladder you chose, not changing your mind.
+ */
+export function slotTakenBy(
+  tree: CharTree, state: CharTalentState, id: string,
+): TalentSpec | null {
+  const spec = tree.talents.find((t) => t.id === id);
+  if (!spec || spec.slot === undefined) return null;
+  return tree.talents.find(
+    (t) => t.slot === spec.slot && t.id !== id && talentLevel(state, t.id) > 0,
+  ) ?? null;
+}
+
+/**
  * Whether anything in this tree can be bought right now.
  *
  * The question a boss asks before it opens the tree: paying mastery is only
@@ -431,6 +487,10 @@ export function purchaseTalent(
   if (!tierOpenAt(state.mastery, spec.tier)) {
     return { kind: 'tierLocked', rankNeeded: spec.tier - 1, rankHeld: rankOf(state.mastery) };
   }
+  // The fork. Checked before the purse, so a player who cannot afford a shut
+  // door is told the door is shut rather than told to come back richer.
+  const rival = slotTakenBy(tree, state, id);
+  if (rival !== null) return { kind: 'slotTaken', takenBy: rival.label };
   const level = talentLevel(state, id);
   if (level >= spec.costs.length) return { kind: 'maxed' };
   const cost = spec.costs[level]!;
