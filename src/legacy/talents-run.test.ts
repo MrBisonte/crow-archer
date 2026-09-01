@@ -914,6 +914,166 @@ describe('the archer rides his own blast', () => {
   });
 });
 
+/**
+ * What standing still is worth outside a boss fight.
+ *
+ * Brace multiplied boss damage and nothing else, and a crow dies to any arrow
+ * either way — so his signature meter was dark for most of a run. These are
+ * the consumers that changed that.
+ */
+describe('a braced archer looses a volley', () => {
+  const brace = (): number => (g.brace() as { level: number }).level;
+
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+    (g.arrows() as unknown[]).length = 0;
+  });
+
+  /** Fires one press and reports the arrows it put in the air. */
+  function arrowsFromOnePress(): number {
+    (g.arrows() as unknown[]).length = 0;
+    (g.inv() as Record<string, number>).arrows = 20;
+    g.shoot();
+    g.stepSim(1);
+    return (g.arrows() as unknown[]).length;
+  }
+
+  it('looses one arrow the moment he has moved', () => {
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(Math.ceil(0.6 * ONE_SECOND));
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    expect(brace(), 'walking should have spent the brace').toBeLessThan(0.5);
+    expect(arrowsFromOnePress()).toBe(1);
+  });
+
+  it('looses the full volley from a full brace', () => {
+    stepPast(3 * ONE_SECOND);        // stood still: the meter fills
+    expect(brace(), 'he never braced').toBe(1);
+    expect(arrowsFromOnePress()).toBe(g.config().archerBraceVolley);
+  });
+
+  it('is never refused a press an unbraced archer would be allowed', () => {
+    // The exact invariant that broke, stated so it cannot drift.
+    //
+    // Reserving in-flight room for the WHOLE volley made bracing a penalty: a
+    // three-arrow volley needed three free slots where a single shot needed
+    // one, so the reward for standing still refused presses the unbraced
+    // archer got. Measured over five seconds it read 13 arrows braced against
+    // 16 walking about.
+    //
+    // Asserted as a refusal rather than as a rate. A rate comparison has to
+    // run twice from the same start, and the second run inherits the brace the
+    // first one built, which makes it unable to fail.
+    stepPast(3 * ONE_SECOND);
+    expect(brace(), 'he never braced').toBe(1);
+    expect(g.config().archerBraceVolley, 'a volley of one proves nothing here')
+      .toBeGreaterThan(1);
+
+    // One slot free: an unbraced press fits, a whole reserved volley does not.
+    const cap = g.config().maxArrowsInFlight as number;
+    (g.arrows() as unknown[]).length = 0;
+    (g.inv() as Record<string, number>).arrows = 20;
+    const room = g.arrows() as { x: number }[];
+    for (let i = 0; i < cap - 1; i++) room.push({ x: -9999 } as never);
+
+    let refused = false;
+    const off = g.onEvent((e: { type: string }) => {
+      if (e.type === 'ACTION_BLOCKED') refused = true;
+    }) as unknown as (() => void) | undefined;
+    g.shoot();
+    g.stepSim(1);
+    if (typeof off === 'function') off();
+
+    expect(refused, 'a braced press was refused with room for an unbraced one')
+      .toBe(false);
+    expect((g.arrows() as unknown[]).length, 'the volley never left the bow')
+      .toBeGreaterThan(cap - 1);
+  });
+
+  it('spends one shaft for the whole volley, as the crossbow does', () => {
+    stepPast(3 * ONE_SECOND);
+    const bag = g.inv() as Record<string, number>;
+    bag.arrows = 20;
+    (g.arrows() as unknown[]).length = 0;
+    const before = bag.arrows;
+    g.shoot();
+    g.stepSim(1);
+    expect((g.arrows() as unknown[]).length).toBeGreaterThan(1);
+    expect(before - bag.arrows, 'a volley charged him per arrow').toBe(1);
+  });
+
+  it('gets the power shot back sooner for having braced', () => {
+    // Measured as the cooldown the release actually sets, which is the figure
+    // the stance is buying.
+    const cd = (): number => (g.archerDraw() as { cooldown: number }).cooldown;
+
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(Math.ceil(0.6 * ONE_SECOND));
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    g.shift(); g.stepSim(2); g.shiftUp();
+    const unbraced = cd();
+
+    stepPast(6 * ONE_SECOND);        // wait it out, then brace fully
+    expect(brace()).toBe(1);
+    g.shift(); g.stepSim(2); g.shiftUp();
+    const braced = cd();
+
+    expect(braced, 'bracing bought no time back').toBeLessThan(unbraced);
+  });
+});
+
+describe('his stick throws what survives it', () => {
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+  });
+
+  it('shoves a survivor away, and leaves one out of range alone', () => {
+    // Both crows are compared against each other rather than against a fixed
+    // number: a crow flies at the player under its own steam, so "it moved"
+    // proves nothing on its own. The one in the blast has to move a great
+    // deal further than the one outside it.
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+    const radius = g.config().dynamiteBlastRadius;
+    (g.crows() as unknown[]).length = 0;
+    g.spawnCrow(); g.spawnCrow();
+    const [near, far] = g.crows() as { x: number; y: number; baseY: number; hp: number }[];
+    // Offset from the stick, not sitting on it: dead centre has no direction
+    // to be pushed along and the code skips it by design.
+    // `baseY` as well as `y`. A crow bobs around its base height and homes
+    // back to it, so a crow parked by `y` alone drifts vertically out of the
+    // blast before it resolves — the self-repositioning trap this repo has
+    // paid for twice already.
+    near!.x = p.x + 80; near!.y = p.y; near!.baseY = p.y; near!.hp = 9999;
+    far!.x = p.x + radius + 160; far!.y = p.y; far!.baseY = p.y; far!.hp = 9999;
+    const nearBefore = near!.x, farBefore = far!.x;
+
+    (g.inv() as Record<string, number>).dynamites = 5;
+    aimAt(p.x + 400, p.y);
+    g.stepSim(1);
+    g.secondary(); g.stepSim(2); g.secondaryUp();
+    const stick = (g.dynamites() as { x: number; y: number; life: number }[]).at(-1)!;
+    stick.x = p.x + 40; stick.y = p.y; stick.life = 0;
+    g.stepSim(1);
+
+    const nearMoved = near!.x - nearBefore;
+    const farMoved = Math.abs(far!.x - farBefore);
+    expect(nearMoved, 'a survivor in the blast was not thrown outward')
+      .toBeGreaterThan(20);
+    expect(nearMoved, 'the crow outside the blast moved as much as the one in it')
+      .toBeGreaterThan(farMoved * 4);
+  });
+});
+
 describe('a powered arrow carries its pickup further', () => {
   beforeEach(() => {
     g.pick('archer');

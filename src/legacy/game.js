@@ -372,6 +372,15 @@ const CONFIG = {
   braceDrainMult: 4,
   braceBossMult: 1.8,
 
+  // Arrows a fully braced shot looses at once. This is what makes the meter
+  // worth filling outside a boss fight: a brace multiplies BOSS damage only,
+  // and a crow dies to any arrow either way, so before this the passive was
+  // dark for most of a run.
+  archerBraceVolley: 3,
+  archerVolleySpreadRadians: Math.PI / 44,   // ~4 degrees between arrows
+  // What a full brace takes off the power shot's wait, as a fraction.
+  archerBracedCooldownCut: 0.4,
+
   archerDrawMaxSecs: 1.0,
   archerPowerCooldown: 5,
   archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
@@ -470,9 +479,10 @@ const CONFIG = {
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
-  // How far his own stick throws him, standing on top of it. Falls to nothing
-  // at the blast's edge, so where he puts the stick is the whole control.
-  archerBlastHopPx: 150,
+  // How far his own stick throws whatever is near it -- him at the centre,
+  // and anything that lived through the blast. Falls to nothing at the edge,
+  // so where he puts the stick is the whole control.
+  archerBlastHopPx: 195,
   // A powered fire arrow drops a patch this often while it flies, which is
   // what turns one landing spot into a burning lane.
   archerFireTrailSecs: 0.09,
@@ -2218,6 +2228,39 @@ function probeAhead(fromX, fromY, angle, maxDistance) {
  * place. A shove into a wall stops at the wall instead of posting a crow
  * inside it.
  */
+/**
+ * How hard a blast pushes something `d` away from its centre.
+ *
+ * Full strength on top of it, nothing at the edge, straight line between. One
+ * home because the archer's own hop and the shove his blast gives the bodies
+ * around him are the same rule seen from two sides, and a blast that threw him
+ * further than it threw a crow standing beside him would read as a bug.
+ */
+function blastPush(d, radius, maxPx) {
+  if (d > radius) return 0;
+  return maxPx * (1 - d / radius);
+}
+
+/**
+ * Shoves everything that lived through a blast away from it.
+ *
+ * Called after the damage, which is what makes it survivors only: whatever the
+ * blast killed is already out of these lists.
+ */
+function pushSurvivorsFrom(cx, cy, radius, maxPx) {
+  for (const list of [crows, skeletons, soldiers]) {
+    for (const b of list) {
+      const d = Math.hypot(b.x - cx, b.y - cy);
+      const px = blastPush(d, radius, maxPx);
+      if (px <= 0 || d < 0.001) continue;
+      const nx = clampArenaX(b.x + ((b.x - cx) / d) * px);
+      const ny = clampArenaY(b.y + ((b.y - cy) / d) * px);
+      if (tilePassable(tileAt(nx, b.y))) b.x = nx;
+      if (tilePassable(tileAt(b.x, ny))) b.y = ny;
+    }
+  }
+}
+
 function pushBodiesFrom(cx, cy, radius, px) {
   const r2 = radius * radius;
   for (const list of [crows, skeletons, soldiers]) {
@@ -2368,7 +2411,11 @@ function releaseArcherDraw() {
   if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
 
-  archerPowerCD = CONFIG.archerPowerCooldown;
+  // A braced archer gets the shot back sooner. The stance already paid for
+  // draw damage; this makes it pay for the rhythm too, so holding still
+  // compounds rather than sitting on one stat.
+  archerPowerCD = CONFIG.archerPowerCooldown
+    * (1 - braceLevel * CONFIG.archerBracedCooldownCut);
   const spd = CONFIG.arrowSpeed * (1 + drawn * (CONFIG.archerPowerSpeedMult - 1));
   // The in-flight cap is deliberately not consulted. It is there to stop the
   // bow being held down, and this is one arrow every five seconds.
@@ -2527,6 +2574,17 @@ function knightSpearDamage(fireSword) {
 
 function knightBloodlustMult() {
   return 1 + knightBloodlust * TALENTS.stat('deeperCut');
+}
+
+/**
+ * How many arrows the bow looses on one press.
+ *
+ * Scales with the meter rather than waiting for a full brace, so standing
+ * still pays continuously instead of paying nothing until it pays everything.
+ * One at a standstill of zero, `archerBraceVolley` at a full one.
+ */
+function braceVolleyCount() {
+  return 1 + Math.floor(braceLevel * (CONFIG.archerBraceVolley - 1));
 }
 
 function braceBossMult() {
@@ -4422,15 +4480,33 @@ function tryShoot() {
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   if (selectedChar === 'sapper') { trySapperCharge(); return; }
   if (!hasShaft()) { tryPitchfork(); return; }
+  const volley = braceVolleyCount();
+  // Gated on ONE arrow's worth of room, then the whole volley flies even if it
+  // overshoots the cap by a couple.
+  //
+  // Reserving room for the whole volley - the crossbow's rule - made bracing
+  // actively worse than not bracing. Measured over five seconds on open
+  // ground: standing still put 13 arrows in the air, walking about put 16,
+  // because a three-arrow volley waits for three free slots while a single
+  // shot waits for one. The cap exists to stop the bow being held down, which
+  // is about how often he may press, and this keeps that identical whether he
+  // is braced or not. The overshoot is bounded by the volley itself.
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // One shaft for the whole volley, which is the crossbow's rule too. The
+  // brace is what is being spent here -- it took a second and a quarter of
+  // standing still in a game that spends most of its time chasing him.
   const type = spendShaft();
-  arrows.push({ x: player.x, y: player.y,
-    vx: Math.cos(player.aimAngle) * CONFIG.arrowSpeed,
-    vy: Math.sin(player.aimAngle) * CONFIG.arrowSpeed,
-    life: CONFIG.arrowLifetime, type, bounces: 0,
-    initSpeed: CONFIG.arrowSpeed,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
-    dmgMult: braceBossMult() });
+  const half = (volley - 1) / 2;
+  for (let i = 0; i < volley; i++) {
+    const a = player.aimAngle + (i - half) * CONFIG.archerVolleySpreadRadians;
+    arrows.push({ x: player.x, y: player.y,
+      vx: Math.cos(a) * CONFIG.arrowSpeed,
+      vy: Math.sin(a) * CONFIG.arrowSpeed,
+      life: CONFIG.arrowLifetime, type, bounces: 0,
+      initSpeed: CONFIG.arrowSpeed,
+      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      dmgMult: braceBossMult() });
+  }
   archerLoose = ARCHER_LOOSE_SECS;
   archerLoosePower = 0;
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
@@ -4614,7 +4690,7 @@ function hopFromBlast(cx, cy, radius) {
   // him the way he is facing, which is the only intent available.
   const angle = d < 0.001 ? player.aimAngle + Math.PI : Math.atan2(player.y - cy, player.x - cx);
   if (d > radius) return 0;
-  const push = CONFIG.archerBlastHopPx * (1 - d / radius);
+  const push = blastPush(d, radius, CONFIG.archerBlastHopPx);
   // Clamped into the arena BEFORE the tile is read, not after. Asking whether
   // a point beyond the wall is standable answers no, and the hop cancels
   // itself -- which is how a stick thrown at his feet while he stood on the
@@ -5720,8 +5796,14 @@ function explodeExplosive(d, source, opts = {}) {
     { amount: bossDamage, source, flash: 0.25 },
     { falloff: opts.falloff, element: d.element });
 
-  // His own stick throws him. Nothing else does, and it costs him no health.
-  if (d.hop === true) hopFromBlast(d.x, d.y, radius);
+  // His own stick throws him, and throws whatever lived through it as well.
+  // Nothing else does either, and neither costs him health. The bodies are
+  // pushed after the damage above, so only survivors are still in the lists
+  // to be moved.
+  if (d.hop === true) {
+    hopFromBlast(d.x, d.y, radius);
+    pushSurvivorsFrom(d.x, d.y, radius, CONFIG.archerBlastHopPx);
+  }
 
   chainNearbyBombs(d, link);
 
