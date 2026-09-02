@@ -1,0 +1,51 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1120,
+      "h": 1250
+    },
+    {
+      "file": "Sigils.dc.html",
+      "x": 1240,
+      "y": 0,
+      "w": 1460,
+      "h": 1900
+    }
+  ],
+  "annotations": [
+    {
+      "id": "medium",
+      "x": 1240,
+      "y": 1970,
+      "w": 380,
+      "text": "Two problems, not one.\n\nThe medium was wrong -- stroked vector in a game of PixelGrids. But flat pixel shapes read as diagrams too. The fix is a lit object in a bezel: something to be lit against, and six value steps instead of three."
+    },
+    {
+      "id": "cost",
+      "x": 1660,
+      "y": 1970,
+      "w": 380,
+      "text": "The frame is code, the object is art.\n\nBezel, ground, cast shadow and sheen are generated from the talent's category. Thirty-seven talents cost thirty-seven objects -- roughly a day -- not thirty-seven illustrations."
+    },
+    {
+      "id": "reads",
+      "x": 2080,
+      "y": 1970,
+      "w": 380,
+      "text": "Four of the seven failed as drawings first.\n\nSPLIT SHAFT was an axe, then a goblet, then a spanner -- every time because the head was as broad as it was long. LONG THROW was a fire extinguisher until it became a bundle. What fixes these is proportion, not detail."
+    },
+    {
+      "id": "limit",
+      "x": 2500,
+      "y": 1970,
+      "w": 380,
+      "text": "The abstract talents are still open.\n\nQUICK TONGUE is a shorter cooldown and BIG COMBO is a bigger radius: no object exists for either. The colour code carries some of it now -- a green square already says attack speed -- but the square still needs something in it."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

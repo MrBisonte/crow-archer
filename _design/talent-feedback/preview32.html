@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>icon check 32</title>
+<style>
+  body { margin: 0; background: #0d0f0c; font-family: "Courier New", monospace; color: #C8D0C4; padding: 26px; }
+  h1 { font-size: 14px; color: #39FF14; letter-spacing: .14em; font-weight: normal; margin: 0 0 18px; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 24px; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .cell svg { image-rendering: pixelated; }
+  .nm { font-size: 10px; letter-spacing: .1em; color: #8f9a8c; }
+  .hero { font-size: 9px; letter-spacing: .14em; color: #5c6459; }
+  .why { font-size: 9.5px; color: #6f8a6c; text-align: center; max-width: 16ch; line-height: 1.5; }
+  .band { display: flex; gap: 24px; align-items: flex-end; margin: 0 0 30px; }
+  .row { display: flex; gap: 10px; align-items: center; background: #11150f; border: 1px solid #23301f;
+         padding: 8px 12px; margin-bottom: 8px; width: 460px; }
+  .row .t { font-size: 11px; letter-spacing: .1em; }
+</style>
+<h1>— 32×32, SOCKETED · BIG —</h1>
+<div class="grid" id="big"></div>
+<h1 style="margin-top:32px">— SHOP ROW (48 px) AND CHOOSER (74 px) —</h1>
+<div class="band" id="small"></div>
+<h1>— IN A ROW, ON THE PANEL —</h1>
+<div id="rows"></div>
+<script type="module">
+import { ICONS } from './icons32.js';
+import { svg, svgSheen } from './compose.mjs';
+
+const big = document.getElementById('big');
+for (const icon of ICONS) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.innerHTML = `<div class="hero">${icon.hero}</div>${svgSheen(icon, 224)}`
+    + `<div class="nm">${icon.name}</div><div class="why">${icon.why}</div>`;
+  big.appendChild(cell);
+}
+
+const small = document.getElementById('small');
+for (const icon of ICONS) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.innerHTML = svgSheen(icon, 48) + svgSheen(icon, 74);
+  small.appendChild(cell);
+}
+
+const rows = document.getElementById('rows');
+for (const icon of ICONS) {
+  const r = document.createElement('div');
+  r.className = 'row';
+  r.innerHTML = svg(icon, 48) + `<div class="t">${icon.name}</div>`;
+  rows.appendChild(r);
+}
+window.__ready = true;
+</script>
