@@ -1112,6 +1112,32 @@ describe('the sapper', () => {
       expect(angles[(angles.length - 1) / 2]).toBeCloseTo(0, 5);
     });
 
+    // The chain is the sapper's ramp -- 1 + link x sapperChainBossBonus, so a
+    // deep cascade is the largest boss hit he has -- and it was the only hero
+    // mechanic on the roster with nothing on screen. Brace, momentum and
+    // bloodlust all report themselves; this multiplied silently.
+    it('reports how deep a cascade went, and lets the reading fall away', () => {
+      clearArena();
+      const c = g.config();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 6.5 * c.tileSize;
+      p.y = 6.5 * c.tileSize;
+      p.aimAngle = 0;
+      g.crows().length = 0;
+      // A wall close enough that the centre bomb reaches it while the rest of
+      // the fan is still inside sapperChainRadius of it.
+      for (let dr = -2; dr <= 2; dr++) g.tiles().set(6 + dr, 8, TILE.ROCK);
+
+      expect(g.sapperChain().peak).toBe(0);
+      g.barrage();
+      stepPast(12);
+      expect(g.sapperChain().peak, 'the fan went off without lighting itself')
+        .toBeGreaterThan(1);
+
+      stepPast(Math.ceil((c.sapperChainReadSecs + 0.3) * ONE_SECOND));
+      expect(g.sapperChain().peak).toBe(0);
+    });
+
     it('refuses a second barrage until its cooldown has run', () => {
       g.barrage();
       expect(g.sapperBarrageCD()).toBeGreaterThan(0);
@@ -1606,6 +1632,37 @@ describe('the knight charge', () => {
     expect(g.knightCharge().dashing).toBe(true);
     g.stepSim(5);
     expect(p.x).toBeGreaterThan(start);
+  });
+
+  // The charge is how the slowest hero reaches a boss that orbits him, so the
+  // dash has to outrun his own legs. It ran at half his walking speed for a
+  // long time -- 75 px/s, slower than every other hero walking, and 112 px of
+  // travel against a 90 px reach, so releasing put him barely further forward
+  // than he could already hit from. Measured rather than read off CONFIG: the
+  // multiplier is only half the claim, and the other half is that the dash
+  // drives movement at all.
+  it('closes ground faster than the knight can walk', () => {
+    const c = g.config();
+    const ang = dashing();
+    const p = g.player() as { x: number; y: number };
+    const start = { x: p.x, y: p.y };
+    g.stepSim(5);
+    const dashed = Math.hypot(p.x - start.x, p.y - start.y);
+
+    // Same ground, same heading, on his own legs.
+    g.stepSim(Math.round(c.knightChargeDashDuration * ONE_SECOND) + 2);
+    p.x = start.x;
+    p.y = start.y;
+    const keys = g.keys() as Record<string, boolean>;
+    keys[keyFor(ang)] = true;
+    g.stepSim(5);
+    keys[keyFor(ang)] = false;
+    const walked = Math.hypot(p.x - start.x, p.y - start.y);
+
+    expect(walked).toBeGreaterThan(0);
+    expect(dashed).toBeGreaterThan(walked);
+    // And the chain is faster than the dash, or it buys nothing.
+    expect(c.knightChargeChainSpeedMult).toBeGreaterThan(c.knightChargeDashSpeedMult);
   });
 
   // Regression: the dash ignores movement keys for its whole 1.5s, so one

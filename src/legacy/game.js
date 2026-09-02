@@ -581,6 +581,11 @@ const CONFIG = {
   sapperChainDelaySecs: 0.07,
   sapperChainBossBonus: 0.5,
   sapperChainMaxLinks: 5,
+  // How long the depth a cascade reached stays readable in the lane. A
+  // chain resolves in five frames -- sapperChainDelaySecs is 0.07 -- so
+  // without a hold there is nothing on screen to read, which is how the
+  // one mechanic that multiplies his boss damage stayed invisible.
+  sapperChainReadSecs: 2,
   // A fire bomb leaves the ground burning where it went off. Shorter-lived
   // than a fire arrow's patch and worth less per second, because a blast
   // already did its damage up front — this is the after-effect, not the hit.
@@ -623,17 +628,23 @@ const CONFIG = {
   // swinging. Damage scales with hold time against the boss only; crows and
   // skeletons die outright in the arc, same as every other knight melee hit.
   knightChargeMaxHoldSecs: 3, knightChargeCooldown: 4,
-  knightChargeDashDuration: 1.5, knightChargeDashSpeedMult: 0.5,
+  // The dash outruns his own legs, which is the whole reason the slowest hero
+  // on the roster has one. It ran at 0.5 for a long time: 75 px/s, slower than
+  // every other hero WALKING, and 112 px of travel against a 90 px reach --
+  // releasing put him barely further forward than he could already hit from,
+  // after a windup that rooted him for up to three seconds. At 1.6 it carries
+  // 360 px, which is four spear lengths and an actual gap closed.
+  knightChargeDashDuration: 1.5, knightChargeDashSpeedMult: 1.6,
   knightChargeMinDamageMult: 1.3, knightChargeMaxDamageMult: 2,
   knightChargeBossDamage: 2, knightChargeRadius: 90,
   knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
   knightChargeTickRate: 0.2,
   // Chained charge: a second press mid-dash, inside shiftChainSecs and with
   // room left ahead, commits him harder in the direction he already picked.
-  // The dash goes from half speed to a little over walking pace, and he lands
-  // one whirlwind swing where he stands. Once per dash — the chain is a
+  // The dash goes from fast to faster, and he lands one whirlwind swing where
+  // he stands. Once per dash — the chain is a
   // decision taken during the commitment, not a button to hold down.
-  knightChargeChainSpeedMult: 1.1,
+  knightChargeChainSpeedMult: 2.0,
   knightChainWhirlRadius: 60, knightChainWhirlBossDamage: 1,
   // How much room ahead counts as somewhere to go. A body width, so a knight
   // already nose-first into a wall cannot chain into it.
@@ -1361,6 +1372,10 @@ let selectedMapKind = 'forest';
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
 let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
+/** The deepest link the last cascade reached, and how long it stays
+ *  readable. The peak rather than the last bomb: a chain goes off from the
+ *  inside out and the final blast is not the deepest one. */
+let sapperChainPeak = 0, sapperChainRead = 0;
 /** Charges still owed to the burst in progress, and the timer to the next. */
 let sapperBurstLeft = 0, sapperBurstTimer = 0, sapperBurstThrown = 0;
 let sapperBarrageCD = 0, sapperShotCD = 0;
@@ -2520,7 +2535,15 @@ const HERO_UPKEEP = {
     if (inv.focus >= CONFIG.resources.focus.max) return;
     inv.focus = Math.min(CONFIG.resources.focus.max, inv.focus + dt / CONFIG.wizFocusRegenSecs);
   },
-  sapper: (dt) => tickSapperBurst(dt),
+  sapper: (dt) => {
+    tickSapperBurst(dt);
+    // The whole cascade lands inside one frame's worth of fuse, so the
+    // hold is what makes it readable; the peak clears with it.
+    if (sapperChainRead > 0) {
+      sapperChainRead -= dt;
+      if (sapperChainRead <= 0) { sapperChainRead = 0; sapperChainPeak = 0; }
+    }
+  },
 };
 
 const MOVEMENT_METERS = {
@@ -3985,6 +4008,7 @@ function initGame() {
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  sapperChainPeak = 0; sapperChainRead = 0;
   stormFx = 0; blinkFx = 0;
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
@@ -4195,8 +4219,8 @@ function updatePlayer(dt) {
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
       // resolution below so it stops on walls like any other movement.
-      // Half speed normally; a chained charge commits him at a little over
-      // walking pace instead, which is the whole of what the chain buys.
+      // Faster than he can walk; a chained charge commits him faster still,
+      // which is the whole of what the chain buys.
       const dashMult = knightDash.chained
         ? CONFIG.knightChargeChainSpeedMult : CONFIG.knightChargeDashSpeedMult;
       const spd = FEATHERS.speed() * dashMult * dt;
@@ -5830,6 +5854,14 @@ function explodeExplosive(d, source, opts = {}) {
   const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
   const grow = TALENTS.capstoneActive('demolitionist')
     ? 1 + link * CONFIG.sapperDemolitionGrowth : 1;
+  // The chain is the sapper's ramp, and it was the only one on the roster
+  // with nothing on screen: brace, momentum and bloodlust all report
+  // themselves, and his multiplied a boss's damage silently. Every bomb a
+  // cascade lights reports the depth it went off at.
+  if (isSapperExplosive(d)) {
+    sapperChainPeak = Math.max(sapperChainPeak, link + 1);
+    sapperChainRead = CONFIG.sapperChainReadSecs;
+  }
   const radius = (opts.radius ?? CONFIG.dynamiteBlastRadius * mult) * grow;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
@@ -12231,7 +12263,7 @@ const LANE_D = {
   ranger: ['momentum', 'net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
-  sapper: ['charge', 'barrage', 'sapperShot', 'shield'],
+  sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -12271,6 +12303,17 @@ const CHIP = {
   shield:    () => ({ glyph: 'shield', color: '#FFB400', lit: playerShield,
                       label: playerShield ? 'ON' : '', frac: null }),
   barrage:    () => cooldownChip('barrage', sapperBarrageCD, CONFIG.sapperBarrageCooldown, 0),
+  // Not a cooldownChip, for the reason Brace and Momentum are not: nothing
+  // is gated and nothing is spent. It reports the depth the last cascade
+  // reached, which is the figure a boss's damage was multiplied by --
+  // 1 + link x sapperChainBossBonus -- against the ceiling MORE LINKS
+  // sets rather than the base one, so a talent is not read away.
+  chain:      () => ({
+    glyph: 'bomb', color: '#FF7A1A', lit: sapperChainPeak > 1,
+    label: sapperChainPeak > 1 ? 'x' + sapperChainPeak : '',
+    frac: sapperChainPeak > 1
+      ? Math.min(1, sapperChainPeak / (TALENTS.stat('moreLinks') + 1)) : null,
+  }),
   // Reuses the snipe crosshair glyph — it is a precision shot, same read as
   // everyone else's aim-down-it key, just cooldown-gated instead of held.
   sapperShot: () => cooldownChip('snipe', sapperShotCD, CONFIG.sapperShotCooldown, 0),
@@ -14875,6 +14918,7 @@ export const devHooks = {
   holdDraw(secs) { if (archerDraw.on) archerDraw.t0 = performance.now() - secs * 1000; },
   holdNet(secs) { if (rangerNet.on) rangerNet.t0 = performance.now() - secs * 1000; },
   rangerNet: () => ({ drawing: rangerNet.on, frac: rangerNetFrac(), cooldown: rangerNetCD }),
+  sapperChain: () => ({ peak: sapperChainPeak, read: sapperChainRead }),
   nets: () => nets,
   /** Nets lying on the ground, which is what a player actually sees. */
   netMats: () => netMats,
