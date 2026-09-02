@@ -4629,8 +4629,11 @@ describe('a siege boss is on the field and can be fought', () => {
 // holding, so a wave came through a gap unopposed. A gate is where a defender
 // stands: forward of the person guarded, on the ground the attack has to cross.
 describe('the retinue holds the barrier gates', () => {
-  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
-  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+  let origRandom: () => number;
+  // One test below pins Math.random to fix its map; save and restore it so the
+  // pin cannot leak into the rest of the file (afterEach runs even on failure).
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); origRandom = Math.random; });
+  afterEach(() => { Math.random = origRandom; g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
 
   const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
 
@@ -4717,6 +4720,13 @@ describe('the retinue holds the barrier gates', () => {
   });
 
   it('returns to its post after leaving it to fight', () => {
+    // Pin the map as well as the siege roll. The settle note below explains why
+    // route length varies -- the map is seeded from Math.random -- and that
+    // variance is also run-order dependent: this passed alone and flaked ~1 in
+    // 20 in the full suite, drawing a cover-heavy map only once the ~300 tests
+    // before it had advanced Math.random first. A fixed seed removes both.
+    // 20260903 lands the walk home 15px from a post, well inside the 170 leash.
+    Math.random = mulberry32(20260903);
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
