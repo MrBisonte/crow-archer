@@ -66,7 +66,10 @@ if (!out || !ids.length) {
   process.exit(2);
 }
 
-const SIZES = [224, 96, 48];
+// Sizes and columns are overridable so one sheet can hold the whole set at a
+// glance: ICON_SIZES=96 ICON_COLS=6 node icon-png.mjs sheet.png <ids...>
+const SIZES = (process.env.ICON_SIZES ?? '224,96,48').split(',').map(Number);
+const COLS = Number(process.env.ICON_COLS ?? 1);
 const GAP = 10;
 const BG = [0x0d, 0x0f, 0x0c];
 
@@ -79,17 +82,19 @@ if (missing.length) {
   process.exit(1);
 }
 
-const W = SIZES.reduce((a, s) => a + s + GAP, GAP);
+const CELL = SIZES.reduce((a, s) => a + s + GAP, 0);
+const W = GAP + COLS * CELL;
 const ROW = SIZES[0] + GAP;
-const H = GAP + ids.length * ROW;
+const H = GAP + Math.ceil(ids.length / COLS) * ROW;
 const px = new Uint8Array(W * H * 4);
 for (let i = 0; i < W * H; i++) {
   px[i * 4] = BG[0]; px[i * 4 + 1] = BG[1]; px[i * 4 + 2] = BG[2]; px[i * 4 + 3] = 255;
 }
 
-ids.forEach((id, row) => {
+ids.forEach((id, i) => {
   const cells = composite(by.get(id));
-  let x0 = GAP;
+  const row = Math.floor(i / COLS);
+  let x0 = GAP + (i % COLS) * CELL;
   for (const size of SIZES) {
     const scale = size / N;
     const y0 = GAP + row * ROW + (SIZES[0] - size);   // sat on one baseline
