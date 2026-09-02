@@ -951,7 +951,9 @@ describe('the ranger tree reaches Momentum', () => {
     // Read off rangerMomentumMult, the figure a bolt's damage runs on. Asking
     // the accessor what the accessor thinks proves nothing, and this file's
     // own opening says exactly that.
-    talents().grant('fullTilt', 3);
+    // Two levels now, not three. If the ceiling had moved with the cost this
+    // is the assertion that would have caught it.
+    talents().grant('fullTilt', 2);
     talents().draft('fullTilt');
     const m = runFor(4 * ONE_SECOND);
     expect(m.level, 'the ranger should be at full tilt by now').toBe(1);

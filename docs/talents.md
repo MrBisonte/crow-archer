@@ -335,6 +335,22 @@ ladder at the same moments whoever they picked, and a tier that exists for one
 hero and not another turns a rank-up into a lottery. `treesShareOneShape` in
 `talents.test.ts` fails if one drifts.
 
+**And a tier costs the same, whoever you picked.** Counting the talents was
+not enough: the shape test passed while the ranger's tree ran 64% dearer than
+the knight's — 23 points against 14 — because tier II was seven points for the
+knight and the sapper and fourteen for the ranger. A rank arrives at the same
+boss for everyone, so it has to buy the same amount. **Every tier-II talent
+costs five and every tier-III costs three**, whether that is 2+3 over two
+levels or 5 in one purchase, and `prices a tier the same as every other hero
+does` fails if one drifts. Tier I is not levelled yet: it runs 4 to 6, because
+FOCUS DEPTH and FOURTH BLOOD are single levels at 1 against a pair at 1+2.
+
+One more thing the prices have to satisfy: **something in a tier has to be
+affordable the moment the tier opens.** Tier II opens at 2 earned, so a tier
+whose cheapest first level is 5 opens a boss later than it claims to. That is
+why CHARGE THROUGH and STICKY FAN sit beside a 2/3 talent rather than replacing
+one, and `can afford something the moment a tier opens` is the guard.
+
 | Hero | Deepens | Tier I | Tier II | Tier III | The rite |
 |---|---|---|---|---|---|
 | Archer | Brace | SET FEET, DEEP ROOTS | SPLIT SHAFT, LONG THROW | FULL DRAW | ROOTED / SPLINTER / … |
@@ -369,10 +385,14 @@ a third to match the wizard. That is the half of this pass not yet built, and
 it is behaviour rather than a table — each one is a new rule in `game.js`.
 
 Two figures worth stating outright, because they were set deliberately rather
-than derived. The ranger's FULL TILT adds **5% a level over three levels**, so
+than derived. The ranger's FULL TILT adds **7.5% a level over two levels**, so
 her ceiling is **45%** rather than the 30% she starts with — and it still
-multiplies with pickups instead of replacing them. And the knight's FOURTH
-BLOOD is a single level: a fourth stack, not a fourth axis.
+multiplies with pickups instead of replacing them. It was 5% over three levels
+until the tier was priced; the third level was what made her tree the dearest
+in the game, and 7.5% is what keeps the **ceiling** exactly where it was tuned
+while the **cost** comes down to five. A cost change that quietly nerfs a
+character is two changes, and only one of them was asked for. And the knight's
+FOURTH BLOOD is a single level: a fourth stack, not a fourth axis.
 
 ## What the colours mean
 

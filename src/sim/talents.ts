@@ -213,7 +213,7 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'chargeThrough', label: 'CHARGE THROUGH',
         desc: 'The charge cuts on every side of him, not only ahead',
-        tier: 2, costs: [2], effect: { kind: 'unlock' },
+        tier: 2, costs: [5], effect: { kind: 'unlock' },
       },
       {
         id: 'towerGuard', label: 'TOWER GUARD',
@@ -251,8 +251,8 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       },
       {
         id: 'fullTilt', label: 'FULL TILT',
-        desc: '+5% to the Momentum ceiling / level',
-        tier: 2, costs: [2, 3, 4], effect: { kind: 'linear', per: 0.05 },
+        desc: '+7.5% to the Momentum ceiling / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 0.075 },
       },
       {
         id: 'wideNet', label: 'WIDE NET',
@@ -291,7 +291,7 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'stickyFan', label: 'STICKY FAN',
         desc: 'Barrage bombs stop where they land and keep their fuse',
-        tier: 2, costs: [2], effect: { kind: 'unlock' },
+        tier: 2, costs: [5], effect: { kind: 'unlock' },
       },
       {
         id: 'widerFan', label: 'WIDER FAN',

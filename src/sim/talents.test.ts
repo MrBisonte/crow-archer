@@ -372,6 +372,35 @@ describe('treesShareOneShape', () => {
     it(`${char} offers a rite worth holding`, () => {
       expect(CHAR_TREES[char].capstones.length).toBeGreaterThanOrEqual(2);
     });
+
+    // A tier is what a rank BUYS, and a rank arrives at the same boss for
+    // everyone. Two heroes reaching rank I and being offered 7 points of
+    // talent and 14 points of talent are not on the same ladder, whatever
+    // the tier counts say -- the ranger's tree ran 64% dearer than the
+    // knight's on a shape test that passed.
+    it(`${char} prices a tier the same as every other hero does`, () => {
+      const WANT: Readonly<Record<number, number>> = { 2: 5, 3: 3 };
+      for (const talent of CHAR_TREES[char].talents) {
+        const want = WANT[talent.tier];
+        if (want === undefined) continue;          // tier I is not levelled yet
+        const paid = talent.costs.reduce((a, b) => a + b, 0);
+        expect(paid, `${char}.${talent.label} costs ${talent.costs.join('+')}`)
+          .toBe(want);
+      }
+    });
+
+    // A tier nobody can afford at the rank that opens it is a tier that opens
+    // one boss later than it says it does.
+    it(`${char} can afford something the moment a tier opens`, () => {
+      for (const tier of [2, 3]) {
+        const opens = RANK_THRESHOLDS[tier - 2]!;
+        const first = CHAR_TREES[char].talents
+          .filter((t) => t.tier === tier)
+          .map((t) => t.costs[0]!);
+        expect(Math.min(...first), `${char} tier ${tier} opens at ${opens} earned`)
+          .toBeLessThanOrEqual(opens);
+      }
+    });
   }
 });
 
