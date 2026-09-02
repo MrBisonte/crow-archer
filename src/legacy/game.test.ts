@@ -24,7 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
-import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
+import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -3305,6 +3305,114 @@ describe('the balance model', () => {
   });
 });
 
+/**
+ * What a hero is worth against a BODY, which is the half of damage that had no
+ * test at all.
+ *
+ * Every balance test above this one measures a boss, because `bossDamageMult`
+ * is the only place single-player damage was ever a quantity. balance.md says
+ * so, and justifies it: everything else has exactly one hit point and dies to
+ * one hit of anything, so scaling a hit that already kills changes nothing.
+ *
+ * That stopped being true when the garrison arrived. A spearman has 2 hit
+ * points and a shieldman 4, so on the cavern damage is a quantity, the
+ * multiplier does not reach it, and the wizard -- the hero whose whole row is
+ * the highest multiplier on the roster -- was the slowest killer in the game
+ * there: 3.9 s on a shieldman the archer killed in 0.33 s, measured with this
+ * harness before `wizBoltBodyDamage` existed.
+ *
+ * Bounds rather than exact times. The point is to fail loudly when someone
+ * moves a wizard number and changes a fight they were not looking at, not to
+ * pin a stopwatch reading that a hitstop tweak would invalidate.
+ */
+describe('time to kill a body', () => {
+  /**
+   * Seconds for `char` to kill one pinned soldier at point-blank range, or
+   * null if it never dies inside the limit.
+   *
+   * The hero is healed every frame and the soldier is held and replaced on its
+   * mark every frame, so what is measured is damage per second and nothing
+   * else -- not kiting, not the soldier's approach, and not whether the hero
+   * survives the exchange, which is a different question with a different
+   * answer for each of them.
+   */
+  function secondsToKill(char: CharacterKind, kind: string): number | null {
+    g.pick(char);
+    g.pickMap('cavern');
+    g.go('playing');
+    clearArena();
+    (g.soldiers() as unknown[]).length = 0;
+    (g.arrows() as unknown[]).length = 0;
+
+    const p = g.player() as { x: number; y: number };
+    g.spawnSoldier(kind);
+    const list = g.soldiers() as
+      { x: number; y: number; hp: number; heldTimer: number }[];
+    const mark = list[0];
+    if (mark === undefined) throw new Error('spawnSoldier put nothing on the field');
+
+    const LIMIT = ONE_SECOND * 20;
+    for (let frame = 0; frame < LIMIT; frame++) {
+      if (list.length === 0) return frame / ONE_SECOND;
+      // Nobody is holding the keys, so an unhealed hero dies to the thing he
+      // is being timed against and the test measures that instead.
+      g.healHero();
+      // Held and re-seated: a soldier that closes changes the range, and a
+      // shieldman that turns changes whether a hit lands at all.
+      mark.heldTimer = 1;
+      mark.x = p.x + 150;
+      mark.y = p.y;
+      aimAt(mark.x, mark.y);
+      g.shoot();
+      stepPast(1);
+    }
+    return null;
+  }
+
+  // The regression this exists for. One bolt to a spearman and two to a
+  // shieldman is the whole of `wizBoltBodyDamage`; at 1 it was two and four,
+  // and a shieldman took the better part of four seconds.
+  it('kills a spearman with one wizard bolt and a shieldman with two', () => {
+    const c = g.config();
+    const spearman = secondsToKill('wizard', 'spearman');
+    const shieldman = secondsToKill('wizard', 'shieldman');
+
+    expect(spearman, 'a spearman survived a wizard for 20 s').not.toBeNull();
+    expect(shieldman, 'a shieldman survived a wizard for 20 s').not.toBeNull();
+    // One bolt lands at once; each one after it waits a whole cooldown. So n
+    // bolts is under (n-1) cooldowns plus a frame of travel, and asserting the
+    // count this way survives a change to the cooldown itself.
+    expect(spearman!).toBeLessThan(c.wizBoltCooldown);
+    expect(shieldman!).toBeLessThan(c.wizBoltCooldown * 2);
+    expect(shieldman!).toBeGreaterThan(c.wizBoltCooldown * 0.5);
+  });
+
+  // Stated as a ratio, because the absolute figures are a property of the
+  // harness and the ordering is a property of the design.
+  it('leaves the click-limited kits faster on a body, which is their half', () => {
+    const wizard = secondsToKill('wizard', 'shieldman');
+    const archer = secondsToKill('archer', 'shieldman');
+
+    expect(archer, 'a shieldman survived an archer for 20 s').not.toBeNull();
+    expect(wizard).not.toBeNull();
+    // He is still slower than the archer -- rate is what he pays for the
+    // biggest single hit -- but no longer by the order of magnitude that made
+    // the panel's "hardest hit" a lie on every map with a garrison.
+    expect(archer!).toBeLessThan(wizard!);
+    expect(wizard!).toBeLessThan(archer! * 8);
+  });
+
+  // A one-hit body is where the multiplier argument still holds, so this is
+  // the control: nothing about the change moves it.
+  it('is the same for everyone against a body with one hit point', () => {
+    for (const char of ['wizard', 'archer', 'ranger'] as CharacterKind[]) {
+      const secs = secondsToKill(char, 'archer');
+      expect(secs, `${char} could not kill a 1 hp soldier`).not.toBeNull();
+      expect(secs!, char).toBeLessThan(1);
+    }
+  });
+});
+
 describe('every boss the stage list names', () => {
   /** Puts a stage's boss on the map and opens its fight. */
   function fightStage(stage: number): { kind: string; hp: number; x: number; y: number } {
@@ -5176,12 +5284,17 @@ describe('projectile flight, as it behaves today', () => {
     expect(g.arrows().length).toBe(0);          // and the bolt stopped on it
   });
 
-  // A spearman has more than one health, so what a bolt is worth against the
-  // garrison is a number that can be got wrong rather than a formality. One,
-  // the same as every other player projectile — a fire bolt is worth three to
-  // a boss and one to a body, which is the rule the archer's quiver states.
-  it('a wizard bolt is worth one hit to a soldier, whatever it carries', () => {
+  // A soldier has more than one hit point, so what a bolt is worth against the
+  // garrison is a number that can be got wrong rather than a formality. It is
+  // `wizBoltBodyDamage` and never `a.dmg`: what a bolt carries is its boss
+  // damage, so reading it here would make a fire bolt worth three to a soldier
+  // and one to everything else.
+  it('a wizard bolt is worth wizBoltBodyDamage to a soldier, whatever it carries', () => {
     const p = g.player() as { x: number; y: number };
+    // A spearman, not a shieldman: a shieldman re-aims its guard at the hero
+    // every frame it walks, so what a bolt is worth to it is a question about
+    // the shield rather than about the figure, and the two do not belong in
+    // one assertion.
     g.spawnSoldier('spearman');
     const sol = g.soldiers()[0] as { x: number; y: number; hp: number } | undefined;
     if (sol === undefined) throw new Error('spawnSoldier put nothing on the field');
@@ -5189,7 +5302,7 @@ describe('projectile flight, as it behaves today', () => {
     const before = sol.hp;
     launch({ wiz: true, homing: false, vx: 400, vy: 0, dmg: g.config().wizFireBoltDamage });
     g.stepSim(ONE_SECOND);
-    expect(sol.hp).toBe(before - 1);
+    expect(sol.hp).toBe(before - g.config().wizBoltBodyDamage);
   });
 
   it('a laser bolt crosses ground a plain arrow is stopped by', () => {

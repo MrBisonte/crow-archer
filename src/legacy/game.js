@@ -661,6 +661,22 @@ const CONFIG = {
   // pace and 3 on calm, so a calm wizard whose bolts all miss can cap out.
   wizBoltCooldown: 1.2, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
+  // What a bolt is worth to a body, as opposed to a boss.
+  //
+  // bossDamageMult is boss-only, and balance.md justifies that scope by
+  // saying everything else has exactly one hit point and dies to one hit of
+  // anything. That was true when it was written and is not any more: a
+  // spearman has 2, a shieldman 4, and a crow in waves mode climbs to 10. So
+  // on every map with a garrison the 2.5x that IS the wizard did nothing at
+  // all, and the hero the panel calls the hardest hitter took 3.9 s to kill a
+  // shieldman the archer kills in 0.33 s. Measured rather than estimated —
+  // see the time-to-kill test in game.test.ts.
+  //
+  // Two, so a spearman falls to one bolt and a shieldman to two. It is the
+  // biggest single hit any hero lands on a body, which is what "hits hardest"
+  // has to mean somewhere other than a boss fight, and he still kills slower
+  // than the click-limited kits because his rate is what he pays for it.
+  wizBoltBodyDamage: 2,
   wizBoltTurnRate: 4.5,           // rad/s homing angular speed
   // Wizard-only pickup batch size (archer/ranger/knight keep their own
   // counts — specialArrowPickupCount/knightJavelinsPerPickup below — so
@@ -4779,7 +4795,7 @@ function updateArrows(dt) {
       let wizHitCrow = false;
       for (let j = crows.length-1; j >= 0; j--) {
         if (dist2(a.x,a.y,crows[j].x,crows[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
-          damageCrow(j);
+          damageCrow(j, CONFIG.wizBoltBodyDamage);
           arrows.splice(i,1);
           wizHitCrow = true;
           break;
@@ -4789,7 +4805,7 @@ function updateArrows(dt) {
       let wizHitSkeleton = false;
       for (let j = skeletons.length-1; j >= 0; j--) {
         if (dist2(a.x,a.y,skeletons[j].x,skeletons[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
-          damageSkeleton(j);
+          damageSkeleton(j, CONFIG.wizBoltBodyDamage);
           arrows.splice(i,1);
           wizHitSkeleton = true;
           break;
@@ -4806,13 +4822,12 @@ function updateArrows(dt) {
       // was pointed.
       for (let j = soldiers.length-1; j >= 0; j--) {
         if (dist2(a.x,a.y,soldiers[j].x,soldiers[j].y) < CONFIG.arrowHitRadius*CONFIG.arrowHitRadius) {
-          // Worth one hit, not `a.dmg`. That is the rule every player
-          // projectile follows — see arrowDamage below — and it is what the
-          // crow and skeleton loops above already do by taking the default.
-          // Only a soldier has the health for the difference to show, so
-          // reading a.dmg here would quietly make a fire bolt worth three
-          // against the garrison and one against everything else.
-          damageSoldier(j, 1, knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx));
+          // The same figure the crow and skeleton loops above use, not
+          // `a.dmg`. What a bolt carries is its boss damage, and reading it
+          // here would quietly make a fire bolt worth three to the garrison
+          // and one to everything else.
+          damageSoldier(j, CONFIG.wizBoltBodyDamage,
+                        knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx));
           arrows.splice(i, 1);
           break;
         }
