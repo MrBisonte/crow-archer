@@ -81,21 +81,46 @@ nothing and a run carried to the bastion banks well.
 
 | Milestone | Points | Paid when |
 |---|---|---|
-| `boss_down` | 2 | any boss dies, siege bosses included |
+| a boss dies | 1–3, by the boss | `BOSS_MASTERY`: crow king 1, dark archer 2, dark knight 2, minotaur 3, commander 3 |
 | `stage_cleared` | 1 | the crow king, dark archer and dark knight hand-offs, and the maze door |
 | `siege_cleared` | 3 | the bastion's ten waves survived |
 | `run_won` | 3 | the win screen, by whichever route reaches it |
+
+A boss pays what its row in `BOSS_MASTERY` says, through `awardBoss`. The
+`boss_down` milestone in `MASTERY_AWARDS` is not what a boss pays and nothing
+in the game awards it — it is the milestone type's default, and reading its 2
+as a boss's price is the mistake this line exists to stop.
+
+A full winning campaign banks **15**: 2 at the crow king, 3 at the dark archer,
+3 at the dark knight, 1 at the maze door, 3 for the siege and 3 for the win.
 
 Ranks are the thresholds those points cross, and a rank opens the tier one
 above it — so tier I is open to a character who has never finished anything,
 which is what lets the draft pool start existing at all.
 
-| Rank | Mastery | Opens |
-|---|---|---|
-| 0 | 0 | Tier I |
-| I | 4 | Tier II |
-| II | 10 | Tier III |
-| III | 18 | The rite |
+| Rank | Mastery | Opens | Reached at |
+|---|---|---|---|
+| 0 | 0 | Tier I | the character select |
+| I | 2 | Tier II | the crow king |
+| II | 5 | Tier III | the dark archer |
+| III | 8 | The rite | the dark knight |
+
+**One boss, one tier.** The thresholds are not round numbers picked for feel;
+they are exactly what a run holds at each of its three boss deaths, because a
+boss death is the only moment a ceremony opens. `queueBossChoosers` is reached
+from two boss-death handlers and nowhere else, it refuses to open mid-siege,
+the minotaur cannot die, and the maze door, the siege win and the win screen
+queue nothing at all. A rank crossed anywhere else cannot be spent until the
+next boss, and one crossed after the last boss cannot be used in that run.
+
+They were 4, 10 and 18, against a campaign that banks 15 and a first-run
+ceiling — the most a player can hold at any boss death in a first run — of 8.
+Rank III was unreachable in a first run and rank II was too, so a tier-III
+talent could not be bought on a first playthrough and the earliest rite any
+character could be offered was the second boss of its second run. Mastery is
+per character, so that was true five times over. `masteryThroughACampaign` in
+`talents.test.ts` is the guard that now fails if a threshold moves off a
+boss.
 
 ## The wizard's tree
 

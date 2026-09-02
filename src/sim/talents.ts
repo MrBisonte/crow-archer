@@ -326,6 +326,12 @@ export function bossMastery(kind: string): number {
  * and a siege survived banks the most.
  */
 export const MASTERY_AWARDS: Record<MasteryMilestone, number> = {
+  // Not paid by anything. A boss banks `bossMastery(kind)` through
+  // `awardBoss`, which is per boss and ranges 1 to 3; this row survives as the
+  // milestone type's default and is what `masteryAfter` would use if a caller
+  // ever passed 'boss_down' to it. Nothing does. Kept rather than deleted
+  // because the milestone is a real thing that happened even when the figure
+  // comes from elsewhere, but do not read this number as what a boss pays.
   boss_down: 2,
   stage_cleared: 1,
   siege_cleared: 3,
@@ -336,8 +342,29 @@ export const MASTERY_AWARDS: Record<MasteryMilestone, number> = {
  * Points at which each rank is reached: rank N at `RANK_THRESHOLDS[N - 1]`.
  * Rank 0 is free — a brand-new character must have something to buy, or the
  * pool the run draft draws from can never start existing.
+ *
+ * One boss, one tier. These are not round numbers picked for feel: they are
+ * exactly what a run has banked at each of its three boss deaths, and a boss
+ * death is the ONLY moment a ceremony opens. `queueBossChoosers` in game.js is
+ * reached from two boss-death handlers and nowhere else, it refuses to open
+ * mid-siege, the minotaur cannot die, and neither the maze door, the siege win
+ * nor the win screen queues anything. So a rank crossed anywhere else is a
+ * rank the player cannot spend or seal until the next boss — and a rank
+ * crossed after the last boss cannot be used in that run at all.
+ *
+ *     crow king    1 + 1 =  2   → rank I opens tier II
+ *     dark archer  2 + 1 =  5   → rank II opens tier III
+ *     dark knight  2 + 1 =  8   → rank III opens the rite
+ *
+ * They were [4, 10, 18], which put every rank above the ceiling. A full
+ * winning campaign banks 15, so rank III was unreachable in a first run; worse,
+ * the most a player can hold at any run-1 boss death is 8, so rank II was out
+ * of reach too and a tier-III talent could not be bought on a first
+ * playthrough. The first rite a character could ever be offered was the second
+ * boss of its second run. See `masteryThroughACampaign` in talents.test.ts,
+ * which is the guard that now says so.
  */
-export const RANK_THRESHOLDS: readonly number[] = [4, 10, 18];
+export const RANK_THRESHOLDS: readonly number[] = [2, 5, 8];
 
 /** The rank the rite demands. The top of the ladder, deliberately. */
 export const CAPSTONE_RANK = RANK_THRESHOLDS.length;

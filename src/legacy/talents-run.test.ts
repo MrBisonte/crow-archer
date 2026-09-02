@@ -482,8 +482,19 @@ describe('the choosers', () => {
     killABoss();
 
     expect(g.state()).toBe('chooser');
-    const c = g.chooser() as unknown as Chooser;
-    expect(c.kind).toBe('draft');
+    // A boss queues rite, then tree, then draft, and which of those actually
+    // open depends on the mastery this character has banked -- which earlier
+    // tests in this file have moved. That used to be invisible because the
+    // rite sat at 18 points and nothing here ever reached it; at 8 it is
+    // reachable and outranks the draft. So walk the queue to the draft rather
+    // than assuming it is first.
+    let c = g.chooser() as unknown as Chooser | null;
+    for (let i = 0; i < 3 && c !== null && c.kind !== 'draft'; i++) {
+      if (c.kind === 'tree') press('b'); else g.chooserPick(0);
+      c = g.chooser() as unknown as Chooser | null;
+    }
+    expect(c, 'no draft followed the boss').not.toBeNull();
+    expect(c!.kind).toBe('draft');
     g.chooserPick(0);
     expect(talents().drafted().length).toBe(1);
   });

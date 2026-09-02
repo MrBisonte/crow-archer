@@ -23,6 +23,7 @@ import {
   CHAR_TREES,
   MASTERY_AWARDS,
   RANK_THRESHOLDS,
+  bossMastery,
   draftOffers,
   draftedValue,
   masteryAfter,
@@ -318,3 +319,88 @@ describe('clampCursor', () => {
     expect(clampCursor(3, 1.9)).toBe(1);
   });
 });
+
+/**
+ * A rank nobody can reach is a rank that does not exist.
+ *
+ * Mastery is banked all over a run, but it can only be SPENT or SEALED when a
+ * ceremony opens, and a ceremony opens on a boss death and nowhere else:
+ * `queueBossChoosers` in game.js is called from two boss-death handlers, it
+ * returns early mid-siege, the minotaur cannot die, and the maze door, the
+ * siege win and the win screen queue nothing. So the question a threshold has
+ * to answer is not "is this reachable" but "is this reachable AT A BOSS".
+ *
+ * The thresholds were [4, 10, 18] against a campaign that banks 15, and the
+ * most a player can hold at any boss death in a first run is 8. Rank II and
+ * rank III were both unreachable in run 1 — a tier-III talent could not be
+ * bought and the rite could not be sealed until the second boss of a second
+ * run. Nothing failed, because nothing was looking.
+ *
+ * This mirrors the award order in `game.js` rather than driving it. If that
+ * order changes — a boss that stops paying, a stage hand-off that starts —
+ * this table has to change with it, and the comment on each row says which
+ * call site it stands for.
+ */
+describe('masteryThroughACampaign', () => {
+  /** What the run banks, in the order game.js banks it. */
+  const CAMPAIGN: ReadonlyArray<{
+    at: string; pays: number; ceremony: boolean;
+  }> = [
+    // killBoss: awardBoss('crowking'), then the branch's stage_cleared, then
+    // queueBossChoosers.
+    { at: 'crow king', pays: bossMastery('crowking') + MASTERY_AWARDS.stage_cleared, ceremony: true },
+    { at: 'dark archer', pays: bossMastery('dark_archer') + MASTERY_AWARDS.stage_cleared, ceremony: true },
+    { at: 'dark knight', pays: bossMastery('dark_knight') + MASTERY_AWARDS.stage_cleared, ceremony: true },
+    // The golden door hands off to the bastion. It pays, and opens nothing.
+    { at: 'maze door', pays: MASTERY_AWARDS.stage_cleared, ceremony: false },
+    // The minotaur cannot die, so the maze has no boss death in it at all.
+    { at: 'siege cleared', pays: MASTERY_AWARDS.siege_cleared, ceremony: false },
+    { at: 'run won', pays: MASTERY_AWARDS.run_won, ceremony: false },
+  ];
+
+  /** Running total after each milestone. */
+  function banked(): { at: string; total: number; ceremony: boolean }[] {
+    let total = 0;
+    return CAMPAIGN.map(({ at, pays, ceremony }) => {
+      total += pays;
+      return { at, total, ceremony };
+    });
+  }
+
+  it('pays 15 for a full winning campaign', () => {
+    expect(banked().at(-1)!.total).toBe(15);
+  });
+
+  it('opens every rank at a boss death, where a ceremony can use it', () => {
+    const atACeremony = banked().filter((m) => m.ceremony);
+    // The ceiling: what the player holds at the LAST moment a ceremony can
+    // open in a first run. Every threshold has to sit at or under it.
+    const ceiling = atACeremony.at(-1)!.total;
+
+    for (const [i, at] of RANK_THRESHOLDS.entries()) {
+      expect(at, `rank ${i + 1} is above the last ceremony of a first run`)
+        .toBeLessThanOrEqual(ceiling);
+      expect(
+        atACeremony.some((m) => m.total === at),
+        `rank ${i + 1} (${at}) is crossed between ceremonies, not at one`,
+      ).toBe(true);
+    }
+  });
+
+  it('seals the rite in a first run, at the last boss before the bastion', () => {
+    const sealable = banked().filter((m) => m.ceremony && riteEligible(m.total));
+    expect(sealable.length, 'no ceremony in a first run can seal the rite').toBeGreaterThan(0);
+    expect(sealable[0]!.at).toBe('dark knight');
+  });
+
+  // One boss, one tier, in order. This is what makes the ladder legible
+  // without a screen explaining it: the next rank is always the next boss.
+  it('opens exactly one rank per boss', () => {
+    const ceremonies = banked().filter((m) => m.ceremony);
+    expect(ceremonies.length).toBe(RANK_THRESHOLDS.length);
+    for (const [i, m] of ceremonies.entries()) {
+      expect(rankOf(m.total), `after the ${m.at}`).toBe(i + 1);
+    }
+  });
+});
+
