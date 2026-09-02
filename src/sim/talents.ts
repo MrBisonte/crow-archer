@@ -79,6 +79,18 @@ export interface CharTree {
  * check, so forgetting a character is a build error rather than the silent
  * fall-through the design-patterns doc records shipping once already.
  *
+ * ## One shape, five heroes
+ *
+ * Every tree is **two tier-I talents, two tier-II and one tier-III**, and
+ * `treesShareOneShape` in talents.test.ts fails if one drifts. The rite is
+ * not level yet: the wizard has three capstones and the rest have two, and
+ * a third for each of them is a rule in game.js rather than a row here.
+ * That is a design rule rather than an implementation convenience: the ranks
+ * are one-per-boss now, so a player meets the same ladder whoever they picked,
+ * and a tier that exists for one hero and not another turns a rank-up into a
+ * lottery. The tier-III row is the one that finishes a line -- it is the
+ * talent the two tier-IIs below it were building toward.
+ *
  * Each hero's tree deepens that hero's own passive, which is what keeps the
  * archer and the ranger diverging rather than converging: they share a quiver,
  * and one is paid for standing still while the other is paid for never doing
@@ -107,6 +119,16 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         id: 'splitShaft', label: 'SPLIT SHAFT',
         desc: '+1 body a full power shot passes through / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      {
+        id: 'longThrow', label: 'LONG THROW',
+        desc: '+48 px/s on a thrown charge / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 48 },
+      },
+      {
+        id: 'fullDraw', label: 'FULL DRAW',
+        desc: 'A power shot reaches full draw 0.25 s sooner',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: -0.25 },
       },
     ],
     capstones: [
@@ -193,6 +215,16 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         desc: 'The charge cuts on every side of him, not only ahead',
         tier: 2, costs: [2], effect: { kind: 'unlock' },
       },
+      {
+        id: 'towerGuard', label: 'TOWER GUARD',
+        desc: '-2 s off the block\'s cooldown / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: -2 },
+      },
+      {
+        id: 'longReach', label: 'LONG REACH',
+        desc: '+12 px of spear, drawn and swung',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: 12 },
+      },
     ],
     capstones: [
       {
@@ -222,6 +254,16 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         desc: '+5% to the Momentum ceiling / level',
         tier: 2, costs: [2, 3, 4], effect: { kind: 'linear', per: 0.05 },
       },
+      {
+        id: 'wideNet', label: 'WIDE NET',
+        desc: '+8 px of net, at any draw / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 8 },
+      },
+      {
+        id: 'fourthBolt', label: 'FOURTH BOLT',
+        desc: 'A fourth bolt in every volley',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: 1 },
+      },
     ],
     capstones: [
       {
@@ -250,6 +292,16 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         id: 'stickyFan', label: 'STICKY FAN',
         desc: 'Barrage bombs stop where they land and keep their fuse',
         tier: 2, costs: [2], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'widerFan', label: 'WIDER FAN',
+        desc: '+1 bomb in a barrage / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      {
+        id: 'shortFuse', label: 'SHORT FUSE',
+        desc: '-0.15 s between charges',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: -0.15 },
       },
     ],
     capstones: [

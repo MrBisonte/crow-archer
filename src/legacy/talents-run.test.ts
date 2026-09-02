@@ -14,6 +14,10 @@
  * it needs and measures deltas — none assumes an empty bank.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
@@ -125,6 +129,212 @@ describe('LONG STEP reaches the blink', () => {
     const from = playerAt();
     g.blink();
     expect(movedSince(from)).toBeCloseTo(g.config().wizBlinkDistance + 40, 6);
+  });
+});
+
+/**
+ * A talent that scales a CONFIG key does nothing wherever that key is still
+ * read straight.
+ *
+ * `TALENTS.STATS` says which CONFIG number each talent moves, and `stat(id)`
+ * returns the base plus what this run drafted. But nothing makes the CODE use
+ * it: a call site left reading `CONFIG.thatKey` keeps the base forever, and
+ * the talent is bought, drawn, described and inert. It fails silently in
+ * both directions — a stat wired for damage but not for the telegraph draws a
+ * lie, and one wired for the sim but not the HUD reports a lie.
+ *
+ * That is not hypothetical. FULL TILT has raised the ranger's momentum
+ * ceiling since the talent pilot, and `rangerMomentumMult` read it correctly,
+ * but the HUD chip and the dev hook both still divided by the base — so a
+ * ranger at +45% was told +30%. This test is what found it.
+ *
+ * Source text rather than behaviour on purpose: the failure is the ABSENCE of
+ * a call, and there is no frame in which an absent call misbehaves. Comment
+ * lines are dropped first, since naming a key in prose is how the reasons get
+ * written down.
+ */
+describe('every talent stat reaches its call sites', () => {
+  const legacy = readFileSync(resolve(fileURLToPath(import.meta.url), '../game.js'), 'utf8');
+
+  /**
+   * Keys a live call site may still read straight, and why.
+   *
+   * An entry here is a claim that the base figure is the right answer for
+   * that reader — not that the talent is unfinished.
+   */
+  const ALLOWED: Readonly<Record<string, string>> = {
+    // The knight's charge chains on the same window the wizard's blink does,
+    // deliberately, so both hands learn one rhythm. HELD STEP is keyed on it,
+    // and only the wizard's reading is talent-aware: routing the knight
+    // through stat() would let a wizard talent widen a knight's chain.
+    shiftChainSecs: "the knight's charge shares the base window on purpose",
+  };
+
+  /** Every CONFIG key TALENTS.STATS claims a talent moves. */
+  function statKeys(): string[] {
+    const table = legacy.slice(legacy.indexOf('  const STATS = {'));
+    const end = table.indexOf('};');
+    return [...table.slice(0, end).matchAll(/key: '(\w+)'/g)].map((m) => m[1]!);
+  }
+
+  /** Lines that read `CONFIG.<key>` as code, past the CONFIG block itself. */
+  function directReads(key: string): string[] {
+    const lines = legacy.split('\n');
+    const declaredBefore = lines.findIndex((l) => l.includes('let inv    = {}'));
+    return lines
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(({ line, n }) =>
+        n > declaredBefore
+        && !line.startsWith('//') && !line.startsWith('*')
+        && line.includes(`CONFIG.${key}`)
+        && !line.slice(0, line.indexOf(`CONFIG.${key}`)).includes('//'))
+      .map(({ line, n }) => `${n}: ${line}`);
+  }
+
+  it('has at least one stat wired, or this test is checking nothing', () => {
+    expect(statKeys().length).toBeGreaterThan(10);
+  });
+
+  it('reads no talent-scaled key straight, outside the allowlist', () => {
+    for (const key of statKeys()) {
+      if (key in ALLOWED) continue;
+      expect(directReads(key), `${key} is scaled by a talent but still read raw`).toEqual([]);
+    }
+  });
+
+  // An allowlist that outlives the reason for it is worse than none: it goes
+  // on excusing a call site nobody has looked at in a year.
+  it('keeps no allowlist entry that has nothing left to excuse', () => {
+    for (const key of Object.keys(ALLOWED)) {
+      expect(directReads(key), `${key} is allowlisted but no longer read raw`)
+        .not.toEqual([]);
+    }
+  });
+});
+
+/**
+ * The eight talents that brought archer, knight, ranger and sapper up to the
+ * wizard's shape.
+ *
+ * Two halves, and neither is enough alone. The table below says each talent's
+ * figure actually MOVES when it is owned and drafted, which is the sim.js side
+ * of it; `every talent stat reaches its call sites` above says no call site is
+ * still reading the base, which is the game.js side. A talent needs both to do
+ * anything, and each fails in a way the other cannot see.
+ *
+ * The three with a one-line observable get one as well, because a count of
+ * bolts on the field is worth more than a number in a table.
+ */
+describe('the four trees levelled up to the wizard\'s shape', () => {
+  /** Owns every level of `id` and wakes it for this run. */
+  function take(char: string, id: string, levels: number): void {
+    g.pick(char);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    talents().grant(id, levels);
+    talents().draft(id);
+  }
+
+  const MOVED: ReadonlyArray<{
+    char: string; id: string; levels: number; from: string; delta: number;
+  }> = [
+    { char: 'archer', id: 'longThrow', levels: 2, from: 'dynamiteSpeed', delta: 96 },
+    { char: 'archer', id: 'fullDraw', levels: 1, from: 'archerDrawMaxSecs', delta: -0.25 },
+    { char: 'knight', id: 'towerGuard', levels: 2, from: 'knightBlockCooldown', delta: -4 },
+    { char: 'knight', id: 'longReach', levels: 1, from: 'knightSpearRange', delta: 12 },
+    { char: 'ranger', id: 'wideNet', levels: 2, from: 'netRadiusBonus', delta: 16 },
+    { char: 'ranger', id: 'fourthBolt', levels: 1, from: 'crossbowBoltCount', delta: 1 },
+    { char: 'sapper', id: 'widerFan', levels: 2, from: 'sapperBarrageCount', delta: 2 },
+    { char: 'sapper', id: 'shortFuse', levels: 1, from: 'sapperChargeCooldown', delta: -0.15 },
+  ];
+
+  for (const { char, id, levels, from, delta } of MOVED) {
+    it(`${id} moves ${from} by ${delta} at ${levels} level(s)`, () => {
+      const base = (g.config() as unknown as Record<string, number>)[from]!;
+      g.pick(char);
+      g.go('playing');
+      talents().grant(id, 0);
+      expect(talents().stat(id), `${id} undrafted must be the base`).toBeCloseTo(base, 6);
+
+      take(char, id, levels);
+      expect(talents().stat(id)).toBeCloseTo(base + delta, 6);
+    });
+
+    it(`${id} is inert while merely owned`, () => {
+      const base = (g.config() as unknown as Record<string, number>)[from]!;
+      g.pick(char);
+      g.go('playing');
+      talents().grant(id, levels);          // owned, never drafted
+      expect(talents().stat(id)).toBeCloseTo(base, 6);
+    });
+  }
+
+  it('FOURTH BOLT puts a fourth bolt on the field', () => {
+    const base = g.config().crossbowBoltCount as number;
+
+    /** One volley, on a clear field with a full quiver. */
+    function volley(): number {
+      (g.arrows() as unknown[]).length = 0;
+      // hasShaft() gates the whole function, and a volley reserves room
+      // against maxArrowsInFlight, so both have to be clear of the answer.
+      (g.inv() as { arrows: number }).arrows = 20;
+      stepPast(ONE_SECOND);                    // clear of the shot cooldown
+      // shoot() sets the pressed flag the loop reads; nothing leaves the
+      // bow until a frame actually runs.
+      g.shoot();
+      stepPast(1);
+      return (g.arrows() as unknown[]).length;
+    }
+
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    expect(volley(), 'the base volley never left').toBe(base);
+
+    take('ranger', 'fourthBolt', 1);
+    expect(volley()).toBe(base + 1);
+  });
+
+  it('WIDE NET throws a wider net at the same draw', () => {
+    /** A tapped net, thrown down the sniper key the way the keyboard does. */
+    function netRadius(): number {
+      (g.nets() as unknown[]).length = 0;
+      g.shift();
+      g.holdNet(0);
+      g.shiftUp();
+      const net = (g.nets() as { radius: number }[])[0];
+      if (net === undefined) throw new Error('no net was thrown');
+      return net.radius;
+    }
+
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    const plain = netRadius();
+
+    take('ranger', 'wideNet', 2);
+    stepPast(ONE_SECOND * 11);                 // clear of the 10 s net cooldown
+    // To a tenth of a pixel: the draw fraction is read off a clock, so two
+    // taps are never bit-identical, and the figure under test is 16.
+    expect(netRadius()).toBeCloseTo(plain + 16, 1);
+  });
+
+  it('WIDER FAN puts two more bombs in a barrage', () => {
+    g.pick('sapper');
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    g.barrage();
+    const plain = (g.barrageBombs() as unknown[]).length;
+    expect(plain, 'the base barrage threw nothing').toBeGreaterThan(0);
+
+    take('sapper', 'widerFan', 2);
+    (g.barrageBombs() as unknown[]).length = 0;
+    g.barrage();
+    expect((g.barrageBombs() as unknown[]).length).toBe(plain + 2);
   });
 });
 

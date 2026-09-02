@@ -320,17 +320,53 @@ converging: they share a quiver, and one is paid for standing still while the
 other is paid for never doing it. Buying into either makes that difference
 larger, not smaller.
 
-Every row is a real figure the game runs on — thirteen of the twenty scale a
-`CONFIG` number, and the remaining seven are unlocks. A talent whose effect
-nothing reads must not ship, so `TALENTS.STATS` is checked at load: a numeric
-talent with no row throws by name rather than handing `NaN` to a consumer.
+Every row is a real figure the game runs on. A talent whose effect nothing
+reads must not ship, and two checks say so rather than a convention: a numeric
+talent with no `TALENTS.STATS` row throws by name at load, and
+`every talent stat reaches its call sites` in `talents-run.test.ts` fails if a
+key a talent scales is still read as `CONFIG.thatKey` anywhere. The second one
+is not paranoia — it is what found the ranger being told **+30%** on a HUD chip
+while her bolts were multiplying by **+45%**.
 
-| Hero | Deepens | Tier I | Tier II | The rite |
-|---|---|---|---|---|
-| Archer | Brace | SET FEET, DEEP ROOTS | SPLIT SHAFT | ROOTED / SPLINTER |
-| Knight | Bloodlust | DEEPER CUT, FOURTH BLOOD | CHARGE THROUGH | BERSERKER / JUGGERNAUT |
-| Ranger | Momentum | LIGHT FOOT, LONG WIND | FULL TILT | SLIPSTREAM / SHRAPNEL |
-| Sapper | Chain detonation | LONG FUSE, MORE LINKS | STICKY FAN | DEMOLITIONIST / SHOCKWAVE |
+**One shape, five heroes.** Every tree is two tier-I talents, two tier-II and
+one tier-III. That is a design rule, not a coincidence of how they were
+written: the ranks are one-per-boss, so every player meets the same
+ladder at the same moments whoever they picked, and a tier that exists for one
+hero and not another turns a rank-up into a lottery. `treesShareOneShape` in
+`talents.test.ts` fails if one drifts.
+
+| Hero | Deepens | Tier I | Tier II | Tier III | The rite |
+|---|---|---|---|---|---|
+| Archer | Brace | SET FEET, DEEP ROOTS | SPLIT SHAFT, LONG THROW | FULL DRAW | ROOTED / SPLINTER / … |
+| Knight | Bloodlust | DEEPER CUT, FOURTH BLOOD | CHARGE THROUGH, TOWER GUARD | LONG REACH | BERSERKER / JUGGERNAUT / … |
+| Ranger | Momentum | LIGHT FOOT, LONG WIND | FULL TILT, WIDE NET | FOURTH BOLT | SLIPSTREAM / SHRAPNEL / … |
+| Sapper | Chain detonation | LONG FUSE, MORE LINKS | STICKY FAN, WIDER FAN | SHORT FUSE | DEMOLITIONIST / SHOCKWAVE / … |
+| Wizard | Focus and the blink | FOCUS DEPTH, LONG STEP | WIDER SKY, HELD STEP | THIRD STEP | OVERCHANNEL / STORMCALLER / THUNDERSTEP |
+
+The eight new rows, and what they move:
+
+| Talent | Tier | Levels | Costs | Each level | Base |
+|---|---|---|---|---|---|
+| LONG THROW | II | 2 | 2, 3 | +48 px/s on a thrown charge | 336 px/s |
+| FULL DRAW | III | 1 | 3 | −0.25 s to reach a full draw | 1.0 s |
+| TOWER GUARD | II | 2 | 2, 3 | −2 s off the block's cooldown | 10 s |
+| LONG REACH | III | 1 | 3 | +12 px of spear | 80 px |
+| WIDE NET | II | 2 | 2, 3 | +8 px of net at any draw | 34–70 px |
+| FOURTH BOLT | III | 1 | 3 | +1 bolt in a volley | 3 |
+| WIDER FAN | II | 2 | 2, 3 | +1 bomb in a barrage | 5 |
+| SHORT FUSE | III | 1 | 3 | −0.15 s between charges | 1.1 s |
+
+WIDE NET is the one that could not be a single key. A net's radius is lerped
+from `netRadiusMin` to `netRadiusMax` off the draw, so raising either end alone
+would widen a tapped net or a full one but not both. It scales
+`netRadiusBonus`, which is 0 and is added to both, so the draw keeps meaning
+what it meant. FULL DRAW, TOWER GUARD and SHORT FUSE carry floors, because the
+arithmetic would otherwise run them to zero: a draw that completes in no time
+is not a talent, and a block that is never on cooldown is not a cooldown.
+
+The rite rows end in `…` for four of the five: each has two capstones and needs
+a third to match the wizard. That is the half of this pass not yet built, and
+it is behaviour rather than a table — each one is a new rule in `game.js`.
 
 Two figures worth stating outright, because they were set deliberately rather
 than derived. The ranger's FULL TILT adds **5% a level over three levels**, so

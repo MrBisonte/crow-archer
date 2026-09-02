@@ -341,6 +341,40 @@ describe('clampCursor', () => {
  * this table has to change with it, and the comment on each row says which
  * call site it stands for.
  */
+/**
+ * One shape, five heroes.
+ *
+ * The ranks are one-per-boss, so every player meets the same ladder at the
+ * same three moments whoever they picked. A tier that exists for one hero and
+ * not another turns a rank-up into a lottery: the wizard finds something to
+ * buy and the sapper finds an empty screen.
+ *
+ * Talent tiers only, for now. The capstone count is deliberately NOT asserted
+ * equal yet — the wizard has three and the other four have two, and the third
+ * for each of them is a new rule in game.js rather than a row in a table. When
+ * they land, add the count here and this comment goes away.
+ */
+describe('treesShareOneShape', () => {
+  const PER_TIER: Readonly<Record<number, number>> = { 1: 2, 2: 2, 3: 1 };
+
+  for (const char of CHARACTERS) {
+    it(`${char} has two tier-I talents, two tier-II and one tier-III`, () => {
+      const tree = CHAR_TREES[char];
+      for (const [tier, want] of Object.entries(PER_TIER)) {
+        const got = tree.talents.filter((t) => t.tier === Number(tier));
+        expect(got.length, `${char} tier ${tier}: ${got.map((t) => t.label).join(', ') || 'none'}`)
+          .toBe(want);
+      }
+      // Nothing outside the three tiers, so a fourth cannot appear unnoticed.
+      expect(tree.talents.length).toBe(5);
+    });
+
+    it(`${char} offers a rite worth holding`, () => {
+      expect(CHAR_TREES[char].capstones.length).toBeGreaterThanOrEqual(2);
+    });
+  }
+});
+
 describe('masteryThroughACampaign', () => {
   /** What the run banks, in the order game.js banks it. */
   const CAMPAIGN: ReadonlyArray<{

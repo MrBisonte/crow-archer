@@ -484,6 +484,7 @@ const CONFIG = {
   netDrawMaxSecs: 1.0,
   netThrowMin: 120, netThrowMax: 320,
   netRadiusMin: 34, netRadiusMax: 70,
+  netRadiusBonus: 0,   // WIDE NET adds to both ends; see TALENTS.STATS
   netHoldMin: 0.8, netHoldMax: 2.0,
   netDamage: 0.9,
   netSpeed: 420,
@@ -2374,7 +2375,7 @@ function tryWizardBlink() {
  * the bar, so it lives in one place. */
 function archerDrawFrac() {
   if (!archerDraw.on) return 0;
-  return Math.min(1, (performance.now() - archerDraw.t0) / 1000 / CONFIG.archerDrawMaxSecs);
+  return Math.min(1, (performance.now() - archerDraw.t0) / 1000 / TALENTS.stat('fullDraw'));
 }
 
 /**
@@ -2687,7 +2688,9 @@ function releaseRangerNet() {
   nets.push({
     x: player.x, y: player.y,
     toX: land.x, toY: land.y,
-    radius: lerp(CONFIG.netRadiusMin, CONFIG.netRadiusMax),
+    // WIDE NET shifts the whole range rather than an end of it, so the
+    // draw still decides where between them this throw lands.
+    radius: lerp(CONFIG.netRadiusMin, CONFIG.netRadiusMax) + TALENTS.stat('wideNet'),
     hold: lerp(CONFIG.netHoldMin, CONFIG.netHoldMax),
     spin: 0,
   });
@@ -2753,7 +2756,7 @@ function drawAbilityFx() {
       const frac = Math.min(1, (performance.now() - charge.t0) / 1000);
       paintDynamiteCharge(ctx, {
         x: player.x, y: player.y + CONFIG.hudHeight, aim: player.aimAngle, frac,
-        reach: throwReachPx(CONFIG.dynamiteSpeed * (1 + frac * 2), CONFIG.dynamiteLifetime),
+        reach: throwReachPx(TALENTS.stat('longThrow') * (1 + frac * 2), CONFIG.dynamiteLifetime),
         blastRadius: CONFIG.dynamiteBlastRadius, t: loopT,
       });
     }
@@ -4270,7 +4273,7 @@ function updatePlayer(dt) {
   // playerShield until something hits the knight from the front.
   if (selectedChar === 'knight' && !playerShield) {
     knightBlockCD = Math.max(0, knightBlockCD - dt);
-    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = CONFIG.knightBlockCooldown; }
+    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = TALENTS.stat('towerGuard'); }
   }
   if (pfSwing > 0) {
     pfSwing = Math.max(0, pfSwing - dt);
@@ -4315,7 +4318,7 @@ function updatePlayer(dt) {
     const swingWas = knightSpearSwing;
     knightSpearSwing = Math.max(0, knightSpearSwing - dt);
     const fsActive   = inv.knightFireSwordTimer > 0;
-    const baseRange  = CONFIG.knightSpearRange * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
+    const baseRange  = TALENTS.stat('longReach') * (fsActive ? CONFIG.knightFireSwordRangeMult : 1);
     const swingProg  = 1 - knightSpearSwing / CONFIG.knightSpearSwingDuration;
     const phase2     = swingProg >= 0.5;  // second half of swing triggers phase 2
     const thrustReach = Math.sin(Math.min(swingProg, 1) * Math.PI) * 22;
@@ -4481,10 +4484,16 @@ function tryCrossbowBolt() {
   if (!hasShaft()) { tryPitchfork(); return; }
   // Reserve room for the whole burst up front — a partial push would let
   // arrows.length overshoot maxArrowsInFlight and stall the next press.
-  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // Read once: a volley has to be counted, spread and fired off the same
+  // number, and FOURTH BOLT moves it.
+  const bolts = TALENTS.stat('fourthBolt');
+  // A fourth bolt costs a little availability as well as buying damage:
+  // bolts share maxArrowsInFlight with arrows, 5 on the default pace, so a
+  // volley of four is refused whenever two are already out.
+  if (arrows.length + bolts > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
-  const half = (CONFIG.crossbowBoltCount - 1) / 2;
-  for (let i = 0; i < CONFIG.crossbowBoltCount; i++) {
+  const half = (bolts - 1) / 2;
+  for (let i = 0; i < bolts; i++) {
     const boltAngle = player.aimAngle + (i - half) * CONFIG.crossbowSpreadRadians;
     arrows.push({ x: player.x, y: player.y,
       vx: Math.cos(boltAngle) * CONFIG.arrowSpeed,
@@ -4623,7 +4632,7 @@ function launchCharge(speed, kind = 'dynamite', element = 'none') {
 function throwDynamite(chargeFrac) {
   if (inv.dynamites <= 0) return;
   inv.dynamites--;
-  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2));
+  launchCharge(TALENTS.stat('longThrow') * (1 + chargeFrac * 2));
 }
 
 /**
@@ -4691,7 +4700,7 @@ function tickSapperBurst(dt) {
 
   // The burst is over: either he let go, he ran the pouch dry, or all three
   // left. Bill him for exactly what he threw.
-  sapperChargeCD    = CONFIG.sapperChargeCooldown * sapperBurstThrown;
+  sapperChargeCD    = TALENTS.stat('shortFuse') * sapperBurstThrown;
   sapperBurstLeft   = 0;
   sapperBurstThrown = 0;
 }
@@ -4706,7 +4715,7 @@ function trySapperBarrage() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperBarrageCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   sapperBarrageCD = CONFIG.sapperBarrageCooldown;
-  const n = CONFIG.sapperBarrageCount, half = CONFIG.sapperBarrageArcRadians / 2;
+  const n = TALENTS.stat('widerFan'), half = CONFIG.sapperBarrageArcRadians / 2;
   for (let i = 0; i < n; i++) {
     // n-1 equal steps across the arc, symmetric about aim angle, so an odd
     // count always puts one bomb on the aim line rather than straddling it.
@@ -9043,6 +9052,17 @@ const TALENTS = (() => {
     // window, and routing him through stat() is how that would happen.
     heldStep:    { key: 'shiftChainSecs' },
     thirdStep:   { key: 'wizBlinkMaxHops' },
+    longThrow:   { key: 'dynamiteSpeed' },
+    // Floors, where the arithmetic would otherwise run a figure to zero or
+    // past it. A draw that completes in no time is not a talent, and a block
+    // that is never on cooldown is not a cooldown.
+    fullDraw:    { key: 'archerDrawMaxSecs', min: 0.4 },
+    towerGuard:  { key: 'knightBlockCooldown', min: 4 },
+    longReach:   { key: 'knightSpearRange' },
+    wideNet:     { key: 'netRadiusBonus' },
+    fourthBolt:  { key: 'crossbowBoltCount' },
+    widerFan:    { key: 'sapperBarrageCount' },
+    shortFuse:   { key: 'sapperChargeCooldown', min: 0.6 },
     setFeet:     { key: 'braceFillSecs', min: 0.35 },
     deepRoots:   { key: 'braceDrainMult', min: 1 },
     splitShaft:  { key: 'archerPowerPierce' },
@@ -9928,7 +9948,7 @@ function drawKnight() {
 
   if (fsActive) {
     // Fire sword — broad blade, short, glowing
-    const sLen = CONFIG.knightSpearRange * CONFIG.knightFireSwordRangeMult * 0.55;
+    const sLen = TALENTS.stat('longReach') * CONFIG.knightFireSwordRangeMult * 0.55;
     ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 14 + 5 * Math.sin(loopT * 10);
     ctx.fillStyle = '#FF3300';
     ctx.fillRect(4, -4, sLen, 8);                // blade
@@ -9941,7 +9961,7 @@ function drawKnight() {
     ctx.fillRect(-10, -2, 12, 4);                // grip
   } else {
     // Spear — long shaft + leaf-tip
-    const sLen = CONFIG.knightSpearRange * 0.92;
+    const sLen = TALENTS.stat('longReach') * 0.92;
     ctx.strokeStyle = '#5a3a10'; ctx.lineWidth = 3.5;
     ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(sLen, 0); ctx.stroke();
     // Cross-binding wraps
@@ -9986,7 +10006,7 @@ function drawKnight() {
   // actually raises — an arc centered on spearAng (the same mirrored aim
   // angle the spear points along), not a full ring.
   if (!playerShield && knightBlockCD > 0) {
-    const fill = 1 - knightBlockCD / CONFIG.knightBlockCooldown;
+    const fill = 1 - knightBlockCD / TALENTS.stat('towerGuard');
     ctx.globalAlpha = 0.5;
     ctx.strokeStyle = '#FFB400'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(0, bob, 19, -Math.PI/2, -Math.PI/2 + fill * Math.PI*2); ctx.stroke();
@@ -12106,15 +12126,15 @@ const LANE_D = {
  *  ability is a new row instead of another arm on a growing chain. */
 const CHIP = {
   whirlwind: () => cooldownChip('spin', knightWhirlwindCD, CONFIG.knightWhirlwindCooldown, knightWhirlwindTimer),
-  block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, CONFIG.knightBlockCooldown, 0),
+  block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, TALENTS.stat('towerGuard'), 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
-  charge:    () => cooldownChip('dynamite', sapperChargeCD, CONFIG.sapperChargeCooldown, 0),
+  charge:    () => cooldownChip('dynamite', sapperChargeCD, TALENTS.stat('shortFuse'), 0),
   storm:     () => cooldownChip('storm', stormCD, TALENTS.stormCooldown(), 0),
   blink:     () => cooldownChip('blink', wizBlinkCD, CONFIG.wizBlinkCooldown, 0),
   // Reads as live while the bow is bent, so the bar on the body and the chip
   // in the lane say the same thing.
   power:     () => cooldownChip('arrow', archerPowerCD, CONFIG.archerPowerCooldown,
-                                archerDraw.on ? CONFIG.archerDrawMaxSecs : 0),
+                                archerDraw.on ? TALENTS.stat('fullDraw') : 0),
   // Not a cooldownChip: nothing is gated and nothing is spent, so "READY"
   // would be a lie. It reports a stance that is filling, full, or draining,
   // and the fraction is the same number the arrows are multiplied by.
@@ -12123,7 +12143,11 @@ const CHIP = {
   // or falling away, and the label is the figure the bolts are multiplied by.
   momentum:  () => ({
     glyph: 'momentum', color: '#FFCC00', lit: rangerMomentum >= 1,
-    label: rangerMomentum <= 0 ? '' : '+' + Math.round(rangerMomentum * CONFIG.rangerMomentumMax * 100) + '%',
+    // The talent's ceiling, not the base one. FULL TILT raises what a full
+    // meter is worth and this label is the only place the player is told
+    // the figure, so reading CONFIG here printed +30% at a bonus of +45%.
+    label: rangerMomentum <= 0 ? ''
+      : '+' + Math.round(rangerMomentum * TALENTS.stat('fullTilt') * 100) + '%',
     frac: rangerMomentum >= 1 ? null : rangerMomentum,
   }),
   brace:     () => ({
@@ -13049,6 +13073,14 @@ const TALENT_LOOK = {
   focusDepth:    { kind: 'indirect', hook: 'A full pool casts four bolts' },
   blinkReach:    { kind: 'mechanic', hook: 'The wall you could not reach is now cover' },
   heldStep:      { kind: 'mechanic', hook: 'The window stays open a breath longer' },
+  longThrow:     { kind: 'mechanic', hook: 'The stick lands where he was aiming' },
+  fullDraw:      { kind: 'indirect', hook: 'The bow is ready before he is' },
+  towerGuard:    { kind: 'indirect', hook: 'The guard comes back up sooner' },
+  longReach:     { kind: 'direct',   hook: 'A step further than they think' },
+  wideNet:       { kind: 'mechanic', hook: 'Fewer edges to slip out of' },
+  fourthBolt:    { kind: 'direct',   hook: 'One more in every fan' },
+  widerFan:      { kind: 'direct',   hook: 'The arc keeps growing' },
+  shortFuse:     { kind: 'mechanic', hook: 'He is already reaching for the next' },
   thirdStep:     { kind: 'mechanic', hook: 'Twice was the cap. It is three' },
   thunderstep:   { kind: 'direct',   hook: 'Arriving is the attack, and it grows' },
   stormWidth:    { kind: 'direct',   hook: 'The storm stops asking where they are' },
@@ -14630,7 +14662,7 @@ export const devHooks = {
   })),
   /** Momentum's meter and what it multiplies a bolt by. */
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
-                     max: CONFIG.rangerMomentumMax }),
+                     max: TALENTS.stat('fullTilt') }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress
    *  has touched anything yet. Enough to check a stack or a reset without
    *  reconstructing the swing. */

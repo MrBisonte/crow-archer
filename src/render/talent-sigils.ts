@@ -89,6 +89,20 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
     { d: 'M17 5 L17 18', dash: true },
     { d: 'M3.4 20.6 L18.6 20.6', alpha: 0.45 },
   ],
+  fourthBolt: [
+    { d: 'M2.4 12 L7.4 12' },
+    { d: 'M7.4 12 L20.6 5.4', alpha: 0.5 },
+    { d: 'M7.4 12 L21.4 9.6', alpha: 0.5 },
+    { d: 'M7.4 12 L21.4 14.4', alpha: 0.5 },
+    { d: 'M7.4 12 L20.6 18.6' },
+    { d: 'M17.4 16.6 L21.6 19.6 L18.2 21z', fill: true },
+  ],
+  fullDraw: [
+    { d: 'M7.4 3.2 A11 11 0 0 1 7.4 20.8' },
+    { d: 'M7.4 3.2 L17.4 12 L7.4 20.8' },
+    { d: 'M3.4 12 L17.4 12' },
+    { d: 'M15.6 9.8 L20.6 12 L15.6 14.2z', fill: true },
+  ],
   fullTilt: [
     { d: 'M2.5 5 L21.5 5' },
     { d: 'M2.5 11 L21.5 11', dash: true, alpha: 0.55 },
@@ -119,6 +133,19 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
     { d: 'M14.3 9.2 A1.9 1.9 0 1 0 18.1 9.2 A1.9 1.9 0 1 0 14.3 9.2', fill: true },
     { d: 'M13.5 17.6 A1.9 1.9 0 1 0 17.3 17.6 A1.9 1.9 0 1 0 13.5 17.6', fill: true },
     { d: 'M2.9 7.6 A1.9 1.9 0 1 0 6.7 7.6 A1.9 1.9 0 1 0 2.9 7.6', fill: true },
+  ],
+  longReach: [
+    { d: 'M2.8 20.4 L16.8 6.4' },
+    { d: 'M15.4 5 L20 3.4 L18.4 8z', fill: true },
+    { d: 'M4.6 20.2 L2 22.2 L2.4 19z', fill: true },
+    { d: 'M18.2 8.6 L22.4 4.4', dash: true },
+  ],
+  longThrow: [
+    { d: 'M2.6 20.6 Q10.4 1.8 20.6 14.6', dash: true },
+    { d: 'M2.2 20.6 L6.4 20.6' },
+    { d: 'M18.6 13.6 h4 v6.4 h-4z', fill: true },
+    { d: 'M20.6 13.6 V10.2' },
+    { d: 'M19 8.8 L22.2 8.8' },
   ],
   longWind: [
     { d: 'M15.6 6.6 L22 12 L15.6 17.4z', fill: true },
@@ -167,6 +194,12 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
     { d: 'M12 21.8 L12 23.4' },
     { d: 'M4 5.4 h2.8 v2.8 h-2.8 z', fill: true },
     { d: 'M3.4 4.8 L2.2 3.6' },
+  ],
+  shortFuse: [
+    { d: 'M6.4 15.4 A5.6 5.6 0 1 0 17.6 15.4 A5.6 5.6 0 1 0 6.4 15.4', fill: true },
+    { d: 'M12 9.8 V6.4' },
+    { d: 'M10.4 5 L13.6 5 M12 3.4 V6.4 M9.6 3.6 L14.4 6.4 M14.4 3.6 L9.6 6.4' },
+    { d: 'M2.6 15.4 L5.4 15.4 M3.6 11 L5.8 12.6 M3.6 19.8 L5.8 18.2', alpha: 0.6 },
   ],
   shrapnel: [
     { d: 'M7.4 12 A4.6 4.6 0 1 0 16.6 12 A4.6 4.6 0 1 0 7.4 12', dash: true },
@@ -238,5 +271,26 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
   stormcaller: [
     { d: 'M9.6 2.8 L5.4 11.4 h2.6 l-1.1 8 5-9.8h-2.6z', fill: true },
     { d: 'M18 2.8 L13.8 11.4 h2.6 l-1.1 8 5-9.8h-2.6z', dash: true },
+  ],
+  towerGuard: [
+    { d: 'M12 2.4 L20.4 5.8 v7.2 q0 5.6 -8.4 8.6 Q3.6 18.6 3.6 13 V5.8z' },
+    { d: 'M9.4 11 A2.6 2.6 0 1 0 14.6 11 A2.6 2.6 0 1 0 9.4 11', fill: true },
+    { d: 'M12 5.2 V8.4', alpha: 0.6 },
+    { d: 'M6.6 22.4 h10.8', alpha: 0.5 },
+  ],
+  wideNet: [
+    { d: 'M4.8 12 A7.2 7.2 0 1 0 19.2 12 A7.2 7.2 0 1 0 4.8 12' },
+    { d: 'M1.6 12 A10.4 10.4 0 1 0 22.4 12 A10.4 10.4 0 1 0 1.6 12', dash: true, alpha: 0.5 },
+    { d: 'M12 4.8 V19.2 M4.8 12 H19.2' },
+    { d: 'M6.9 6.9 L17.1 17.1 M17.1 6.9 L6.9 17.1', alpha: 0.55 },
+  ],
+  widerFan: [
+    { d: 'M10.4 21.8 h3.2 v1.4 h-3.2z', fill: true },
+    { d: 'M2.6 15.6 Q12 2.6 21.4 15.6', dash: true, alpha: 0.5 },
+    { d: 'M3.6 12.8 A1.7 1.7 0 1 0 7 12.8 A1.7 1.7 0 1 0 3.6 12.8', fill: true, alpha: 0.5 },
+    { d: 'M7.5 7.9 A1.7 1.7 0 1 0 10.9 7.9 A1.7 1.7 0 1 0 7.5 7.9', fill: true, alpha: 0.65 },
+    { d: 'M13.1 7.9 A1.7 1.7 0 1 0 16.5 7.9 A1.7 1.7 0 1 0 13.1 7.9', fill: true, alpha: 0.8 },
+    { d: 'M16.8 12.4 A2.3 2.3 0 1 0 21.4 12.4 A2.3 2.3 0 1 0 16.8 12.4', fill: true },
+    { d: 'M21.4 9.4 V7.2 M20.2 7.6 L22.6 6.4', alpha: 0.9 },
   ],
 };
