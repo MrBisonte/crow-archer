@@ -30,6 +30,8 @@ declare global {
     /** Puts both towers at `hp`, for watching one fall. Unlike `hurt`, it sets
      *  the figure rather than subtracting it. */
     crack: (hp?: number) => unknown;
+    /** Toggles player invincibility. Password-gated dev cheat; see `game.js`. */
+    god: (pw?: string) => unknown;
     /** The retinue as readable lines: rank marker, kind, HP. */
     retinue: () => string[];
     /** Starts a run with every one of `char`'s talents owned, so the opening

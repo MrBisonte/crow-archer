@@ -1369,6 +1369,7 @@ function cyclePanelSelection(panels, current, field) {
 /** @type {import('../net/protocol').CharacterKind} */
 let selectedChar = 'archer';
 let playerHP = CHARACTER_STATS[selectedChar].maxHp, playerHitFlash = 0;
+let godMode = false;  // hidden dev cheat toggle; see the key-code in boot()
 // Counts down after any refused action, to flash the reticle. See ACTION_BLOCKED.
 let blockedFlash = 0;
 let killCount = 0, dropStreak = 0, playerShield = false;
@@ -6696,12 +6697,14 @@ function updatePlayerPoison(dt) {
   playerPoison.tickIn -= dt;
   if (playerPoison.tickIn > 0) return;
   playerPoison.tickIn += CONFIG.ratPoisonTickSecs;
+  if (godMode) return;   // cheat: venom can't kill a god either
   playerHP -= CONFIG.ratPoisonDamagePerTick;
   events.emit({ type: 'PLAYER_POISON_TICK', x: player.x, y: player.y });
   if (playerHP <= 0) { playerHP = 0; transitionTo('gameover'); }
 }
 
 function damagePlayer(amount, crowIndex = -1) {
+  if (godMode) return;   // hidden dev cheat (the key-code in boot): a god takes no hits
   // Team gate: an attacker never hurts its own team. In single-player the
   // source is always an enemy, so this passes; it enforces the rule once
   // co-op puts two players on team A.
@@ -15299,6 +15302,22 @@ export function boot() {
   }
 
   installInput();
+
+  // Hidden dev cheat, for our own reference (Alex + Merger, 2026-09-02): typing
+  // the password during play toggles invincibility (`godMode`, guarded in
+  // `damagePlayer` and the poison tick). Gated to the dev server on purpose --
+  // `import.meta.env.DEV` compiles to false in the built download and on
+  // gh-pages, so it never reaches the final build. Deliberately not a console
+  // verb and not in any doc or the ledger; this comment is the only record.
+  if (import.meta.env.DEV) {
+    const GOD_CODE = 'p0t4t0';
+    let typed = '';
+    window.addEventListener('keydown', (e) => {
+      if (e.key.length !== 1) return;   // ignore Shift, arrows, function keys
+      typed = (typed + e.key).slice(-GOD_CODE.length);
+      if (typed === GOD_CODE) { godMode = !godMode; typed = ''; console.info(godMode ? 'god on' : 'god off'); }
+    });
+  }
 
   // Render-side reaction to a new map. Registered here, not at module scope,
   // because it touches the offscreen layers boot() just built.
