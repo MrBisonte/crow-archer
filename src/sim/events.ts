@@ -93,6 +93,8 @@ export type GameEvent =
   // the ring drawn for it cannot claim a different one. It used to be read
   // straight off CONFIG at the draw site, which is the same number by
   // coincidence rather than by construction.
+  /** MINEFIELD armed a barrage bomb where it landed. */
+  | { type: 'SAPPER_MINE_ARMED'; x: number; y: number }
   | { type: 'WIZARD_BLINK'; x: number; y: number; toX: number; toY: number; radius: number }
   | { type: 'KNIGHT_WHIRL_SWING'; x: number; y: number; radius: number }
   | { type: 'ARCHER_POWER_SHOT'; x: number; y: number; power: number }

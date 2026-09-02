@@ -127,6 +127,10 @@ quantity rather than a threshold:
   of anything. Scaling a hit that already kills changes nothing, and scaling
   the ranger's below 1 would mean his bolts stop killing crows — the exact
   failure the net's 0.9 damage is designed around.
+- **The garrison is the exception, and it arrived after the rule.** A spearman
+  has 2 hit points and a shieldman 4, so on the cavern damage is a quantity
+  and the reasoning above does not reach it. See
+  [What a hit is worth to a body](#what-a-hit-is-worth-to-a-body).
 - **The player's own health** is `maxHp`, a different column.
 - **Multiplayer** has no bosses. `BattleWorld` reads `speed` and `maxHp` from
   the same table and never looks at this field. See
@@ -134,6 +138,46 @@ quantity rather than a threshold:
 
 The name says the scope. A field called `damageMult` in a shared table would
 invite exactly the wrong reading from the engine that has no bosses in it.
+
+## What a hit is worth to a body
+
+The multiplier is a boss field, so until the garrison arrived there was
+nothing else for damage to be a quantity against. There is now, and the wizard
+is the row it broke: the highest multiplier on the roster does nothing on the
+maps whose bodies are toughest, which made the panel's "hardest hit" false
+everywhere except a boss fight.
+
+Measured with the time-to-kill harness in `game.test.ts`, one held soldier at
+point-blank range, hero healed each frame so the figure is damage and not
+survival:
+
+| Target | Wizard, before | Wizard, now | Archer | Ranger |
+|---|---|---|---|---|
+| Soldier archer (1 hp) | 0.30 s | 0.30 s | 0.28 s | 0.28 s |
+| Spearman (2 hp) | 1.50 s | 0.30 s | 0.30 s | 0.30 s |
+| Shieldman (4 hp) | 3.90 s | 1.50 s | 0.33 s | 0.57 s |
+
+`wizBoltBodyDamage` is 2: a spearman falls to one bolt and a shieldman to two.
+It is the biggest single hit any hero lands on a body, which is what the
+highest damage row has to mean somewhere other than a boss fight.
+
+He is still the slowest of the three, and that is the design rather than a
+leftover. The archer and the ranger are click-limited, so their rate is theirs
+to spend; the wizard's is a 1.2 s cooldown over a Focus pool, and the rate is
+what he pays for the size of the hit. What changed is the order of magnitude,
+not the ordering.
+
+The figure is a bolt's, not a character's. Nothing else the wizard throws
+reads it, and no other hero has a body-damage field at all — every one of
+their weapons is still worth exactly one hit, which is the rule the archer's
+quiver is balanced around.
+
+One consequence worth stating, because it is not about soldiers. Waves mode
+scales crow health to 10x by about wave 25 (`waveCrowHpMult`), and a crow above
+1 hit point is a body like any other, so the same figure halves the wizard's
+time to kill there. That is the same defect and the same fix — a hit that was
+worth 1 against a 10-health crow was the multiplier failing to reach exactly
+the fight it was written for.
 
 ## Time to kill
 

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { dist2, nearestHostile, nearestHostileWithin, type Targetable } from './targeting';
+import {
+  dist2, nearestHostile, nearestHostileAmong, nearestHostileWithin,
+  type Targetable,
+} from './targeting';
 import { Team } from './team';
 
 /** Named so a failed assertion says who got picked instead of dumping numbers. */
@@ -144,6 +147,62 @@ describe('nearestHostileWithin', () => {
     expect(nearestHostileWithin(guard, [skeleton], Number.NaN)).toBeNull();
     // Zero reach is still a real reach: something on top of you is in it.
     expect(nearestHostileWithin(guard, [at('onTop', 0, 0, Team.ENEMY)], 0)).not.toBeNull();
+  });
+});
+
+describe('nearestHostileAmong', () => {
+  // The wizard's homing bolt is the caller this exists for. Crows, skeletons
+  // and soldiers are three arrays that are never one array, and the bolt has
+  // to pick across all three every frame it is in flight. Flattening them
+  // first would build a list per bolt per tick to answer a question that only
+  // needs the winner.
+  it('picks the nearest across every group, not the nearest in the first', () => {
+    const wizard = at('wizard', 0, 0, Team.A);
+    const crow = at('crow', 300, 0, Team.ENEMY);
+    const soldier = at('soldier', 40, 0, Team.ENEMY);
+
+    expect(nearestHostileAmong(wizard, [[crow], [], [soldier]])).toBe(soldier);
+  });
+
+  it('agrees with nearestHostile when there is only one group', () => {
+    const wizard = at('wizard', 0, 0, Team.A);
+    const near = at('near', 20, 0, Team.ENEMY);
+    const far = at('far', 90, 0, Team.ENEMY);
+
+    expect(nearestHostileAmong(wizard, [[near, far]]))
+      .toBe(nearestHostile(wizard, [near, far]));
+  });
+
+  it('returns null for no groups, and for groups that are all empty', () => {
+    const wizard = at('wizard', 0, 0, Team.A);
+
+    expect(nearestHostileAmong(wizard, [])).toBeNull();
+    expect(nearestHostileAmong(wizard, [[], [], []])).toBeNull();
+  });
+
+  // The hostility rule is the one in team.ts and it must not weaken just
+  // because the candidates arrived in several lists rather than one.
+  it('never picks a same-team candidate, whichever group it sits in', () => {
+    const hero = at('hero', 0, 0, Team.A);
+    const guard = at('guard', 1, 0, Team.A);
+    const skeleton = at('skeleton', 500, 0, Team.ENEMY);
+
+    expect(nearestHostileAmong(hero, [[guard], [skeleton]])).toBe(skeleton);
+    expect(nearestHostileAmong(hero, [[guard]])).toBeNull();
+  });
+
+  // Same reason ties matter in nearestHostile: the simulation has to replay,
+  // so two bodies at equal range cannot be resolved by 'either one'. The
+  // earlier group wins, and within a group the earlier candidate does.
+  it('breaks an exact tie by group order, then by position in the group', () => {
+    const wizard = at('wizard', 0, 0, Team.A);
+    const first = at('first', 50, 0, Team.ENEMY);
+    const second = at('second', -50, 0, Team.ENEMY);
+    const third = at('third', 0, 50, Team.ENEMY);
+
+    expect(nearestHostileAmong(wizard, [[first], [second]])).toBe(first);
+    expect(nearestHostileAmong(wizard, [[second], [first]])).toBe(second);
+    expect(nearestHostileAmong(wizard, [[third, first]])).toBe(third);
   });
 });
 

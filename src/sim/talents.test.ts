@@ -24,6 +24,7 @@ import {
   CHAR_TREES,
   MASTERY_AWARDS,
   RANK_THRESHOLDS,
+  bossMastery,
   draftOffers,
   draftedValue,
   masteryAfter,
@@ -206,85 +207,6 @@ describe('buying a talent', () => {
   });
 });
 
-/**
- * The fork.
- *
- * The reason the thing is a tree rather than a shopping list: two talents
- * sharing a slot are exclusive, and buying one shuts the other for that
- * character for good. Before this every talent was eventually bought and the
- * screen asked nothing.
- */
-describe('a slot is a fork, and taking one side shuts the other', () => {
-  const tree = CHAR_TREES.archer;
-  const forked = tree.talents.filter((t) => t.slot !== undefined);
-
-  it('gives the archer forks to make', () => {
-    // A pilot tree with no slots would make every check below vacuous.
-    expect(forked.length, 'the pilot tree has no forks at all').toBeGreaterThan(0);
-    const slots = new Set(forked.map((t) => t.slot));
-    for (const slot of slots) {
-      expect(forked.filter((t) => t.slot === slot).length,
-        `slot '${slot}' has nobody to be exclusive with`).toBeGreaterThan(1);
-    }
-  });
-
-  /** The two talents of the first fork the tree offers. */
-  const pair = (): [TalentSpec, TalentSpec] => {
-    const slot = forked[0]!.slot;
-    const [a, b] = tree.talents.filter((t) => t.slot === slot);
-    return [a!, b!];
-  };
-
-  it('refuses the other side once one is taken, and names what took it', () => {
-    const [a, b] = pair();
-    const rich = { mastery: 60, spent: 0, levels: {} };
-    const bought = purchaseTalent(tree, rich, a.id);
-    expect(bought.kind).toBe('bought');
-    if (bought.kind !== 'bought') return;
-
-    const refused = purchaseTalent(tree, bought.state, b.id);
-    expect(refused.kind, 'the fork let both sides be bought').toBe('slotTaken');
-    if (refused.kind === 'slotTaken') expect(refused.takenBy).toBe(a.label);
-  });
-
-  it('still lets the chosen side climb its own ladder', () => {
-    // Exclusivity is between the two sides, not between a talent and itself:
-    // a second level of what you already chose is the ladder, not a change of
-    // mind, and refusing it would make every fork one level deep.
-    const [a] = pair();
-    if (a.costs.length < 2) return;
-    let state: CharTalentState = { mastery: 60, spent: 0, levels: {} };
-    for (let i = 0; i < a.costs.length; i++) {
-      const r = purchaseTalent(tree, state, a.id);
-      expect(r.kind, `level ${i + 1} of the chosen side was refused`).toBe('bought');
-      if (r.kind === 'bought') state = r.state;
-    }
-    expect(talentLevel(state, a.id)).toBe(a.costs.length);
-  });
-
-  it('leaves an unforked talent open to everyone', () => {
-    // `slot` is optional, so a hero can carry something with only one thing to
-    // say. Those must never refuse.
-    for (const char of CHARACTERS) {
-      for (const spec of CHAR_TREES[char].talents.filter((t) => t.slot === undefined)) {
-        const state = { mastery: 60, spent: 0, levels: {} };
-        expect(purchaseTalent(CHAR_TREES[char], state, spec.id).kind,
-          `${char}.${spec.id} has no fork and was refused anyway`).not.toBe('slotTaken');
-      }
-    }
-  });
-
-  it('answers the fork before it answers the purse', () => {
-    // A shut door is a shut door. Telling a player to come back richer for
-    // something they can never buy is the screen lying to them.
-    const [a, b] = pair();
-    const bought = purchaseTalent(tree, { mastery: 60, spent: 0, levels: {} }, a.id);
-    if (bought.kind !== 'bought') throw new Error('setup failed');
-    const broke = { ...bought.state, spent: bought.state.mastery };
-    expect(purchaseTalent(tree, broke, b.id).kind).toBe('slotTaken');
-  });
-});
-
 describe('reading the save file', () => {
   const tree = CHAR_TREES.wizard;
 
@@ -398,3 +320,155 @@ describe('clampCursor', () => {
     expect(clampCursor(3, 1.9)).toBe(1);
   });
 });
+
+/**
+ * A rank nobody can reach is a rank that does not exist.
+ *
+ * Mastery is banked all over a run, but it can only be SPENT or SEALED when a
+ * ceremony opens, and a ceremony opens on a boss death and nowhere else:
+ * `queueBossChoosers` in game.js is called from two boss-death handlers, it
+ * returns early mid-siege, the minotaur cannot die, and the maze door, the
+ * siege win and the win screen queue nothing. So the question a threshold has
+ * to answer is not "is this reachable" but "is this reachable AT A BOSS".
+ *
+ * The thresholds were [4, 10, 18] against a campaign that banks 15, and the
+ * most a player can hold at any boss death in a first run is 8. Rank II and
+ * rank III were both unreachable in run 1 — a tier-III talent could not be
+ * bought and the rite could not be sealed until the second boss of a second
+ * run. Nothing failed, because nothing was looking.
+ *
+ * This mirrors the award order in `game.js` rather than driving it. If that
+ * order changes — a boss that stops paying, a stage hand-off that starts —
+ * this table has to change with it, and the comment on each row says which
+ * call site it stands for.
+ */
+/**
+ * One shape, five heroes.
+ *
+ * The ranks are one-per-boss, so every player meets the same ladder at the
+ * same three moments whoever they picked. A tier that exists for one hero and
+ * not another turns a rank-up into a lottery: the wizard finds something to
+ * buy and the sapper finds an empty screen.
+ *
+ * Talent tiers only, for now. The capstone count is deliberately NOT asserted
+ * equal yet — the wizard has three and the other four have two, and the third
+ * for each of them is a new rule in game.js rather than a row in a table. When
+ * they land, add the count here and this comment goes away.
+ */
+describe('treesShareOneShape', () => {
+  const PER_TIER: Readonly<Record<number, number>> = { 1: 2, 2: 2, 3: 1 };
+
+  for (const char of CHARACTERS) {
+    it(`${char} has two tier-I talents, two tier-II and one tier-III`, () => {
+      const tree = CHAR_TREES[char];
+      for (const [tier, want] of Object.entries(PER_TIER)) {
+        const got = tree.talents.filter((t) => t.tier === Number(tier));
+        expect(got.length, `${char} tier ${tier}: ${got.map((t) => t.label).join(', ') || 'none'}`)
+          .toBe(want);
+      }
+      // Nothing outside the three tiers, so a fourth cannot appear unnoticed.
+      expect(tree.talents.length).toBe(5);
+    });
+
+    // Three, exactly. This was `>= 2` while the wizard had three and the rest
+    // had two, which is a shape test agreeing to whatever it is shown -- the
+    // rite is the one choice a run cannot take back, and being offered two of
+    // them where another hero is offered three is not the same ladder.
+    it(`${char} offers three rites to choose one from`, () => {
+      expect(CHAR_TREES[char].capstones.length).toBe(3);
+    });
+
+    // A tier is what a rank BUYS, and a rank arrives at the same boss for
+    // everyone. Two heroes reaching rank I and being offered 7 points of
+    // talent and 14 points of talent are not on the same ladder, whatever
+    // the tier counts say -- the ranger's tree ran 64% dearer than the
+    // knight's on a shape test that passed.
+    it(`${char} prices a tier the same as every other hero does`, () => {
+      const WANT: Readonly<Record<number, number>> = { 2: 5, 3: 3 };
+      for (const talent of CHAR_TREES[char].talents) {
+        const want = WANT[talent.tier];
+        if (want === undefined) continue;          // tier I is not levelled yet
+        const paid = talent.costs.reduce((a, b) => a + b, 0);
+        expect(paid, `${char}.${talent.label} costs ${talent.costs.join('+')}`)
+          .toBe(want);
+      }
+    });
+
+    // A tier nobody can afford at the rank that opens it is a tier that opens
+    // one boss later than it says it does.
+    it(`${char} can afford something the moment a tier opens`, () => {
+      for (const tier of [2, 3]) {
+        const opens = RANK_THRESHOLDS[tier - 2]!;
+        const first = CHAR_TREES[char].talents
+          .filter((t) => t.tier === tier)
+          .map((t) => t.costs[0]!);
+        expect(Math.min(...first), `${char} tier ${tier} opens at ${opens} earned`)
+          .toBeLessThanOrEqual(opens);
+      }
+    });
+  }
+});
+
+describe('masteryThroughACampaign', () => {
+  /** What the run banks, in the order game.js banks it. */
+  const CAMPAIGN: ReadonlyArray<{
+    at: string; pays: number; ceremony: boolean;
+  }> = [
+    // killBoss: awardBoss('crowking'), then the branch's stage_cleared, then
+    // queueBossChoosers.
+    { at: 'crow king', pays: bossMastery('crowking') + MASTERY_AWARDS.stage_cleared, ceremony: true },
+    { at: 'dark archer', pays: bossMastery('dark_archer') + MASTERY_AWARDS.stage_cleared, ceremony: true },
+    { at: 'dark knight', pays: bossMastery('dark_knight') + MASTERY_AWARDS.stage_cleared, ceremony: true },
+    // The golden door hands off to the bastion. It pays, and opens nothing.
+    { at: 'maze door', pays: MASTERY_AWARDS.stage_cleared, ceremony: false },
+    // The minotaur cannot die, so the maze has no boss death in it at all.
+    { at: 'siege cleared', pays: MASTERY_AWARDS.siege_cleared, ceremony: false },
+    { at: 'run won', pays: MASTERY_AWARDS.run_won, ceremony: false },
+  ];
+
+  /** Running total after each milestone. */
+  function banked(): { at: string; total: number; ceremony: boolean }[] {
+    let total = 0;
+    return CAMPAIGN.map(({ at, pays, ceremony }) => {
+      total += pays;
+      return { at, total, ceremony };
+    });
+  }
+
+  it('pays 15 for a full winning campaign', () => {
+    expect(banked().at(-1)!.total).toBe(15);
+  });
+
+  it('opens every rank at a boss death, where a ceremony can use it', () => {
+    const atACeremony = banked().filter((m) => m.ceremony);
+    // The ceiling: what the player holds at the LAST moment a ceremony can
+    // open in a first run. Every threshold has to sit at or under it.
+    const ceiling = atACeremony.at(-1)!.total;
+
+    for (const [i, at] of RANK_THRESHOLDS.entries()) {
+      expect(at, `rank ${i + 1} is above the last ceremony of a first run`)
+        .toBeLessThanOrEqual(ceiling);
+      expect(
+        atACeremony.some((m) => m.total === at),
+        `rank ${i + 1} (${at}) is crossed between ceremonies, not at one`,
+      ).toBe(true);
+    }
+  });
+
+  it('seals the rite in a first run, at the last boss before the bastion', () => {
+    const sealable = banked().filter((m) => m.ceremony && riteEligible(m.total));
+    expect(sealable.length, 'no ceremony in a first run can seal the rite').toBeGreaterThan(0);
+    expect(sealable[0]!.at).toBe('dark knight');
+  });
+
+  // One boss, one tier, in order. This is what makes the ladder legible
+  // without a screen explaining it: the next rank is always the next boss.
+  it('opens exactly one rank per boss', () => {
+    const ceremonies = banked().filter((m) => m.ceremony);
+    expect(ceremonies.length).toBe(RANK_THRESHOLDS.length);
+    for (const [i, m] of ceremonies.entries()) {
+      expect(rankOf(m.total), `after the ${m.at}`).toBe(i + 1);
+    }
+  });
+});
+
