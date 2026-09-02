@@ -59,6 +59,22 @@ def pick(v, stops, chars):
     return chars[-1]
 
 
+def cyl_row(w, chars):
+    """One row across a cylinder, in the six steps every surface here runs.
+
+    `chars` is (dark edge, specular, highlight, midtone, core shadow, reflected
+    light). The last one is the pixel on the FAR edge that stops a shape reading
+    as a stripe, and it is the step a hand-written row keeps forgetting -- five
+    icons wanted this loop, so it lives here rather than in five modules.
+    """
+    if w <= 0:
+        return ''
+    if w <= 2:
+        return chars[2] * w
+    body = [pick(i / float(w - 1), [0.20, 0.48, 0.78], chars[1:5]) for i in range(w)]
+    return chars[0] + ''.join(body[1:-1]) + chars[5]
+
+
 def limb(g, x0, y0, x1, y1, w0, w1, ramp):
     """A tapering wedge. Used for roots and anything else that thins as it goes."""
     n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1

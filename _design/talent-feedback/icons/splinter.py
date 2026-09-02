@@ -1,64 +1,50 @@
 # -*- coding: utf-8 -*-
-import math
-
-from iconkit import G, pick, register
+from iconkit import G, cyl_row, register
 
 # ── SPLINTER ────────────────────────────────────────────────────────────────
-# ONE stick of dynamite, snapped into three lengths that have just begun to
-# kick apart, with the blast breaking out of both cuts. Three separate sticks
-# is LONG THROW and it is also a diagram -- the count has to be a feature of a
-# single object, the way DEEP ROOTS counts roots, or the icon stops being a
-# painting of a thing.
+# Three charges in one tie, carried across the body. The stick bursts into
+# three, so the object is the three.
 #
-# The three lengths are UNEQUAL and each leans a little further than the last.
-# Even blocks on one axis read as a stack of bricks; what says one stick came
-# apart is that the pieces still line up while no two of them match.
-#
-# The fire is kept INSIDE the two cuts. Run wide it swallows the paper and the
-# icon reads as molten rock -- the second draft did exactly that, and the
-# tongues thrown clear of it floated with nothing holding them on.
-#
-# Cloth carries four tones, one short of a cylinder. Fire's `e` sits between R
-# and r, so the paper takes it as its fourth step and the cuts take the rest of
-# that ramp: the wrap is lit by what is coming out of it.
+# Three failures, each a different lesson. Red cloth like LONG THROW's bundle
+# is red on the red damage socket: it smeared and read as flame. In steel,
+# splayed from a point at the base, three shapes converging read as a fan of
+# KNIVES. Stood upright and parallel behind a full-width tie, they read as a
+# fence -- vertical bars of equal length with a rail across them are a gate
+# whatever they are made of. Diagonal fixes both: nothing in a fence leans, and
+# the tie is now a short wrap round the middle rather than a rail.
 s = G()
 
-PAPER = 'QRReerqqQr'          # 10 across: edge, specular, highlight, midtone,
-CUT = 'QqeerqqqQq'            # core shadow, edge, and the far reflected pixel
-END = 'RReerqqQ'              # the crimped paper end, inset from the wrap
-
-#          top  bottom   x at top  lean per row
-PIECES = ((6, 10, 11.8, 0.30), (14, 19, 15.3, 0.16), (23, 26, 19.0, 0.26))
-BREAKS = ((13.4, 12.0), (17.4, 21.0))               # where it came apart
-FUSE = ((10, 5), (11, 4), (12, 4), (13, 5))
+STEEL = 'XMPpSs'
+W = 7
 
 
-def left(cx, lean, top, y):
-    return int(round(cx + (y - top) * lean - len(PAPER) / 2.0))
+def charge(x0, y0, x1, y1):
+    """One case, low left to high right, with a cap at each end and a fuse."""
+    n = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+    for i in range(n):
+        t = i / float(n - 1)
+        cx, cy = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+        s.put(int(round(cy)), int(round(cx - W / 2.0)), cyl_row(W, STEEL))
+    s.put(int(round(y0)), int(round(x0 - W / 2.0)), 'XXSSSSS')
+    s.put(int(round(y1)), int(round(x1 - W / 2.0)), 'SSSSSSS')
+    wx, wy = int(round(x1)), int(round(y1))
+    s.put(wy - 1, wx - 1, 'nno')
+    s.put(wy - 3, wx, 'ef')
+    s.put(wy - 4, wx, 'fF')
 
 
-for top, bottom, cx, lean in PIECES:
-    for y in range(top, bottom + 1):
-        s.put(y, left(cx, lean, top, y), CUT if y in (top, bottom) else PAPER)
-TOP, _, TOP_X, _LEAN = PIECES[0]
-s.put(TOP, left(TOP_X, _LEAN, TOP, TOP) + 1, END)
+charge(6.0, 24.0, 20.0, 10.0)
+charge(9.0, 28.0, 25.0, 14.0)
+charge(4.0, 19.0, 17.0, 6.0)
 
-for i, (x, y) in enumerate(FUSE):                   # the fuse, burnt to a stub
-    s.px(x, y, 'N' if i % 2 == 0 else 'n')          # -- one pixel of cord, not
-s.px(FUSE[-1][0] + 1, FUSE[-1][1] + 1, 'o')         # two: two is a knob
-
-for (bx, by) in BREAKS:
-    for y in range(int(by) - 1, int(by) + 2):
-        for x in range(int(bx) - 7, int(bx) + 8):
-            if math.hypot((x - bx) / 5.6, (y - by) / 1.7) > 1.0:
-                continue
-            # The core sits up and left of the cut, the way the key light does.
-            s.px(x, y, pick(math.hypot((x - bx + 1.1) / 3.4, (y - by + 0.4) / 1.2),
-                            [0.44, 0.80, 1.15], 'YFfe'))
+# The tie: three turns across the middle only, so it binds rather than rails.
+for i, ch in enumerate('NnnO'.replace('O', 'o')):
+    for k in range(9):
+        s.px(11 + i + k, 21 - k, ch)
 
 register(
     'splinter', label='SPLINTER', hero='ARCHER', kind='direct', cat='damage',
-    why='a stick, broken in three',
-    ramps=('cloth', 'fire', 'rope'),
+    why='three charges, one tie',
+    ramps=('steel', 'fire', 'rope'),
     grid=s,
 )
