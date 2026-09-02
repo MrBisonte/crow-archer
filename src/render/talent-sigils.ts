@@ -204,15 +204,18 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
   shrapnel: [
     { d: 'M7.4 12 A4.6 4.6 0 1 0 16.6 12 A4.6 4.6 0 1 0 7.4 12', dash: true },
     { d: 'M10.2 12 A1.8 1.8 0 1 0 13.8 12 A1.8 1.8 0 1 0 10.2 12', fill: true },
+    // Three bolts, at 0 and +/-120 degrees about the satchel. They were three
+    // copies of the SAME path: one arrow drawn three times, which renders as
+    // one arrow and shows nothing wrong on a sheet.
     { d: 'M16.8 12 L20.2 12' },
     { d: 'M19.6 10.5 L22.6 12 L19.6 13.5z', fill: true },
     { d: 'M17 10.6 L17 13.4' },
-    { d: 'M16.8 12 L20.2 12' },
-    { d: 'M19.6 10.5 L22.6 12 L19.6 13.5z', fill: true },
-    { d: 'M17 10.6 L17 13.4' },
-    { d: 'M16.8 12 L20.2 12' },
-    { d: 'M19.6 10.5 L22.6 12 L19.6 13.5z', fill: true },
-    { d: 'M17 10.6 L17 13.4' },
+    { d: 'M9.6 16.2 L7.9 19.1' },
+    { d: 'M9.5 17.8 L6.7 21.2 L6.9 19.3z', fill: true },
+    { d: 'M10.7 15.6 L8.3 17' },
+    { d: 'M9.6 7.8 L7.9 4.9' },
+    { d: 'M6.9 4.7 L6.7 2.8 L9.5 6.2z', fill: true },
+    { d: 'M8.3 7 L10.7 8.4' },
   ],
   slipstream: [
     { d: 'M9.4 5.4 A2.6 2.6 0 1 0 14.6 5.4 A2.6 2.6 0 1 0 9.4 5.4', dash: true },
