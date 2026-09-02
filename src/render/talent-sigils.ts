@@ -218,5 +218,114 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
   stormcaller: [
     { d: 'M9.6 2.8 L5.4 11.4 h2.6 l-1.1 8 5-9.8h-2.6z', fill: true },
     { d: 'M18 2.8 L13.8 11.4 h2.6 l-1.1 8 5-9.8h-2.6z', dash: true },
+  ],  // WIDE VOLLEY: three shafts leaving one string at once, the outer pair
+  // fanned. Reads against SPLIT SHAFT's single line through many bodies --
+  // width where that one is depth.
+  wideVolley: [
+    { d: 'M3 12 L15.5 12' },
+    { d: 'M15 9.4 L19.4 12 L15 14.6z', fill: true },
+    { d: 'M3.4 10.4 L14.6 6.2' },
+    { d: 'M14.4 3.9 L18.6 5.2 L15.5 8.2z', fill: true },
+    { d: 'M3.4 13.6 L14.6 17.8' },
+    { d: 'M14.4 20.1 L18.6 18.8 L15.5 15.8z', fill: true },
   ],
+  // SHORT FUSE: the stick, and a spark already at its mouth -- no length of
+  // fuse left to run. The burst lines say it is going off now.
+  shortFuse: [
+    { d: 'M8.5 10.5 h7 v10 h-7 z' },
+    { d: 'M12 10.3 L12 7.6' },
+    { d: 'M12 6.6 A1.6 1.6 0 1 0 15.2 6.6 A1.6 1.6 0 1 0 12 6.6', fill: true },
+    { d: 'M12 2.4 L12 4.6' },
+    { d: 'M7.4 4.2 L9 5.8' },
+    { d: 'M16.6 4.2 L15 5.8' },
+  ],
+  // LONG THROW: a long arc out to a burst, with the thrower shoved the other
+  // way. The short dash behind is him going backwards.
+  longThrow: [
+    { d: 'M3.2 18.5 Q11.5 1.5 20 14.5', dash: true },
+    { d: 'M20 14.5 A2.6 2.6 0 1 0 25.2 14.5 A2.6 2.6 0 1 0 20 14.5', alpha: 0.55 },
+    { d: 'M17.6 12.6 L22.4 16.4' },
+    { d: 'M22.4 12.6 L17.6 16.4' },
+    { d: 'M6.6 18.9 L2 20.6' },
+    { d: 'M2.6 17.9 L1 20.7 L4 21.4z', fill: true },
+  ],
+  // QUICK TONGUE: three short bolts stacked close - the same answer, given
+  // often, against WIDER SKY's one large one.
+  quickTongue: [
+    { d: 'M4 6.5 L16 6.5' }, { d: 'M15.6 4.4 L19.6 6.5 L15.6 8.6z', fill: true },
+    { d: 'M4 12 L16 12' }, { d: 'M15.6 9.9 L19.6 12 L15.6 14.1z', fill: true },
+    { d: 'M4 17.5 L16 17.5' }, { d: 'M15.6 15.4 L19.6 17.5 L15.6 19.6z', fill: true },
+  ],
+  // FAR SIGHT: the blink's two footprints with a clock hand between them -
+  // the step comes round again sooner.
+  farSight: [
+    { d: 'M1.6 19 L6.4 19' }, { d: 'M17.6 19 L22.4 19' },
+    { d: 'M12 11.4 A5.4 5.4 0 1 0 17.4 11.4 A5.4 5.4 0 1 0 12 11.4' },
+    { d: 'M14.7 11.4 L14.7 7.6' }, { d: 'M14.7 11.4 L17.6 12.8' },
+  ],
+  // LONG PHASE: a body inside a shell, the shell drawn twice to say it holds.
+  longPhase: [
+    { d: 'M12 3.2 A8.8 8.8 0 1 0 20.8 12 A8.8 8.8 0 1 0 12 3.2', dash: true },
+    { d: 'M12 6.4 A5.6 5.6 0 1 0 17.6 12 A5.6 5.6 0 1 0 12 6.4', alpha: 0.5 },
+    { d: 'M12 9.6 A2.4 2.4 0 1 0 14.4 12 A2.4 2.4 0 1 0 12 9.6', fill: true },
+  ],
+  // HARD CHARGE: two chevrons behind one another - he comes again.
+  hardCharge: [
+    { d: 'M3.5 5.5 L10 12 L3.5 18.5' },
+    { d: 'M10.5 5.5 L17 12 L10.5 18.5' },
+    { d: 'M19 5.5 L19 18.5', alpha: 0.5 },
+  ],
+  // TOWER GUARD: a shield with a full bar under it - rarely down.
+  towerGuard: [
+    { d: 'M12 2.8 L20 6 v7 q0 5 -8 8.2 Q4 18 4 13 V6z' },
+    { d: 'M6.5 22.6 h11', alpha: 0.6 },
+  ],
+  // WIDE ARC: a swept arc, wider than the blade that swings it.
+  wideArc: [
+    { d: 'M3.4 16.5 A10 10 0 0 1 20.6 16.5' },
+    { d: 'M20.6 16.5 L22.6 13 L17.6 13.4z', fill: true },
+    { d: 'M12 20.6 L12 12' },
+  ],
+  // FOURTH BOLT: three bolts and a fourth, drawn apart to be counted.
+  fourthBolt: [
+    { d: 'M3 7 L11 7' }, { d: 'M3 11 L11 11' }, { d: 'M3 15 L11 15' },
+    { d: 'M13.4 19 L21.4 19' },
+    { d: 'M21 16.9 L24 19 L21 21.1z', fill: true },
+  ],
+  // QUICK ARM: a satchel already lit, its fuse almost gone.
+  quickArm: [
+    { d: 'M6 11 h12 v9 H6z' },
+    { d: 'M12 10.8 L12 8.4' },
+    { d: 'M12 7 A1.7 1.7 0 1 0 15.4 7 A1.7 1.7 0 1 0 12 7', fill: true },
+    { d: 'M17.6 3 L19.6 5', alpha: 0.7 },
+  ],
+  // LONG ARM: the satchel on a long flat throw, distance marked behind it.
+  longArm: [
+    { d: 'M2 17.5 L17 17.5', dash: true },
+    { d: 'M16 13.6 h5.4 v5.4 h-5.4z' },
+    { d: 'M18.7 13.4 L18.7 10.8' },
+    { d: 'M2 20.6 L8 20.6', alpha: 0.55 },
+  ],
+  // WIDE FAN: the barrage arc, with one more bomb on it than before.
+  wideFan: [
+    { d: 'M12 21 A11 11 0 0 1 12 3', dash: true },
+    { d: 'M4.4 7 A1.9 1.9 0 1 0 8.2 7 A1.9 1.9 0 1 0 4.4 7', fill: true },
+    { d: 'M2.4 12 A1.9 1.9 0 1 0 6.2 12 A1.9 1.9 0 1 0 2.4 12', fill: true },
+    { d: 'M4.4 17 A1.9 1.9 0 1 0 8.2 17 A1.9 1.9 0 1 0 4.4 17', fill: true },
+    { d: 'M14.6 11.2 L18 12 L14.6 12.8z', fill: true },
+  ],
+  // QUICK SHOT: a dart with a clock behind it.
+  quickShot: [
+    { d: 'M2.6 12 L14 12' }, { d: 'M13.4 9.6 L17.4 12 L13.4 14.4z', fill: true },
+    { d: 'M13.6 5.4 A4.6 4.6 0 1 0 18.2 5.4 A4.6 4.6 0 1 0 13.6 5.4' },
+    { d: 'M15.9 5.4 L15.9 2.6' }, { d: 'M15.9 5.4 L18.2 6.6' },
+  ],
+  // BIG COMBO: a burst inside a wider ring than it fills.
+  bigCombo: [
+    { d: 'M12 2.6 A9.4 9.4 0 1 0 21.4 12 A9.4 9.4 0 1 0 12 2.6', dash: true },
+    { d: 'M12 7.2 A4.8 4.8 0 1 0 16.8 12 A4.8 4.8 0 1 0 12 7.2', fill: true },
+    { d: 'M12 1 L12 4.4' }, { d: 'M12 19.6 L12 23' },
+    { d: 'M1 12 L4.4 12' }, { d: 'M19.6 12 L23 12' },
+  ],
+
 };

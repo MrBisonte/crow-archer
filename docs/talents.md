@@ -8,6 +8,7 @@ this document is the per-character half that sits beside it.
 - [The three layers](#the-three-layers)
 - [Mastery and ranks](#mastery-and-ranks)
 - [The wizard's tree](#the-wizards-tree)
+- [The fork](#the-fork)
 - [Buying them](#buying-them)
 - [The axes that have not moved yet](#the-axes-that-have-not-moved-yet)
 - [What a run looks like](#what-a-run-looks-like)
@@ -138,6 +139,62 @@ than a choice.
 |---|---|
 | OVERCHANNEL | Bolts cost no Focus for 4 s after a blink lands — the escape button becomes the attack button |
 | STORMCALLER | Lightning Storm recharges in half the time, everywhere the wait is shown |
+
+## The fork
+
+Two talents that share a `slot` are **exclusive**: buying into one shuts the
+other for that character, permanently. This is what makes the thing a tree
+rather than a shopping list — before it, every talent was eventually bought
+and the screen asked nothing.
+
+Every hero carries three forks, one per tier. The archer piloted the shape:
+
+| Tier | The question | One side | The other |
+|---|---|---|---|
+| I · open | how he earns his brace | SET FEET, reaches it sooner | DEEP ROOTS, loses it slower |
+| II · rank I | what the brace buys | SPLIT SHAFT, depth | WIDE VOLLEY, width |
+| III · rank II | what his stick is for | SHORT FUSE, a weapon | LONG THROW, a vehicle |
+
+Three forks is eight permanent builds per hero. The other four ask their own
+questions at the same three heights:
+
+| Hero | Tier I | Tier II | Tier III |
+|---|---|---|---|
+| Wizard | the pool or the step | the storm or the bolt | blink often or blink safe |
+| Knight | a stack's worth or one more | cut every side or charge again | the shield or the swing |
+| Ranger | reach full tilt or hold it | the ceiling or a fourth bolt | armed sooner or thrown further |
+| Sapper | a chain that reaches or runs on | bombs that stick or more of them | combo sooner or bigger |
+
+Every new talent is **linear on a CONFIG figure the game already reads**, which
+is deliberate: inventing a mechanic per talent would have been twelve chances
+to ship something inert. **Tier III also gives rank II something
+to open** — before the fork, no tree used tier 3 at all, so reaching 10 mastery
+unlocked precisely nothing.
+
+`slot` is optional, so a hero may carry an unforked talent where their kit has
+only one thing to say, and **trees need not be the same size**: `clampCursor`,
+the row layout and the shop all read the tree's own length. They already
+differ — 25 mastery to fill the knight against 34 for the ranger.
+
+### A talent with a price and no effect
+
+Twelve of these shipped past `assertTalentStatsWired` doing **nothing at all**.
+Each had a STATS row naming the CONFIG figure it moved, and each consumer went
+on reading `CONFIG.theKey` directly — so `TALENTS.stat` was computed and thrown
+away. The tree looked right, the shop priced them, and the game never saw one.
+
+`talent-stats-wired.test.ts` reads the source and holds both halves: every
+linear talent's figure must be read through `TALENTS.stat` *somewhere*, and
+must not still be read raw *anywhere* — a talent honoured in one place and
+bypassed in another is worse than a dead one, because it works only sometimes.
+Cooldown chips and meter fills are the named exceptions: they draw progress as
+a fraction of the whole bar, so they want the base figure on purpose.
+
+Two rules the screen must keep, because a closed door nobody can see is a trap:
+every forked row names its rival before a choice is made, and a row that lost
+its fork says which talent took it. `purchaseTalent` answers the fork **before**
+it answers the purse — telling a player to come back richer for something they
+can never buy would be a lie.
 
 ## Buying them
 

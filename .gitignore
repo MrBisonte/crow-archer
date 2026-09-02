@@ -21,6 +21,11 @@ _design/
 # per server session. Diagnostic exhaust, not source; see src/dev/flight-sink.ts.
 _flightlogs/
 
+# Hand-made exports of the single-file build (`npm run build` writes dist/, and
+# these are copies of dist/index.html renamed for handing out). Artifact, not
+# source: rebuildable from any commit, and 400KB of inlined bundle in a diff.
+crow-archer-complete.html
+
 # OS artifacts
 Thumbs.db
 .DS_Store

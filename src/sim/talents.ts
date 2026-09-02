@@ -50,9 +50,19 @@ export interface TalentSpec {
   readonly label: string;
   readonly desc: string;
   readonly tier: TalentTier;
-  /** Feathers per level, cheapest first. Length is the maximum level. */
+  /** Mastery per level, cheapest first. Length is the maximum level. */
   readonly costs: readonly number[];
   readonly effect: UpgradeEffect;
+  /**
+   * The fork this talent belongs to. Two talents sharing a slot are
+   * exclusive: buying into one shuts the other for that character, for good.
+   *
+   * This is what makes the thing a tree rather than a shopping list. Without
+   * it every talent is eventually bought and the screen asks nothing; with it
+   * a tier is a question. Optional, so a hero can carry an unforked talent
+   * where their kit has only one thing to say.
+   */
+  readonly slot?: string;
 }
 
 /**
@@ -91,22 +101,48 @@ export interface CharTree {
  * commits; a row whose effect nothing reads yet must not ship past that.
  */
 export const CHAR_TREES: Record<CharacterKind, CharTree> = {
+  // Three forks, one per tier, and every one of them a question rather than a
+  // purchase. The pilot for the shape: see `slot` on TalentSpec.
   archer: {
     talents: [
+      // THE STANCE. How he earns his brace: reach it sooner, or lose it later.
+      // These two were already a natural pair -- one shortens the fill, the
+      // other softens the drain -- which is what made the archer the tree to
+      // pilot the fork on.
       {
-        id: 'setFeet', label: 'SET FEET',
-        desc: '-0.25 s to reach a full brace / level',
-        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -0.25 },
+        id: 'setFeet', label: 'SET FEET', slot: 'stance',
+        desc: '-0.35 s to reach a full brace / level',
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -0.35 },
       },
       {
-        id: 'deepRoots', label: 'DEEP ROOTS',
-        desc: 'Brace bleeds away slower once he moves',
-        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -1 },
+        id: 'deepRoots', label: 'DEEP ROOTS', slot: 'stance',
+        desc: 'Brace bleeds away far slower once he moves',
+        tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -1.4 },
+      },
+      // WHAT THE BRACE BUYS. One shot through many bodies, or many arrows at
+      // once: the same stance spent on depth or on width.
+      {
+        id: 'splitShaft', label: 'SPLIT SHAFT', slot: 'payoff',
+        desc: '+2 bodies a full power shot passes through / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 2 },
       },
       {
-        id: 'splitShaft', label: 'SPLIT SHAFT',
-        desc: '+1 body a full power shot passes through / level',
+        id: 'wideVolley', label: 'WIDE VOLLEY', slot: 'payoff',
+        desc: '+1 arrow in a fully braced volley / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      // THE STICK. Whether his dynamite is a weapon or a way to travel. Short
+      // fuse gives up the hop -- there is no time to stand where it lands --
+      // and long throw gives up the certainty of hitting anything with it.
+      {
+        id: 'shortFuse', label: 'SHORT FUSE', slot: 'stick',
+        desc: 'Dynamite blows the moment it lands, with no fuse to wait out',
+        tier: 3, costs: [3], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'longThrow', label: 'LONG THROW', slot: 'stick',
+        desc: '+45 px the blast throws him and everything near it / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 45 },
       },
     ],
     capstones: [
@@ -122,20 +158,39 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   wizard: {
     talents: [
+      // THE POOL OR THE STEP. More casting, or more getting away with it.
       {
-        id: 'focusDepth', label: 'FOCUS DEPTH',
+        id: 'focusDepth', label: 'FOCUS DEPTH', slot: 'reserve',
         desc: '+1 Focus: a full pool casts four bolts',
         tier: 1, costs: [1], effect: { kind: 'linear', per: 1 },
       },
       {
-        id: 'blinkReach', label: 'LONG STEP',
+        id: 'blinkReach', label: 'LONG STEP', slot: 'reserve',
         desc: '+20 px blink distance / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 20 },
       },
+      // THE STORM OR THE BOLT. One big answer on a long timer, or a small one
+      // he can give more often.
       {
-        id: 'stormWidth', label: 'WIDER SKY',
+        id: 'stormWidth', label: 'WIDER SKY', slot: 'weapon',
         desc: '+50 px storm radius / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 50 },
+      },
+      {
+        id: 'quickTongue', label: 'QUICK TONGUE', slot: 'weapon',
+        desc: '-0.18 s between bolts / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: -0.18 },
+      },
+      // THE BLINK. Take it more often, or survive longer inside it.
+      {
+        id: 'farSight', label: 'FAR SIGHT', slot: 'blink',
+        desc: '-1 s off the blink cooldown / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -1 },
+      },
+      {
+        id: 'longPhase', label: 'LONG PHASE', slot: 'blink',
+        desc: '+0.25 s untouchable after a blink / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 0.25 },
       },
     ],
     capstones: [
@@ -151,20 +206,38 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   knight: {
     talents: [
+      // WHAT A STACK IS WORTH, OR HOW MANY. The same meter asked two ways.
       {
-        id: 'deeperCut', label: 'DEEPER CUT',
+        id: 'deeperCut', label: 'DEEPER CUT', slot: 'bloodlust',
         desc: '+3% damage and swing speed per Bloodlust stack / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 0.03 },
       },
       {
-        id: 'fourthBlood', label: 'FOURTH BLOOD',
+        id: 'fourthBlood', label: 'FOURTH BLOOD', slot: 'bloodlust',
         desc: 'A fourth Bloodlust stack to fill',
         tier: 1, costs: [1], effect: { kind: 'linear', per: 1 },
       },
+      // THE CHARGE. Cut on every side of one, or take it far more often.
       {
-        id: 'chargeThrough', label: 'CHARGE THROUGH',
+        id: 'chargeThrough', label: 'CHARGE THROUGH', slot: 'charge',
         desc: 'The charge cuts on every side of him, not only ahead',
         tier: 2, costs: [2], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'hardCharge', label: 'HARD CHARGE', slot: 'charge',
+        desc: '-0.8 s off the charge cooldown / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: -0.8 },
+      },
+      // THE GUARD OR THE SWING. His shield back sooner, or his whirlwind wider.
+      {
+        id: 'towerGuard', label: 'TOWER GUARD', slot: 'guard',
+        desc: '-2 s before his block charges again / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -2 },
+      },
+      {
+        id: 'wideArc', label: 'WIDE ARC', slot: 'guard',
+        desc: '+18 px of whirlwind reach / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 18 },
       },
     ],
     capstones: [
@@ -180,20 +253,39 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   ranger: {
     talents: [
+      // REACH FULL TILT SOONER, OR HOLD IT LONGER. The archer's stance fork,
+      // asked of the hero who is paid for never standing still.
       {
-        id: 'lightFoot', label: 'LIGHT FOOT',
+        id: 'lightFoot', label: 'LIGHT FOOT', slot: 'momentum',
         desc: '-75 px of ground to fill Momentum / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: -75 },
       },
       {
-        id: 'longWind', label: 'LONG WIND',
+        id: 'longWind', label: 'LONG WIND', slot: 'momentum',
         desc: '+1 s before a standing ranger loses Momentum / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 1 },
       },
+      // WHAT THE METER BUYS. A higher ceiling on every bolt, or one more bolt.
       {
-        id: 'fullTilt', label: 'FULL TILT',
+        id: 'fullTilt', label: 'FULL TILT', slot: 'payoff',
         desc: '+5% to the Momentum ceiling / level',
         tier: 2, costs: [2, 3, 4], effect: { kind: 'linear', per: 0.05 },
+      },
+      {
+        id: 'fourthBolt', label: 'FOURTH BOLT', slot: 'payoff',
+        desc: '+1 bolt in every crossbow burst / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      // THE SATCHEL. Armed sooner, or thrown further.
+      {
+        id: 'quickArm', label: 'QUICK ARM', slot: 'satchel',
+        desc: '-0.9 s off the satchel fuse / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -0.9 },
+      },
+      {
+        id: 'longArm', label: 'LONG ARM', slot: 'satchel',
+        desc: '+90 px/s on a thrown satchel / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 90 },
       },
     ],
     capstones: [
@@ -209,20 +301,38 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
   },
   sapper: {
     talents: [
+      // A CHAIN THAT REACHES, OR A CHAIN THAT RUNS ON. His passive, both ways.
       {
-        id: 'longFuse', label: 'LONG FUSE',
+        id: 'longFuse', label: 'LONG FUSE', slot: 'chain',
         desc: '+18 px of reach for a bomb to light the next / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 18 },
       },
       {
-        id: 'moreLinks', label: 'MORE LINKS',
+        id: 'moreLinks', label: 'MORE LINKS', slot: 'chain',
         desc: '+2 bombs one chain may run through / level',
         tier: 1, costs: [1, 2], effect: { kind: 'linear', per: 2 },
       },
+      // THE FAN. Bombs that stay where they land, or simply more of them.
       {
-        id: 'stickyFan', label: 'STICKY FAN',
+        id: 'stickyFan', label: 'STICKY FAN', slot: 'fan',
         desc: 'Barrage bombs stop where they land and keep their fuse',
         tier: 2, costs: [2], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'wideFan', label: 'WIDE FAN', slot: 'fan',
+        desc: '+1 bomb in every barrage / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      // THE COMBO SHOT. Back sooner, or bigger when it lands.
+      {
+        id: 'quickShot', label: 'QUICK SHOT', slot: 'combo',
+        desc: '-2 s off the combo shot cooldown / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: -2 },
+      },
+      {
+        id: 'bigCombo', label: 'BIG COMBO', slot: 'combo',
+        desc: '+25% to the combo blast radius / level',
+        tier: 3, costs: [3, 4], effect: { kind: 'linear', per: 0.25 },
       },
     ],
     capstones: [
@@ -351,7 +461,10 @@ export type TalentPurchase =
   | { readonly kind: 'bought'; readonly state: CharTalentState; readonly spent: number }
   | { readonly kind: 'maxed' }
   | { readonly kind: 'tooPoor'; readonly cost: number; readonly short: number }
-  | { readonly kind: 'tierLocked'; readonly rankNeeded: number; readonly rankHeld: number };
+  | { readonly kind: 'tierLocked'; readonly rankNeeded: number; readonly rankHeld: number }
+  /** The fork was already taken the other way. Carries the talent that took
+   *  it, so the screen can name what shut this door rather than only refuse. */
+  | { readonly kind: 'slotTaken'; readonly takenBy: string };
 
 /** Levels held in a talent, clamped into the range its ladder allows. */
 export function talentLevel(state: CharTalentState, id: string): number {
@@ -399,6 +512,23 @@ export function talentValue(tree: CharTree, state: CharTalentState, id: string, 
 }
 
 /**
+ * The talent that has already claimed `id`'s fork, or null if it is still open.
+ *
+ * A talent with no slot forks nothing and always answers null. A talent
+ * answers null for itself, too: buying a second level of what you already own
+ * is climbing the ladder you chose, not changing your mind.
+ */
+export function slotTakenBy(
+  tree: CharTree, state: CharTalentState, id: string,
+): TalentSpec | null {
+  const spec = tree.talents.find((t) => t.id === id);
+  if (!spec || spec.slot === undefined) return null;
+  return tree.talents.find(
+    (t) => t.slot === spec.slot && t.id !== id && talentLevel(state, t.id) > 0,
+  ) ?? null;
+}
+
+/**
  * Whether anything in this tree can be bought right now.
  *
  * The question a boss asks before it opens the tree: paying mastery is only
@@ -431,6 +561,10 @@ export function purchaseTalent(
   if (!tierOpenAt(state.mastery, spec.tier)) {
     return { kind: 'tierLocked', rankNeeded: spec.tier - 1, rankHeld: rankOf(state.mastery) };
   }
+  // The fork. Checked before the purse, so a player who cannot afford a shut
+  // door is told the door is shut rather than told to come back richer.
+  const rival = slotTakenBy(tree, state, id);
+  if (rival !== null) return { kind: 'slotTaken', takenBy: rival.label };
   const level = talentLevel(state, id);
   if (level >= spec.costs.length) return { kind: 'maxed' };
   const cost = spec.costs[level]!;

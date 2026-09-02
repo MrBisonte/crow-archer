@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { CHARACTERS } from '../net/protocol';
 import { mulberry32 } from './rng';
 import {
+  type TalentSpec,
   masteryAvailable,  clampCursor,  CAPSTONE_RANK,
   CHAR_TREES,
   MASTERY_AWARDS,
@@ -202,6 +203,85 @@ describe('buying a talent', () => {
 
   it('throws on an id the tree does not hold, rather than inventing a row', () => {
     expect(() => purchaseTalent(tree, fresh(), 'notATalent')).toThrow();
+  });
+});
+
+/**
+ * The fork.
+ *
+ * The reason the thing is a tree rather than a shopping list: two talents
+ * sharing a slot are exclusive, and buying one shuts the other for that
+ * character for good. Before this every talent was eventually bought and the
+ * screen asked nothing.
+ */
+describe('a slot is a fork, and taking one side shuts the other', () => {
+  const tree = CHAR_TREES.archer;
+  const forked = tree.talents.filter((t) => t.slot !== undefined);
+
+  it('gives the archer forks to make', () => {
+    // A pilot tree with no slots would make every check below vacuous.
+    expect(forked.length, 'the pilot tree has no forks at all').toBeGreaterThan(0);
+    const slots = new Set(forked.map((t) => t.slot));
+    for (const slot of slots) {
+      expect(forked.filter((t) => t.slot === slot).length,
+        `slot '${slot}' has nobody to be exclusive with`).toBeGreaterThan(1);
+    }
+  });
+
+  /** The two talents of the first fork the tree offers. */
+  const pair = (): [TalentSpec, TalentSpec] => {
+    const slot = forked[0]!.slot;
+    const [a, b] = tree.talents.filter((t) => t.slot === slot);
+    return [a!, b!];
+  };
+
+  it('refuses the other side once one is taken, and names what took it', () => {
+    const [a, b] = pair();
+    const rich = { mastery: 60, spent: 0, levels: {} };
+    const bought = purchaseTalent(tree, rich, a.id);
+    expect(bought.kind).toBe('bought');
+    if (bought.kind !== 'bought') return;
+
+    const refused = purchaseTalent(tree, bought.state, b.id);
+    expect(refused.kind, 'the fork let both sides be bought').toBe('slotTaken');
+    if (refused.kind === 'slotTaken') expect(refused.takenBy).toBe(a.label);
+  });
+
+  it('still lets the chosen side climb its own ladder', () => {
+    // Exclusivity is between the two sides, not between a talent and itself:
+    // a second level of what you already chose is the ladder, not a change of
+    // mind, and refusing it would make every fork one level deep.
+    const [a] = pair();
+    if (a.costs.length < 2) return;
+    let state: CharTalentState = { mastery: 60, spent: 0, levels: {} };
+    for (let i = 0; i < a.costs.length; i++) {
+      const r = purchaseTalent(tree, state, a.id);
+      expect(r.kind, `level ${i + 1} of the chosen side was refused`).toBe('bought');
+      if (r.kind === 'bought') state = r.state;
+    }
+    expect(talentLevel(state, a.id)).toBe(a.costs.length);
+  });
+
+  it('leaves an unforked talent open to everyone', () => {
+    // `slot` is optional, so a hero can carry something with only one thing to
+    // say. Those must never refuse.
+    for (const char of CHARACTERS) {
+      for (const spec of CHAR_TREES[char].talents.filter((t) => t.slot === undefined)) {
+        const state = { mastery: 60, spent: 0, levels: {} };
+        expect(purchaseTalent(CHAR_TREES[char], state, spec.id).kind,
+          `${char}.${spec.id} has no fork and was refused anyway`).not.toBe('slotTaken');
+      }
+    }
+  });
+
+  it('answers the fork before it answers the purse', () => {
+    // A shut door is a shut door. Telling a player to come back richer for
+    // something they can never buy is the screen lying to them.
+    const [a, b] = pair();
+    const bought = purchaseTalent(tree, { mastery: 60, spent: 0, levels: {} }, a.id);
+    if (bought.kind !== 'bought') throw new Error('setup failed');
+    const broke = { ...bought.state, spent: bought.state.mastery };
+    expect(purchaseTalent(tree, broke, b.id).kind).toBe('slotTaken');
   });
 });
 

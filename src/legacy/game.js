@@ -36,7 +36,7 @@ import {
   SOLDIER_SPRITE, buildCommanderGrid,
 } from '../render/soldier-grids';
 import { PathScheduler, FovMap } from '../sim/pathfinding';
-import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp } from '../sim/input';
+import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp, pointerToCanvas } from '../sim/input';
 import { CHARACTER_STATS } from '../sim/arena';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
@@ -53,8 +53,8 @@ import {
 import {
   CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
   draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
-  anyAffordable, bossMastery, clampCursor, masteryAvailable, talentBankFrom,
-  talentLevel, tierOpenAt,
+  anyAffordable, bossMastery, clampCursor, masteryAvailable, slotTakenBy,
+  talentBankFrom, talentLevel, tierOpenAt,
 } from '../sim/talents';
 import { ScreenShake } from '../render/shake';
 import { PLAYBACK, variationProfile } from '../render/sound-variation';
@@ -215,7 +215,12 @@ const CONFIG = {
   killsToTriggerBoss: 10,
   // The retinue. Reach and interval are the cavern garrison's numbers, so an
   // allied foot soldier and an enemy shieldman trade blows at the same rhythm.
-  guardSpeed: 74, guardMeleeReach: 26, guardArcherReach: 260,
+  // guardSpeed was 74, tuned when the map was 33x21. The playfield is 2.62x
+  // that area now, and at 74 a guard needed 23.8s to cross it -- longer than a
+  // wave, so a breach on the far side was not answered late, it was never
+  // answered at all. 110 puts the crossing back near 16s while still reading
+  // as armour rather than a sprint; 123 would restore the old time exactly.
+  guardSpeed: 110, guardMeleeReach: 26, guardArcherReach: 260,
   // Far enough that a boss does not land on top of the hero, near enough
   // that it is on screen and reachable the moment its wave begins.
   siegeBossSpawnDistance: 260,
@@ -372,6 +377,23 @@ const CONFIG = {
   braceDrainMult: 4,
   braceBossMult: 1.8,
 
+  // Arrows a fully braced shot looses at once. This is what makes the meter
+  // worth filling outside a boss fight: a brace multiplies BOSS damage only,
+  // and a crow dies to any arrow either way, so before this the passive was
+  // dark for most of a run.
+  archerBraceVolley: 3,
+  // What SHORT FUSE leaves of the stick's fuse.
+  //
+  // A fraction rather than a rest threshold. The first version blew the stick
+  // when it slowed below 45 px/s, and friction of 0.985 a frame takes about
+  // 136 frames to get there from a throw -- well past the 90-frame fuse it was
+  // meant to beat, so the talent did nothing at all. The name was the better
+  // specification: a short fuse is a short fuse.
+  archerShortFuseMult: 0.35,
+  archerVolleySpreadRadians: Math.PI / 44,   // ~4 degrees between arrows
+  // What a full brace takes off the power shot's wait, as a fraction.
+  archerBracedCooldownCut: 0.4,
+
   archerDrawMaxSecs: 1.0,
   archerPowerCooldown: 5,
   archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
@@ -387,7 +409,10 @@ const CONFIG = {
   // Which preset to run. Override at runtime with ?pace=nightmare.
   pace: 'fast',
 
-  maxPickupsOnMap: 3,
+  // Three was the count on a 0.71 Mpx playfield. The playfield is 1.86 Mpx now,
+  // so three meant a third of the old density and a much longer walk between
+  // them; eight restores what it was.
+  maxPickupsOnMap: 8,
   waterShimmerMs: 800,
 
   // One pool, the same whoever is fighting him. Who is holding the weapon is
@@ -470,6 +495,16 @@ const CONFIG = {
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
   dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
+  // How far his own stick throws whatever is near it -- him at the centre,
+  // and anything that lived through the blast. Falls to nothing at the edge,
+  // so where he puts the stick is the whole control.
+  archerBlastHopPx: 195,
+  // A powered fire arrow drops a patch this often while it flies, which is
+  // what turns one landing spot into a burning lane.
+  archerFireTrailSecs: 0.09,
+  // Bounces a powered ricochet gets before it gives up, against the 9 an
+  // ordinary one gets.
+  archerPowerBounces: 26,
   // 70% of dynamite's, same cut the crossbow bolt takes against the arrow. Blast
   // radius stays shared with dynamiteBlastRadius; only boss damage is softer.
   satchelBossDamage: 1,
@@ -2209,6 +2244,39 @@ function probeAhead(fromX, fromY, angle, maxDistance) {
  * place. A shove into a wall stops at the wall instead of posting a crow
  * inside it.
  */
+/**
+ * How hard a blast pushes something `d` away from its centre.
+ *
+ * Full strength on top of it, nothing at the edge, straight line between. One
+ * home because the archer's own hop and the shove his blast gives the bodies
+ * around him are the same rule seen from two sides, and a blast that threw him
+ * further than it threw a crow standing beside him would read as a bug.
+ */
+function blastPush(d, radius, maxPx) {
+  if (d > radius) return 0;
+  return maxPx * (1 - d / radius);
+}
+
+/**
+ * Shoves everything that lived through a blast away from it.
+ *
+ * Called after the damage, which is what makes it survivors only: whatever the
+ * blast killed is already out of these lists.
+ */
+function pushSurvivorsFrom(cx, cy, radius, maxPx) {
+  for (const list of [crows, skeletons, soldiers]) {
+    for (const b of list) {
+      const d = Math.hypot(b.x - cx, b.y - cy);
+      const px = blastPush(d, radius, maxPx);
+      if (px <= 0 || d < 0.001) continue;
+      const nx = clampArenaX(b.x + ((b.x - cx) / d) * px);
+      const ny = clampArenaY(b.y + ((b.y - cy) / d) * px);
+      if (tilePassable(tileAt(nx, b.y))) b.x = nx;
+      if (tilePassable(tileAt(b.x, ny))) b.y = ny;
+    }
+  }
+}
+
 function pushBodiesFrom(cx, cy, radius, px) {
   const r2 = radius * radius;
   for (const list of [crows, skeletons, soldiers]) {
@@ -2309,8 +2377,8 @@ function tryWizardBlink() {
   player.x = hop.x; player.y = hop.y;
   wizBlinkHops       = chaining ? wizBlinkHops - 1 : CONFIG.wizBlinkMaxHops - 1;
   wizBlinkChainTimer = CONFIG.shiftChainSecs;
-  wizBlinkCD         = CONFIG.wizBlinkCooldown;
-  wizBlinkIFrame     = CONFIG.wizBlinkIFrames;
+  wizBlinkCD         = TALENTS.stat('farSight');
+  wizBlinkIFrame     = TALENTS.stat('longPhase');
   // The rite's Overchannel: a landed blink opens the free-bolt window.
   if (TALENTS.capstoneActive('overchannel')) wizOverchannel = CONFIG.wizOverchannelSecs;
 
@@ -2359,7 +2427,11 @@ function releaseArcherDraw() {
   if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
 
-  archerPowerCD = CONFIG.archerPowerCooldown;
+  // A braced archer gets the shot back sooner. The stance already paid for
+  // draw damage; this makes it pay for the rhythm too, so holding still
+  // compounds rather than sitting on one stat.
+  archerPowerCD = CONFIG.archerPowerCooldown
+    * (1 - braceLevel * CONFIG.archerBracedCooldownCut);
   const spd = CONFIG.arrowSpeed * (1 + drawn * (CONFIG.archerPowerSpeedMult - 1));
   // The in-flight cap is deliberately not consulted. It is there to stop the
   // bow being held down, and this is one arrow every five seconds.
@@ -2370,6 +2442,10 @@ function releaseArcherDraw() {
     initSpeed: spd,
     trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
     power: true,
+    // What the pickup is worth on a powered shot. Fire lays a lane instead of
+    // one patch; ricochet stops running out of bounces. Each is the arrow
+    // type doing more of its own thing, so a pickup still reads as itself.
+    fireTrail: type === 'fire' ? 0 : null,
     pierceLeft: 1 + Math.round(drawn * (TALENTS.stat('splitShaft') - 1)),
     // Draw and brace multiply: a fully drawn shot from a braced stance is
     // the most committed thing he can do, and it is paid for in seconds.
@@ -2514,6 +2590,17 @@ function knightSpearDamage(fireSword) {
 
 function knightBloodlustMult() {
   return 1 + knightBloodlust * TALENTS.stat('deeperCut');
+}
+
+/**
+ * How many arrows the bow looses on one press.
+ *
+ * Scales with the meter rather than waiting for a full brace, so standing
+ * still pays continuously instead of paying nothing until it pays everything.
+ * One at a standstill of zero, `archerBraceVolley` at a full one.
+ */
+function braceVolleyCount() {
+  return 1 + Math.floor(braceLevel * (TALENTS.stat('wideVolley') - 1));
 }
 
 function braceBossMult() {
@@ -2733,7 +2820,7 @@ function drawAbilityFx() {
   if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
     paintWhirlwind(ctx, {
       x: player.x, y: player.y + CONFIG.hudHeight,
-      radius: CONFIG.knightWhirlwindRadius,
+      radius: TALENTS.stat('wideArc'),
       age:  1 - knightWhirlwindTimer / CONFIG.knightWhirlwindDuration,
       tick: 1 - knightWhirlwindTick / CONFIG.knightWhirlwindTickRate,
       t: loopT,
@@ -2861,7 +2948,7 @@ function releaseKnightCharge() {
   knightDash.frac    = held;
   knightDash.angle   = player.aimAngle;   // committed here, not re-read per frame
   knightChargeTick = 0;   // first arc sweep lands immediately, as whirlwind's does
-  knightChargeCD   = CONFIG.knightChargeCooldown;
+  knightChargeCD   = TALENTS.stat('hardCharge');
   events.emit({ type: 'KNIGHT_CHARGE', x: player.x, y: player.y, power: held });
 }
 
@@ -3002,12 +3089,17 @@ function installInput() {
   // something off to the side went where the pointer had last been seen rather
   // than where it was pointing. Clamping pins aim to the nearest edge instead,
   // which is what a player means by pushing past the border.
-  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   window.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return;   // canvas not laid out yet
-    mouse.x = clamp((e.clientX - r.left) * (CONFIG.canvasW / r.width), 0, CONFIG.canvasW);
-    mouse.y = clamp((e.clientY - r.top) * (CONFIG.canvasH / r.height), 0, CONFIG.canvasH);
+    // Deliberately unclamped. The canvas is letterboxed, so there is margin on
+    // every side to wander into, and clamping the aim here froze it the moment
+    // the pointer left the picture: both axes pinned, so pushing further out
+    // changed nothing and the shot kept going where you used to be pointing.
+    // Keeping the crosshair on screen is reticleAt's job, not the aim's.
+    const at = pointerToCanvas(e.clientX, e.clientY, r, CONFIG.canvasW, CONFIG.canvasH);
+    mouse.x = at.x;
+    mouse.y = at.y;
   });
   canvas.addEventListener('mousedown', e => {
     initAudio();
@@ -3558,7 +3650,7 @@ events.on(e => {
         // The sapper's shift-detonated combo reaches a bigger radius than a
         // normal blast, so its burst travels 33% further to match rather than
         // reading like a normal explosion sitting inside a bigger ring.
-        const m = e.big ? CONFIG.sapperComboRadiusMult : 1;
+        const m = e.big ? TALENTS.stat('bigCombo') : 1;
         burst(e.x, e.y, { count: Math.round(12 * m), colors: ['#FFFFFF','#FFB400'],
           speedMin: 200 * m, speedMax: 360 * m, decay: 4.0,
           shape: 'circle', sizeMin: 2, sizeMax: 5, shadowBlur: 16, shadowColor: '#FFB400' });
@@ -3736,7 +3828,7 @@ events.on(e => {
       break;
 
     case 'WHIRLWIND_TICK': {
-      const wr = CONFIG.knightWhirlwindRadius;
+      const wr = TALENTS.stat('wideArc');
       burst(e.x, e.y, {
         count: 6, colors: ['#C0C0D0','#8090B0','#ffffff'],
         speedMin: wr * 0.5, speedMax: wr * 0.95, decay: 4.0, shape: 'spark',
@@ -4222,7 +4314,7 @@ function updatePlayer(dt) {
   // playerShield until something hits the knight from the front.
   if (selectedChar === 'knight' && !playerShield) {
     knightBlockCD = Math.max(0, knightBlockCD - dt);
-    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = CONFIG.knightBlockCooldown; }
+    if (knightBlockCD <= 0) { playerShield = true; knightBlockCD = TALENTS.stat('towerGuard'); }
   }
   if (pfSwing > 0) {
     pfSwing = Math.max(0, pfSwing - dt);
@@ -4337,7 +4429,7 @@ function updatePlayer(dt) {
     knightWhirlwindTick  -= dt;
     if (knightWhirlwindTick <= 0) {
       knightWhirlwindTick = CONFIG.knightWhirlwindTickRate;
-      const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
+      const wr = TALENTS.stat('wideArc'), wr2 = wr * wr;
       damageEnemiesInRadius(player.x, player.y, wr,
         { amount: 1, source: 'whirlwind', flash: 0.1 });
       // Break tiles in radius
@@ -4409,15 +4501,33 @@ function tryShoot() {
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   if (selectedChar === 'sapper') { trySapperCharge(); return; }
   if (!hasShaft()) { tryPitchfork(); return; }
+  const volley = braceVolleyCount();
+  // Gated on ONE arrow's worth of room, then the whole volley flies even if it
+  // overshoots the cap by a couple.
+  //
+  // Reserving room for the whole volley - the crossbow's rule - made bracing
+  // actively worse than not bracing. Measured over five seconds on open
+  // ground: standing still put 13 arrows in the air, walking about put 16,
+  // because a three-arrow volley waits for three free slots while a single
+  // shot waits for one. The cap exists to stop the bow being held down, which
+  // is about how often he may press, and this keeps that identical whether he
+  // is braced or not. The overshoot is bounded by the volley itself.
   if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // One shaft for the whole volley, which is the crossbow's rule too. The
+  // brace is what is being spent here -- it took a second and a quarter of
+  // standing still in a game that spends most of its time chasing him.
   const type = spendShaft();
-  arrows.push({ x: player.x, y: player.y,
-    vx: Math.cos(player.aimAngle) * CONFIG.arrowSpeed,
-    vy: Math.sin(player.aimAngle) * CONFIG.arrowSpeed,
-    life: CONFIG.arrowLifetime, type, bounces: 0,
-    initSpeed: CONFIG.arrowSpeed,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
-    dmgMult: braceBossMult() });
+  const half = (volley - 1) / 2;
+  for (let i = 0; i < volley; i++) {
+    const a = player.aimAngle + (i - half) * CONFIG.archerVolleySpreadRadians;
+    arrows.push({ x: player.x, y: player.y,
+      vx: Math.cos(a) * CONFIG.arrowSpeed,
+      vy: Math.sin(a) * CONFIG.arrowSpeed,
+      life: CONFIG.arrowLifetime, type, bounces: 0,
+      initSpeed: CONFIG.arrowSpeed,
+      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      dmgMult: braceBossMult() });
+  }
   archerLoose = ARCHER_LOOSE_SECS;
   archerLoosePower = 0;
   events.emit({ type: 'WEAPON_FIRED', kind: 'arrow' });
@@ -4433,10 +4543,14 @@ function tryCrossbowBolt() {
   if (!hasShaft()) { tryPitchfork(); return; }
   // Reserve room for the whole burst up front — a partial push would let
   // arrows.length overshoot maxArrowsInFlight and stall the next press.
-  if (arrows.length + CONFIG.crossbowBoltCount > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  const bolts = TALENTS.stat('fourthBolt');
+  // Gated on one bolt's room, the archer's rule: reserving the whole burst
+  // makes a wider burst fire less often than a narrow one, which turns the
+  // talent that widens it into a penalty.
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
-  const half = (CONFIG.crossbowBoltCount - 1) / 2;
-  for (let i = 0; i < CONFIG.crossbowBoltCount; i++) {
+  const half = (bolts - 1) / 2;
+  for (let i = 0; i < bolts; i++) {
     const boltAngle = player.aimAngle + (i - half) * CONFIG.crossbowSpreadRadians;
     arrows.push({ x: player.x, y: player.y,
       vx: Math.cos(boltAngle) * CONFIG.arrowSpeed,
@@ -4466,7 +4580,7 @@ function tryWizardBolt() {
   let dmg  = CONFIG.wizBoltDamage;
   if      (inv.laserStreams > 0) { inv.laserStreams--; type = 'wiz_laser'; dmg = CONFIG.wizFireBoltDamage; }
   else if (inv.fireBolts    > 0) { inv.fireBolts--;   type = 'wiz_fire';  dmg = CONFIG.wizFireBoltDamage; }
-  wizBoltCD = CONFIG.wizBoltCooldown;
+  wizBoltCD = TALENTS.stat('quickTongue');
   const spd = CONFIG.wizBoltSpeed;
   arrows.push({
     x: player.x, y: player.y,
@@ -4561,13 +4675,22 @@ function startWhirlwind() {
  * so the two throws can never drift into being two slightly different
  * explosives.
  */
-function launchCharge(speed, kind = 'dynamite', element = 'none') {
-  const lifetime = kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime;
+function launchCharge(speed, kind = 'dynamite', element = 'none', opts = {}) {
+  const lifetime = (kind === 'bomb' ? CONFIG.sapperBombLifetime : CONFIG.dynamiteLifetime)
+    * (opts.fuseMult ?? 1);
   dynamites.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * speed,
     vy: Math.sin(player.aimAngle) * speed,
     life: lifetime, fuseTotal: lifetime, kind, element,
+    // Marks a stick as one HE threw, so only that one throws him back. The
+    // blast alone cannot answer this: `explodeExplosive` sees source
+    // 'dynamite' for a splinter child and for the `blast()` dev hook too, and
+    // launching the player off either would be a surprise rather than a move.
+    hop: opts.hop === true,
+    // Read at the throw, not at the landing, so a talent drafted while a
+    // stick is in the air cannot reach back and detonate it early.
+    shortFuse: opts.shortFuse === true,
     angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2
   });
 }
@@ -4575,7 +4698,52 @@ function launchCharge(speed, kind = 'dynamite', element = 'none') {
 function throwDynamite(chargeFrac) {
   if (inv.dynamites <= 0) return;
   inv.dynamites--;
-  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2));
+  const short = dynamiteBlowsOnLanding();
+  launchCharge(CONFIG.dynamiteSpeed * (1 + chargeFrac * 2), 'dynamite', 'none',
+    { hop: true, shortFuse: short, fuseMult: short ? CONFIG.archerShortFuseMult : 1 });
+}
+
+/**
+ * Whether the stick he just threw goes off on contact.
+ *
+ * SHORT FUSE trades the hop for the hit: no fuse means no time to walk into
+ * the blast, so the fork asks whether his dynamite is a weapon or a way to
+ * travel. Read where the stick is built rather than where it lands, so a
+ * talent drafted mid-flight cannot detonate one already in the air.
+ */
+function dynamiteBlowsOnLanding() {
+  return TALENTS.held('shortFuse');
+}
+
+/**
+ * Throws the player clear of his own blast. No damage: the stick has never
+ * hurt him and this does not change that, it only moves him.
+ *
+ * The push falls off with distance, so standing on the stick throws him
+ * furthest and catching the edge barely moves him. That makes the placement
+ * the whole control -- a stick at his feet is a leap, a stick thrown long is
+ * an attack he happens to be standing near.
+ *
+ * Walls are respected per axis, the way `pushBodiesFrom` does it, so a hop
+ * into a rock slides along it rather than posting him inside it.
+ */
+function hopFromBlast(cx, cy, radius) {
+  const d = Math.hypot(player.x - cx, player.y - cy);
+  // Dead centre has no direction to push along. Rather than pick one, nudge
+  // him the way he is facing, which is the only intent available.
+  const angle = d < 0.001 ? player.aimAngle + Math.PI : Math.atan2(player.y - cy, player.x - cx);
+  if (d > radius) return 0;
+  const push = blastPush(d, radius, TALENTS.stat('longThrow'));
+  // Clamped into the arena BEFORE the tile is read, not after. Asking whether
+  // a point beyond the wall is standable answers no, and the hop cancels
+  // itself -- which is how a stick thrown at his feet while he stood on the
+  // spawn tile moved him nowhere at all. Clamped first, the same hop carries
+  // him up to the wall and stops there, which is what sliding means.
+  const nx = clampArenaX(player.x + Math.cos(angle) * push);
+  const ny = clampArenaY(player.y + Math.sin(angle) * push);
+  if (tilePassable(tileAt(nx, player.y))) player.x = nx;
+  if (tilePassable(tileAt(player.x, ny))) player.y = ny;
+  return push;
 }
 
 /**
@@ -4658,7 +4826,7 @@ function trySapperBarrage() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperBarrageCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   sapperBarrageCD = CONFIG.sapperBarrageCooldown;
-  const n = CONFIG.sapperBarrageCount, half = CONFIG.sapperBarrageArcRadians / 2;
+  const n = TALENTS.stat('wideFan'), half = CONFIG.sapperBarrageArcRadians / 2;
   for (let i = 0; i < n; i++) {
     // n-1 equal steps across the arc, symmetric about aim angle, so an odd
     // count always puts one bomb on the aim line rather than straddling it.
@@ -4683,7 +4851,7 @@ function trySapperBarrage() {
 function trySapperShot() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperShotCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
-  sapperShotCD = CONFIG.sapperShotCooldown;
+  sapperShotCD = TALENTS.stat('quickShot');
   sapperShots.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * CONFIG.sapperShotSpeed,
@@ -4794,6 +4962,18 @@ function updateArrows(dt) {
       continue; // done with wizard bolt — skip archer logic below
     }
 
+    // A powered fire arrow leaves fire behind it rather than only where it
+    // lands, so a full draw burns a lane through whatever it pierced. Spaced
+    // on a timer rather than dropped per frame: a patch every frame would be
+    // a hundred of them down one flight.
+    if (a.fireTrail !== null && a.fireTrail !== undefined) {
+      a.fireTrail -= dt;
+      if (a.fireTrail <= 0) {
+        a.fireTrail += CONFIG.archerFireTrailSecs;
+        spawnFire(a.x, a.y);
+      }
+    }
+
     // Fire trail — 1 particle every 0.03s, rises like heat
     if (a.type === 'fire') {
       a.trailTimer -= dt;
@@ -4880,7 +5060,8 @@ function updateArrows(dt) {
         a.trailHistory.push({ x: a.x, y: a.y, angle: Math.atan2(a.vy, a.vx) });
         if (a.trailHistory.length > 6) a.trailHistory.shift();
       }
-      if (!removed && (a.bounces > 9 || a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows * CONFIG.tileSize))
+      const bounceCap = a.power === true ? CONFIG.archerPowerBounces : 9;
+      if (!removed && (a.bounces > bounceCap || a.x < 0 || a.x >= CONFIG.canvasW || a.y < 0 || a.y >= CONFIG.rows * CONFIG.tileSize))
         { arrows.splice(i, 1); removed = true; }
     } else {
       a.x += a.vx * dt; a.y += a.vy * dt;
@@ -5513,18 +5694,29 @@ function updateDynamites(dt) {
     if (d.life <= 0) { explodeExplosive(d, 'dynamite'); dynamites.splice(i, 1); continue; }
 
     let splashed = false;
+    let struck = false;
     const nx = d.x + d.vx * dt;
     const tx = tileAt(nx, d.y);
     if      (tx === TILE.WATER)              splashed = true;
-    else if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) d.vx *= -0.65;
+    else if (tx === TILE.ROCK || tx === TILE.TREE || tx === TILE.HUT) { d.vx *= -0.65; struck = true; }
     else d.x = Math.max(0, Math.min(CONFIG.canvasW - 1, nx));
 
     if (!splashed) {
       const ny = d.y + d.vy * dt;
       const ty = tileAt(d.x, ny);
       if      (ty === TILE.WATER)              splashed = true;
-      else if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) d.vy *= -0.65;
+      else if (ty === TILE.ROCK || ty === TILE.TREE || ty === TILE.HUT) { d.vy *= -0.65; struck = true; }
       else d.y = Math.max(0, Math.min(CONFIG.rows * CONFIG.tileSize - 1, ny));
+    }
+
+    // SHORT FUSE also blows on the first thing the stick touches, on top of
+    // the shortened fuse it was launched with. A stick has no notion of the
+    // ground -- it slides on friction until its fuse runs out -- so "lands" is
+    // whatever it hits.
+    if (!splashed && d.shortFuse === true && struck) {
+      explodeExplosive(d, 'dynamite');
+      dynamites.splice(i, 1);
+      continue;
     }
 
     if (splashed) {
@@ -5658,6 +5850,15 @@ function explodeExplosive(d, source, opts = {}) {
     { amount: bossDamage, source, flash: 0.25 },
     { falloff: opts.falloff, element: d.element });
 
+  // His own stick throws him, and throws whatever lived through it as well.
+  // Nothing else does either, and neither costs him health. The bodies are
+  // pushed after the damage above, so only survivors are still in the lists
+  // to be moved.
+  if (d.hop === true) {
+    hopFromBlast(d.x, d.y, radius);
+    pushSurvivorsFrom(d.x, d.y, radius, TALENTS.stat('longThrow'));
+  }
+
   chainNearbyBombs(d, link);
 
   // SHOCKWAVE: the combo blast clears the ground around him of whatever it
@@ -5761,7 +5962,7 @@ function updateSapperShots(dt) {
         // Marked rather than given a one-off radius: chainNearbyBombs copies
         // this onto everything it lights, so the whole cluster goes up at the
         // wider size instead of one wide blast surrounded by ordinary ones.
-        d.chainMult = CONFIG.sapperComboRadiusMult;
+        d.chainMult = TALENTS.stat('bigCombo');
         explodeExplosive(d, 'sapperShot', {
           falloff: { max: CONFIG.sapperComboFalloffMax, min: CONFIG.sapperComboFalloffMin },
         });
@@ -5807,13 +6008,13 @@ function useSatchel() {
   const own = satchels.find(s => !s.armed);
   if (own) {
     own.armed = true;
-    own.life  = CONFIG.satchelArmFuse;
+    own.life  = TALENTS.stat('quickArm');
     events.emit({ type: 'SATCHEL_ARMED', x: own.x, y: own.y });
     return;
   }
   if (inv.satchels <= 0) return;
   inv.satchels--;
-  const spd = CONFIG.satchelThrowSpeed;
+  const spd = TALENTS.stat('longArm');
   satchels.push({
     x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * spd, vy: Math.sin(player.aimAngle) * spd,
@@ -8960,6 +9161,8 @@ const TALENTS = (() => {
     setFeet:     { key: 'braceFillSecs', min: 0.35 },
     deepRoots:   { key: 'braceDrainMult', min: 1 },
     splitShaft:  { key: 'archerPowerPierce' },
+    wideVolley:  { key: 'archerBraceVolley' },
+    longThrow:   { key: 'archerBlastHopPx' },
     deeperCut:   { key: 'knightBloodlustPer' },
     fourthBlood: { key: 'knightBloodlustMax' },
     lightFoot:   { key: 'rangerMomentumFullPx', min: 120 },
@@ -8967,6 +9170,21 @@ const TALENTS = (() => {
     fullTilt:    { key: 'rangerMomentumMax' },
     longFuse:    { key: 'sapperChainRadius' },
     moreLinks:   { key: 'sapperChainMaxLinks' },
+    // The forks added in the redesign. Every floor below exists because the
+    // talent subtracts: a cooldown taken to zero is a weapon with no rhythm,
+    // and a fuse taken to zero arms in the thrower's hand.
+    quickTongue: { key: 'wizBoltCooldown', min: 0.45 },
+    farSight:    { key: 'wizBlinkCooldown', min: 2 },
+    longPhase:   { key: 'wizBlinkIFrames' },
+    hardCharge:  { key: 'knightChargeCooldown', min: 1.5 },
+    towerGuard:  { key: 'knightBlockCooldown', min: 4 },
+    wideArc:     { key: 'knightWhirlwindRadius' },
+    fourthBolt:  { key: 'crossbowBoltCount' },
+    quickArm:    { key: 'satchelArmFuse', min: 0.6 },
+    longArm:     { key: 'satchelThrowSpeed' },
+    wideFan:     { key: 'sapperBarrageCount' },
+    quickShot:   { key: 'sapperShotCooldown', min: 4 },
+    bigCombo:    { key: 'sapperComboRadiusMult' },
   };
 
   /** A talent's effective figure: its CONFIG base, plus the levels this run
@@ -9758,7 +9976,7 @@ function drawKnight() {
       ctx.shadowColor  = fsColor ? '#FF5500' : '#6080C0';
       ctx.shadowBlur   = 10;
       ctx.lineWidth    = 3;
-      const r = CONFIG.knightWhirlwindRadius;
+      const r = TALENTS.stat('wideArc');
       ctx.beginPath(); ctx.arc(0, 0, r * 0.42, baseA,          baseA + 1.15); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, r * 0.72, baseA + 0.38,   baseA + 1.55); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, r * 0.93, baseA + 0.65,   baseA + 1.80); ctx.stroke();
@@ -12037,7 +12255,7 @@ const CHIP = {
   // or falling away, and the label is the figure the bolts are multiplied by.
   momentum:  () => ({
     glyph: 'momentum', color: '#FFCC00', lit: rangerMomentum >= 1,
-    label: rangerMomentum <= 0 ? '' : '+' + Math.round(rangerMomentum * CONFIG.rangerMomentumMax * 100) + '%',
+    label: rangerMomentum <= 0 ? '' : '+' + Math.round(rangerMomentum * TALENTS.stat('fullTilt') * 100) + '%',
     frac: rangerMomentum >= 1 ? null : rangerMomentum,
   }),
   brace:     () => ({
@@ -12970,6 +13188,9 @@ const TALENT_LOOK = {
   setFeet:       { kind: 'indirect', hook: 'Set faster, hit sooner' },
   deepRoots:     { kind: 'indirect', hook: 'What you built takes longer to lose' },
   splitShaft:    { kind: 'direct',   hook: 'One shaft, a line of them' },
+  wideVolley:    { kind: 'direct',   hook: 'The stance answers with more of them' },
+  shortFuse:     { kind: 'direct',   hook: 'It goes off where it lands' },
+  longThrow:     { kind: 'mechanic', hook: 'The blast carries further, him included' },
   rooted:        { kind: 'indirect', hook: 'Braced, and free to walk' },
   splinter:      { kind: 'direct',   hook: 'One stick, three craters' },
 
@@ -12990,6 +13211,20 @@ const TALENT_LOOK = {
   // Sapper.
   longFuse:      { kind: 'indirect', hook: 'A bomb reaches further for the next' },
   moreLinks:     { kind: 'direct',   hook: 'The chain runs longer before it dies' },
+
+  // The forks.
+  quickTongue:   { kind: 'direct',   hook: 'The small answer, given often' },
+  farSight:      { kind: 'mechanic', hook: 'The way out comes back sooner' },
+  longPhase:     { kind: 'mechanic', hook: 'Longer spent where nothing can reach' },
+  hardCharge:    { kind: 'mechanic', hook: 'He runs at them again, and again' },
+  towerGuard:    { kind: 'indirect', hook: 'The shield is rarely down' },
+  wideArc:       { kind: 'direct',   hook: 'The whirl takes in more of the room' },
+  fourthBolt:    { kind: 'direct',   hook: 'One more bolt on every string' },
+  quickArm:      { kind: 'indirect', hook: 'It is live almost as it lands' },
+  longArm:       { kind: 'mechanic', hook: 'The satchel reaches across the field' },
+  wideFan:       { kind: 'direct',   hook: 'A wider spread of the same fan' },
+  quickShot:     { kind: 'indirect', hook: 'The combo comes round again' },
+  bigCombo:      { kind: 'direct',   hook: 'What the combo touches, it takes' },
   stickyFan:     { kind: 'mechanic', hook: 'The fan stays where it lands' },
   demolitionist: { kind: 'direct',   hook: 'Each blast louder than the last' },
   shockwave:     { kind: 'mechanic', hook: 'What survives is thrown clear' },
@@ -13257,6 +13492,9 @@ function _talentBuyNote(result) {
     case 'tooPoor':    return {
       text: `${result.short} MORE MASTERY · ${result.cost} NEEDED`, color: '#C86A2A',
     };
+    case 'slotTaken':  return {
+      text: `THIS FORK WENT TO ${result.takenBy}`, color: '#C86A2A',
+    };
     case 'tierLocked': return {
       text: `TIER LOCKED · MASTERY RANK ${TIER_ROMAN[result.rankNeeded] || result.rankNeeded}`
           + ` NEEDED, RANK ${TIER_ROMAN[result.rankHeld] || result.rankHeld || '—'} HELD`,
@@ -13287,7 +13525,12 @@ function _masteryLine(points) {
  */
 function _drawTalentRow(row, spec, sel, mastery, purse) {
   const look = TALENT_LOOK[spec.id], kind = TALENT_KINDS[look.kind];
-  const open = tierOpenAt(mastery, spec.tier);
+  const tierOpen = tierOpenAt(mastery, spec.tier);
+  // The fork, if this one lost it. A closed door the player cannot see is a
+  // trap: they would read a price, press ENTER, and be refused by something
+  // the screen never mentioned.
+  const shutBy = slotTakenBy(CHAR_TREES[selectedChar], TALENTS.state(), spec.id);
+  const open = tierOpen && shutBy === null;
   const level = talentLevel(TALENTS.state(), spec.id);
   const maxed = level >= spec.costs.length;
   const cost = maxed ? 0 : spec.costs[level];
@@ -13327,7 +13570,12 @@ function _drawTalentRow(row, spec, sel, mastery, purse) {
 
   ctx.font = '10px "Courier New",monospace';
   ctx.fillStyle = PANEL_LABEL_COLOR;
-  ctx.fillText(`${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`, textX, row.midY + 2);
+  // The rival is named on every forked row, taken or not, so the player reads
+  // what a purchase costs them before they make it rather than after.
+  const rival = CHAR_TREES[selectedChar].talents.find(
+    (t) => t.slot !== undefined && t.slot === spec.slot && t.id !== spec.id);
+  ctx.fillText(`${kind.label} · TIER ${TIER_ROMAN[spec.tier]}`
+    + (rival ? `  ·  OR ${rival.label}` : ''), textX, row.midY + 2);
 
   ctx.font = '11.5px "Courier New",monospace';
   ctx.fillStyle = open ? '#93a08f' : lockedInk;
@@ -13337,7 +13585,10 @@ function _drawTalentRow(row, spec, sel, mastery, purse) {
   // the description so the eye reads across rather than hunting.
   ctx.textAlign = 'right';
   ctx.font = '13px "Courier New",monospace';
-  if (!open) {
+  if (shutBy !== null) {
+    ctx.fillStyle = '#8a6a55';
+    ctx.fillText(`GAVE THIS UP FOR ${shutBy.label}`, rightX, row.midY - 18);
+  } else if (!tierOpen) {
     ctx.fillStyle = '#C86A2A';
     ctx.fillText(`LOCKED · RANK ${TIER_ROMAN[spec.tier - 1] || spec.tier - 1}`, rightX, row.midY - 18);
   } else if (maxed) {
@@ -13730,9 +13981,34 @@ const RETICLE_PAINTERS = {
  *
  * One function so the two can never disagree again, and exposed on devHooks so
  * the agreement is checkable without a canvas.
+ *
+ * The two do differ in one way, and only one: `mouse` is unclamped, so the aim
+ * follows the pointer out into the letterbox margin and beyond, while the
+ * crosshair has to stay on the picture to be seen at all. Where they differ the
+ * crosshair is pinned to the point the aim ray crosses the playfield edge, so
+ * it still sits on the line the shot travels. Players reported the aim
+ * "sticking" precisely because the old code clamped the aim instead: once both
+ * axes pinned, moving further out changed nothing.
  */
 function reticleAt() {
-  return { x: mouse.x, y: mouse.y };
+  const top = CONFIG.hudHeight, bottom = CONFIG.canvasH, right = CONFIG.canvasW;
+  if (mouse.x >= 0 && mouse.x <= right && mouse.y >= top && mouse.y <= bottom) {
+    return { x: mouse.x, y: mouse.y };
+  }
+  // Off the picture, so pin the crosshair where the aim ray leaves the
+  // playfield rather than at the nearest edge point. Nearest-point is what a
+  // plain clamp gives, and it puts the crosshair off the line the shot travels
+  // -- the same lie as the old 48px offset above, just in the other axis.
+  const px = player.x, py = player.y + top;
+  const dx = mouse.x - px, dy = mouse.y - py;
+  let t = 1;
+  if (dx > 0) t = Math.min(t, (right - px) / dx);
+  else if (dx < 0) t = Math.min(t, -px / dx);
+  if (dy > 0) t = Math.min(t, (bottom - py) / dy);
+  else if (dy < 0) t = Math.min(t, (top - py) / dy);
+  if (!Number.isFinite(t)) t = 0;
+  t = Math.max(0, Math.min(1, t));
+  return { x: px + dx * t, y: py + dy * t };
 }
 
 /** The world point the aim ray is pointed at. */
@@ -14541,7 +14817,7 @@ export const devHooks = {
   })),
   /** Momentum's meter and what it multiplies a bolt by. */
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
-                     max: CONFIG.rangerMomentumMax }),
+                     max: TALENTS.stat('fullTilt') }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress
    *  has touched anything yet. Enough to check a stack or a reset without
    *  reconstructing the swing. */
@@ -14591,7 +14867,7 @@ export const devHooks = {
    *  same routine the shift shot reaches when it threads one of his bombs. */
   sapperCombo(x, y) {
     explodeExplosive({ x, y, vx: 0, vy: 0, life: 0, angle: 0 }, 'sapperShot',
-      { radius: CONFIG.dynamiteBlastRadius * CONFIG.sapperComboRadiusMult });
+      { radius: CONFIG.dynamiteBlastRadius * TALENTS.stat('bigCombo') });
   },
   // Backdates a draw already in progress, so a test can loose a fully drawn
   // shot without spending a real second on it: archerDrawFrac reads the wall
