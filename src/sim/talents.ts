@@ -140,6 +140,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         id: 'splinter', label: 'SPLINTER',
         desc: 'Dynamite bursts into three smaller blasts',
       },
+      {
+        id: 'deadEye', label: 'DEAD EYE',
+        desc: 'A power shot loosed at a full draw from a full brace costs no cooldown',
+      },
     ],
   },
   wizard: {
@@ -235,6 +239,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         id: 'juggernaut', label: 'JUGGERNAUT',
         desc: 'The dash cannot be stopped, and throws back what it hits',
       },
+      {
+        id: 'bulwark', label: 'BULWARK',
+        desc: 'A blocked hit brings the guard straight back, and spends a Bloodlust stack',
+      },
     ],
   },
   ranger: {
@@ -274,6 +282,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         id: 'shrapnel', label: 'SHRAPNEL',
         desc: 'The satchel throws bolts outward when it blows',
       },
+      {
+        id: 'holdfast', label: 'HOLDFAST',
+        desc: 'Everything the net is holding takes double while it is held',
+      },
     ],
   },
   sapper: {
@@ -312,6 +324,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'shockwave', label: 'SHOCKWAVE',
         desc: 'A combo blast throws back everything it does not kill',
+      },
+      {
+        id: 'minefield', label: 'MINEFIELD',
+        desc: 'A barrage bomb that touches nothing arms where it lands and waits',
       },
     ],
   },

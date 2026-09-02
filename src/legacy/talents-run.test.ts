@@ -225,6 +225,219 @@ describe('every talent stat reaches its call sites', () => {
  * The three with a one-line observable get one as well, because a count of
  * bolts on the field is worth more than a number in a table.
  */
+/**
+ * The four third capstones, one per hero, each on the tool that hero's other
+ * two rites do not touch.
+ *
+ * Every one of them is a RULE rather than a figure, so none can be checked by
+ * asking TALENTS what a number is. What each test does is run the tool twice
+ * -- once with the rite sealed and once without -- and assert on what the sim
+ * actually did with it.
+ */
+describe('the third rite of the four heroes who had two', () => {
+  /** Seals `id` for this run, after clearing whatever the last test sealed. */
+  function seal(char: string, id: string): void {
+    talents().resetRun();
+    g.pick(char);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    talents().sealCapstone(id);
+  }
+
+  function plain(char: string): void {
+    talents().resetRun();
+    g.pick(char);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  }
+
+  describe('DEAD EYE', () => {
+    /** A full brace and a full draw, loosed. Returns the cooldown it left. */
+    function perfectShot(): number {
+      (g.inv() as { arrows: number }).arrows = 20;
+      // The brace fills only while he is standing still, and nothing in this
+      // harness is holding a key, so stepping IS standing still.
+      stepPast(Math.ceil(ONE_SECOND * (g.config().braceFillSecs as number + 0.4)));
+      expect((g.brace() as { level: number }).level, 'he never finished bracing').toBe(1);
+      g.shift();
+      g.holdDraw(2);                    // backdated: a full draw without the wait
+      g.shiftUp();
+      return (g.archerDraw() as { cooldown: number }).cooldown;
+    }
+
+    it('costs the full cooldown without the rite', () => {
+      plain('archer');
+      expect(perfectShot()).toBeCloseTo(g.config().archerPowerCooldown as number, 3);
+    });
+
+    it('costs nothing with it', () => {
+      seal('archer', 'deadEye');
+      expect(perfectShot()).toBe(0);
+    });
+
+    // The half that makes it a rite rather than a switch: the refund is bought
+    // with the standing still, so a shot that skipped either half still pays.
+    it('still costs the full cooldown for a tapped draw', () => {
+      seal('archer', 'deadEye');
+      (g.inv() as { arrows: number }).arrows = 20;
+      stepPast(Math.ceil(ONE_SECOND * (g.config().braceFillSecs as number + 0.4)));
+      g.shift();
+      g.holdDraw(0);                    // braced, but loosed at once
+      g.shiftUp();
+      expect((g.archerDraw() as { cooldown: number }).cooldown)
+        .toBeCloseTo(g.config().archerPowerCooldown as number, 3);
+    });
+  });
+
+  describe('BULWARK', () => {
+    /** Swings the spear into a parked skeleton until Bloodlust shows a stack. */
+    function buildAStack(): number {
+      g.spawnSkeleton('normal');
+      const sk = (g.skeletons() as { x: number; y: number; hp: number }[]);
+      const p = g.player() as { x: number; y: number };
+      aimAt(p.x + 200, p.y);
+      // Re-parked every frame. A skeleton left alone walks out of the 80 px
+      // the spear reaches between one swing and the next, and a swing that
+      // connects with nothing is the exact thing that resets Bloodlust -- so
+      // a harness that parks it once measures the reset, not the stack.
+      for (let i = 0; i < 240 && (g.bloodlust() as { stacks: number }).stacks === 0; i++) {
+        for (const s of sk) { s.x = p.x + 70; s.y = p.y; s.hp = 99; }
+        g.shoot();
+        stepPast(1);
+      }
+      // Parked at 70: inside the spear's 80 and outside its own reach, so it
+      // feeds swings without hitting back. Cleared afterwards all the same --
+      // the guard is what the next helper measures, and a skeleton left
+      // standing there spends it before the test does.
+      (g.skeletons() as unknown[]).length = 0;
+      g.healHero();
+      return (g.bloodlust() as { stacks: number }).stacks;
+    }
+
+    /** Waits for the guard to come up, then takes two hits. */
+    function twoHits(): { lost: number; stacks: number } {
+      stepPast(Math.ceil(ONE_SECOND * (g.config().knightBlockCooldown as number + 1)));
+      const before = g.hp() as number;
+      g.hurtHero(1);
+      // damagePlayer drops everything while playerHitFlash runs, so two calls
+      // in one frame are one hit however the guard resolved the first.
+      stepPast(Math.ceil(ONE_SECOND * (g.config().playerHitFlashSecs as number + 0.05)));
+      g.hurtHero(1);
+      return { lost: before - (g.hp() as number),
+               stacks: (g.bloodlust() as { stacks: number }).stacks };
+    }
+
+    it('lets the second hit through without the rite', () => {
+      plain('knight');
+      expect(buildAStack(), 'no stack, so the test proves nothing').toBeGreaterThan(0);
+      expect(twoHits().lost, 'the guard blocks one and one lands').toBe(1);
+    });
+
+    it('blocks both, and a stack pays for it', () => {
+      seal('knight', 'bulwark');
+      const had = buildAStack();
+      expect(had).toBeGreaterThan(0);
+      const after = twoHits();
+      expect(after.lost, 'the guard came straight back').toBe(0);
+      expect(after.stacks, 'and blood paid for it').toBe(had - 1);
+    });
+
+    it('cannot pay with no blood, so the second hit lands', () => {
+      seal('knight', 'bulwark');
+      expect((g.bloodlust() as { stacks: number }).stacks).toBe(0);
+      expect(twoHits().lost).toBe(1);
+    });
+  });
+
+  describe('HOLDFAST', () => {
+    /** Parks a spearman in reach, nets him, and reports what one bolt took. */
+    function netThenHit(): number {
+      g.spawnSoldier('spearman');
+      const sold = g.soldiers() as { x: number; y: number; hp: number; heldTimer: number }[];
+      const p = g.player() as { x: number; y: number };
+      const reach = g.config().netThrowMin as number;
+      aimAt(p.x + reach * 3, p.y);
+      g.shift();
+      g.holdNet(0);                     // a tapped net: it only has to land
+      g.shiftUp();
+      // Pinned to the landing point for the whole flight: a tapped net lands
+      // at netThrowMin and takes a third of a second to fly there, and an
+      // aggroed spearman covers 30 px in that time.
+      for (let i = 0; i < 60; i++) {
+        for (const s of sold) { s.x = p.x + reach; s.y = p.y; s.hp = 40; }
+        stepPast(1);
+      }
+      expect(sold[0]!.heldTimer, 'the net never caught him').toBeGreaterThan(0);
+      const before = sold[0]!.hp;
+      g.damageSoldier(0, 1);
+      return before - sold[0]!.hp;
+    }
+
+    it('a held body takes a plain hit without the rite', () => {
+      plain('ranger');
+      expect(netThenHit()).toBeCloseTo(1, 4);
+    });
+
+    it('and takes double with it', () => {
+      seal('ranger', 'holdfast');
+      expect(netThenHit()).toBeCloseTo(g.config().rangerHoldfastMult as number, 4);
+    });
+
+    // The rite is about the NET, and a boss can be dazed by a stun as well.
+    it('does not double for a body that is merely stunned', () => {
+      seal('ranger', 'holdfast');
+      g.spawnSoldier('spearman');
+      const sold = g.soldiers() as { x: number; y: number; hp: number; heldTimer: number }[];
+      const p = g.player() as { x: number; y: number };
+      for (const s of sold) { s.x = p.x + 40; s.y = p.y; s.hp = 40; s.heldTimer = 0; }
+      const before = sold[0]!.hp;
+      g.damageSoldier(0, 1);
+      expect(before - sold[0]!.hp).toBeCloseTo(1, 4);
+    });
+  });
+
+  describe('MINEFIELD', () => {
+    /** Throws a fan into empty ground and waits out its fuse. */
+    function fanIntoNothing(): { kind: string; mine?: boolean }[] {
+      (g.barrageBombs() as unknown[]).length = 0;
+      g.barrage();
+      expect((g.barrageBombs() as unknown[]).length, 'the fan never left').toBeGreaterThan(0);
+      stepPast(Math.ceil(ONE_SECOND * (g.config().sapperBarrageLifetime as number + 0.3)));
+      return g.barrageBombs() as { kind: string; mine?: boolean }[];
+    }
+
+    it('a fan that touches nothing is spent without the rite', () => {
+      plain('sapper');
+      expect(fanIntoNothing().length).toBe(0);
+    });
+
+    it('and stays on the ground armed with it', () => {
+      seal('sapper', 'minefield');
+      const left = fanIntoNothing();
+      expect(left.length).toBe(g.config().sapperBarrageCount as number);
+      expect(left.every((b) => b.mine === true), 'left lying but not armed').toBe(true);
+    });
+
+    it('and a mine answers to something walking near it', () => {
+      seal('sapper', 'minefield');
+      const live = fanIntoNothing() as unknown as { x: number; y: number }[];
+      const armed = live.length;
+      expect(armed).toBeGreaterThan(0);
+      // A snapshot, because `live` is the array under test: comparing its
+      // length with itself after a frame compares four with four forever.
+      const at = { x: live[0]!.x, y: live[0]!.y };
+      g.spawnSkeleton('normal');
+      const sk = g.skeletons() as { x: number; y: number }[];
+      for (const s of sk) { s.x = at.x; s.y = at.y; }
+      stepPast(4);
+      expect((g.barrageBombs() as unknown[]).length,
+             'it sat there while something stood on it').toBeLessThan(armed);
+    });
+  });
+});
+
 describe('the four trees levelled up to the wizard\'s shape', () => {
   /** Owns every level of `id` and wakes it for this run. */
   function take(char: string, id: string, levels: number): void {
@@ -1184,6 +1397,28 @@ describe('STICKY FAN leaves the fan on the ground', () => {
     talents().draft('stickyFan');
     expect(barrageIntoBody(), 'stuck bombs should still be on the map')
       .toBeGreaterThan(0);
+  });
+
+  // The talent's own words are that they KEEP THEIR FUSE. A stuck bomb went on
+  // scanning for bodies every frame, so one resting against the thing it landed
+  // on re-stuck itself forever and never went off at all -- the fan was not a
+  // delayed blast, it was a blast that never came.
+  it('runs the fuse out even with the body still standing on them', () => {
+    talents().grant('stickyFan', 1);
+    talents().draft('stickyFan');
+    expect(barrageIntoBody()).toBeGreaterThan(0);
+    const c = g.config();
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons() as { x: number; y: number; hp: number }[];
+    const bombs = g.barrageBombs() as { x: number; y: number }[];
+    const at = { x: bombs[0]!.x, y: bombs[0]!.y };
+    // Pinned on top of a stuck bomb for the whole of the rest of its fuse.
+    for (let i = 0; i < Math.ceil(ONE_SECOND * (c.sapperBarrageLifetime as number + 0.6)); i++) {
+      for (const k of sk) { k.x = at.x; k.y = at.y; k.hp = 99; }
+      stepPast(1);
+    }
+    expect((g.barrageBombs() as unknown[]).length,
+           'a bomb sat under a body instead of going off').toBe(0);
   });
 });
 

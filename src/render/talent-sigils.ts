@@ -43,11 +43,28 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
     { d: 'M15.5 20 L22.5 20' },
     { d: 'M5 20 Q12 3.5 19 20', dash: true },
   ],
+  bulwark: [
+    // The same kite TOWER GUARD wears, because they are the same line: the
+    // tier deepens the block and the rite changes what pays for it.
+    { d: 'M9.6 2.8 L16.8 5.6 v6 q0 4.6 -7.2 7.2 Q2.4 16.6 2.4 11.6 V5.6z' },
+    { d: 'M7 9 L12.2 14.2 M12.2 9 L7 14.2', alpha: 0.65 },
+    { d: 'M20.6 2.6 L22.6 6.2 a2.3 2.3 0 1 1 -4 0z', fill: true },
+    { d: 'M22.6 13.4 A4.2 4.2 0 1 0 21.2 17.8', dash: true },
+    { d: 'M19.4 10.4 L23.4 12.8 L19.6 15.2' },
+  ],
   chargeThrough: [
     { d: 'M1.5 12 L18.4 12' },
     { d: 'M17.8 8.9 L22.4 12 L17.8 15.1z', fill: true },
     { d: 'M6 8.4 V15.6 M3.4 9.6 L8.6 14.4 M8.6 9.6 L3.4 14.4' },
     { d: 'M12.6 9.6 V14.4 M10.8 10.2 L14.4 13.8 M14.4 10.2 L10.8 13.8', alpha: 0.6 },
+  ],
+  deadEye: [
+    { d: 'M6.6 4.6 A9.6 9.6 0 0 1 6.6 19.4' },
+    { d: 'M6.6 4.6 L14.6 12 L6.6 19.4' },
+    { d: 'M2.6 12 L14.6 12' },
+    { d: 'M13 9.8 L17.6 12 L13 14.2z', fill: true },
+    { d: 'M22.4 6.4 A4.2 4.2 0 1 0 19.4 10.4', dash: true },
+    { d: 'M19.4 3.2 L23.2 6 L19.2 8' },
   ],
   deepRoots: [
     { d: 'M6 3 H18 L12 12 L18 21 H6 L12 12z' },
@@ -110,6 +127,16 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
     { d: 'M12 18.4 L12 7.4' },
     { d: 'M9.2 9.8 L12 6.6 L14.8 9.8', fill: true },
   ],
+  holdfast: [
+    { d: 'M4.8 13 A7.2 7.2 0 1 0 19.2 13 A7.2 7.2 0 1 0 4.8 13' },
+    { d: 'M12 5.8 V20.2 M4.8 13 H19.2', alpha: 0.6 },
+    { d: 'M6.9 7.9 L17.1 18.1 M17.1 7.9 L6.9 18.1', alpha: 0.45 },
+    { d: 'M9.8 10.8 h4.4 v4.4 h-4.4z', fill: true },
+    { d: 'M1.4 3.4 L7 7.6' },
+    { d: 'M5.2 7.8 L9 9.2 L6.6 5.8z', fill: true },
+    { d: 'M22.6 3.4 L17 7.6', alpha: 0.75 },
+    { d: 'M18.8 7.8 L15 9.2 L17.4 5.8z', fill: true, alpha: 0.75 },
+  ],
   juggernaut: [
     { d: 'M4.5 5.5 L16 12 L4.5 18.5z', fill: true },
     { d: 'M16.8 9.6 L20 6.4' },
@@ -154,6 +181,16 @@ export const SIGILS: Record<string, readonly SigilPart[]> = {
     { d: 'M2.6 12 L6 12', alpha: 0.42 },
     { d: 'M8.6 7.4 L13.4 7.4', alpha: 0.55 },
     { d: 'M8.6 16.6 L13.4 16.6', alpha: 0.55 },
+  ],
+  minefield: [
+    { d: 'M1.6 20.4 H22.4', alpha: 0.5 },
+    { d: 'M1.8 18.2 A4.4 4.4 0 1 0 10.6 18.2 A4.4 4.4 0 1 0 1.8 18.2', dash: true, alpha: 0.45 },
+    { d: 'M7.6 18.2 A4.4 4.4 0 1 0 16.4 18.2 A4.4 4.4 0 1 0 7.6 18.2', dash: true, alpha: 0.45 },
+    { d: 'M13.4 18.2 A4.4 4.4 0 1 0 22.2 18.2 A4.4 4.4 0 1 0 13.4 18.2', dash: true, alpha: 0.45 },
+    { d: 'M4 18.2 A2.2 2.2 0 1 0 8.4 18.2 A2.2 2.2 0 1 0 4 18.2', fill: true },
+    { d: 'M9.8 18.2 A2.2 2.2 0 1 0 14.2 18.2 A2.2 2.2 0 1 0 9.8 18.2', fill: true },
+    { d: 'M15.6 18.2 A2.2 2.2 0 1 0 20 18.2 A2.2 2.2 0 1 0 15.6 18.2', fill: true },
+    { d: 'M12 16 V13 M10.4 11.4 L13.6 11.4 M12 9.8 V12.8 M9.8 10 L14.2 12.8 M14.2 10 L9.8 12.8' },
   ],
   moreLinks: [
     { d: 'M2 19.6 L22 19.6', alpha: 0.45 },

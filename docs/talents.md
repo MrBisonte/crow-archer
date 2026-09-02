@@ -328,8 +328,8 @@ key a talent scales is still read as `CONFIG.thatKey` anywhere. The second one
 is not paranoia — it is what found the ranger being told **+30%** on a HUD chip
 while her bolts were multiplying by **+45%**.
 
-**One shape, five heroes.** Every tree is two tier-I talents, two tier-II and
-one tier-III. That is a design rule, not a coincidence of how they were
+**One shape, five heroes.** Every tree is two tier-I talents, two tier-II, one
+tier-III and three rites. That is a design rule, not a coincidence of how they were
 written: the ranks are one-per-boss, so every player meets the same
 ladder at the same moments whoever they picked, and a tier that exists for one
 hero and not another turns a rank-up into a lottery. `treesShareOneShape` in
@@ -353,10 +353,10 @@ one, and `can afford something the moment a tier opens` is the guard.
 
 | Hero | Deepens | Tier I | Tier II | Tier III | The rite |
 |---|---|---|---|---|---|
-| Archer | Brace | SET FEET, DEEP ROOTS | SPLIT SHAFT, LONG THROW | FULL DRAW | ROOTED / SPLINTER / … |
-| Knight | Bloodlust | DEEPER CUT, FOURTH BLOOD | CHARGE THROUGH, TOWER GUARD | LONG REACH | BERSERKER / JUGGERNAUT / … |
-| Ranger | Momentum | LIGHT FOOT, LONG WIND | FULL TILT, WIDE NET | FOURTH BOLT | SLIPSTREAM / SHRAPNEL / … |
-| Sapper | Chain detonation | LONG FUSE, MORE LINKS | STICKY FAN, WIDER FAN | SHORT FUSE | DEMOLITIONIST / SHOCKWAVE / … |
+| Archer | Brace | SET FEET, DEEP ROOTS | SPLIT SHAFT, LONG THROW | FULL DRAW | ROOTED / SPLINTER / DEAD EYE |
+| Knight | Bloodlust | DEEPER CUT, FOURTH BLOOD | CHARGE THROUGH, TOWER GUARD | LONG REACH | BERSERKER / JUGGERNAUT / BULWARK |
+| Ranger | Momentum | LIGHT FOOT, LONG WIND | FULL TILT, WIDE NET | FOURTH BOLT | SLIPSTREAM / SHRAPNEL / HOLDFAST |
+| Sapper | Chain detonation | LONG FUSE, MORE LINKS | STICKY FAN, WIDER FAN | SHORT FUSE | DEMOLITIONIST / SHOCKWAVE / MINEFIELD |
 | Wizard | Focus and the blink | FOCUS DEPTH, LONG STEP | WIDER SKY, HELD STEP | THIRD STEP | OVERCHANNEL / STORMCALLER / THUNDERSTEP |
 
 The eight new rows, and what they move:
@@ -380,9 +380,53 @@ what it meant. FULL DRAW, TOWER GUARD and SHORT FUSE carry floors, because the
 arithmetic would otherwise run them to zero: a draw that completes in no time
 is not a talent, and a block that is never on cooldown is not a cooldown.
 
-The rite rows end in `…` for four of the five: each has two capstones and needs
-a third to match the wizard. That is the half of this pass not yet built, and
-it is behaviour rather than a table — each one is a new rule in `game.js`.
+### The third rite, and how each one was chosen
+
+Four heroes had two rites where the wizard had three. The third was not picked
+for flavour: **every hero's existing pair already covered two of its tools and
+left one alone**, and the tool left alone is the one the third rite is about.
+That is exactly THUNDERSTEP's relationship to the blink, so the wizard stops
+being a special case rather than the others staying exceptions to it.
+
+| Hero | Its other two cover | Left alone | The third rite |
+|---|---|---|---|
+| Archer | the brace, the dynamite | **the power shot** | DEAD EYE |
+| Knight | Bloodlust, the charge | **the block** | BULWARK |
+| Ranger | Momentum, the satchel | **the net** | HOLDFAST |
+| Sapper | the chain, the combo blast | **the barrage** | MINEFIELD |
+
+- **DEAD EYE** — a power shot loosed at a full draw *from a full brace* costs
+  no cooldown. Both halves have to be full, so what buys the refund is the same
+  2.25 s of standing still it always was; a tapped draw pays the 5 s exactly as
+  it does without the rite. It is the archer's most committed action made
+  repeatable at its own price rather than made cheaper.
+- **BULWARK** — a blocked hit brings the guard straight back and spends a
+  Bloodlust stack. With no stack there is nothing to spend and it recharges as
+  it always did, so it cannot hold a guard up forever. It argues with BERSERKER
+  on purpose: one rite exists to keep stacks and the other to spend them, so
+  picking between them is picking what the stacks are *for*.
+- **HOLDFAST** — everything the net is holding takes double while it is held.
+  It turns the net from crowd control into a damage window, which is what a
+  hero who lands for less than a plain weapon's worth per bolt actually needs,
+  and it works on a boss because a boss can be netted. Held is read from the
+  net's own timer and not from the daze it rides, so a boss the knight has
+  stunned is not a boss the ranger has caught.
+- **MINEFIELD** — a barrage bomb that touches nothing arms where it lands and
+  waits instead of spending itself on its own 0.9 s fuse. A missed fan becomes
+  ground nobody can cross, and the mines are still his bombs, so a chain runs
+  through them. It triggers at a stride rather than at a bomb's contact radius:
+  something that has to touch it is a bomb with a long fuse, not a mine.
+
+`treesShareOneShape` asserts **three** rites for every hero. It said `>= 2`
+while the wizard had three and the rest had two, which is a shape test agreeing
+to whatever it is shown — and the rite is the one choice a run cannot take
+back, so being offered two where another hero is offered three is not the same
+ladder.
+
+One bug fell out of building MINEFIELD. A barrage bomb's contact check listed
+crows, skeletons and the boss and never the garrison, so a bomb flew through a
+soldier and went off on its own fuse behind him. A mine the cavern can walk
+over is not a mine, so the loop was fixed rather than worked around.
 
 Two figures worth stating outright, because they were set deliberately rather
 than derived. The ranger's FULL TILT adds **7.5% a level over two levels**, so

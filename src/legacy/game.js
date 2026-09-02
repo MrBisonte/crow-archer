@@ -485,6 +485,7 @@ const CONFIG = {
   netThrowMin: 120, netThrowMax: 320,
   netRadiusMin: 34, netRadiusMax: 70,
   netRadiusBonus: 0,   // WIDE NET adds to both ends; see TALENTS.STATS
+  rangerHoldfastMult: 2,   // HOLDFAST: what a held target is worth
   netHoldMin: 0.8, netHoldMax: 2.0,
   netDamage: 0.9,
   netSpeed: 420,
@@ -522,6 +523,10 @@ const CONFIG = {
   sapperBarrageCount: 5, sapperBarrageArcRadians: Math.PI / 4, sapperBarrageCooldown: 6,
   sapperBarrageSpeed: 380, sapperBarrageLifetime: 0.9, sapperBarrageBlastRadius: 40,
   sapperBarrageDamage: 1,
+  // MINEFIELD. A mine waits far longer than a fuse but not forever, and it
+  // triggers at a stride rather than at a bomb's own contact radius --
+  // something that has to touch it is a bomb with a long fuse, not a mine.
+  sapperMineSecs: 20, sapperMineTriggerRadius: 26,
   // Shift: a fast piercing shot. A direct hit is a clean multiple of a normal
   // one; catching the sapper's own live bomb in flight instead detonates it
   // early into a bigger blast, its damage highest at the centre and falling
@@ -2408,7 +2413,14 @@ function releaseArcherDraw() {
   if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
 
-  archerPowerCD = CONFIG.archerPowerCooldown;
+  // DEAD EYE: the most committed thing he can do stops costing him the next
+  // one. BOTH halves have to be full -- a full draw and a full brace -- so
+  // what buys the refund is the same 2.25 s of standing still it always was,
+  // and a tapped shot pays the cooldown exactly as it does without the rite.
+  const perfect = drawn >= 1 && braceLevel >= 1;
+  archerPowerCD = (perfect && TALENTS.capstoneActive('deadEye'))
+    ? 0
+    : CONFIG.archerPowerCooldown;
   const spd = CONFIG.arrowSpeed * (1 + drawn * (CONFIG.archerPowerSpeedMult - 1));
   // The in-flight cap is deliberately not consulted. It is there to stop the
   // bow being held down, and this is one arrow every five seconds.
@@ -2652,6 +2664,10 @@ function holdEnemiesInRadius(cx, cy, radius, secs) {
   // fair game: it is two seconds at the very most and it has to be landed.
   if (bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2) {
     boss.dazeTimer = Math.max(boss.dazeTimer, dazeTimerForStun(secs));
+    // Held separately from the daze it rides, because a daze also comes from a
+    // stun and HOLDFAST is about the NET. Reading dazeTimer here would have
+    // doubled every hit on a boss the knight had just stunned.
+    boss.netHold = Math.max(boss.netHold || 0, secs);
     caught++;
   }
   return caught;
@@ -3677,6 +3693,17 @@ events.on(e => {
         count: 8, colors: ['#8A6A4A','#C8B090','#5C5C5C'],
         speedMin: 30, speedMax: 90, decay: 3.2, shape: 'circle',
         sizeMin: 1.5, sizeMax: 3, damping: 0.6,
+      });
+      break;
+
+    case 'SAPPER_MINE_ARMED':
+      // A click and one settling puff. A mine that arms silently is a mine the
+      // player does not know is there, which is a trap for the wrong person.
+      playSound(sndArm);
+      burst(e.x, e.y, {
+        count: 5, colors: ['#8A6A4A', '#C8B090'],
+        speedMin: 8, speedMax: 26, decay: 3.4, shape: 'circle',
+        sizeMin: 1, sizeMax: 2, damping: 0.7,
       });
       break;
 
@@ -5302,7 +5329,7 @@ function spawnSkeleton(kind = 'normal') {
 function damageSkeleton(j, amount = 1, knock = null) {
   const s = skeletons[j];
   if (!s) return;
-  s.hp -= amount;
+  s.hp -= amount * netHoldMult(s.heldTimer || 0);
   if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return; }
   killSkeleton(j);
 }
@@ -5504,7 +5531,7 @@ function damageSoldier(j, amount = 1, knock = null, heading = null) {
     events.emit({ type: 'SHIELD_BLOCKED', x: s.x, y: s.y });
     return false;
   }
-  s.hp -= amount;
+  s.hp -= amount * netHoldMult(s.heldTimer || 0);
   if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return true; }
   killSoldier(j);
   return true;
@@ -5798,7 +5825,6 @@ function explodeExplosive(d, source, opts = {}) {
  * as five small blasts rather than five bombs vanishing off-screen.
  */
 function updateBarrageBombs(dt) {
-  const hitR = CONFIG.arrowHitRadius;
   for (let i = barrageBombs.length - 1; i >= 0; i--) {
     const b = barrageBombs[i];
     b.life -= dt;
@@ -5806,11 +5832,26 @@ function updateBarrageBombs(dt) {
     const blocked = !tilePassable(tileAt(nx, ny));
     if (!blocked) { b.x = nx; b.y = ny; }
 
-    // A stuck bomb is already where it was going: it waits out its fuse.
-    let hit = b.stuck ? false : blocked;
-    if (!hit) for (const c of crows) if (dist2(b.x, b.y, c.x, c.y) < hitR * hitR) { hit = true; break; }
-    if (!hit) for (const s of skeletons) if (dist2(b.x, b.y, s.x, s.y) < hitR * hitR) { hit = true; break; }
-    if (!hit && bossInPlay() && !boss.shield && dist2(b.x, b.y, boss.x, boss.y) < hitR * hitR) hit = true;
+    const armed = b.mine === true;
+    // An armed mine answers to a stride, not to a bomb's contact radius.
+    const hitR = armed ? CONFIG.sapperMineTriggerRadius : CONFIG.arrowHitRadius;
+    // A stuck bomb is already where it was going and STOPS LOOKING -- which is
+    // what the line above always said and what it did only for walls. It kept
+    // scanning bodies, so a STICKY FAN bomb resting against the crow it landed
+    // on re-stuck itself every frame and never once ran its fuse out. A mine is
+    // the exception: waiting for somebody is the whole of it.
+    let hit = b.stuck && !armed ? false : blocked;
+    const looking = armed || !b.stuck;
+    if (looking && !hit) {
+      for (const c of crows) if (dist2(b.x, b.y, c.x, c.y) < hitR * hitR) { hit = true; break; }
+      if (!hit) for (const s of skeletons) if (dist2(b.x, b.y, s.x, s.y) < hitR * hitR) { hit = true; break; }
+      // The garrison, which this loop never mentioned: a barrage bomb flew
+      // through a soldier and went off on its own fuse behind him. A mine the
+      // cavern can walk over is not a mine, so it is fixed rather than worked
+      // around.
+      if (!hit) for (const s of soldiers) if (dist2(b.x, b.y, s.x, s.y) < hitR * hitR) { hit = true; break; }
+      if (!hit && bossInPlay() && !boss.shield && dist2(b.x, b.y, boss.x, boss.y) < hitR * hitR) hit = true;
+    }
 
     // STICKY FAN: a bomb that touches something stops there and keeps its
     // fuse instead of going off on contact, which turns the fan from a
@@ -5819,6 +5860,14 @@ function updateBarrageBombs(dt) {
     // they never bounced, they detonated, so this is what it buys instead.
     if (hit && TALENTS.held('stickyFan')) {
       b.vx = 0; b.vy = 0; b.stuck = true;
+    } else if (!hit && b.life <= 0 && !b.mine && TALENTS.capstoneActive('minefield')) {
+      // MINEFIELD: a bomb that touched nothing does not spend itself on its own
+      // fuse. It settles where it landed and waits, which turns a missed fan
+      // into ground nobody can cross -- and they are still his bombs, so a
+      // chain runs through them exactly as it runs through a stuck one.
+      b.vx = 0; b.vy = 0; b.stuck = true; b.mine = true;
+      b.life = CONFIG.sapperMineSecs;
+      events.emit({ type: 'SAPPER_MINE_ARMED', x: b.x, y: b.y });
     } else if (hit || b.life <= 0) {
       explodeExplosive(b, 'barrage', { radius: CONFIG.sapperBarrageBlastRadius });
       barrageBombs.splice(i, 1);
@@ -6455,6 +6504,16 @@ function damagePlayer(amount, crowIndex = -1) {
     playerShield = false;
     playerHitFlash = CONFIG.playerHitFlashSecs;
     events.emit({ type: 'SHIELD_BLOCKED', x: player.x, y: player.y });
+    // BULWARK: the guard comes straight back and a Bloodlust stack pays for
+    // it. With no stack left there is nothing to spend and it recharges the
+    // way it always did, so the rite cannot hold a guard up forever -- and it
+    // argues with BERSERKER, whose whole job is keeping those stacks. Picking
+    // one of the two is picking what the stacks are FOR.
+    if (TALENTS.capstoneActive('bulwark') && knightBloodlust > 0) {
+      knightBloodlust -= 1;
+      playerShield = true;
+      events.emit({ type: 'KNIGHT_BLOODLUST', stacks: knightBloodlust, x: player.x, y: player.y });
+    }
     // Shield kills non-boss attackers
     if (crowIndex >= 0 && crowIndex < crows.length) killCrow(crowIndex);
     return;
@@ -6675,6 +6734,7 @@ function spawnBoss() {
     burnTimer: 0, emberTimer: 0,    // fire-arrow burn: slows him and drains HP
     burnDps: 0,                     // damage per second for the burn now running
     dazeTimer: 0,                   // crow king only: stun then two-step slow, see dazeBoss
+    netHold: 0,                     // HOLDFAST: how long the net still has him
   };
   if (kind === 'minotaur') {
     // Starts far from the player rather than off the right edge: a maze has no
@@ -6779,11 +6839,23 @@ function knockBoss(fromX, fromY) {
  * Callers do their own hit detection and shield check first, so a shielded
  * boss still swallows nothing and projectiles behave as before.
  */
+/**
+ * What a hit is worth to something the net is holding.
+ *
+ * HOLDFAST turns the net from a hold into a window, and the boss, the garrison
+ * and the skeletons all have to agree about how wide that window is. One home:
+ * three copies of `held > 0 ? 2 : 1` is three chances to disagree about what
+ * caught means.
+ */
+function netHoldMult(held) {
+  return held > 0 && TALENTS.capstoneActive('holdfast') ? CONFIG.rangerHoldfastMult : 1;
+}
+
 function damageBoss(amount, fromX, fromY, source, flash = 0.15) {
   boss.hitFlash = flash;
   knockBoss(fromX, fromY);
   events.emit({ type: 'BOSS_HIT', source });
-  BOSS_ON_HIT[boss.kind](amount);
+  BOSS_ON_HIT[boss.kind](amount * netHoldMult(boss.netHold || 0));
 }
 
 /** Outcome of one projectile reaching the boss. */
@@ -6902,6 +6974,7 @@ function dazeBoss() { boss.dazeTimer = bossDazeTotal(); }
 
 function updateBossDaze(dt) {
   if (boss.dazeTimer > 0) boss.dazeTimer = Math.max(0, boss.dazeTimer - dt);
+  if (boss.netHold > 0) boss.netHold = Math.max(0, boss.netHold - dt);
 }
 
 /** Counts the burn down, drains HP with it, and puffs embers while it lasts. */
@@ -13093,6 +13166,7 @@ const TALENT_LOOK = {
   splitShaft:    { kind: 'direct',   hook: 'One shaft, a line of them' },
   rooted:        { kind: 'indirect', hook: 'Braced, and free to walk' },
   splinter:      { kind: 'direct',   hook: 'One stick, three craters' },
+  deadEye:       { kind: 'mechanic', hook: 'Stand still enough and it is free' },
 
   // Knight.
   deeperCut:     { kind: 'direct',   hook: 'Every stack bites harder' },
@@ -13100,6 +13174,7 @@ const TALENT_LOOK = {
   chargeThrough: { kind: 'direct',   hook: 'He cuts on every side while charging' },
   berserker:     { kind: 'indirect', hook: 'A miss is no longer the end of it' },
   juggernaut:    { kind: 'mechanic', hook: 'Nothing stops the charge' },
+  bulwark:       { kind: 'mechanic', hook: 'Blood buys the guard back' },
 
   // Ranger.
   lightFoot:     { kind: 'indirect', hook: 'Less ground to reach full tilt' },
@@ -13107,6 +13182,7 @@ const TALENT_LOOK = {
   fullTilt:      { kind: 'indirect', hook: 'The ceiling climbs with you' },
   slipstream:    { kind: 'mechanic', hook: 'At full speed, nothing is in the way' },
   shrapnel:      { kind: 'direct',   hook: 'The satchel answers outward' },
+  holdfast:      { kind: 'direct',   hook: 'Caught is worth twice' },
 
   // Sapper.
   longFuse:      { kind: 'indirect', hook: 'A bomb reaches further for the next' },
@@ -13114,6 +13190,7 @@ const TALENT_LOOK = {
   stickyFan:     { kind: 'mechanic', hook: 'The fan stays where it lands' },
   demolitionist: { kind: 'direct',   hook: 'Each blast louder than the last' },
   shockwave:     { kind: 'mechanic', hook: 'What survives is thrown clear' },
+  minefield:     { kind: 'mechanic', hook: 'A miss becomes ground they cannot cross' },
 };
 for (const [lookChar, lookTree] of Object.entries(CHAR_TREES)) {
   for (const entry of [...lookTree.talents, ...lookTree.capstones]) {
@@ -14736,6 +14813,9 @@ export const devHooks = {
   },
   state: () => appState,
   soldiers: () => soldiers,
+  /** One known hit on one known soldier. A test that has to build a projectile
+   *  to deliver a hit is measuring the projectile as well as the hit. */
+  damageSoldier(j, amount = 1) { return damageSoldier(j, amount); },
   soldierKills: () => soldierKillCount,
   spawnSoldier(kind) { spawnSoldier(kind); },
   multiplayer: () => multiplayerSession?.describe() ?? null,

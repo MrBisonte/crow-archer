@@ -369,8 +369,12 @@ describe('treesShareOneShape', () => {
       expect(tree.talents.length).toBe(5);
     });
 
-    it(`${char} offers a rite worth holding`, () => {
-      expect(CHAR_TREES[char].capstones.length).toBeGreaterThanOrEqual(2);
+    // Three, exactly. This was `>= 2` while the wizard had three and the rest
+    // had two, which is a shape test agreeing to whatever it is shown -- the
+    // rite is the one choice a run cannot take back, and being offered two of
+    // them where another hero is offered three is not the same ladder.
+    it(`${char} offers three rites to choose one from`, () => {
+      expect(CHAR_TREES[char].capstones.length).toBe(3);
     });
 
     // A tier is what a rank BUYS, and a rank arrives at the same boss for
