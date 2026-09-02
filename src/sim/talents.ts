@@ -137,6 +137,26 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         desc: '+50 px storm radius / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 50 },
       },
+      // The blink line, tier by tier. LONG STEP above buys reach, and these
+      // two buy the chain itself: the window to take the next hop in, and
+      // then a third hop to take. THUNDERSTEP finishes it. Read down, it is
+      // the one path on the roster that ends somewhere other than where it
+      // started -- an escape button that becomes the attack.
+      {
+        id: 'heldStep', label: 'HELD STEP',
+        desc: '+0.4 s to take the next hop in / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 0.4 },
+      },
+      // The first tier-3 talent in any tree. The tier existed and was gated
+      // and nothing had earned it yet; a third hop is worth the rank because
+      // two is the cap the ability shipped with, and the comment on
+      // `wizBlinkMaxHops` says why: three crosses a room rather than breaking
+      // contact. Paying rank 2 for it is the price of that.
+      {
+        id: 'thirdStep', label: 'THIRD STEP',
+        desc: 'A third hop in a single chain',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: 1 },
+      },
     ],
     capstones: [
       {
@@ -146,6 +166,13 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'stormcaller', label: 'STORMCALLER',
         desc: 'Lightning Storm recharges twice as fast',
+      },
+      // The end of the blink line, and the third thing his rite can be. The
+      // other two deepen a hero who stands and casts; this one is for the
+      // hero who does not stand anywhere.
+      {
+        id: 'thunderstep', label: 'THUNDERSTEP',
+        desc: 'Every hop of a chain arrives harder than the last',
       },
     ],
   },

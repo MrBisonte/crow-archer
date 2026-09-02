@@ -38,6 +38,7 @@ interface Talents {
   draft: (id: string) => void;
   drafted: () => string[];
   sealCapstone: (id: string) => void;
+  resetRun: () => void;
   buy: (id: string) => { kind: string };
   blinkDistance: () => number;
   stormRadius: () => number;
@@ -124,6 +125,157 @@ describe('LONG STEP reaches the blink', () => {
     const from = playerAt();
     g.blink();
     expect(movedSince(from)).toBeCloseTo(g.config().wizBlinkDistance + 40, 6);
+  });
+});
+
+describe('HELD STEP holds the chain window open', () => {
+  it('opens the base window with nothing drafted', () => {
+    g.blink();
+    expect(g.wizBlink().chainWindow).toBeCloseTo(g.config().shiftChainSecs, 6);
+  });
+
+  it('adds 0.8 s with two levels drafted', () => {
+    talents().grant('heldStep', 2);
+    talents().draft('heldStep');
+    g.blink();
+    expect(g.wizBlink().chainWindow).toBeCloseTo(g.config().shiftChainSecs + 0.8, 6);
+  });
+
+  // What the talent buys, said in hops rather than in seconds: a second press
+  // this late is refused without it, and the wizard has not moved.
+  it('lets a hop be taken after the base window would have shut', () => {
+    const late = Math.ceil(ONE_SECOND * (g.config().shiftChainSecs + 0.25));
+
+    g.blink();
+    stepPast(late);
+    const refused = playerAt();
+    g.blink();
+    expect(movedSince(refused), 'the base window did not shut').toBe(0);
+
+    talents().grant('heldStep', 2);
+    talents().draft('heldStep');
+    stepPast(ONE_SECOND * 7);            // clear of the 6 s cooldown
+    g.blink();
+    stepPast(late);
+    const from = playerAt();
+    g.blink();
+    expect(movedSince(from)).toBeGreaterThan(0);
+  });
+
+  // The window is shared: the knight's charge chains on the same figure,
+  // deliberately, so both hands learn one rhythm. A talent in the wizard's
+  // tree that widened the knight's chain would be this line's one real way to
+  // go wrong, and it is invisible from the wizard's own screen. His charge
+  // reads CONFIG.shiftChainSecs straight, so what this pins is that the
+  // talent never writes to the shared figure it reads.
+  it('leaves the shared figure the knight chains on exactly where it was', () => {
+    const before = g.config().shiftChainSecs;
+    talents().grant('heldStep', 2);
+    talents().draft('heldStep');
+
+    expect(g.config().shiftChainSecs).toBe(before);
+    expect(talents().stat('heldStep')).toBeCloseTo(before + 0.8, 6);
+  });
+});
+
+describe('THIRD STEP adds a hop to the chain', () => {
+  /** Blinks until the chain refuses, and answers how many hops it took. */
+  function hopsInOneChain(): number {
+    let hops = 0;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const from = playerAt();
+      g.blink();
+      if (movedSince(from) === 0) break;
+      hops += 1;
+      // Two frames: well inside any window here, so what ends the chain is
+      // the hop count and never the clock.
+      stepPast(2);
+    }
+    return hops;
+  }
+
+  it('chains twice with nothing drafted, which is what it shipped with', () => {
+    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops);
+  });
+
+  it('chains three times when drafted', () => {
+    talents().grant('thirdStep', 1);
+    talents().draft('thirdStep');
+    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops + 1);
+  });
+
+  it('chains twice for merely owning it — undrafted is the base', () => {
+    talents().grant('thirdStep', 1);
+    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops);
+  });
+});
+
+describe('THUNDERSTEP makes arriving the attack', () => {
+  /** The arrival radius every hop of the next chain reports. */
+  function chainRadii(hops: number): number[] {
+    const seen: number[] = [];
+    g.onEvent((e: { type: string; radius?: number }) => {
+      if (e.type === 'WIZARD_BLINK' && e.radius !== undefined) seen.push(e.radius);
+    });
+    for (let hop = 0; hop < hops; hop++) { g.blink(); stepPast(2); }
+    return seen;
+  }
+
+  it('leaves an unsealed chain at the base radius, every hop', () => {
+    const base = g.config().wizBlinkPulseRadius;
+    expect(chainRadii(2)).toEqual([base, base]);
+  });
+
+  it('widens each hop of a sealed chain over the one before it', () => {
+    talents().sealCapstone('thunderstep');
+    const base = g.config().wizBlinkPulseRadius;
+    const radii = chainRadii(2);
+
+    expect(radii.length).toBe(2);
+    expect(radii[0]).toBeCloseTo(base, 6);
+    expect(radii[1]).toBeCloseTo(base * (1 + g.config().wizThunderstepGrowth), 6);
+  });
+
+  // The reason it is worth a rite. A chain is a real share of a boss taken
+  // while moving, with an i-frame on every arrival — the answer to a fight
+  // that will not let him stand and cast.
+  it('takes 1 + 2 off a boss over a two-hop chain, against 1 + 1 unsealed', () => {
+    function bossLostOverAChain(sealed: boolean): number {
+      // A fresh fight each time: initGame resets the run layer, so the seal
+      // has to come after it rather than before.
+      g.go('playing');
+      clearArena();
+      g.go('boss_entrance');
+      for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+      g.go('boss_fight');
+      g.healHero();
+      if (sealed) talents().sealCapstone('thunderstep');
+
+      const boss = g.boss() as { hp: number; x: number; y: number; shield?: boolean };
+      boss.shield = false;                       // he opens behind one
+      const before = boss.hp;
+      for (let hop = 0; hop < 2; hop++) {
+        // The pulse resolves where the blink LANDS, not where it left, so the
+        // boss is parked on the destination rather than on the wizard — the
+        // first draft of this test moved him to the departure point and
+        // measured a chain that never touched him.
+        const p = g.player() as { x: number; y: number };
+        aimAt(p.x + 500, p.y);                   // due east, so the landing is known
+        stepPast(1);                             // the aim ray reads the pointer
+        boss.x = p.x + talents().stat('blinkReach');
+        boss.y = p.y;
+        g.blink();
+        stepPast(2);
+        boss.shield = false;                     // he re-shields on his own timer
+      }
+      return before - (g.boss() as { hp: number }).hp;
+    }
+
+    const plain = bossLostOverAChain(false);
+    const sealed = bossLostOverAChain(true);
+
+    expect(plain, 'an unsealed chain took nothing off the boss').toBeGreaterThan(0);
+    expect(sealed).toBeCloseTo(plain * 1.5, 6);   // 1 + 2 against 1 + 1
   });
 });
 
@@ -345,8 +497,10 @@ describe('the choosers', () => {
     const rite = g.chooser() as unknown as Chooser;
     expect(g.state()).toBe('chooser');
     expect(rite.kind).toBe('rite');
-    expect(rite.offers).toEqual(['overchannel', 'stormcaller']);
-    g.chooserPick(1);
+    // The exact set, not a length: a length catches a capstone deleted and
+    // misses one added, which is the rule CLAUDE.md states for tables.
+    expect(rite.offers).toEqual(['overchannel', 'stormcaller', 'thunderstep']);
+    g.chooserPick(1);   // stormcaller, whose halved cooldown this asserts below
 
     // The tree comes next: the rank is spent, and the mastery is not.
     expect(g.state(), 'the tree did not follow the rite').toBe('talents');

@@ -24,6 +24,7 @@ import {
 } from '../sim/towers';
 import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { nearestHostile, nearestHostileAmong, nearestHostileWithin } from '../sim/targeting';
+import { escalatedPulse, hopOrdinal } from '../sim/blink';
 import {
   GUARD_GRID_BUILDERS, GUARD_PALETTES, GUARD_SPRITES,
 } from '../render/guard-grids';
@@ -644,6 +645,19 @@ const CONFIG = {
   // punishes whoever was chasing, rather than a repositioning nuke: it clears
   // the ring of crows that closed in, and takes one point off a boss.
   wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
+  // Thunderstep: how much wider each further hop of a chain arrives, as a
+  // fraction of the base radius. The damage step is a whole base hit and is
+  // not a dial -- see escalatedPulse in sim/blink.ts for why one of them is a
+  // count and the other a length. At 0.45 a three-hop chain arrives at 56,
+  // 81 and 106 px, which is a ring cleared rather than a screen cleared, and
+  // it is worth 1 + 2 + 3 to a boss across the whole chain.
+  //
+  // Against a boss that is 6 over about two seconds, on a 6 s cooldown.
+  // Deliberately less than the five bolts the same six seconds would buy: the
+  // chain is not more damage than casting, it is damage taken while moving,
+  // with i-frames on every arrival, which is what makes it the answer to a
+  // fight that will not let him stand still.
+  wizThunderstepGrowth: 0.45,
   // The rite's Overchannel capstone: how long bolts cast free after a blink.
   wizOverchannelSecs: 4,
   // The rest of the rite, and the two tier-II unlocks.
@@ -2323,19 +2337,37 @@ function tryWizardBlink() {
   // the cooldown.
   if (!chaining) inv.focus -= CONFIG.wizFocusBlink;
   player.x = hop.x; player.y = hop.y;
-  wizBlinkHops       = chaining ? wizBlinkHops - 1 : CONFIG.wizBlinkMaxHops - 1;
-  wizBlinkChainTimer = CONFIG.shiftChainSecs;
+  // THIRD STEP buys a hop, so the chain's length is a talent figure rather
+  // than the raw constant. Read once: it sizes the chain on the opening hop
+  // and numbers this one for the pulse below, and a draft landing between two
+  // reads would otherwise change the answer in the middle of one blink.
+  const maxHops      = TALENTS.stat('thirdStep');
+  wizBlinkHops       = chaining ? wizBlinkHops - 1 : maxHops - 1;
+  // HELD STEP buys window. See the STATS row: the base is the one the knight
+  // shares, and only the wizard's reading of it is talent-aware.
+  wizBlinkChainTimer = TALENTS.stat('heldStep');
   wizBlinkCD         = CONFIG.wizBlinkCooldown;
   wizBlinkIFrame     = CONFIG.wizBlinkIFrames;
   // The rite's Overchannel: a landed blink opens the free-bolt window.
   if (TALENTS.capstoneActive('overchannel')) wizOverchannel = CONFIG.wizOverchannelSecs;
 
+  // The rite's Thunderstep: each hop of a chain arrives harder than the last.
+  // Unsealed, the pulse is exactly what it always was -- escalatedPulse at
+  // ordinal 1 is the identity, so there is no second code path here and no
+  // way for the plain blink to drift away from the sealed one.
+  const basePulse = {
+    radius: CONFIG.wizBlinkPulseRadius, bossDamage: CONFIG.wizBlinkPulseBossDamage,
+  };
+  const pulse = TALENTS.capstoneActive('thunderstep')
+    ? escalatedPulse(basePulse, hopOrdinal(maxHops, wizBlinkHops), CONFIG.wizThunderstepGrowth)
+    : basePulse;
+
   // Arriving is itself the attack. Resolved here rather than on a timer, so
   // what the ring shows a moment later is a report of what was already hit.
-  damageEnemiesInRadius(player.x, player.y, CONFIG.wizBlinkPulseRadius,
-    { amount: CONFIG.wizBlinkPulseBossDamage, source: 'storm', flash: 0.1 });
+  damageEnemiesInRadius(player.x, player.y, pulse.radius,
+    { amount: pulse.bossDamage, source: 'storm', flash: 0.1 });
   events.emit({ type: 'WIZARD_BLINK', x: fromX, y: fromY, toX: player.x, toY: player.y,
-                radius: CONFIG.wizBlinkPulseRadius });
+                radius: pulse.radius });
 }
 
 /** How far the draw has come, 0 to 1. Read by the release, the aim line and
@@ -9004,6 +9036,13 @@ const TALENTS = (() => {
     focusDepth:  { key: 'wizFocusMax' },
     blinkReach:  { key: 'wizBlinkDistance' },
     stormWidth:  { key: 'stormBlastRadius' },
+    // Keyed on the SHARED chain window on purpose: the wizard's window is the
+    // common base plus what he bought, so the base keeps its one home. The
+    // knight's charge reads CONFIG.shiftChainSecs straight and is untouched
+    // by this -- a talent in the wizard's tree must not widen the knight's
+    // window, and routing him through stat() is how that would happen.
+    heldStep:    { key: 'shiftChainSecs' },
+    thirdStep:   { key: 'wizBlinkMaxHops' },
     setFeet:     { key: 'braceFillSecs', min: 0.35 },
     deepRoots:   { key: 'braceDrainMult', min: 1 },
     splitShaft:  { key: 'archerPowerPierce' },
@@ -13009,6 +13048,9 @@ const TALENT_LOOK = {
   // Wizard.
   focusDepth:    { kind: 'indirect', hook: 'A full pool casts four bolts' },
   blinkReach:    { kind: 'mechanic', hook: 'The wall you could not reach is now cover' },
+  heldStep:      { kind: 'mechanic', hook: 'The window stays open a breath longer' },
+  thirdStep:     { kind: 'mechanic', hook: 'Twice was the cap. It is three' },
+  thunderstep:   { kind: 'direct',   hook: 'Arriving is the attack, and it grows' },
   stormWidth:    { kind: 'direct',   hook: 'The storm stops asking where they are' },
   overchannel:   { kind: 'indirect', hook: 'The escape button becomes the attack button' },
   stormcaller:   { kind: 'indirect', hook: 'The sky becomes a habit' },

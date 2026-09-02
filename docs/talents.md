@@ -108,36 +108,86 @@ flowchart BT
     subgraph rite["THE RITE - rank III, one per run, exclusive"]
         oc["OVERCHANNEL\nbolts cost no Focus for 4 s\nafter a blink lands"]
         sc["STORMCALLER\nLightning Storm recharges\ntwice as fast"]
+        ts["THUNDERSTEP\nevery hop of a chain\narrives harder than the last"]
+    end
+    subgraph t3["Tier III - needs rank II"]
+        th["THIRD STEP\na third hop in one chain\n3 mastery"]
     end
     subgraph t2["Tier II - needs rank I"]
         ws["WIDER SKY\n+50 px storm radius per level\n2 then 3 mastery"]
+        hs["HELD STEP\n+0.4 s of chain window per level\n2 then 3 mastery"]
     end
     subgraph t1["Tier I - open from the start"]
         fd["FOCUS DEPTH\n+1 Focus, one level only\n1 mastery"]
         ls["LONG STEP\n+20 px blink per level\n1 then 2 mastery"]
     end
-    t1 --> t2 --> rite
+    t1 --> t2 --> t3 --> rite
+    ls -.-> hs -.-> th -.-> ts
 ```
+
+Read the dotted line and you have the blink path: reach, then the window to
+use it in, then a third hop, then a rite that pays for taking all three. It is
+the only line in any tree that ends somewhere other than where it started —
+every other talent deepens what a hero already does, and this one changes what
+the button is for.
 
 | Talent | Tier | Levels | Costs | Each level | Base it stacks on |
 |---|---|---|---|---|---|
 | FOCUS DEPTH | I | 1 | 1 | +1 Focus | a pool of 3 |
 | LONG STEP | I | 2 | 1, 2 | +20 px blink | 160 px |
 | WIDER SKY | II | 2 | 2, 3 | +50 px storm radius | 450 px |
+| HELD STEP | II | 2 | 2, 3 | +0.4 s of chain window | 1.1 s |
+| THIRD STEP | III | 1 | 3 | +1 hop in a chain | a chain of 2 |
 
 FOCUS DEPTH is one level on purpose: a full pool buying a fourth bolt is the
 whole of what it promises, and a second level would quietly rewrite what Focus
-costs mean. Tier III exists in the model and holds no wizard talent yet.
+costs mean.
 
-The two capstones are **earned, not bought** — reaching rank III is the price,
-and the rite's pick lasts one run. They are exclusive, and a tree offers either
-none or at least two, because a rite with a single option is a cutscene rather
-than a choice.
+THIRD STEP is the first tier-III talent in any tree. The tier existed in the
+model and was gated and nothing had earned it. A third hop is worth the rank
+because two was a deliberate cap — the note on `wizBlinkMaxHops` says three
+crosses a room rather than breaking contact — so paying rank II is the price of
+lifting a limit that was chosen rather than inherited.
+
+HELD STEP is keyed on `shiftChainSecs`, which the knight's charge chains on
+too. Only the wizard's reading of it is talent-aware: his window is the shared
+base plus what he bought, and the knight reads the base straight, so the figure
+keeps one home and a wizard talent can never widen a knight's chain. There is
+a test that says exactly that, because nothing about it is visible from the
+wizard's own screen.
+
+The three capstones are **earned, not bought** — reaching rank III is the
+price, and the rite's pick lasts one run. They are exclusive, and a tree offers
+either none or at least two, because a rite with a single option is a cutscene
+rather than a choice.
 
 | Capstone | Effect |
 |---|---|
 | OVERCHANNEL | Bolts cost no Focus for 4 s after a blink lands — the escape button becomes the attack button |
 | STORMCALLER | Lightning Storm recharges in half the time, everywhere the wait is shown |
+| THUNDERSTEP | Every hop of a chain arrives harder and wider than the one before it |
+
+THUNDERSTEP is what the blink line is for. Unsealed, an arrival is worth one
+point to a boss inside 56 px, every hop the same. Sealed, the hops step:
+
+| Hop | Boss damage | Radius |
+|---|---|---|
+| 1st | 1 | 56 px |
+| 2nd | 2 | 81 px |
+| 3rd, with THIRD STEP | 3 | 106 px |
+
+Damage steps by a whole base hit and the radius by a fraction of one, and the
+difference is deliberate: damage is a count, and radius is a length whose area
+grows as its square, so stepping both the same way would multiply the ground a
+three-hop chain covers by nine. The arithmetic is `escalatedPulse` in
+`src/sim/blink.ts`, kept out of `tryWizardBlink` because an off-by-one in a hop
+count is invisible on a canvas and obvious in a table.
+
+Six points off a boss across a chain is less than the five bolts the same six
+seconds of cooldown would buy. That is the point rather than an oversight: the
+chain is damage taken *while moving*, with an i-frame on every arrival, so what
+the rite sells is not more damage but damage in a fight that will not let him
+stand still.
 
 ## Buying them
 
