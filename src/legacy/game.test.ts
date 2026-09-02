@@ -1112,6 +1112,32 @@ describe('the sapper', () => {
       expect(angles[(angles.length - 1) / 2]).toBeCloseTo(0, 5);
     });
 
+    // The chain is the sapper's ramp -- 1 + link x sapperChainBossBonus, so a
+    // deep cascade is the largest boss hit he has -- and it was the only hero
+    // mechanic on the roster with nothing on screen. Brace, momentum and
+    // bloodlust all report themselves; this multiplied silently.
+    it('reports how deep a cascade went, and lets the reading fall away', () => {
+      clearArena();
+      const c = g.config();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 6.5 * c.tileSize;
+      p.y = 6.5 * c.tileSize;
+      p.aimAngle = 0;
+      g.crows().length = 0;
+      // A wall close enough that the centre bomb reaches it while the rest of
+      // the fan is still inside sapperChainRadius of it.
+      for (let dr = -2; dr <= 2; dr++) g.tiles().set(6 + dr, 8, TILE.ROCK);
+
+      expect(g.sapperChain().peak).toBe(0);
+      g.barrage();
+      stepPast(12);
+      expect(g.sapperChain().peak, 'the fan went off without lighting itself')
+        .toBeGreaterThan(1);
+
+      stepPast(Math.ceil((c.sapperChainReadSecs + 0.3) * ONE_SECOND));
+      expect(g.sapperChain().peak).toBe(0);
+    });
+
     it('refuses a second barrage until its cooldown has run', () => {
       g.barrage();
       expect(g.sapperBarrageCD()).toBeGreaterThan(0);

@@ -546,6 +546,11 @@ const CONFIG = {
   sapperChainDelaySecs: 0.07,
   sapperChainBossBonus: 0.5,
   sapperChainMaxLinks: 5,
+  // How long the depth a cascade reached stays readable in the lane. A
+  // chain resolves in five frames -- sapperChainDelaySecs is 0.07 -- so
+  // without a hold there is nothing on screen to read, which is how the
+  // one mechanic that multiplies his boss damage stayed invisible.
+  sapperChainReadSecs: 2,
   // A fire bomb leaves the ground burning where it went off. Shorter-lived
   // than a fire arrow's patch and worth less per second, because a blast
   // already did its damage up front — this is the after-effect, not the hit.
@@ -1332,6 +1337,10 @@ let selectedMapKind = 'forest';
 // Wizard combat cooldowns
 let wizBoltCD = 0;   // 3-second cooldown for magic bolts
 let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperChargeCooldown
+/** The deepest link the last cascade reached, and how long it stays
+ *  readable. The peak rather than the last bomb: a chain goes off from the
+ *  inside out and the final blast is not the deepest one. */
+let sapperChainPeak = 0, sapperChainRead = 0;
 /** Charges still owed to the burst in progress, and the timer to the next. */
 let sapperBurstLeft = 0, sapperBurstTimer = 0, sapperBurstThrown = 0;
 let sapperBarrageCD = 0, sapperShotCD = 0;
@@ -2450,7 +2459,15 @@ const HERO_UPKEEP = {
     if (inv.focus >= CONFIG.resources.focus.max) return;
     inv.focus = Math.min(CONFIG.resources.focus.max, inv.focus + dt / CONFIG.wizFocusRegenSecs);
   },
-  sapper: (dt) => tickSapperBurst(dt),
+  sapper: (dt) => {
+    tickSapperBurst(dt);
+    // The whole cascade lands inside one frame's worth of fuse, so the
+    // hold is what makes it readable; the peak clears with it.
+    if (sapperChainRead > 0) {
+      sapperChainRead -= dt;
+      if (sapperChainRead <= 0) { sapperChainRead = 0; sapperChainPeak = 0; }
+    }
+  },
 };
 
 const MOVEMENT_METERS = {
@@ -3899,6 +3916,7 @@ function initGame() {
   // with the shield already up; without it this is the plain reset it was.
   playerHP = FEATHERS.maxHP(); playerHitFlash = 0; killCount = 0; skeletonKillCount = 0; dropStreak = 0; playerShield = FEATHERS.wardStart();
   wizBoltCD = 0; stormCD = 0; _stormFlash = 0; sapperChargeCD = 0;
+  sapperChainPeak = 0; sapperChainRead = 0;
   stormFx = 0; blinkFx = 0;
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
@@ -5644,6 +5662,14 @@ function explodeExplosive(d, source, opts = {}) {
   const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
   const grow = TALENTS.capstoneActive('demolitionist')
     ? 1 + link * CONFIG.sapperDemolitionGrowth : 1;
+  // The chain is the sapper's ramp, and it was the only one on the roster
+  // with nothing on screen: brace, momentum and bloodlust all report
+  // themselves, and his multiplied a boss's damage silently. Every bomb a
+  // cascade lights reports the depth it went off at.
+  if (isSapperExplosive(d)) {
+    sapperChainPeak = Math.max(sapperChainPeak, link + 1);
+    sapperChainRead = CONFIG.sapperChainReadSecs;
+  }
   const radius = (opts.radius ?? CONFIG.dynamiteBlastRadius * mult) * grow;
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
@@ -12019,7 +12045,7 @@ const LANE_D = {
   ranger: ['momentum', 'net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
-  sapper: ['charge', 'barrage', 'sapperShot', 'shield'],
+  sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -12059,6 +12085,17 @@ const CHIP = {
   shield:    () => ({ glyph: 'shield', color: '#FFB400', lit: playerShield,
                       label: playerShield ? 'ON' : '', frac: null }),
   barrage:    () => cooldownChip('barrage', sapperBarrageCD, CONFIG.sapperBarrageCooldown, 0),
+  // Not a cooldownChip, for the reason Brace and Momentum are not: nothing
+  // is gated and nothing is spent. It reports the depth the last cascade
+  // reached, which is the figure a boss's damage was multiplied by --
+  // 1 + link x sapperChainBossBonus -- against the ceiling MORE LINKS
+  // sets rather than the base one, so a talent is not read away.
+  chain:      () => ({
+    glyph: 'bomb', color: '#FF7A1A', lit: sapperChainPeak > 1,
+    label: sapperChainPeak > 1 ? 'x' + sapperChainPeak : '',
+    frac: sapperChainPeak > 1
+      ? Math.min(1, sapperChainPeak / (TALENTS.stat('moreLinks') + 1)) : null,
+  }),
   // Reuses the snipe crosshair glyph — it is a precision shot, same read as
   // everyone else's aim-down-it key, just cooldown-gated instead of held.
   sapperShot: () => cooldownChip('snipe', sapperShotCD, CONFIG.sapperShotCooldown, 0),
@@ -14605,6 +14642,7 @@ export const devHooks = {
   holdDraw(secs) { if (archerDraw.on) archerDraw.t0 = performance.now() - secs * 1000; },
   holdNet(secs) { if (rangerNet.on) rangerNet.t0 = performance.now() - secs * 1000; },
   rangerNet: () => ({ drawing: rangerNet.on, frac: rangerNetFrac(), cooldown: rangerNetCD }),
+  sapperChain: () => ({ peak: sapperChainPeak, read: sapperChainRead }),
   nets: () => nets,
   /** Nets lying on the ground, which is what a player actually sees. */
   netMats: () => netMats,

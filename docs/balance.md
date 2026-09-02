@@ -253,6 +253,51 @@ how long the wizard spends unable to answer anything. Note that bolts share
 3 on `calm`; at 1.2 s and a 3.5 s bolt lifetime, a `calm` wizard whose bolts
 all miss can briefly cap out.
 
+### The sapper lights the pile
+
+The fourth build-up, and the one that was missing from this page. It does not
+build over time the way brace, momentum and bloodlust do -- it builds over the
+field. A blast lights every explosive of his within `sapperChainRadius` 74 px,
+each of those lights the next up to `sapperChainMaxLinks` 5 deep, and every
+link hits a boss harder than the one that lit it:
+
+    bossDamage = base x (1 + link x sapperChainBossBonus)      // 0.5
+
+Boss damage only. Everything else on the field dies to one hit of anything, so
+against a crowd a chain is already worth exactly its coverage.
+
+Two of his three sources can chain and only one of them reliably does. A thrown
+charge has a 1.8 s fuse against a 1.1 s cooldown, so at most 1.6 are ever in the
+air at once. The five-bomb barrage is the one moment a pile exists, which is why
+the fan rather than the charge is the row below.
+
+| Barrage, one fan, every bomb lighting | Link | Raw | x 1.2 | Running |
+|---|---|---|---|---|
+| the bomb that touched something | 0 | 1.0 | 1.2 | 1.2 |
+| lit by it | 1 | 1.5 | 1.8 | 3.0 |
+| | 2 | 2.0 | 2.4 | 5.4 |
+| | 3 | 2.5 | 3.0 | 8.4 |
+| | 4 | 3.0 | 3.6 | 12.0 |
+
+Twelve against the Crow King's 10, on a 6 s cooldown. A fan that chains cleanly
+is the only single action on the roster that ends that fight outright, and that
+is the ceiling rather than the figure: every link needs the next bomb inside
+74 px of the one that lit it *and* the boss inside that bomb's own 40 px blast,
+which a fan spread across 45 degrees rarely gives. What the table is for is
+that the ceiling was never written down -- the sapper's row in **Time to kill**
+says 4.2 actions, and that row is one charge.
+
+**`sapperChainMaxLinks` is not what caps the fan.** Five links is depth, and a
+five-bomb fan can only reach link 4 whatever the depth allows, so MORE LINKS
+buys nothing on a stock barrage. It buys the last bombs of a widened one: WIDER
+FAN at two levels is seven bombs, which wants link 6, and the base depth stops
+at 5. That pairing is the sapper tree's one real combination and it reads as a
+dead talent until the other half is drafted.
+
+The depth a cascade actually reached is on screen now, in the lane-D `chain`
+chip, for the same reason brace and momentum are: a multiplier the player
+cannot see is a multiplier the player cannot play around.
+
 ## Multiplayer
 
 Multiplayer is balanced separately and stays that way. `BattleWorld` reads
