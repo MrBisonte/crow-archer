@@ -287,12 +287,12 @@ which a fan spread across 45 degrees rarely gives. What the table is for is
 that the ceiling was never written down -- the sapper's row in **Time to kill**
 says 4.2 actions, and that row is one charge.
 
-**`sapperChainMaxLinks` is not what caps the fan.** Five links is depth, and a
-five-bomb fan can only reach link 4 whatever the depth allows, so MORE LINKS
-buys nothing on a stock barrage. It buys the last bombs of a widened one: WIDER
-FAN at two levels is seven bombs, which wants link 6, and the base depth stops
-at 5. That pairing is the sapper tree's one real combination and it reads as a
-dead talent until the other half is drafted.
+**`sapperChainMaxLinks` is not what caps the fan.** Five links is DEPTH, and a
+five-bomb fan can only ever reach link 4 whatever the depth allows. So MORE
+LINKS buys nothing at all on a barrage, and nothing in the tree as it stands
+widens the fan for it to buy: the talent pays only on his thrown charges, which
+are the source that almost never piles up. It is worth knowing before anyone
+prices it, and it is the argument for a talent that adds bombs.
 
 The depth a cascade actually reached is on screen now, in the lane-D `chain`
 chip, for the same reason brace and momentum are: a multiplier the player
