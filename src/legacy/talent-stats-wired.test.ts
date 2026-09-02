@@ -43,7 +43,12 @@ function statsTable(): Record<string, string> {
  * invisible exactly where the player looks to see it. Those read the base on
  * purpose, and are named here rather than left to be argued about later.
  */
-const MAY_READ_RAW = /cooldownChip|const fill = 1 -|fuse: s\.life \/|cooldown: wizBoltCD/;
+// The knight's chain window is the last of these. HELD STEP is keyed to the
+// shared shiftChainSecs, and the wizard's reading of it is talent-aware on
+// purpose while the knight's is not: a talent in the wizard's tree must not
+// widen the knight's charge chain, and routing him through stat() is exactly
+// how that would happen. See the STATS row that says so.
+const MAY_READ_RAW = /cooldownChip|const fill = 1 -|fuse: s\.life \/|cooldown: wizBoltCD|knightChainTimer/;
 
 describe('every numeric talent reaches the game', () => {
   const stats = statsTable();
@@ -83,11 +88,14 @@ describe('every numeric talent reaches the game', () => {
     // another, which is worse than dead because it works only sometimes.
     const leaks: string[] = [];
     for (const [id, key] of Object.entries(stats)) {
-      for (const line of SRC.split('\n')) {
+      for (const rawLine of SRC.split('\n')) {
+        // Prose, not code. A comment naming the figure is documentation,
+        // and that includes a TRAILING one: `let sapperChargeCD = 0;  //
+        // ... see CONFIG.sapperChargeCooldown` is a note, not a read.
+        const line = rawLine.split('//')[0]!;
         if (!line.includes(`CONFIG.${key}`)) continue;
         const t = line.trimStart();
-        // Prose, not code. A comment naming the figure is documentation.
-        if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) continue;
+        if (t.startsWith('*') || t.startsWith('/*')) continue;
         if (line.includes(`${key}:`)) continue;          // the definition itself
         if (MAY_READ_RAW.test(line)) continue;           // deliberate, see above
         leaks.push(`${id} bypassed: ${line.trim()}`);

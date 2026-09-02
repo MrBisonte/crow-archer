@@ -79,6 +79,52 @@ export function nearestHostile<T extends Targetable>(
 }
 
 /**
+ * The nearest hostile across several candidate arrays, or null.
+ *
+ * For a caller whose candidates are permanently in separate lists. The wizard
+ * bolt is the one this was written for: crows, skeletons and soldiers are
+ * three arrays that are never one array, and a bolt steers at whichever of
+ * them is nearest on every frame it is in flight.
+ *
+ * Composed from `nearestHostile` rather than being a second copy of its loop
+ * with an outer `for` around it. That costs one extra `dist2` per group -- at
+ * most one per array, not one per body -- and buys the guarantee that the two
+ * functions can never disagree about hostility, finiteness or ties, because
+ * there is only one place where any of that is decided.
+ *
+ * Ties resolve by group order first and then by position within the group,
+ * which is the array order the caller already has. Same reason as in
+ * `nearestHostile`: identical state has to produce an identical pick on every
+ * peer and on every replay, so "either one" is not an available answer.
+ *
+ * Allocates nothing of its own. It is called per homing projectile per
+ * frame, so the loop below holds two numbers and builds no list.
+ */
+export function nearestHostileAmong<T extends Targetable>(
+  seeker: Targetable,
+  groups: readonly (readonly T[])[],
+): T | null {
+  let best: T | null = null;
+  let bestDist2 = Infinity;
+
+  for (const candidates of groups) {
+    const pick = nearestHostile(seeker, candidates);
+    if (pick === null) continue;
+    // Strictly closer, so the first group to offer a body at a given range
+    // keeps it. A seeker with a broken position of its own makes every
+    // distance NaN, loses every comparison, and picks nobody -- the same way
+    // it already fails inside nearestHostile.
+    const d2 = dist2(seeker, pick);
+    if (d2 < bestDist2) {
+      bestDist2 = d2;
+      best = pick;
+    }
+  }
+
+  return best;
+}
+
+/**
  * Nearest hostile within `range` world pixels, or null. For AI that only
  * engages what it can actually reach.
  *
