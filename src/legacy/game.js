@@ -588,17 +588,23 @@ const CONFIG = {
   // swinging. Damage scales with hold time against the boss only; crows and
   // skeletons die outright in the arc, same as every other knight melee hit.
   knightChargeMaxHoldSecs: 3, knightChargeCooldown: 4,
-  knightChargeDashDuration: 1.5, knightChargeDashSpeedMult: 0.5,
+  // The dash outruns his own legs, which is the whole reason the slowest hero
+  // on the roster has one. It ran at 0.5 for a long time: 75 px/s, slower than
+  // every other hero WALKING, and 112 px of travel against a 90 px reach --
+  // releasing put him barely further forward than he could already hit from,
+  // after a windup that rooted him for up to three seconds. At 1.6 it carries
+  // 360 px, which is four spear lengths and an actual gap closed.
+  knightChargeDashDuration: 1.5, knightChargeDashSpeedMult: 1.6,
   knightChargeMinDamageMult: 1.3, knightChargeMaxDamageMult: 2,
   knightChargeBossDamage: 2, knightChargeRadius: 90,
   knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
   knightChargeTickRate: 0.2,
   // Chained charge: a second press mid-dash, inside shiftChainSecs and with
   // room left ahead, commits him harder in the direction he already picked.
-  // The dash goes from half speed to a little over walking pace, and he lands
-  // one whirlwind swing where he stands. Once per dash — the chain is a
+  // The dash goes from fast to faster, and he lands one whirlwind swing where
+  // he stands. Once per dash — the chain is a
   // decision taken during the commitment, not a button to hold down.
-  knightChargeChainSpeedMult: 1.1,
+  knightChargeChainSpeedMult: 2.0,
   knightChainWhirlRadius: 60, knightChainWhirlBossDamage: 1,
   // How much room ahead counts as somewhere to go. A body width, so a knight
   // already nose-first into a wall cannot chain into it.
@@ -4103,8 +4109,8 @@ function updatePlayer(dt) {
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
       // resolution below so it stops on walls like any other movement.
-      // Half speed normally; a chained charge commits him at a little over
-      // walking pace instead, which is the whole of what the chain buys.
+      // Faster than he can walk; a chained charge commits him faster still,
+      // which is the whole of what the chain buys.
       const dashMult = knightDash.chained
         ? CONFIG.knightChargeChainSpeedMult : CONFIG.knightChargeDashSpeedMult;
       const spd = FEATHERS.speed() * dashMult * dt;

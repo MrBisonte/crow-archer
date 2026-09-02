@@ -1608,6 +1608,37 @@ describe('the knight charge', () => {
     expect(p.x).toBeGreaterThan(start);
   });
 
+  // The charge is how the slowest hero reaches a boss that orbits him, so the
+  // dash has to outrun his own legs. It ran at half his walking speed for a
+  // long time -- 75 px/s, slower than every other hero walking, and 112 px of
+  // travel against a 90 px reach, so releasing put him barely further forward
+  // than he could already hit from. Measured rather than read off CONFIG: the
+  // multiplier is only half the claim, and the other half is that the dash
+  // drives movement at all.
+  it('closes ground faster than the knight can walk', () => {
+    const c = g.config();
+    const ang = dashing();
+    const p = g.player() as { x: number; y: number };
+    const start = { x: p.x, y: p.y };
+    g.stepSim(5);
+    const dashed = Math.hypot(p.x - start.x, p.y - start.y);
+
+    // Same ground, same heading, on his own legs.
+    g.stepSim(Math.round(c.knightChargeDashDuration * ONE_SECOND) + 2);
+    p.x = start.x;
+    p.y = start.y;
+    const keys = g.keys() as Record<string, boolean>;
+    keys[keyFor(ang)] = true;
+    g.stepSim(5);
+    keys[keyFor(ang)] = false;
+    const walked = Math.hypot(p.x - start.x, p.y - start.y);
+
+    expect(walked).toBeGreaterThan(0);
+    expect(dashed).toBeGreaterThan(walked);
+    // And the chain is faster than the dash, or it buys nothing.
+    expect(c.knightChargeChainSpeedMult).toBeGreaterThan(c.knightChargeDashSpeedMult);
+  });
+
   // Regression: the dash ignores movement keys for its whole 1.5s, so one
   // that ran into a tree used to pin the knight against it for the remaining
   // second and a half with every escape key held down — measured at 85 frames
