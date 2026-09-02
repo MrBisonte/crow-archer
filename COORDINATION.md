@@ -11,6 +11,17 @@ That branch name is written here once; everything
 else refers to "the current integration branch" so this file is the only
 thing that has to change when a round closes.
 
+**The round-7 PR is the home-path remedy — do not cut a standalone fast-fix.**
+`master` still shows Alex's home-dir path in `COORDINATION.md` (lines 114, 118)
+and `docs/playbooks/monitored-playtest.md` (line 119), inherited from PR #41.
+Round 7 already scrubs all three, so landing the round-7 PR is the whole fix; a
+separate fast-fix branch only conflicts with work already done. Alex is holding
+the PR until `feat/wizard-round` and the rest of the character balance land; the
+interview moved to Fri 2026-09-05, so there is time. Before the PR opens, sweep
+for other spellings the two-pattern grep misses — 8.3 short names,
+`%USERPROFILE%` expansions, absolute paths baked into committed fixtures or log
+samples.
+
 **Merger is the coordinating session.** Alex has given it authority to ask any
 session listed here to update its row, to settle collisions between branches,
 and to decide merge order. Where two branches disagree, Merger judges. The aim
