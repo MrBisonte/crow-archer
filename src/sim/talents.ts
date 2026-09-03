@@ -79,6 +79,18 @@ export interface CharTree {
  * check, so forgetting a character is a build error rather than the silent
  * fall-through the design-patterns doc records shipping once already.
  *
+ * ## One shape, five heroes
+ *
+ * Every tree is **two tier-I talents, two tier-II and one tier-III**, and
+ * `treesShareOneShape` in talents.test.ts fails if one drifts. The rite is
+ * not level yet: the wizard has three capstones and the rest have two, and
+ * a third for each of them is a rule in game.js rather than a row here.
+ * That is a design rule rather than an implementation convenience: the ranks
+ * are one-per-boss now, so a player meets the same ladder whoever they picked,
+ * and a tier that exists for one hero and not another turns a rank-up into a
+ * lottery. The tier-III row is the one that finishes a line -- it is the
+ * talent the two tier-IIs below it were building toward.
+ *
  * Each hero's tree deepens that hero's own passive, which is what keeps the
  * archer and the ranger diverging rather than converging: they share a quiver,
  * and one is paid for standing still while the other is paid for never doing
@@ -108,6 +120,16 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         desc: '+1 body a full power shot passes through / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
       },
+      {
+        id: 'longThrow', label: 'LONG THROW',
+        desc: '+48 px/s on a thrown charge / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 48 },
+      },
+      {
+        id: 'fullDraw', label: 'FULL DRAW',
+        desc: 'A power shot reaches full draw 0.25 s sooner',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: -0.25 },
+      },
     ],
     capstones: [
       {
@@ -117,6 +139,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'splinter', label: 'SPLINTER',
         desc: 'Dynamite bursts into three smaller blasts',
+      },
+      {
+        id: 'deadEye', label: 'DEAD EYE',
+        desc: 'A power shot loosed at a full draw from a full brace costs no cooldown',
       },
     ],
   },
@@ -137,6 +163,26 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
         desc: '+50 px storm radius / level',
         tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 50 },
       },
+      // The blink line, tier by tier. LONG STEP above buys reach, and these
+      // two buy the chain itself: the window to take the next hop in, and
+      // then a third hop to take. THUNDERSTEP finishes it. Read down, it is
+      // the one path on the roster that ends somewhere other than where it
+      // started -- an escape button that becomes the attack.
+      {
+        id: 'heldStep', label: 'HELD STEP',
+        desc: '+0.4 s to take the next hop in / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 0.4 },
+      },
+      // The first tier-3 talent in any tree. The tier existed and was gated
+      // and nothing had earned it yet; a third hop is worth the rank because
+      // two is the cap the ability shipped with, and the comment on
+      // `wizBlinkMaxHops` says why: three crosses a room rather than breaking
+      // contact. Paying rank 2 for it is the price of that.
+      {
+        id: 'thirdStep', label: 'THIRD STEP',
+        desc: 'A third hop in a single chain',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: 1 },
+      },
     ],
     capstones: [
       {
@@ -146,6 +192,13 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'stormcaller', label: 'STORMCALLER',
         desc: 'Lightning Storm recharges twice as fast',
+      },
+      // The end of the blink line, and the third thing his rite can be. The
+      // other two deepen a hero who stands and casts; this one is for the
+      // hero who does not stand anywhere.
+      {
+        id: 'thunderstep', label: 'THUNDERSTEP',
+        desc: 'Every hop of a chain arrives harder than the last',
       },
     ],
   },
@@ -164,7 +217,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'chargeThrough', label: 'CHARGE THROUGH',
         desc: 'The charge cuts on every side of him, not only ahead',
-        tier: 2, costs: [2], effect: { kind: 'unlock' },
+        tier: 2, costs: [5], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'towerGuard', label: 'TOWER GUARD',
+        desc: '-2 s off the block\'s cooldown / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: -2 },
+      },
+      {
+        id: 'longReach', label: 'LONG REACH',
+        desc: '+12 px of spear, drawn and swung',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: 12 },
       },
     ],
     capstones: [
@@ -175,6 +238,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'juggernaut', label: 'JUGGERNAUT',
         desc: 'The dash cannot be stopped, and throws back what it hits',
+      },
+      {
+        id: 'bulwark', label: 'BULWARK',
+        desc: 'A blocked hit brings the guard straight back, and spends a Bloodlust stack',
       },
     ],
   },
@@ -192,8 +259,18 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       },
       {
         id: 'fullTilt', label: 'FULL TILT',
-        desc: '+5% to the Momentum ceiling / level',
-        tier: 2, costs: [2, 3, 4], effect: { kind: 'linear', per: 0.05 },
+        desc: '+7.5% to the Momentum ceiling / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 0.075 },
+      },
+      {
+        id: 'wideNet', label: 'WIDE NET',
+        desc: '+8 px of net, at any draw / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 8 },
+      },
+      {
+        id: 'fourthBolt', label: 'FOURTH BOLT',
+        desc: 'A fourth bolt in every volley',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: 1 },
       },
     ],
     capstones: [
@@ -204,6 +281,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'shrapnel', label: 'SHRAPNEL',
         desc: 'The satchel throws bolts outward when it blows',
+      },
+      {
+        id: 'holdfast', label: 'HOLDFAST',
+        desc: 'Everything the net is holding takes double while it is held',
       },
     ],
   },
@@ -222,7 +303,17 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'stickyFan', label: 'STICKY FAN',
         desc: 'Barrage bombs stop where they land and keep their fuse',
-        tier: 2, costs: [2], effect: { kind: 'unlock' },
+        tier: 2, costs: [5], effect: { kind: 'unlock' },
+      },
+      {
+        id: 'widerFan', label: 'WIDER FAN',
+        desc: '+1 bomb in a barrage / level',
+        tier: 2, costs: [2, 3], effect: { kind: 'linear', per: 1 },
+      },
+      {
+        id: 'shortFuse', label: 'SHORT FUSE',
+        desc: '-0.15 s between charges',
+        tier: 3, costs: [3], effect: { kind: 'linear', per: -0.15 },
       },
     ],
     capstones: [
@@ -233,6 +324,10 @@ export const CHAR_TREES: Record<CharacterKind, CharTree> = {
       {
         id: 'shockwave', label: 'SHOCKWAVE',
         desc: 'A combo blast throws back everything it does not kill',
+      },
+      {
+        id: 'minefield', label: 'MINEFIELD',
+        desc: 'A barrage bomb that touches nothing arms where it lands and waits',
       },
     ],
   },
@@ -299,6 +394,12 @@ export function bossMastery(kind: string): number {
  * and a siege survived banks the most.
  */
 export const MASTERY_AWARDS: Record<MasteryMilestone, number> = {
+  // Not paid by anything. A boss banks `bossMastery(kind)` through
+  // `awardBoss`, which is per boss and ranges 1 to 3; this row survives as the
+  // milestone type's default and is what `masteryAfter` would use if a caller
+  // ever passed 'boss_down' to it. Nothing does. Kept rather than deleted
+  // because the milestone is a real thing that happened even when the figure
+  // comes from elsewhere, but do not read this number as what a boss pays.
   boss_down: 2,
   stage_cleared: 1,
   siege_cleared: 3,
@@ -309,8 +410,29 @@ export const MASTERY_AWARDS: Record<MasteryMilestone, number> = {
  * Points at which each rank is reached: rank N at `RANK_THRESHOLDS[N - 1]`.
  * Rank 0 is free — a brand-new character must have something to buy, or the
  * pool the run draft draws from can never start existing.
+ *
+ * One boss, one tier. These are not round numbers picked for feel: they are
+ * exactly what a run has banked at each of its three boss deaths, and a boss
+ * death is the ONLY moment a ceremony opens. `queueBossChoosers` in game.js is
+ * reached from two boss-death handlers and nowhere else, it refuses to open
+ * mid-siege, the minotaur cannot die, and neither the maze door, the siege win
+ * nor the win screen queues anything. So a rank crossed anywhere else is a
+ * rank the player cannot spend or seal until the next boss — and a rank
+ * crossed after the last boss cannot be used in that run at all.
+ *
+ *     crow king    1 + 1 =  2   → rank I opens tier II
+ *     dark archer  2 + 1 =  5   → rank II opens tier III
+ *     dark knight  2 + 1 =  8   → rank III opens the rite
+ *
+ * They were [4, 10, 18], which put every rank above the ceiling. A full
+ * winning campaign banks 15, so rank III was unreachable in a first run; worse,
+ * the most a player can hold at any run-1 boss death is 8, so rank II was out
+ * of reach too and a tier-III talent could not be bought on a first
+ * playthrough. The first rite a character could ever be offered was the second
+ * boss of its second run. See `masteryThroughACampaign` in talents.test.ts,
+ * which is the guard that now says so.
  */
-export const RANK_THRESHOLDS: readonly number[] = [4, 10, 18];
+export const RANK_THRESHOLDS: readonly number[] = [2, 5, 8];
 
 /** The rank the rite demands. The top of the ladder, deliberately. */
 export const CAPSTONE_RANK = RANK_THRESHOLDS.length;

@@ -14,6 +14,10 @@
  * it needs and measures deltas — none assumes an empty bank.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
@@ -38,6 +42,7 @@ interface Talents {
   draft: (id: string) => void;
   drafted: () => string[];
   sealCapstone: (id: string) => void;
+  resetRun: () => void;
   buy: (id: string) => { kind: string };
   blinkDistance: () => number;
   stormRadius: () => number;
@@ -124,6 +129,583 @@ describe('LONG STEP reaches the blink', () => {
     const from = playerAt();
     g.blink();
     expect(movedSince(from)).toBeCloseTo(g.config().wizBlinkDistance + 40, 6);
+  });
+});
+
+/**
+ * A talent that scales a CONFIG key does nothing wherever that key is still
+ * read straight.
+ *
+ * `TALENTS.STATS` says which CONFIG number each talent moves, and `stat(id)`
+ * returns the base plus what this run drafted. But nothing makes the CODE use
+ * it: a call site left reading `CONFIG.thatKey` keeps the base forever, and
+ * the talent is bought, drawn, described and inert. It fails silently in
+ * both directions — a stat wired for damage but not for the telegraph draws a
+ * lie, and one wired for the sim but not the HUD reports a lie.
+ *
+ * That is not hypothetical. FULL TILT has raised the ranger's momentum
+ * ceiling since the talent pilot, and `rangerMomentumMult` read it correctly,
+ * but the HUD chip and the dev hook both still divided by the base — so a
+ * ranger at +45% was told +30%. This test is what found it.
+ *
+ * Source text rather than behaviour on purpose: the failure is the ABSENCE of
+ * a call, and there is no frame in which an absent call misbehaves. Comment
+ * lines are dropped first, since naming a key in prose is how the reasons get
+ * written down.
+ */
+describe('every talent stat reaches its call sites', () => {
+  const legacy = readFileSync(resolve(fileURLToPath(import.meta.url), '../game.js'), 'utf8');
+
+  /**
+   * Keys a live call site may still read straight, and why.
+   *
+   * An entry here is a claim that the base figure is the right answer for
+   * that reader — not that the talent is unfinished.
+   */
+  const ALLOWED: Readonly<Record<string, string>> = {
+    // The knight's charge chains on the same window the wizard's blink does,
+    // deliberately, so both hands learn one rhythm. HELD STEP is keyed on it,
+    // and only the wizard's reading is talent-aware: routing the knight
+    // through stat() would let a wizard talent widen a knight's chain.
+    shiftChainSecs: "the knight's charge shares the base window on purpose",
+  };
+
+  /** Every CONFIG key TALENTS.STATS claims a talent moves. */
+  function statKeys(): string[] {
+    const table = legacy.slice(legacy.indexOf('  const STATS = {'));
+    const end = table.indexOf('};');
+    return [...table.slice(0, end).matchAll(/key: '(\w+)'/g)].map((m) => m[1]!);
+  }
+
+  /** Lines that read `CONFIG.<key>` as code, past the CONFIG block itself. */
+  function directReads(key: string): string[] {
+    const lines = legacy.split('\n');
+    const declaredBefore = lines.findIndex((l) => l.includes('let inv    = {}'));
+    return lines
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(({ line, n }) =>
+        n > declaredBefore
+        && !line.startsWith('//') && !line.startsWith('*')
+        && line.includes(`CONFIG.${key}`)
+        && !line.slice(0, line.indexOf(`CONFIG.${key}`)).includes('//'))
+      .map(({ line, n }) => `${n}: ${line}`);
+  }
+
+  it('has at least one stat wired, or this test is checking nothing', () => {
+    expect(statKeys().length).toBeGreaterThan(10);
+  });
+
+  it('reads no talent-scaled key straight, outside the allowlist', () => {
+    for (const key of statKeys()) {
+      if (key in ALLOWED) continue;
+      expect(directReads(key), `${key} is scaled by a talent but still read raw`).toEqual([]);
+    }
+  });
+
+  // An allowlist that outlives the reason for it is worse than none: it goes
+  // on excusing a call site nobody has looked at in a year.
+  it('keeps no allowlist entry that has nothing left to excuse', () => {
+    for (const key of Object.keys(ALLOWED)) {
+      expect(directReads(key), `${key} is allowlisted but no longer read raw`)
+        .not.toEqual([]);
+    }
+  });
+});
+
+/**
+ * The eight talents that brought archer, knight, ranger and sapper up to the
+ * wizard's shape.
+ *
+ * Two halves, and neither is enough alone. The table below says each talent's
+ * figure actually MOVES when it is owned and drafted, which is the sim.js side
+ * of it; `every talent stat reaches its call sites` above says no call site is
+ * still reading the base, which is the game.js side. A talent needs both to do
+ * anything, and each fails in a way the other cannot see.
+ *
+ * The three with a one-line observable get one as well, because a count of
+ * bolts on the field is worth more than a number in a table.
+ */
+/**
+ * The four third capstones, one per hero, each on the tool that hero's other
+ * two rites do not touch.
+ *
+ * Every one of them is a RULE rather than a figure, so none can be checked by
+ * asking TALENTS what a number is. What each test does is run the tool twice
+ * -- once with the rite sealed and once without -- and assert on what the sim
+ * actually did with it.
+ */
+describe('the third rite of the four heroes who had two', () => {
+  /** Seals `id` for this run, after clearing whatever the last test sealed. */
+  function seal(char: string, id: string): void {
+    talents().resetRun();
+    g.pick(char);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    talents().sealCapstone(id);
+  }
+
+  function plain(char: string): void {
+    talents().resetRun();
+    g.pick(char);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+  }
+
+  describe('DEAD EYE', () => {
+    /** A full brace and a full draw, loosed. Returns the cooldown it left. */
+    function perfectShot(): number {
+      (g.inv() as { arrows: number }).arrows = 20;
+      // The brace fills only while he is standing still, and nothing in this
+      // harness is holding a key, so stepping IS standing still.
+      stepPast(Math.ceil(ONE_SECOND * (g.config().braceFillSecs as number + 0.4)));
+      expect((g.brace() as { level: number }).level, 'he never finished bracing').toBe(1);
+      g.shift();
+      g.holdDraw(2);                    // backdated: a full draw without the wait
+      g.shiftUp();
+      return (g.archerDraw() as { cooldown: number }).cooldown;
+    }
+
+    // Braced, not raw. The archer round's own balance work already shortens
+    // a braced power shot, and this rite is about whether it costs NOTHING.
+    // The two compose, so the figure short of the rite is the braced one.
+    const bracedCooldown = (): number =>
+      (g.config().archerPowerCooldown as number)
+      * (1 - (g.config().archerBracedCooldownCut as number));
+
+    it('costs the full cooldown without the rite', () => {
+      plain('archer');
+      expect(perfectShot()).toBeCloseTo(bracedCooldown(), 3);
+    });
+
+    it('costs nothing with it', () => {
+      seal('archer', 'deadEye');
+      expect(perfectShot()).toBe(0);
+    });
+
+    // The half that makes it a rite rather than a switch: the refund is bought
+    // with the standing still, so a shot that skipped either half still pays.
+    it('still costs the full cooldown for a tapped draw', () => {
+      seal('archer', 'deadEye');
+      (g.inv() as { arrows: number }).arrows = 20;
+      stepPast(Math.ceil(ONE_SECOND * (g.config().braceFillSecs as number + 0.4)));
+      g.shift();
+      g.holdDraw(0);                    // braced, but loosed at once
+      g.shiftUp();
+      expect((g.archerDraw() as { cooldown: number }).cooldown)
+        .toBeCloseTo(bracedCooldown(), 3);
+    });
+  });
+
+  describe('BULWARK', () => {
+    /** Swings the spear into a parked skeleton until Bloodlust shows a stack. */
+    function buildAStack(): number {
+      g.spawnSkeleton('normal');
+      const sk = (g.skeletons() as { x: number; y: number; hp: number }[]);
+      const p = g.player() as { x: number; y: number };
+      aimAt(p.x + 200, p.y);
+      // Re-parked every frame. A skeleton left alone walks out of the 80 px
+      // the spear reaches between one swing and the next, and a swing that
+      // connects with nothing is the exact thing that resets Bloodlust -- so
+      // a harness that parks it once measures the reset, not the stack.
+      for (let i = 0; i < 240 && (g.bloodlust() as { stacks: number }).stacks === 0; i++) {
+        for (const s of sk) { s.x = p.x + 70; s.y = p.y; s.hp = 99; }
+        g.shoot();
+        stepPast(1);
+      }
+      // Parked at 70: inside the spear's 80 and outside its own reach, so it
+      // feeds swings without hitting back. Cleared afterwards all the same --
+      // the guard is what the next helper measures, and a skeleton left
+      // standing there spends it before the test does.
+      (g.skeletons() as unknown[]).length = 0;
+      g.healHero();
+      return (g.bloodlust() as { stacks: number }).stacks;
+    }
+
+    /** Waits for the guard to come up, then takes two hits. */
+    function twoHits(): { lost: number; stacks: number } {
+      stepPast(Math.ceil(ONE_SECOND * (g.config().knightBlockCooldown as number + 1)));
+      const before = g.hp() as number;
+      g.hurtHero(1);
+      // damagePlayer drops everything while playerHitFlash runs, so two calls
+      // in one frame are one hit however the guard resolved the first.
+      stepPast(Math.ceil(ONE_SECOND * (g.config().playerHitFlashSecs as number + 0.05)));
+      g.hurtHero(1);
+      return { lost: before - (g.hp() as number),
+               stacks: (g.bloodlust() as { stacks: number }).stacks };
+    }
+
+    it('lets the second hit through without the rite', () => {
+      plain('knight');
+      expect(buildAStack(), 'no stack, so the test proves nothing').toBeGreaterThan(0);
+      expect(twoHits().lost, 'the guard blocks one and one lands').toBe(1);
+    });
+
+    it('blocks both, and a stack pays for it', () => {
+      seal('knight', 'bulwark');
+      const had = buildAStack();
+      expect(had).toBeGreaterThan(0);
+      const after = twoHits();
+      expect(after.lost, 'the guard came straight back').toBe(0);
+      expect(after.stacks, 'and blood paid for it').toBe(had - 1);
+    });
+
+    it('cannot pay with no blood, so the second hit lands', () => {
+      seal('knight', 'bulwark');
+      expect((g.bloodlust() as { stacks: number }).stacks).toBe(0);
+      expect(twoHits().lost).toBe(1);
+    });
+  });
+
+  describe('HOLDFAST', () => {
+    /** Parks a spearman in reach, nets him, and reports what one bolt took. */
+    function netThenHit(): number {
+      g.spawnSoldier('spearman');
+      const sold = g.soldiers() as { x: number; y: number; hp: number; heldTimer: number }[];
+      const p = g.player() as { x: number; y: number };
+      const reach = g.config().netThrowMin as number;
+      aimAt(p.x + reach * 3, p.y);
+      g.shift();
+      g.holdNet(0);                     // a tapped net: it only has to land
+      g.shiftUp();
+      // Pinned to the landing point for the whole flight: a tapped net lands
+      // at netThrowMin and takes a third of a second to fly there, and an
+      // aggroed spearman covers 30 px in that time.
+      for (let i = 0; i < 60; i++) {
+        for (const s of sold) { s.x = p.x + reach; s.y = p.y; s.hp = 40; }
+        stepPast(1);
+      }
+      expect(sold[0]!.heldTimer, 'the net never caught him').toBeGreaterThan(0);
+      const before = sold[0]!.hp;
+      g.damageSoldier(0, 1);
+      return before - sold[0]!.hp;
+    }
+
+    it('a held body takes a plain hit without the rite', () => {
+      plain('ranger');
+      expect(netThenHit()).toBeCloseTo(1, 4);
+    });
+
+    it('and takes double with it', () => {
+      seal('ranger', 'holdfast');
+      expect(netThenHit()).toBeCloseTo(g.config().rangerHoldfastMult as number, 4);
+    });
+
+    // The rite is about the NET, and a boss can be dazed by a stun as well.
+    it('does not double for a body that is merely stunned', () => {
+      seal('ranger', 'holdfast');
+      g.spawnSoldier('spearman');
+      const sold = g.soldiers() as { x: number; y: number; hp: number; heldTimer: number }[];
+      const p = g.player() as { x: number; y: number };
+      for (const s of sold) { s.x = p.x + 40; s.y = p.y; s.hp = 40; s.heldTimer = 0; }
+      const before = sold[0]!.hp;
+      g.damageSoldier(0, 1);
+      expect(before - sold[0]!.hp).toBeCloseTo(1, 4);
+    });
+  });
+
+  describe('MINEFIELD', () => {
+    /** Throws a fan into empty ground and waits out its fuse. */
+    function fanIntoNothing(): { kind: string; mine?: boolean }[] {
+      (g.barrageBombs() as unknown[]).length = 0;
+      g.barrage();
+      expect((g.barrageBombs() as unknown[]).length, 'the fan never left').toBeGreaterThan(0);
+      stepPast(Math.ceil(ONE_SECOND * (g.config().sapperBarrageLifetime as number + 0.3)));
+      return g.barrageBombs() as { kind: string; mine?: boolean }[];
+    }
+
+    it('a fan that touches nothing is spent without the rite', () => {
+      plain('sapper');
+      expect(fanIntoNothing().length).toBe(0);
+    });
+
+    it('and stays on the ground armed with it', () => {
+      seal('sapper', 'minefield');
+      const left = fanIntoNothing();
+      expect(left.length).toBe(g.config().sapperBarrageCount as number);
+      expect(left.every((b) => b.mine === true), 'left lying but not armed').toBe(true);
+    });
+
+    it('and a mine answers to something walking near it', () => {
+      seal('sapper', 'minefield');
+      const live = fanIntoNothing() as unknown as { x: number; y: number }[];
+      const armed = live.length;
+      expect(armed).toBeGreaterThan(0);
+      // A snapshot, because `live` is the array under test: comparing its
+      // length with itself after a frame compares four with four forever.
+      const at = { x: live[0]!.x, y: live[0]!.y };
+      g.spawnSkeleton('normal');
+      const sk = g.skeletons() as { x: number; y: number }[];
+      for (const s of sk) { s.x = at.x; s.y = at.y; }
+      stepPast(4);
+      expect((g.barrageBombs() as unknown[]).length,
+             'it sat there while something stood on it').toBeLessThan(armed);
+    });
+  });
+});
+
+describe('the four trees levelled up to the wizard\'s shape', () => {
+  /** Owns every level of `id` and wakes it for this run. */
+  function take(char: string, id: string, levels: number): void {
+    g.pick(char);
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    talents().grant(id, levels);
+    talents().draft(id);
+  }
+
+  const MOVED: ReadonlyArray<{
+    char: string; id: string; levels: number; from: string; delta: number;
+  }> = [
+    { char: 'archer', id: 'longThrow', levels: 2, from: 'dynamiteSpeed', delta: 96 },
+    { char: 'archer', id: 'fullDraw', levels: 1, from: 'archerDrawMaxSecs', delta: -0.25 },
+    { char: 'knight', id: 'towerGuard', levels: 2, from: 'knightBlockCooldown', delta: -4 },
+    { char: 'knight', id: 'longReach', levels: 1, from: 'knightSpearRange', delta: 12 },
+    { char: 'ranger', id: 'wideNet', levels: 2, from: 'netRadiusBonus', delta: 16 },
+    { char: 'ranger', id: 'fourthBolt', levels: 1, from: 'crossbowBoltCount', delta: 1 },
+    { char: 'sapper', id: 'widerFan', levels: 2, from: 'sapperBarrageCount', delta: 2 },
+    { char: 'sapper', id: 'shortFuse', levels: 1, from: 'sapperChargeCooldown', delta: -0.15 },
+  ];
+
+  for (const { char, id, levels, from, delta } of MOVED) {
+    it(`${id} moves ${from} by ${delta} at ${levels} level(s)`, () => {
+      const base = (g.config() as unknown as Record<string, number>)[from]!;
+      g.pick(char);
+      g.go('playing');
+      talents().grant(id, 0);
+      expect(talents().stat(id), `${id} undrafted must be the base`).toBeCloseTo(base, 6);
+
+      take(char, id, levels);
+      expect(talents().stat(id)).toBeCloseTo(base + delta, 6);
+    });
+
+    it(`${id} is inert while merely owned`, () => {
+      const base = (g.config() as unknown as Record<string, number>)[from]!;
+      g.pick(char);
+      g.go('playing');
+      talents().grant(id, levels);          // owned, never drafted
+      expect(talents().stat(id)).toBeCloseTo(base, 6);
+    });
+  }
+
+  it('FOURTH BOLT puts a fourth bolt on the field', () => {
+    const base = g.config().crossbowBoltCount as number;
+
+    /** One volley, on a clear field with a full quiver. */
+    function volley(): number {
+      (g.arrows() as unknown[]).length = 0;
+      // hasShaft() gates the whole function, and a volley reserves room
+      // against maxArrowsInFlight, so both have to be clear of the answer.
+      (g.inv() as { arrows: number }).arrows = 20;
+      stepPast(ONE_SECOND);                    // clear of the shot cooldown
+      // shoot() sets the pressed flag the loop reads; nothing leaves the
+      // bow until a frame actually runs.
+      g.shoot();
+      stepPast(1);
+      return (g.arrows() as unknown[]).length;
+    }
+
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    expect(volley(), 'the base volley never left').toBe(base);
+
+    take('ranger', 'fourthBolt', 1);
+    expect(volley()).toBe(base + 1);
+  });
+
+  it('WIDE NET throws a wider net at the same draw', () => {
+    /** A tapped net, thrown down the sniper key the way the keyboard does. */
+    function netRadius(): number {
+      (g.nets() as unknown[]).length = 0;
+      g.shift();
+      g.holdNet(0);
+      g.shiftUp();
+      const net = (g.nets() as { radius: number }[])[0];
+      if (net === undefined) throw new Error('no net was thrown');
+      return net.radius;
+    }
+
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    const plain = netRadius();
+
+    take('ranger', 'wideNet', 2);
+    stepPast(ONE_SECOND * 11);                 // clear of the 10 s net cooldown
+    // To a tenth of a pixel: the draw fraction is read off a clock, so two
+    // taps are never bit-identical, and the figure under test is 16.
+    expect(netRadius()).toBeCloseTo(plain + 16, 1);
+  });
+
+  it('WIDER FAN puts two more bombs in a barrage', () => {
+    g.pick('sapper');
+    g.go('playing');
+    clearArena();
+    g.healHero();
+    g.barrage();
+    const plain = (g.barrageBombs() as unknown[]).length;
+    expect(plain, 'the base barrage threw nothing').toBeGreaterThan(0);
+
+    take('sapper', 'widerFan', 2);
+    (g.barrageBombs() as unknown[]).length = 0;
+    g.barrage();
+    expect((g.barrageBombs() as unknown[]).length).toBe(plain + 2);
+  });
+});
+
+describe('HELD STEP holds the chain window open', () => {
+  it('opens the base window with nothing drafted', () => {
+    g.blink();
+    expect(g.wizBlink().chainWindow).toBeCloseTo(g.config().shiftChainSecs, 6);
+  });
+
+  it('adds 0.8 s with two levels drafted', () => {
+    talents().grant('heldStep', 2);
+    talents().draft('heldStep');
+    g.blink();
+    expect(g.wizBlink().chainWindow).toBeCloseTo(g.config().shiftChainSecs + 0.8, 6);
+  });
+
+  // What the talent buys, said in hops rather than in seconds: a second press
+  // this late is refused without it, and the wizard has not moved.
+  it('lets a hop be taken after the base window would have shut', () => {
+    const late = Math.ceil(ONE_SECOND * (g.config().shiftChainSecs + 0.25));
+
+    g.blink();
+    stepPast(late);
+    const refused = playerAt();
+    g.blink();
+    expect(movedSince(refused), 'the base window did not shut').toBe(0);
+
+    talents().grant('heldStep', 2);
+    talents().draft('heldStep');
+    stepPast(ONE_SECOND * 7);            // clear of the 6 s cooldown
+    g.blink();
+    stepPast(late);
+    const from = playerAt();
+    g.blink();
+    expect(movedSince(from)).toBeGreaterThan(0);
+  });
+
+  // The window is shared: the knight's charge chains on the same figure,
+  // deliberately, so both hands learn one rhythm. A talent in the wizard's
+  // tree that widened the knight's chain would be this line's one real way to
+  // go wrong, and it is invisible from the wizard's own screen. His charge
+  // reads CONFIG.shiftChainSecs straight, so what this pins is that the
+  // talent never writes to the shared figure it reads.
+  it('leaves the shared figure the knight chains on exactly where it was', () => {
+    const before = g.config().shiftChainSecs;
+    talents().grant('heldStep', 2);
+    talents().draft('heldStep');
+
+    expect(g.config().shiftChainSecs).toBe(before);
+    expect(talents().stat('heldStep')).toBeCloseTo(before + 0.8, 6);
+  });
+});
+
+describe('THIRD STEP adds a hop to the chain', () => {
+  /** Blinks until the chain refuses, and answers how many hops it took. */
+  function hopsInOneChain(): number {
+    let hops = 0;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const from = playerAt();
+      g.blink();
+      if (movedSince(from) === 0) break;
+      hops += 1;
+      // Two frames: well inside any window here, so what ends the chain is
+      // the hop count and never the clock.
+      stepPast(2);
+    }
+    return hops;
+  }
+
+  it('chains twice with nothing drafted, which is what it shipped with', () => {
+    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops);
+  });
+
+  it('chains three times when drafted', () => {
+    talents().grant('thirdStep', 1);
+    talents().draft('thirdStep');
+    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops + 1);
+  });
+
+  it('chains twice for merely owning it — undrafted is the base', () => {
+    talents().grant('thirdStep', 1);
+    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops);
+  });
+});
+
+describe('THUNDERSTEP makes arriving the attack', () => {
+  /** The arrival radius every hop of the next chain reports. */
+  function chainRadii(hops: number): number[] {
+    const seen: number[] = [];
+    g.onEvent((e: { type: string; radius?: number }) => {
+      if (e.type === 'WIZARD_BLINK' && e.radius !== undefined) seen.push(e.radius);
+    });
+    for (let hop = 0; hop < hops; hop++) { g.blink(); stepPast(2); }
+    return seen;
+  }
+
+  it('leaves an unsealed chain at the base radius, every hop', () => {
+    const base = g.config().wizBlinkPulseRadius;
+    expect(chainRadii(2)).toEqual([base, base]);
+  });
+
+  it('widens each hop of a sealed chain over the one before it', () => {
+    talents().sealCapstone('thunderstep');
+    const base = g.config().wizBlinkPulseRadius;
+    const radii = chainRadii(2);
+
+    expect(radii.length).toBe(2);
+    expect(radii[0]).toBeCloseTo(base, 6);
+    expect(radii[1]).toBeCloseTo(base * (1 + g.config().wizThunderstepGrowth), 6);
+  });
+
+  // The reason it is worth a rite. A chain is a real share of a boss taken
+  // while moving, with an i-frame on every arrival — the answer to a fight
+  // that will not let him stand and cast.
+  it('takes 1 + 2 off a boss over a two-hop chain, against 1 + 1 unsealed', () => {
+    function bossLostOverAChain(sealed: boolean): number {
+      // A fresh fight each time: initGame resets the run layer, so the seal
+      // has to come after it rather than before.
+      g.go('playing');
+      clearArena();
+      g.go('boss_entrance');
+      for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+      g.go('boss_fight');
+      g.healHero();
+      if (sealed) talents().sealCapstone('thunderstep');
+
+      const boss = g.boss() as { hp: number; x: number; y: number; shield?: boolean };
+      boss.shield = false;                       // he opens behind one
+      const before = boss.hp;
+      for (let hop = 0; hop < 2; hop++) {
+        // The pulse resolves where the blink LANDS, not where it left, so the
+        // boss is parked on the destination rather than on the wizard — the
+        // first draft of this test moved him to the departure point and
+        // measured a chain that never touched him.
+        const p = g.player() as { x: number; y: number };
+        aimAt(p.x + 500, p.y);                   // due east, so the landing is known
+        stepPast(1);                             // the aim ray reads the pointer
+        boss.x = p.x + talents().stat('blinkReach');
+        boss.y = p.y;
+        g.blink();
+        stepPast(2);
+        boss.shield = false;                     // he re-shields on his own timer
+      }
+      return before - (g.boss() as { hp: number }).hp;
+    }
+
+    const plain = bossLostOverAChain(false);
+    const sealed = bossLostOverAChain(true);
+
+    expect(plain, 'an unsealed chain took nothing off the boss').toBeGreaterThan(0);
+    expect(sealed).toBeCloseTo(plain * 1.5, 6);   // 1 + 2 against 1 + 1
   });
 });
 
@@ -330,8 +912,19 @@ describe('the choosers', () => {
     killABoss();
 
     expect(g.state()).toBe('chooser');
-    const c = g.chooser() as unknown as Chooser;
-    expect(c.kind).toBe('draft');
+    // A boss queues rite, then tree, then draft, and which of those actually
+    // open depends on the mastery this character has banked -- which earlier
+    // tests in this file have moved. That used to be invisible because the
+    // rite sat at 18 points and nothing here ever reached it; at 8 it is
+    // reachable and outranks the draft. So walk the queue to the draft rather
+    // than assuming it is first.
+    let c = g.chooser() as unknown as Chooser | null;
+    for (let i = 0; i < 3 && c !== null && c.kind !== 'draft'; i++) {
+      if (c.kind === 'tree') press('b'); else g.chooserPick(0);
+      c = g.chooser() as unknown as Chooser | null;
+    }
+    expect(c, 'no draft followed the boss').not.toBeNull();
+    expect(c!.kind).toBe('draft');
     g.chooserPick(0);
     expect(talents().drafted().length).toBe(1);
   });
@@ -345,8 +938,10 @@ describe('the choosers', () => {
     const rite = g.chooser() as unknown as Chooser;
     expect(g.state()).toBe('chooser');
     expect(rite.kind).toBe('rite');
-    expect(rite.offers).toEqual(['overchannel', 'stormcaller']);
-    g.chooserPick(1);
+    // The exact set, not a length: a length catches a capstone deleted and
+    // misses one added, which is the rule CLAUDE.md states for tables.
+    expect(rite.offers).toEqual(['overchannel', 'stormcaller', 'thunderstep']);
+    g.chooserPick(1);   // stormcaller, whose halved cooldown this asserts below
 
     // The tree comes next: the rank is spent, and the mastery is not.
     expect(g.state(), 'the tree did not follow the rite').toBe('talents');
@@ -467,10 +1062,22 @@ describe('the archer tree reaches Brace', () => {
   });
 
   it('punches through more bodies with SPLIT SHAFT drafted', () => {
+    // Read off the tree rather than written down: this asserted a literal 5,
+    // which is a figure a balance pass moves, and a test that fails on tuning
+    // teaches nothing about whether the talent works.
+    const spec = CHAR_TREES.archer.talents.find((t) => t.id === 'splitShaft')!;
+    const per = spec.effect.kind === 'linear' ? spec.effect.per : 0;
     const base = g.config().archerPowerPierce;
-    talents().grant('splitShaft', 2);
+    const levels = spec.costs.length;
+
+    talents().grant('splitShaft', levels);
+    expect(talents().stat('splitShaft'), 'owned but undrafted should be the base')
+      .toBe(base);
+
     talents().draft('splitShaft');
-    expect(talents().stat('splitShaft')).toBe(base + 2);
+    expect(talents().stat('splitShaft')).toBe(base + per * levels);
+    expect(talents().stat('splitShaft'), 'the talent bought no pierce at all')
+      .toBeGreaterThan(base);
   });
 
   it('holds a full brace through movement only once ROOTED is sealed', () => {
@@ -576,7 +1183,9 @@ describe('the ranger tree reaches Momentum', () => {
     // Read off rangerMomentumMult, the figure a bolt's damage runs on. Asking
     // the accessor what the accessor thinks proves nothing, and this file's
     // own opening says exactly that.
-    talents().grant('fullTilt', 3);
+    // Two levels now, not three. If the ceiling had moved with the cost this
+    // is the assertion that would have caught it.
+    talents().grant('fullTilt', 2);
     talents().draft('fullTilt');
     const m = runFor(4 * ONE_SECOND);
     expect(m.level, 'the ranger should be at full tilt by now').toBe(1);
@@ -808,6 +1417,343 @@ describe('STICKY FAN leaves the fan on the ground', () => {
     expect(barrageIntoBody(), 'stuck bombs should still be on the map')
       .toBeGreaterThan(0);
   });
+
+  // The talent's own words are that they KEEP THEIR FUSE. A stuck bomb went on
+  // scanning for bodies every frame, so one resting against the thing it landed
+  // on re-stuck itself forever and never went off at all -- the fan was not a
+  // delayed blast, it was a blast that never came.
+  it('runs the fuse out even with the body still standing on them', () => {
+    talents().grant('stickyFan', 1);
+    talents().draft('stickyFan');
+    expect(barrageIntoBody()).toBeGreaterThan(0);
+    const c = g.config();
+    g.spawnSkeleton('normal');
+    const sk = g.skeletons() as { x: number; y: number; hp: number }[];
+    const bombs = g.barrageBombs() as { x: number; y: number }[];
+    const at = { x: bombs[0]!.x, y: bombs[0]!.y };
+    // Pinned on top of a stuck bomb for the whole of the rest of its fuse.
+    for (let i = 0; i < Math.ceil(ONE_SECOND * (c.sapperBarrageLifetime as number + 0.6)); i++) {
+      for (const k of sk) { k.x = at.x; k.y = at.y; k.hp = 99; }
+      stepPast(1);
+    }
+    expect((g.barrageBombs() as unknown[]).length,
+           'a bomb sat under a body instead of going off').toBe(0);
+  });
+});
+
+/**
+ * The archer's round: his own stick moves him, and a powered pickup carries
+ * further than a plain one.
+ *
+ * Measured on the field rather than off the config, because both of these are
+ * the kind of change that reads as done in a diff and does nothing in a game:
+ * a push applied to the wrong object, a trail dropped by an arrow nobody
+ * powered.
+ */
+describe('the archer rides his own blast', () => {
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+  });
+
+  /**
+   * Throws a stick at an offset from him and reports how far he moved.
+   *
+   * He is stood in open ground first. The spawn tile is x=80, a stride from
+   * the left wall, and a push away from a stick to his right lands outside
+   * the arena — which is a real case, but not the one these tests are about.
+   */
+  function hopWithStickAt(dx: number): { moved: number; hp: number } {
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+    const from = { x: p.x, y: p.y };
+    const hpBefore = (g.counts() as { hp: number }).hp;
+    (g.inv() as Record<string, number>).dynamites = 5;
+    aimAt(p.x + 400, p.y);
+    g.stepSim(1);
+    g.secondary();
+    g.stepSim(2);
+    g.secondaryUp();
+    // Park the thrown stick exactly where the test wants it and set it off.
+    const stick = (g.dynamites() as { x: number; y: number; life: number }[]).at(-1)!;
+    stick.x = from.x + dx; stick.y = from.y;
+    stick.life = 0;
+    stepPast(4);
+    const after = g.player() as { x: number; y: number };
+    return {
+      moved: Math.hypot(after.x - from.x, after.y - from.y),
+      hp: hpBefore - (g.counts() as { hp: number }).hp,
+    };
+  }
+
+  it('throws him clear, and costs him nothing to do it', () => {
+    const { moved, hp } = hopWithStickAt(10);
+    expect(moved, 'his own stick did not move him').toBeGreaterThan(20);
+    expect(hp, 'the hop cost him health').toBe(0);
+  });
+
+  it('throws him hardest from underfoot and barely at all from the edge', () => {
+    // The control the owner picked: where the stick lands is the whole dial.
+    const near = hopWithStickAt(6).moved;
+    const edge = hopWithStickAt(Math.round(g.config().dynamiteBlastRadius * 0.85)).moved;
+    expect(near, 'a stick at his feet should launch him').toBeGreaterThan(edge * 2);
+  });
+
+  it('throws him away from the stick, never towards it', () => {
+    // Stick to his RIGHT, so any push must carry him left. hopWithStickAt
+    // centres him first, so read the start position after it has done so.
+    let startX = 0;
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    startX = p.x;
+    hopWithStickAt(20);
+    expect((g.player() as { x: number }).x, 'he was pulled into the blast')
+      .toBeLessThan(startX);
+  });
+
+  it('leaves a stick outside the blast unable to move him', () => {
+    const { moved } = hopWithStickAt(g.config().dynamiteBlastRadius + 40);
+    expect(moved, 'a stick out of range still threw him').toBeLessThan(1);
+  });
+
+  it('does not throw him off a blast he did not throw', () => {
+    // `blast()` is the dev hook, and a splinter child carries no mark either.
+    // Only the stick that left his hand moves him.
+    const p = g.player() as { x: number; y: number };
+    const from = { x: p.x, y: p.y };
+    g.blast(p.x + 8, p.y);
+    stepPast(2);
+    const after = g.player() as { x: number; y: number };
+    expect(Math.hypot(after.x - from.x, after.y - from.y),
+      'an explosion he did not throw moved him').toBeLessThan(1);
+  });
+});
+
+/**
+ * What standing still is worth outside a boss fight.
+ *
+ * Brace multiplied boss damage and nothing else, and a crow dies to any arrow
+ * either way — so his signature meter was dark for most of a run. These are
+ * the consumers that changed that.
+ */
+describe('a braced archer looses a volley', () => {
+  const brace = (): number => (g.brace() as { level: number }).level;
+
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+    (g.arrows() as unknown[]).length = 0;
+  });
+
+  /** Fires one press and reports the arrows it put in the air. */
+  function arrowsFromOnePress(): number {
+    (g.arrows() as unknown[]).length = 0;
+    (g.inv() as Record<string, number>).arrows = 20;
+    g.shoot();
+    g.stepSim(1);
+    return (g.arrows() as unknown[]).length;
+  }
+
+  it('looses one arrow the moment he has moved', () => {
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(Math.ceil(0.6 * ONE_SECOND));
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    expect(brace(), 'walking should have spent the brace').toBeLessThan(0.5);
+    expect(arrowsFromOnePress()).toBe(1);
+  });
+
+  it('looses the full volley from a full brace', () => {
+    stepPast(3 * ONE_SECOND);        // stood still: the meter fills
+    expect(brace(), 'he never braced').toBe(1);
+    expect(arrowsFromOnePress()).toBe(g.config().archerBraceVolley);
+  });
+
+  it('is never refused a press an unbraced archer would be allowed', () => {
+    // The exact invariant that broke, stated so it cannot drift.
+    //
+    // Reserving in-flight room for the WHOLE volley made bracing a penalty: a
+    // three-arrow volley needed three free slots where a single shot needed
+    // one, so the reward for standing still refused presses the unbraced
+    // archer got. Measured over five seconds it read 13 arrows braced against
+    // 16 walking about.
+    //
+    // Asserted as a refusal rather than as a rate. A rate comparison has to
+    // run twice from the same start, and the second run inherits the brace the
+    // first one built, which makes it unable to fail.
+    stepPast(3 * ONE_SECOND);
+    expect(brace(), 'he never braced').toBe(1);
+    expect(g.config().archerBraceVolley, 'a volley of one proves nothing here')
+      .toBeGreaterThan(1);
+
+    // One slot free: an unbraced press fits, a whole reserved volley does not.
+    const cap = g.config().maxArrowsInFlight as number;
+    (g.arrows() as unknown[]).length = 0;
+    (g.inv() as Record<string, number>).arrows = 20;
+    const room = g.arrows() as { x: number }[];
+    for (let i = 0; i < cap - 1; i++) room.push({ x: -9999 } as never);
+
+    let refused = false;
+    const off = g.onEvent((e: { type: string }) => {
+      if (e.type === 'ACTION_BLOCKED') refused = true;
+    }) as unknown as (() => void) | undefined;
+    g.shoot();
+    g.stepSim(1);
+    if (typeof off === 'function') off();
+
+    expect(refused, 'a braced press was refused with room for an unbraced one')
+      .toBe(false);
+    expect((g.arrows() as unknown[]).length, 'the volley never left the bow')
+      .toBeGreaterThan(cap - 1);
+  });
+
+  it('spends one shaft for the whole volley, as the crossbow does', () => {
+    stepPast(3 * ONE_SECOND);
+    const bag = g.inv() as Record<string, number>;
+    bag.arrows = 20;
+    (g.arrows() as unknown[]).length = 0;
+    const before = bag.arrows;
+    g.shoot();
+    g.stepSim(1);
+    expect((g.arrows() as unknown[]).length).toBeGreaterThan(1);
+    expect(before - bag.arrows, 'a volley charged him per arrow').toBe(1);
+  });
+
+  it('gets the power shot back sooner for having braced', () => {
+    // Measured as the cooldown the release actually sets, which is the figure
+    // the stance is buying.
+    const cd = (): number => (g.archerDraw() as { cooldown: number }).cooldown;
+
+    (g.keys() as Record<string, boolean>)['d'] = true;
+    stepPast(Math.ceil(0.6 * ONE_SECOND));
+    (g.keys() as Record<string, boolean>)['d'] = false;
+    g.shift(); g.stepSim(2); g.shiftUp();
+    const unbraced = cd();
+
+    stepPast(6 * ONE_SECOND);        // wait it out, then brace fully
+    expect(brace()).toBe(1);
+    g.shift(); g.stepSim(2); g.shiftUp();
+    const braced = cd();
+
+    expect(braced, 'bracing bought no time back').toBeLessThan(unbraced);
+  });
+});
+
+/**
+ * The three talents the fork added, measured on the field.
+ *
+ * Each is one side of a question: width or depth, weapon or vehicle. A talent
+ * that reads right in the tree and does nothing in the game would make the
+ * fork a decision about nothing.
+ */
+describe('his stick throws what survives it', () => {
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+  });
+
+  it('shoves a survivor away, and leaves one out of range alone', () => {
+    // Both crows are compared against each other rather than against a fixed
+    // number: a crow flies at the player under its own steam, so "it moved"
+    // proves nothing on its own. The one in the blast has to move a great
+    // deal further than the one outside it.
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+    const radius = g.config().dynamiteBlastRadius;
+    (g.crows() as unknown[]).length = 0;
+    g.spawnCrow(); g.spawnCrow();
+    const [near, far] = g.crows() as { x: number; y: number; baseY: number; hp: number }[];
+    // Offset from the stick, not sitting on it: dead centre has no direction
+    // to be pushed along and the code skips it by design.
+    // `baseY` as well as `y`. A crow bobs around its base height and homes
+    // back to it, so a crow parked by `y` alone drifts vertically out of the
+    // blast before it resolves — the self-repositioning trap this repo has
+    // paid for twice already.
+    near!.x = p.x + 80; near!.y = p.y; near!.baseY = p.y; near!.hp = 9999;
+    far!.x = p.x + radius + 160; far!.y = p.y; far!.baseY = p.y; far!.hp = 9999;
+    const nearBefore = near!.x, farBefore = far!.x;
+
+    (g.inv() as Record<string, number>).dynamites = 5;
+    aimAt(p.x + 400, p.y);
+    g.stepSim(1);
+    g.secondary(); g.stepSim(2); g.secondaryUp();
+    const stick = (g.dynamites() as { x: number; y: number; life: number }[]).at(-1)!;
+    stick.x = p.x + 40; stick.y = p.y; stick.life = 0;
+    g.stepSim(1);
+
+    const nearMoved = near!.x - nearBefore;
+    const farMoved = Math.abs(far!.x - farBefore);
+    expect(nearMoved, 'a survivor in the blast was not thrown outward')
+      .toBeGreaterThan(20);
+    expect(nearMoved, 'the crow outside the blast moved as much as the one in it')
+      .toBeGreaterThan(farMoved * 4);
+  });
+});
+
+describe('a powered arrow carries its pickup further', () => {
+  beforeEach(() => {
+    g.pick('archer');
+    g.go('playing');
+    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
+    clearArena();
+    g.healHero();
+  });
+
+  /**
+   * Fires one shot with only fire arrows in the quiver, and reports the fires
+   * it left: how many, and how far apart.
+   *
+   * The spread is the point. Counting alone is not enough — an arrow that
+   * lights one patch where it stops still beats an arrow that lights none, so
+   * a count test passes with the trail deleted. A lane is fires in DIFFERENT
+   * PLACES, and that is what this measures.
+   */
+  function fireLaneFrom(powered: boolean): { count: number; spread: number } {
+    (g.fires() as unknown[]).length = 0;
+    const bag = g.inv() as Record<string, number>;
+    bag.arrows = 0; bag.ricochetArrows = 0; bag.fireArrows = 5;
+    const p = g.player() as { x: number; y: number };
+    p.x = Math.round(g.config().canvasW / 2);
+    p.y = Math.round((g.config().rows * g.config().tileSize) / 2);
+    aimAt(p.x + 400, p.y);
+    g.stepSim(1);
+    if (powered) { g.shift(); stepPast(40); g.shiftUp(); } else { g.shoot(); }
+    stepPast(60);
+    const xs = (g.fires() as { x: number }[]).map((f) => f.x);
+    return {
+      count: xs.length,
+      spread: xs.length === 0 ? 0 : Math.max(...xs) - Math.min(...xs),
+    };
+  }
+
+  it('lays a lane of fire on a power shot, not a single patch', () => {
+    const lane = fireLaneFrom(true);
+    expect(lane.count, 'a powered fire arrow lit no lane').toBeGreaterThan(2);
+    expect(lane.spread, 'every fire it lit landed in one place').toBeGreaterThan(100);
+  });
+
+  it('leaves a plain fire arrow lighting nothing like a lane', () => {
+    // The contrast that makes the lane a power-shot thing rather than a fire
+    // thing: an ordinary fire arrow spreads no fire along its flight at all.
+    expect(fireLaneFrom(false).spread, 'a plain fire arrow laid a lane too')
+      .toBeLessThan(100);
+  });
+
+  it('lets a powered ricochet outlast the bounces an ordinary one gets', () => {
+    // The cap itself, since a bounce count depends on where the walls are and
+    // this suite clears the arena. What matters is that powered reads higher.
+    expect(g.config().archerPowerBounces).toBeGreaterThan(9);
+  });
 });
 
 describe('the rite: the capstones that change the field', () => {
@@ -954,17 +1900,22 @@ describe('the talent shop', () => {
 
   it('buys the row the cursor moved to, not the one it started on', () => {
     // The bug this exists for: a screen that draws a cursor and buys index 0.
+    //
     const tree = CHAR_TREES.archer;
-    const second = tree.talents[1]!;
-    talents().grant(second.id, 0);
-    setPurse(20);
+    const first = tree.talents[0]!;
+    const other = tree.talents[1]!;
+    const otherRow = 1;
+    for (const t of tree.talents) talents().grant(t.id, 0);
+    talents().grantMastery(40);
 
     talents().setCursor(0);
-    talents().moveCursor(1);
-    expect(talents().cursor()).toBe(1);
+    for (let i = 0; i < otherRow; i++) talents().moveCursor(1);
+    expect(talents().cursor()).toBe(otherRow);
     talents().buyCurrent();
 
-    expect(talents().state().levels[second.id]).toBe(1);
+    expect(talents().state().levels[other.id]).toBe(1);
+    expect(talents().state().levels[first.id] ?? 0, 'it bought the row it started on')
+      .toBe(0);
   });
 
   it('wraps the cursor at both ends and never leaves the tree', () => {
@@ -1010,7 +1961,11 @@ describe('the talent shop', () => {
   });
 
   it('says a tier is locked rather than doing nothing', () => {
-    const locked = CHAR_TREES.archer.talents.find((t) => t.tier > 1)!;
+    // Highest tier available, so no rank the earlier tests granted can have
+    // opened it, and ungranted so a level left over cannot answer first.
+    const top = Math.max(...CHAR_TREES.archer.talents.map((t) => t.tier));
+    const locked = CHAR_TREES.archer.talents.find((t) => t.tier === top)!;
+    for (const t of CHAR_TREES.archer.talents) talents().grant(t.id, 0);
     setPurse(0);
     talents().setCursor(CHAR_TREES.archer.talents.indexOf(locked));
 

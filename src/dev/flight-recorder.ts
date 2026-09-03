@@ -131,9 +131,44 @@ function drain(): readonly LogEvent[] {
   return fresh;
 }
 
+/** Mints an id for one page load.
+ *
+ * `crypto.randomUUID` needs a secure context, which localhost is, but a plain
+ * http:// LAN address is not. The fallback keeps the recorder working there
+ * rather than throwing on boot in the one situation you most want telemetry.
+ */
+export function mintClientId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `cid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** This page load's id, fixed for as long as the page lives. */
+const CLIENT_ID = mintClientId();
+
+/** The id every record from this page carries. */
+export function clientId(): string {
+  return CLIENT_ID;
+}
+
+/** Stamps a payload with the page load id.
+ *
+ * The sink writes one file per dev server run, so a single log holds every page
+ * load of that run and log event ids restart at 1 on each. The file name
+ * therefore keys nothing. `cid` does, and because it is applied here rather
+ * than at each call site it rides on every kind, `bye` included. A goodbye that
+ * lands in a file which never saw its `hello` stays attributable.
+ *
+ * The payload wins on collision, so a caller can always be explicit.
+ */
+export function stamp(payload: Record<string, unknown>): Record<string, unknown> {
+  return { cid: CLIENT_ID, ...payload };
+}
+
 function send(payload: Record<string, unknown>, urgent = false): void {
   if (failures >= MAX_SEND_FAILURES) return;
-  const body = JSON.stringify(payload);
+  const body = JSON.stringify(stamp(payload));
   // sendBeacon survives a closing page, which is what `urgent` means here.
   if (urgent && typeof navigator.sendBeacon === 'function'
       && navigator.sendBeacon(FLIGHT_PATH, body)) return;

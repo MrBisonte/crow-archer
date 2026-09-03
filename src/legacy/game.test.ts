@@ -24,7 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
-import { ONE_SECOND, clearArena, stepPast } from './arena-testkit';
+import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -1112,6 +1112,32 @@ describe('the sapper', () => {
       expect(angles[(angles.length - 1) / 2]).toBeCloseTo(0, 5);
     });
 
+    // The chain is the sapper's ramp -- 1 + link x sapperChainBossBonus, so a
+    // deep cascade is the largest boss hit he has -- and it was the only hero
+    // mechanic on the roster with nothing on screen. Brace, momentum and
+    // bloodlust all report themselves; this multiplied silently.
+    it('reports how deep a cascade went, and lets the reading fall away', () => {
+      clearArena();
+      const c = g.config();
+      const p = g.player() as { x: number; y: number; aimAngle: number };
+      p.x = 6.5 * c.tileSize;
+      p.y = 6.5 * c.tileSize;
+      p.aimAngle = 0;
+      g.crows().length = 0;
+      // A wall close enough that the centre bomb reaches it while the rest of
+      // the fan is still inside sapperChainRadius of it.
+      for (let dr = -2; dr <= 2; dr++) g.tiles().set(6 + dr, 8, TILE.ROCK);
+
+      expect(g.sapperChain().peak).toBe(0);
+      g.barrage();
+      stepPast(12);
+      expect(g.sapperChain().peak, 'the fan went off without lighting itself')
+        .toBeGreaterThan(1);
+
+      stepPast(Math.ceil((c.sapperChainReadSecs + 0.3) * ONE_SECOND));
+      expect(g.sapperChain().peak).toBe(0);
+    });
+
     it('refuses a second barrage until its cooldown has run', () => {
       g.barrage();
       expect(g.sapperBarrageCD()).toBeGreaterThan(0);
@@ -1606,6 +1632,37 @@ describe('the knight charge', () => {
     expect(g.knightCharge().dashing).toBe(true);
     g.stepSim(5);
     expect(p.x).toBeGreaterThan(start);
+  });
+
+  // The charge is how the slowest hero reaches a boss that orbits him, so the
+  // dash has to outrun his own legs. It ran at half his walking speed for a
+  // long time -- 75 px/s, slower than every other hero walking, and 112 px of
+  // travel against a 90 px reach, so releasing put him barely further forward
+  // than he could already hit from. Measured rather than read off CONFIG: the
+  // multiplier is only half the claim, and the other half is that the dash
+  // drives movement at all.
+  it('closes ground faster than the knight can walk', () => {
+    const c = g.config();
+    const ang = dashing();
+    const p = g.player() as { x: number; y: number };
+    const start = { x: p.x, y: p.y };
+    g.stepSim(5);
+    const dashed = Math.hypot(p.x - start.x, p.y - start.y);
+
+    // Same ground, same heading, on his own legs.
+    g.stepSim(Math.round(c.knightChargeDashDuration * ONE_SECOND) + 2);
+    p.x = start.x;
+    p.y = start.y;
+    const keys = g.keys() as Record<string, boolean>;
+    keys[keyFor(ang)] = true;
+    g.stepSim(5);
+    keys[keyFor(ang)] = false;
+    const walked = Math.hypot(p.x - start.x, p.y - start.y);
+
+    expect(walked).toBeGreaterThan(0);
+    expect(dashed).toBeGreaterThan(walked);
+    // And the chain is faster than the dash, or it buys nothing.
+    expect(c.knightChargeChainSpeedMult).toBeGreaterThan(c.knightChargeDashSpeedMult);
   });
 
   // Regression: the dash ignores movement keys for its whole 1.5s, so one
@@ -3305,6 +3362,114 @@ describe('the balance model', () => {
   });
 });
 
+/**
+ * What a hero is worth against a BODY, which is the half of damage that had no
+ * test at all.
+ *
+ * Every balance test above this one measures a boss, because `bossDamageMult`
+ * is the only place single-player damage was ever a quantity. balance.md says
+ * so, and justifies it: everything else has exactly one hit point and dies to
+ * one hit of anything, so scaling a hit that already kills changes nothing.
+ *
+ * That stopped being true when the garrison arrived. A spearman has 2 hit
+ * points and a shieldman 4, so on the cavern damage is a quantity, the
+ * multiplier does not reach it, and the wizard -- the hero whose whole row is
+ * the highest multiplier on the roster -- was the slowest killer in the game
+ * there: 3.9 s on a shieldman the archer killed in 0.33 s, measured with this
+ * harness before `wizBoltBodyDamage` existed.
+ *
+ * Bounds rather than exact times. The point is to fail loudly when someone
+ * moves a wizard number and changes a fight they were not looking at, not to
+ * pin a stopwatch reading that a hitstop tweak would invalidate.
+ */
+describe('time to kill a body', () => {
+  /**
+   * Seconds for `char` to kill one pinned soldier at point-blank range, or
+   * null if it never dies inside the limit.
+   *
+   * The hero is healed every frame and the soldier is held and replaced on its
+   * mark every frame, so what is measured is damage per second and nothing
+   * else -- not kiting, not the soldier's approach, and not whether the hero
+   * survives the exchange, which is a different question with a different
+   * answer for each of them.
+   */
+  function secondsToKill(char: CharacterKind, kind: string): number | null {
+    g.pick(char);
+    g.pickMap('cavern');
+    g.go('playing');
+    clearArena();
+    (g.soldiers() as unknown[]).length = 0;
+    (g.arrows() as unknown[]).length = 0;
+
+    const p = g.player() as { x: number; y: number };
+    g.spawnSoldier(kind);
+    const list = g.soldiers() as
+      { x: number; y: number; hp: number; heldTimer: number }[];
+    const mark = list[0];
+    if (mark === undefined) throw new Error('spawnSoldier put nothing on the field');
+
+    const LIMIT = ONE_SECOND * 20;
+    for (let frame = 0; frame < LIMIT; frame++) {
+      if (list.length === 0) return frame / ONE_SECOND;
+      // Nobody is holding the keys, so an unhealed hero dies to the thing he
+      // is being timed against and the test measures that instead.
+      g.healHero();
+      // Held and re-seated: a soldier that closes changes the range, and a
+      // shieldman that turns changes whether a hit lands at all.
+      mark.heldTimer = 1;
+      mark.x = p.x + 150;
+      mark.y = p.y;
+      aimAt(mark.x, mark.y);
+      g.shoot();
+      stepPast(1);
+    }
+    return null;
+  }
+
+  // The regression this exists for. One bolt to a spearman and two to a
+  // shieldman is the whole of `wizBoltBodyDamage`; at 1 it was two and four,
+  // and a shieldman took the better part of four seconds.
+  it('kills a spearman with one wizard bolt and a shieldman with two', () => {
+    const c = g.config();
+    const spearman = secondsToKill('wizard', 'spearman');
+    const shieldman = secondsToKill('wizard', 'shieldman');
+
+    expect(spearman, 'a spearman survived a wizard for 20 s').not.toBeNull();
+    expect(shieldman, 'a shieldman survived a wizard for 20 s').not.toBeNull();
+    // One bolt lands at once; each one after it waits a whole cooldown. So n
+    // bolts is under (n-1) cooldowns plus a frame of travel, and asserting the
+    // count this way survives a change to the cooldown itself.
+    expect(spearman!).toBeLessThan(c.wizBoltCooldown);
+    expect(shieldman!).toBeLessThan(c.wizBoltCooldown * 2);
+    expect(shieldman!).toBeGreaterThan(c.wizBoltCooldown * 0.5);
+  });
+
+  // Stated as a ratio, because the absolute figures are a property of the
+  // harness and the ordering is a property of the design.
+  it('leaves the click-limited kits faster on a body, which is their half', () => {
+    const wizard = secondsToKill('wizard', 'shieldman');
+    const archer = secondsToKill('archer', 'shieldman');
+
+    expect(archer, 'a shieldman survived an archer for 20 s').not.toBeNull();
+    expect(wizard).not.toBeNull();
+    // He is still slower than the archer -- rate is what he pays for the
+    // biggest single hit -- but no longer by the order of magnitude that made
+    // the panel's "hardest hit" a lie on every map with a garrison.
+    expect(archer!).toBeLessThan(wizard!);
+    expect(wizard!).toBeLessThan(archer! * 8);
+  });
+
+  // A one-hit body is where the multiplier argument still holds, so this is
+  // the control: nothing about the change moves it.
+  it('is the same for everyone against a body with one hit point', () => {
+    for (const char of ['wizard', 'archer', 'ranger'] as CharacterKind[]) {
+      const secs = secondsToKill(char, 'archer');
+      expect(secs, `${char} could not kill a 1 hp soldier`).not.toBeNull();
+      expect(secs!, char).toBeLessThan(1);
+    }
+  });
+});
+
 describe('every boss the stage list names', () => {
   /** Puts a stage's boss on the map and opens its fight. */
   function fightStage(stage: number): { kind: string; hp: number; x: number; y: number } {
@@ -4464,8 +4629,11 @@ describe('a siege boss is on the field and can be fought', () => {
 // holding, so a wave came through a gap unopposed. A gate is where a defender
 // stands: forward of the person guarded, on the ground the attack has to cross.
 describe('the retinue holds the barrier gates', () => {
-  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
-  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+  let origRandom: () => number;
+  // One test below pins Math.random to fix its map; save and restore it so the
+  // pin cannot leak into the rest of the file (afterEach runs even on failure).
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); origRandom = Math.random; });
+  afterEach(() => { Math.random = origRandom; g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
 
   const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
 
@@ -4552,6 +4720,13 @@ describe('the retinue holds the barrier gates', () => {
   });
 
   it('returns to its post after leaving it to fight', () => {
+    // Pin the map as well as the siege roll. The settle note below explains why
+    // route length varies -- the map is seeded from Math.random -- and that
+    // variance is also run-order dependent: this passed alone and flaked ~1 in
+    // 20 in the full suite, drawing a cover-heavy map only once the ~300 tests
+    // before it had advanced Math.random first. A fixed seed removes both.
+    // 20260903 lands the walk home 15px from a post, well inside the 170 leash.
+    Math.random = mulberry32(20260903);
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
@@ -4821,7 +4996,17 @@ describe('allies are visibly the hero\u2019s', () => {
 // the reticle a full 48px below the point the arrow flew at. Lining the reticle
 // up on a crow shot a clean 48px over its head, on a target 16 pixels tall.
 describe('the reticle sits where the shot goes', () => {
-  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+  afterEach(() => {
+    g.setMode('brawl');
+    g.pickMap('forest');
+    // Put the pointer back on the picture. `mouse` is unclamped now, so a test
+    // that leaves it out in the margin hands the next one a reticle that is
+    // pinned rather than under the pointer, and anything deriving an offset
+    // from `mouse - reticleAt()` silently reads that pin as its offset.
+    const mouse = g.mouse() as { x: number; y: number };
+    mouse.x = g.config().canvasW / 2;
+    mouse.y = g.config().canvasH / 2;
+  });
 
   const MOUSE_POINTS = [
     { x: 100, y: 100 }, { x: 528, y: 360 }, { x: 900, y: 640 }, { x: 0, y: 48 },
@@ -4839,6 +5024,58 @@ describe('the reticle sits where the shot goes', () => {
       expect(reticle.x, `x at ${at.x},${at.y}`).toBe(world.x);
       expect(reticle.y, `reticle is not on the aim point at ${at.x},${at.y}`)
         .toBe(world.y + hud);
+    }
+  });
+
+  // Players reported the aim "sticking" the moment the pointer left the picture.
+  // The canvas is letterboxed, so there is margin on all four sides to wander
+  // into, and the listener clamped mouse.x/y to the canvas bounds: once both
+  // axes pinned, moving further out changed nothing and the shot kept firing at
+  // the point the pointer had crossed the edge at.
+  it('keeps following the pointer once it has left the picture', () => {
+    g.setMode('brawl');
+    g.pickMap('forest');
+    g.go('playing');
+    const p = g.player() as { x: number; y: number };
+    const mouse = g.mouse() as { x: number; y: number };
+
+    const aimAt = (mx: number, my: number): number => {
+      mouse.x = mx; mouse.y = my;
+      const w = g.aimWorld() as { x: number; y: number };
+      return Math.atan2(w.y - p.y, w.x - p.x);
+    };
+
+    // Both of these clamp to x = 0, so the old code handed them one angle.
+    expect(aimAt(-50, 200)).not.toBeCloseTo(aimAt(-400, 200), 5);
+    // And the same collapse happened past every other edge.
+    expect(aimAt(5000, 300)).not.toBeCloseTo(aimAt(9000, 300), 5);
+    expect(aimAt(600, -200)).not.toBeCloseTo(aimAt(600, -900), 5);
+  });
+
+  it('pins the crosshair to the edge, still on the line the shot travels', () => {
+    g.setMode('brawl');
+    g.pickMap('forest');
+    g.go('playing');
+    const p = g.player() as { x: number; y: number };
+    const mouse = g.mouse() as { x: number; y: number };
+    const cfg = g.config() as { hudHeight: number; canvasW: number; canvasH: number };
+
+    for (const at of [{ x: -400, y: 200 }, { x: 9000, y: -500 }, { x: 700, y: 9000 }]) {
+      mouse.x = at.x; mouse.y = at.y;
+      const r = g.reticleAt() as { x: number; y: number };
+      const where = `pointer at ${at.x},${at.y}`;
+
+      // Visible: a crosshair drawn off the canvas is no aiming reference at all.
+      expect(r.x, `${where} x`).toBeGreaterThanOrEqual(0);
+      expect(r.x, `${where} x`).toBeLessThanOrEqual(cfg.canvasW);
+      expect(r.y, `${where} y`).toBeGreaterThanOrEqual(cfg.hudHeight);
+      expect(r.y, `${where} y`).toBeLessThanOrEqual(cfg.canvasH);
+
+      // Honest: on the ray, not merely at the nearest point on the border. A
+      // plain clamp satisfies the four bounds above and still lies about angle.
+      const eye = { x: p.x, y: p.y + cfg.hudHeight };
+      expect(Math.atan2(r.y - eye.y, r.x - eye.x), `${where} is off the aim line`)
+        .toBeCloseTo(Math.atan2(at.y - eye.y, at.x - eye.x), 5);
     }
   });
 
@@ -5131,33 +5368,70 @@ describe('projectile flight, as it behaves today', () => {
     expect(Math.abs(a.vy)).toBeGreaterThan(0);  // steered off the straight line
   });
 
-  // Characterising a real gap, not endorsing it. Homing checks the boss and
-  // then walks `crows`, and no other population, so the wizard's defining
-  // mechanic is inert wherever the enemies are not birds: the castle gauntlet
-  // and the maze, where crows are deleted outright and everything is a
-  // skeleton, and the cavern, whose whole garrison is soldiers.
-  //
-  // Locked in here so a refactor of updateArrows cannot change it by accident.
-  // Fixing it is a separate decision with balance consequences, and belongs to
-  // whoever owns the wizard rather than to a test.
-  it('does NOT home toward a skeleton or a soldier, which is a known gap', () => {
+  // This used to be a characterisation test asserting the opposite: homing
+  // checked the boss and then walked `crows` alone, so the wizard's defining
+  // mechanic was inert wherever the enemies are not birds — the castle
+  // gauntlet and the maze, where crows are deleted outright and everything is
+  // a skeleton, and the cavern, whose whole garrison is soldiers.
+  it('a wizard bolt homes toward a skeleton, the same as toward a crow', () => {
     const p = g.player() as { x: number; y: number };
     g.spawnSkeleton('normal');
     const s = g.skeletons()[0] as { x: number; y: number };
     s.x = p.x + 120; s.y = p.y - 120;
-    const atSkeleton = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    const bolt = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
     g.stepSim(10);
-    expect(atSkeleton.vy).toBe(0);              // flew perfectly straight past it
+    expect(bolt.vy).toBeLessThan(0);            // steered up, toward the skeleton
+  });
 
-    emptyField();
+  it('a wizard bolt homes toward a soldier, the same as toward a crow', () => {
+    const p = g.player() as { x: number; y: number };
     g.spawnSoldier('spearman');
     const sol = g.soldiers()[0] as { x: number; y: number } | undefined;
     expect(sol, 'spawnSoldier put nothing on the field').toBeDefined();
     if (sol === undefined) return;
     sol.x = p.x + 120; sol.y = p.y - 120;
-    const atSoldier = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
+    const bolt = launch({ wiz: true, homing: true, vx: 400, vy: 0 }) as { vy: number };
     g.stepSim(10);
-    expect(atSoldier.vy).toBe(0);
+    expect(bolt.vy).toBeLessThan(0);
+  });
+
+  // Steering at a body it cannot damage would be the worse half of the bug
+  // rather than a fix, so the hit is asserted separately from the turn. This
+  // is the loop that never mentioned soldiers at all: the bolt flew through
+  // the whole garrison and out the other side.
+  it('a wizard bolt damages a soldier it flies into', () => {
+    const p = g.player() as { x: number; y: number };
+    g.spawnSoldier('spearman');
+    const sol = g.soldiers()[0] as { x: number; y: number; hp: number } | undefined;
+    expect(sol, 'spawnSoldier put nothing on the field').toBeDefined();
+    if (sol === undefined) return;
+    sol.x = p.x + 100; sol.y = p.y;             // dead ahead, on the flight line
+    const before = sol.hp;
+    launch({ wiz: true, homing: false, vx: 400, vy: 0, dmg: 1 });
+    g.stepSim(ONE_SECOND);
+    expect(sol.hp).toBeLessThan(before);
+    expect(g.arrows().length).toBe(0);          // and the bolt stopped on it
+  });
+
+  // A soldier has more than one hit point, so what a bolt is worth against the
+  // garrison is a number that can be got wrong rather than a formality. It is
+  // `wizBoltBodyDamage` and never `a.dmg`: what a bolt carries is its boss
+  // damage, so reading it here would make a fire bolt worth three to a soldier
+  // and one to everything else.
+  it('a wizard bolt is worth wizBoltBodyDamage to a soldier, whatever it carries', () => {
+    const p = g.player() as { x: number; y: number };
+    // A spearman, not a shieldman: a shieldman re-aims its guard at the hero
+    // every frame it walks, so what a bolt is worth to it is a question about
+    // the shield rather than about the figure, and the two do not belong in
+    // one assertion.
+    g.spawnSoldier('spearman');
+    const sol = g.soldiers()[0] as { x: number; y: number; hp: number } | undefined;
+    if (sol === undefined) throw new Error('spawnSoldier put nothing on the field');
+    sol.x = p.x + 100; sol.y = p.y;
+    const before = sol.hp;
+    launch({ wiz: true, homing: false, vx: 400, vy: 0, dmg: g.config().wizFireBoltDamage });
+    g.stepSim(ONE_SECOND);
+    expect(sol.hp).toBe(before - g.config().wizBoltBodyDamage);
   });
 
   it('a laser bolt crosses ground a plain arrow is stopped by', () => {

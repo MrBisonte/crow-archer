@@ -1,0 +1,51 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1120,
+      "h": 1250
+    },
+    {
+      "file": "Sigils.dc.html",
+      "x": 1240,
+      "y": 0,
+      "w": 1460,
+      "h": 5500
+    }
+  ],
+  "annotations": [
+    {
+      "id": "medium",
+      "x": 1240,
+      "y": 5570,
+      "w": 380,
+      "text": "Two problems, not one.\n\nThe medium was wrong -- stroked vector in a game of PixelGrids. But flat pixel shapes read as diagrams too. The fix is a lit object in a bezel: something to be lit against, and six value steps instead of three."
+    },
+    {
+      "id": "cost",
+      "x": 1660,
+      "y": 5570,
+      "w": 380,
+      "text": "The frame is code, the object is art.\n\nBezel, ground, cast shadow and sheen are generated from the talent's category. Forty talents cost forty objects, not forty illustrations -- and one icon is one file, so thirty of them were drawn fourteen at a time."
+    },
+    {
+      "id": "reads",
+      "x": 2080,
+      "y": 5570,
+      "w": 380,
+      "text": "Proportion, not detail.\n\nSPLIT SHAFT was an axe, then a goblet, then a spanner -- every time because the head was as broad as it was long. LONG REACH was a fountain pen and DEEPER CUT a syringe for the same reason. Looking at all forty on one sheet is what finds these; none of them is visible in the code."
+    },
+    {
+      "id": "limit",
+      "x": 2500,
+      "y": 5570,
+      "w": 380,
+      "text": "The abstract talents were the hard ones.\n\nFULL TILT is a bigger number and SLIPSTREAM is a rule, not a thing. Both resolve the same way: pick the object the hero HOLDS. A threaded needle goes through without tearing; a wheel cannot be stopped. What never works is drawing the effect."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

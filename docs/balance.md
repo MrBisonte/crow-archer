@@ -127,6 +127,10 @@ quantity rather than a threshold:
   of anything. Scaling a hit that already kills changes nothing, and scaling
   the ranger's below 1 would mean his bolts stop killing crows — the exact
   failure the net's 0.9 damage is designed around.
+- **The garrison is the exception, and it arrived after the rule.** A spearman
+  has 2 hit points and a shieldman 4, so on the cavern damage is a quantity
+  and the reasoning above does not reach it. See
+  [What a hit is worth to a body](#what-a-hit-is-worth-to-a-body).
 - **The player's own health** is `maxHp`, a different column.
 - **Multiplayer** has no bosses. `BattleWorld` reads `speed` and `maxHp` from
   the same table and never looks at this field. See
@@ -134,6 +138,46 @@ quantity rather than a threshold:
 
 The name says the scope. A field called `damageMult` in a shared table would
 invite exactly the wrong reading from the engine that has no bosses in it.
+
+## What a hit is worth to a body
+
+The multiplier is a boss field, so until the garrison arrived there was
+nothing else for damage to be a quantity against. There is now, and the wizard
+is the row it broke: the highest multiplier on the roster does nothing on the
+maps whose bodies are toughest, which made the panel's "hardest hit" false
+everywhere except a boss fight.
+
+Measured with the time-to-kill harness in `game.test.ts`, one held soldier at
+point-blank range, hero healed each frame so the figure is damage and not
+survival:
+
+| Target | Wizard, before | Wizard, now | Archer | Ranger |
+|---|---|---|---|---|
+| Soldier archer (1 hp) | 0.30 s | 0.30 s | 0.28 s | 0.28 s |
+| Spearman (2 hp) | 1.50 s | 0.30 s | 0.30 s | 0.30 s |
+| Shieldman (4 hp) | 3.90 s | 1.50 s | 0.33 s | 0.57 s |
+
+`wizBoltBodyDamage` is 2: a spearman falls to one bolt and a shieldman to two.
+It is the biggest single hit any hero lands on a body, which is what the
+highest damage row has to mean somewhere other than a boss fight.
+
+He is still the slowest of the three, and that is the design rather than a
+leftover. The archer and the ranger are click-limited, so their rate is theirs
+to spend; the wizard's is a 1.2 s cooldown over a Focus pool, and the rate is
+what he pays for the size of the hit. What changed is the order of magnitude,
+not the ordering.
+
+The figure is a bolt's, not a character's. Nothing else the wizard throws
+reads it, and no other hero has a body-damage field at all — every one of
+their weapons is still worth exactly one hit, which is the rule the archer's
+quiver is balanced around.
+
+One consequence worth stating, because it is not about soldiers. Waves mode
+scales crow health to 10x by about wave 25 (`waveCrowHpMult`), and a crow above
+1 hit point is a body like any other, so the same figure halves the wizard's
+time to kill there. That is the same defect and the same fix — a hit that was
+worth 1 against a 10-health crow was the multiplier failing to reach exactly
+the fight it was written for.
 
 ## Time to kill
 
@@ -252,6 +296,51 @@ how long the wizard spends unable to answer anything. Note that bolts share
 `maxArrowsInFlight` with arrows, which is 5 on the default `fast` preset and
 3 on `calm`; at 1.2 s and a 3.5 s bolt lifetime, a `calm` wizard whose bolts
 all miss can briefly cap out.
+
+### The sapper lights the pile
+
+The fourth build-up, and the one that was missing from this page. It does not
+build over time the way brace, momentum and bloodlust do -- it builds over the
+field. A blast lights every explosive of his within `sapperChainRadius` 74 px,
+each of those lights the next up to `sapperChainMaxLinks` 5 deep, and every
+link hits a boss harder than the one that lit it:
+
+    bossDamage = base x (1 + link x sapperChainBossBonus)      // 0.5
+
+Boss damage only. Everything else on the field dies to one hit of anything, so
+against a crowd a chain is already worth exactly its coverage.
+
+Two of his three sources can chain and only one of them reliably does. A thrown
+charge has a 1.8 s fuse against a 1.1 s cooldown, so at most 1.6 are ever in the
+air at once. The five-bomb barrage is the one moment a pile exists, which is why
+the fan rather than the charge is the row below.
+
+| Barrage, one fan, every bomb lighting | Link | Raw | x 1.2 | Running |
+|---|---|---|---|---|
+| the bomb that touched something | 0 | 1.0 | 1.2 | 1.2 |
+| lit by it | 1 | 1.5 | 1.8 | 3.0 |
+| | 2 | 2.0 | 2.4 | 5.4 |
+| | 3 | 2.5 | 3.0 | 8.4 |
+| | 4 | 3.0 | 3.6 | 12.0 |
+
+Twelve against the Crow King's 10, on a 6 s cooldown. A fan that chains cleanly
+is the only single action on the roster that ends that fight outright, and that
+is the ceiling rather than the figure: every link needs the next bomb inside
+74 px of the one that lit it *and* the boss inside that bomb's own 40 px blast,
+which a fan spread across 45 degrees rarely gives. What the table is for is
+that the ceiling was never written down -- the sapper's row in **Time to kill**
+says 4.2 actions, and that row is one charge.
+
+**`sapperChainMaxLinks` is not what caps the fan.** Five links is DEPTH, and a
+five-bomb fan can only ever reach link 4 whatever the depth allows. So MORE
+LINKS buys nothing at all on a barrage, and nothing in the tree as it stands
+widens the fan for it to buy: the talent pays only on his thrown charges, which
+are the source that almost never piles up. It is worth knowing before anyone
+prices it, and it is the argument for a talent that adds bombs.
+
+The depth a cascade actually reached is on screen now, in the lane-D `chain`
+chip, for the same reason brace and momentum are: a multiplier the player
+cannot see is a multiplier the player cannot play around.
 
 ## Multiplayer
 

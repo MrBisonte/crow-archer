@@ -15,11 +15,40 @@ dist-server/
 # Design scratch: render scripts and the PNGs they emit, for looking at sprite
 # work at 8x before it goes in. Deliberately not committed — they are a way of
 # checking the art, not the art itself, and the art lives in src/render.
-_design/
+#
+# `_design/talent-feedback/` is the exception. Its icon SOURCE is source: the
+# shapes are hand-drawn and cost days, and a directory nobody can branch is a
+# directory nobody can work on in parallel. So the scripts are tracked and
+# everything they GENERATE stays ignored -- a 2.5 MB render cache and a 3.4 MB
+# published bundle are not source however they got here.
+#
+# A bare `!` inside an ignored directory does nothing: git never descends into
+# `_design/`, so the parent has to be re-included before anything under it can
+# be. Hence the widen-then-narrow shape below.
+_design/*
+!_design/talent-feedback/
+_design/talent-feedback/*
+!_design/talent-feedback/*.py
+!_design/talent-feedback/*.mjs
+!_design/talent-feedback/README.md
+!_design/talent-feedback/canvas.json
+!_design/talent-feedback/preview32.html
+!_design/talent-feedback/Main.dc.html
+!_design/talent-feedback/icons/
+
+# Python bytecode. The icon modules are imported by the loader, so this appears
+# the first time anyone runs the build -- and the re-include above would
+# otherwise carry it straight into the commit.
+__pycache__/
 
 # Flight-recorder playtest logs: JSONL the dev-server sink appends, one file
 # per server session. Diagnostic exhaust, not source; see src/dev/flight-sink.ts.
 _flightlogs/
+
+# Hand-made exports of the single-file build (`npm run build` writes dist/, and
+# these are copies of dist/index.html renamed for handing out). Artifact, not
+# source: rebuildable from any commit, and 400KB of inlined bundle in a diff.
+crow-archer-complete.html
 
 # OS artifacts
 Thumbs.db

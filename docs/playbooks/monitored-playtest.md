@@ -116,7 +116,7 @@ Component notes, top to bottom:
    ```
 
    where
-   - `<repo>` is the clone root, for example `C:\Users\bison\OneDrive\labs\robinhood`.
+   - `<repo>` is the clone root, the directory holding `package.json`.
    - `<name>` is the worktree directory name.
    - `<branch>` is the branch to serve.
 
@@ -189,15 +189,15 @@ Four clocks appear in the file.
 The wire is JSON, so the types below are the closest SQL equivalents:
 `bigint` for ms-epoch integers, `double` for floats, `varchar(n)` where a
 closed value set bounds the length (n is the longest member), `text` where
-nothing does, and `json` for free structure. `PK` marks the one real key;
-the key column stays empty everywhere else because records nest by
-containment, and no line references another. The remaining size bounds are
-the array caps on the relations and the sink's 1,000,000-byte limit per
-line (`MAX_BODY_BYTES` in `src/dev/flight-sink.ts`).
+nothing does, and `json` for free structure. `PK` marks the real key, `cid`,
+which every record carries and which ties one page load's records together. The
+remaining size bounds are the array caps on the relations and the sink's
+1,000,000-byte limit per line (`MAX_BODY_BYTES` in `src/dev/flight-sink.ts`).
 
 ```mermaid
 erDiagram
   hello {
+    varchar(36) cid PK "page load id"
     bigint srv "sink receive time, ms epoch"
     bigint wall "page clock, ms epoch"
     text href "page URL"
@@ -205,6 +205,7 @@ erDiagram
     double dpr "device pixel ratio"
   }
   beat {
+    varchar(36) cid PK "page load id"
     bigint srv "sink receive time, ms epoch"
     bigint wall "page clock, ms epoch"
     bigint perf "performance.now, ms, rounded"
@@ -213,18 +214,21 @@ erDiagram
     int dropped "events discarded; optional"
   }
   alarm {
+    varchar(36) cid PK "page load id"
     bigint srv "sink receive time, ms epoch"
     bigint wall "page clock, ms epoch"
     bigint perf "performance.now, ms, rounded"
     varchar(11) class "loop-dead, logic-freeze, no-frames"
   }
   err {
+    varchar(36) cid PK "page load id"
     bigint srv "sink receive time, ms epoch"
     bigint wall "page clock, ms epoch"
     text msg "error message"
     text stack "stack trace; optional"
   }
   bye {
+    varchar(36) cid PK "page load id"
     bigint srv "sink receive time, ms epoch"
     bigint wall "page clock, ms epoch"
   }
@@ -236,6 +240,10 @@ erDiagram
   alarm ||--o{ LogEvent : "events"
   err ||--o{ LogEvent : "events"
   bye ||--o{ LogEvent : "events, last 100"
+  hello ||--o{ beat : "cid"
+  hello ||--o{ alarm : "cid"
+  hello ||--o{ err : "cid"
+  hello ||--o| bye : "cid"
 ```
 
 The nested objects, fully typed:
@@ -307,14 +315,36 @@ erDiagram
 | `err` | uncaught error or unhandled rejection | `wall`, `msg`, `stack`, `events` |
 | `bye` | `pagehide` fires (close, reload, navigate) | `wall`, `events` |
 
+### cid, the page load id
+
+Every record carries `cid`, a string minted once when the recorder starts and
+constant for as long as that page lives.
+
+It exists because the sink writes one file per dev server run, not one file per
+page. Reload the page five times and all five page loads append to the same
+file, while the log ring's event ids restart at 1 on each of them. The file name
+therefore identifies a server run and nothing finer, and before `cid` there was
+no way to tell one page load's beats from another's.
+
+`cid` is applied in `send`, so it rides on every kind including `bye`. That
+matters more than it looks: a page that outlives the dev server sends its
+goodbye into a file that never saw its `hello`, and without an id on the
+goodbye there is nothing to tie it back to.
+
+`crypto.randomUUID` is used where the context is secure, which localhost is. A
+plain http:// LAN address is not, and there the recorder falls back to a
+timestamped random id rather than throwing on boot.
+
 ### hello
 
+- `cid` (string) is the page load id, as above. Present on every kind.
 - `href` (string) is `location.href` of the page.
 - `ua` (string) is `navigator.userAgent`.
 - `dpr` (number) is `devicePixelRatio`.
 
 ```json
-{"kind": "hello",
+{"cid": "6f1c2f0e-6d1b-4f43-9a2c-0c9c2b8f1a55",
+ "kind": "hello",
  "wall": 1788101911786,
  "href": "http://localhost:8090/",
  "ua": "Mozilla/5.0 ...",
