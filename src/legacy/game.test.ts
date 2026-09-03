@@ -5467,3 +5467,130 @@ describe('projectile flight, as it behaves today', () => {
   });
 });
 
+
+describe('the ultimate', () => {
+  /** A hero standing in a cleared arena, aiming due east, ultimate charging. */
+  function readyRun(hero: string): { x: number; y: number; aimAngle: number } {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    p.aimAngle = 0;
+    return p;
+  }
+
+  it('starts a run charging rather than in hand', () => {
+    readyRun('archer');
+    expect(g.ultimate().ready).toBe(false);
+    expect(g.ultimate().cd).toBe(g.config().ultimateCooldown);
+  });
+
+  // The whole of the per-hero part of the timer. An archer who is braced is
+  // playing his kit, and the timer is meant to notice: revert the boost term
+  // in tickUltimate and the two numbers below are equal.
+  it('charges faster for a hero filling his own meter', () => {
+    readyRun('archer');
+    // Standing still is what fills the brace, so the sim does it for us.
+    stepPast(2 * ONE_SECOND);
+    expect(g.brace().level).toBe(1);
+    const before = g.ultimate().cd;
+    stepPast(ONE_SECOND);
+    const bracedSpend = before - g.ultimate().cd;
+
+    // The same second with the meter empty. Walking is what empties the
+    // brace, and standing still is what fills it, so the comparison only
+    // means anything if this hero actually moves.
+    readyRun('archer');
+    (g.keys() as Record<string, boolean>)['ArrowRight'] = true;
+    stepPast(ONE_SECOND);
+    expect(g.brace().level).toBe(0);
+    const idleFrom = g.ultimate().cd;
+    stepPast(ONE_SECOND);
+    const idleSpend = idleFrom - g.ultimate().cd;
+    (g.keys() as Record<string, boolean>)['ArrowRight'] = false;
+
+    expect(g.config().ultimateChargeBoost).toBeGreaterThan(0);
+    // A full meter is worth the whole boost: one second of standing still
+    // spends two of the timer's.
+    expect(idleSpend).toBeCloseTo(1, 1);
+    expect(bracedSpend).toBeCloseTo(1 + g.config().ultimateChargeBoost, 1);
+  });
+
+  // The trigger, and the reason it needs no new key: the special is bound to
+  // both F and the right button, so one of the two can carry the ultimate.
+  it('fires on the special KEY and never on the right button', () => {
+    readyRun('archer');
+    g.setUltimateCD(0);
+    expect(g.ultimate().ready).toBe(true);
+
+    // The button: the plain special, and the ultimate is untouched.
+    const dynamitesBefore = g.dynamites().length;
+    g.special(false);
+    expect(g.ultimate().ready).toBe(true);
+    expect(g.dynamites().length).toBeGreaterThan(dynamitesBefore);
+
+    // The key: the ultimate, and it costs the whole timer.
+    const arrowsBefore = g.arrows().length;
+    g.special(true);
+    expect(g.arrows().length).toBe(arrowsBefore + 1);
+    expect(g.ultimate().cd).toBe(g.config().ultimateCooldown);
+  });
+
+  // A miss costs the minute: the cooldown is spent on firing, not on hitting.
+  // The arena is empty, so this shot hits nothing at all.
+  it('costs the full timer even when the shot hits nothing', () => {
+    readyRun('archer');
+    g.setUltimateCD(0);
+    g.special(true);
+    stepPast(ONE_SECOND);
+    expect(g.ultimate().ready).toBe(false);
+    expect(g.ultimate().cd).toBeGreaterThan(g.config().ultimateCooldown * 0.9);
+  });
+
+  it('spends nothing when the archer has no shaft to fire', () => {
+    readyRun('archer');
+    const inv = g.inv() as { arrows: number; fireArrows: number; ricochetArrows: number };
+    inv.arrows = 0; inv.fireArrows = 0; inv.ricochetArrows = 0;
+    g.setUltimateCD(0);
+    g.special(true);
+    expect(g.ultimate().ready).toBe(true);
+  });
+});
+
+describe('HEADSHOT, the archer ultimate', () => {
+  function firedFrom(braced: boolean): Record<string, number> {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    p.aimAngle = 0;
+    if (braced) stepPast(2 * ONE_SECOND);
+    g.setUltimateCD(0);
+    g.special(true);
+    const shot = g.arrows()[g.arrows().length - 1] as Record<string, number>;
+    return shot;
+  }
+
+  it('always lands critical, on top of the brace rather than instead of it', () => {
+    const cold = firedFrom(false);
+    expect(cold.dmgMult).toBe(g.config().archerHeadshotCrit);
+
+    const braced = firedFrom(true);
+    // The stance still pays. Flatten the multipliers into one and this is the
+    // test that says so.
+    expect(braced.dmgMult).toBeCloseTo(
+      g.config().archerHeadshotCrit * g.config().braceBossMult, 5);
+  });
+
+  it('outruns a power shot and pierces far past one', () => {
+    const shot = firedFrom(false);
+    const c = g.config();
+    expect(shot.initSpeed).toBe(c.arrowSpeed * c.archerHeadshotSpeedMult);
+    expect(shot.pierceLeft).toBeGreaterThan(c.archerPowerBounces);
+    expect(shot.pierceLeft).toBe(c.archerHeadshotPierce);
+  });
+});

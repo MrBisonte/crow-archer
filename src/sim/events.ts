@@ -123,6 +123,16 @@ export type GameEvent =
    * filling rather than as a shot landing.
    */
   | { type: 'ARCHER_POWER_HIT'; x: number; y: number; left: number }
+  /**
+   * The ultimate has finished charging. Fires once, on the frame the timer
+   * reaches zero, for the same reason ARCHER_BRACED and RANGER_MOMENTUM do:
+   * the useful moment is the threshold, not the countdown. `hero` is who it
+   * became ready for, since every hero's is a different thing.
+   */
+  | { type: 'ULTIMATE_READY'; hero: string; x: number; y: number }
+  /** An ultimate was spent. One event for all five: what each one does is
+   *  its own business, but the commitment reads the same every time. */
+  | { type: 'ULTIMATE_FIRED'; hero: string; x: number; y: number }
   | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }

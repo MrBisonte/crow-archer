@@ -20,6 +20,23 @@ knight who has bought the health axis stays a point ahead of an archer who has
 bought the same levels. [Balance](balance.md) carries the full table and the
 reasoning behind every figure in it.
 
+**Every hero has an ultimate**, and none of them has a key of its own. The
+special is bound twice -- to **F** and to the **right mouse button** -- so the
+key fires the ultimate whenever it is up and the button always fires the plain
+special. Nothing is taken away: a player who wants the dynamite rather than the
+ultimate right-clicks for it.
+
+It charges on a 60 second timer that runs faster the fuller that hero's own
+meter is -- the archer's brace, the ranger's momentum, the knight's bloodlust,
+the wizard's spent focus, the sapper's chain depth. A full meter runs it at
+double, so a minute is what an idle hero waits and half of it is what a hero
+playing his kit properly waits. Every one of them is a skill shot, and a miss
+costs the whole timer: the cooldown is spent on firing, not on hitting.
+
+While it is ready the hero carries a visible aura -- a different one each -- and
+the status lane shows a magenta chip, the only one there that is not the
+cooldown green.
+
 ### Archer
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Body:** 9 health, 200 px/s. The middle of the roster on both counts, and the row the other four are read against
@@ -28,6 +45,7 @@ Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Special:** Dynamite, hold to charge, release to throw, blast clears tiles and damages the boss
 - **Brace:** Stand still and he sets his feet, filling over 1.25 s and shown as a chip in the status lane. A full brace multiplies what every arrow is worth **against a boss** by 1.8; against a crow it changes nothing, because a crow dies to any arrow either way. It drains four times faster than it fills, so it is a stance rather than a resource — it cannot be built in cover and carried into the open. It is the answer to his being the smallest hit per press on the roster, and standing still is the whole price
 - **Power shot (hold Shift):** Draws the bow, rooted while he holds it, for up to 1 s. Releasing looses one arrow that pierces up to 3 bodies, flies at up to twice the usual 500 px/s, and hits a boss for up to 3x a plain arrow. A tap gets the bottom of every one of those ranges, so the question the key asks is how long to stand still. 5 s cooldown. It spends one unit of whatever ammo is queued, so a fully drawn fire arrow still burns, and it ignores the in-flight cap. Draw and brace multiply: a full draw from a full brace is the most committed thing he can do and hits a boss for 5.4x a plain arrow, paid for with 1.25 s of standing still, 1 s of drawing and a 5 s cooldown
+- **HEADSHOT (ultimate, F):** One arrow down the aim line at 3x an ordinary arrow's speed. It crosses the map, passes through effectively anything, and always lands critical -- **2x, applied on top of the brace multiplier rather than instead of it**, so a headshot fired from a full brace is worth 3.6x a plain arrow to a boss and the stance still pays. It spends one unit of whatever ammo is queued and takes that arrow's behaviour with it, so a fire headshot lays a lane and a ricochet one keeps bouncing. Out of shafts it does not fire and the ultimate is not spent. Ready, four sight ticks close on him once a second
 - **Pickups:** Ricochet arrows (bounce off walls with a speed boost), fire arrows (leave burning patches)
 
 ### Wizard

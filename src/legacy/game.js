@@ -820,6 +820,30 @@ const CONFIG = {
   // reads even on noise; pitch is small and, on shapes 4 and 5, inaudible.
   soundVariation: { gain: 0.1, pitch: 0.04, tail: 0.12 },
 
+  // ── The ultimate ──────────────────────────────────────────────────────
+  // One long timer per hero, and the only thing on the roster that is not
+  // bought with a key of its own: the special is bound twice, to F and to
+  // the right button, so the key fires the ultimate when it is up and the
+  // button always fires the plain special. Nothing new to press, nothing
+  // taken away.
+  //
+  // The timer is not a wall clock. It runs faster the fuller the hero's own
+  // meter is -- brace, momentum, bloodlust, focus spent, chain depth -- so
+  // a minute is what an idle hero waits and half of it is what a hero
+  // playing his kit properly waits. That is the whole of the boost: one
+  // dial, not five, and the per-hero part is only which meter is read.
+  ultimateCooldown: 60, ultimateChargeBoost: 1.0,
+
+  // HEADSHOT. One arrow down the aim line that crosses the map, passes
+  // through effectively anything, and always lands critical -- the x2 is
+  // applied ON TOP of brace, so the stance still pays. Pierce is a large
+  // finite number rather than Infinity: the value rides on the arrow and
+  // the arrow is serialised.
+  archerHeadshotCrit: 2, archerHeadshotSpeedMult: 3, archerHeadshotPierce: 99,
+  // The streak the renderer draws behind it. Fixed, because pierceLeft
+  // sizes an ordinary power shot's streak and 99 would draw a wall.
+  archerHeadshotPips: 6,
+
   keys: {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
@@ -1413,6 +1437,15 @@ let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperCh
  *  readable. The peak rather than the last bomb: a chain goes off from the
  *  inside out and the final blast is not the deepest one. */
 let sapperChainPeak = 0, sapperChainRead = 0;
+/**
+ * How deep the last cascade ran, against the ceiling MORE LINKS sets rather
+ * than the base one. The HUD chip and the ultimate's charge rate both read
+ * it, and a talent read away in one of the two would be a silent disagreement.
+ */
+function sapperChainFrac() {
+  if (sapperChainPeak <= 1) return 0;
+  return Math.min(1, sapperChainPeak / (TALENTS.stat('moreLinks') + 1));
+}
 /** Charges still owed to the burst in progress, and the timer to the next. */
 let sapperBurstLeft = 0, sapperBurstTimer = 0, sapperBurstThrown = 0;
 let sapperBarrageCD = 0, sapperShotCD = 0;
@@ -1528,6 +1561,13 @@ function walkPhaseFor(distancePx) {
   return (distancePx / WALK_CYCLE_PX) * Math.PI * 2;
 }
 
+/**
+ * Seconds until the ultimate is available again, counting down.
+ *
+ * One variable for all five heroes, because only one is ever selected. It
+ * starts a run full, so the first one is earned rather than opened with.
+ */
+let ultimateCD = 0;
 let archerPowerCD = 0;
 /**
  * Seconds left of the snap forward after a shot leaves, counting down.
@@ -2484,6 +2524,42 @@ function startArcherDraw() {
   archerDraw.t0 = performance.now();
 }
 
+/**
+ * HEADSHOT -- the archer's ultimate.
+ *
+ * The power shot asks how long to stand still. This one does not ask: it is
+ * the shot he would have taken with all the time in the world. It crosses
+ * the map, passes through effectively anything, and always lands critical.
+ *
+ * The x2 is applied on top of the brace multiplier rather than instead of
+ * it, for the same reason DEAD EYE composes with the braced cooldown cut:
+ * the stance was already paid for, and an ultimate that flattened it would
+ * make the best moment to fire the one where he had done the least.
+ *
+ * It spends a queued pickup arrow exactly as a power shot does, and gets
+ * that arrow's behaviour with it -- so a fire headshot lays a lane and a
+ * ricochet one keeps bouncing. Out of shafts, it does not fire and nothing
+ * is spent.
+ */
+function fireHeadshot() {
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  const type = spendShaft();
+  const spd = CONFIG.arrowSpeed * CONFIG.archerHeadshotSpeedMult;
+  arrows.push({ x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd,
+    vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.arrowLifetime, type, bounces: 0,
+    initSpeed: spd,
+    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    power: true, headshot: true,
+    fireTrail: type === 'fire' ? 0 : null,
+    pierceLeft: CONFIG.archerHeadshotPierce,
+    dmgMult: CONFIG.archerHeadshotCrit * braceBossMult() });
+  archerLoose = ARCHER_LOOSE_SECS;
+  archerLoosePower = 1;
+  return true;
+}
+
 function releaseArcherDraw() {
   if (!archerDraw.on) return;
   const drawn = archerDrawFrac();
@@ -2584,6 +2660,61 @@ function releaseArcherDraw() {
  * with something to tick every frame is a row here, not another
  * `selectedChar ===` guard bolted onto a block every hero runs.
  */
+/**
+ * Which meter charges each hero's ultimate, 0 to 1.
+ *
+ * A table rather than a branch, the way HERO_UPKEEP and CHIP are, so a hero
+ * is a row. Each reads the meter that hero is already paid for filling, so
+ * the ultimate arrives sooner for playing the kit rather than for waiting.
+ * The wizard's is inverted on purpose: Focus regenerates on its own, so a
+ * full pool means he has not been casting, and it is the casting that
+ * should be rewarded.
+ */
+const ULTIMATE_CHARGE = {
+  archer: () => braceLevel,
+  ranger: () => rangerMomentum,
+  // The talent's ceiling, not the base one: FOURTH BLOOD raises the cap, and
+  // reading CONFIG here would charge a fourth stack as if it were a full meter.
+  knight: () => knightBloodlust / TALENTS.stat('fourthBlood'),
+  wizard: () => 1 - inv.focus / CONFIG.resources.focus.max,
+  sapper: () => sapperChainFrac(),
+};
+
+/** What each hero's ultimate does. Returns false if it could not fire, in
+ *  which case nothing is spent -- the gate belongs to the hero, not here. */
+const ULTIMATE = {
+  archer: fireHeadshot,
+};
+
+/** True while the ultimate is up. The aura, the HUD chip and the key all ask.*/
+function ultimateReady() { return ultimateCD <= 0 && !!ULTIMATE[selectedChar]; }
+
+/**
+ * Fires the ultimate if it is up, and says whether it went.
+ *
+ * A miss costs the whole timer: the cooldown is spent on firing, not on
+ * hitting. What it does not cost is a refusal -- a hero who cannot fire yet
+ * (the ranger below his momentum cap) returns false from his own function
+ * and keeps the charge.
+ */
+function tryUltimate() {
+  if (!inGame() || !ultimateReady()) return false;
+  if (!ULTIMATE[selectedChar]()) return false;
+  ultimateCD = CONFIG.ultimateCooldown;
+  events.emit({ type: 'ULTIMATE_FIRED', hero: selectedChar, x: player.x, y: player.y });
+  return true;
+}
+
+/** The countdown, and the one moment it is worth telling the player about. */
+function tickUltimate(dt) {
+  if (ultimateCD <= 0) return;
+  const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
+  ultimateCD = Math.max(0, ultimateCD - dt * (1 + charge * CONFIG.ultimateChargeBoost));
+  if (ultimateCD <= 0 && ULTIMATE[selectedChar]) {
+    events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
+  }
+}
+
 const HERO_UPKEEP = {
   // Focus refills at a constant rate whether or not he is casting. Deliberate:
   // a regeneration that paused while acting would make the pool a second,
@@ -3122,7 +3253,15 @@ function knightChargeTelegraph() {
   return { ...wedge, frac: knightChargeFrac(), endX: end.x, endY: end.y, travel: end.moved };
 }
 
-function startCharge() {
+/**
+ * The special. Bound twice -- to F and to the right mouse button -- which is
+ * the redundancy the ultimate is paid for with: `viaUltimateKey` is true
+ * only on the key, so the key fires the ultimate while it is up and the
+ * button always fires the plain special. Nothing new to bind, and no press
+ * is taken away from a player who wants the special instead.
+ */
+function startCharge(viaUltimateKey) {
+  if (viaUltimateKey && tryUltimate()) return;
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
   } else if (selectedChar === 'knight') {
@@ -3216,7 +3355,7 @@ function installInput() {
       remapTarget = null; e.preventDefault(); return;
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
-    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
+    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge(true);
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
     if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
     // The name bookkeeping — including the held key that starts repeating
@@ -3894,6 +4033,23 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'ULTIMATE_READY':
+      // Loud, and allowed to be: it happens about once a minute and the
+      // whole point is that the player notices. The aura on the body is the
+      // standing tell; this is the moment it arrives.
+      playSound(sndKeyDrop); triggerShake(2, 120);
+      burst(e.x, e.y, {
+        count: 16, colors: ['#FF3EC8','#FFFFFF'], speedMin: 30, speedMax: 110,
+        decay: 2.2, shape: 'spark', shadowBlur: 8, shadowColor: '#FF3EC8'
+      });
+      break;
+    case 'ULTIMATE_FIRED':
+      playSound(sndChargeWhoosh); triggerShake(5, 220);
+      burst(e.x, e.y, {
+        count: 22, colors: ['#FF3EC8','#FFFFFF'], speedMin: 60, speedMax: 180,
+        decay: 2.0, shape: 'spark', shadowBlur: 10, shadowColor: '#FF3EC8'
+      });
+      break;
     case 'ARCHER_BRACED':
       // Quiet and short: a confirmation, not an alarm. He is standing still to
       // hear it, so it does not have to compete with anything.
@@ -4097,6 +4253,7 @@ function initGame() {
   chooser = null; chooserQueue = []; riteOffered = false;
 
   knightChainTimer = 0;
+  ultimateCD = CONFIG.ultimateCooldown;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
@@ -4386,6 +4543,7 @@ function updatePlayer(dt) {
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   HERO_UPKEEP[selectedChar]?.(dt);
+  tickUltimate(dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
@@ -9675,6 +9833,46 @@ function drawPlayerFrozenOverlay() {
 // for why later phases add a table entry per character/tile kind here
 // instead of a growing if/else chain.
 
+/**
+ * What a ready ultimate looks like on the body, per hero.
+ *
+ * A table for the same reason CHIP is one, and painted here rather than
+ * inside each of the five draw functions: the aura belongs to a state every
+ * hero shares, and five copies of it would drift the moment one was tuned.
+ * It goes down before the sprite so it reads as something around him rather
+ * than something stuck on him -- the ground shadow lands on top of it.
+ *
+ * Each is deliberately a different idea, not a recolour: the player learns
+ * one hero at a time and should recognise the state without reading a HUD.
+ */
+const ULTIMATE_AURA = {
+  // HEADSHOT: four sight ticks closing on him, once a second. Everything
+  // narrowing to one point is the shot itself.
+  archer: (t) => {
+    const close = 1 - (t % 1);
+    const r = 10 + close * 16;
+    ctx.strokeStyle = '#EAFF6A'; ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 8;
+    ctx.lineWidth = 2; ctx.globalAlpha = 0.35 + 0.5 * (1 - close);
+    for (let k = 0; k < 4; k++) {
+      const a = k * Math.PI / 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * (r + 7), Math.sin(a) * (r + 7) - 6);
+      ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r - 6);
+      ctx.stroke();
+    }
+  },
+};
+
+/** Paints the ready aura, if the hero out has an ultimate and it is up. */
+function drawUltimateAura() {
+  const paint = ULTIMATE_AURA[selectedChar];
+  if (!paint || !ultimateReady()) return;
+  ctx.save();
+  ctx.translate(player.x, player.y + CONFIG.hudHeight);
+  paint(loopT);
+  ctx.restore();
+}
+
 function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
   if (selectedChar === 'knight') { drawKnight(); return; }
@@ -10343,10 +10541,14 @@ function drawArrows() {
     // it spent: a bright streak behind the shaft, as long as the number of
     // bodies it can still pass through.
     if (a.power) {
-      const pips = a.pierceLeft || 1;
+      // A headshot pierces effectively without limit, so pierceLeft cannot
+      // size its streak -- 99 would draw a wall. It takes a fixed, heavier
+      // one in white instead, so it never reads as a big power shot.
+      const pips = a.headshot ? CONFIG.archerHeadshotPips : (a.pierceLeft || 1);
       ctx.globalAlpha = 0.5;
-      ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 10;
-      ctx.strokeStyle = '#EAFF6A'; ctx.lineWidth = 2 + pips;
+      const streak = a.headshot ? '#FFFFFF' : '#EAFF6A';
+      ctx.shadowColor = streak; ctx.shadowBlur = a.headshot ? 18 : 10;
+      ctx.strokeStyle = streak; ctx.lineWidth = 2 + pips;
       ctx.beginPath(); ctx.moveTo(-16 - 4 * pips, 0); ctx.lineTo(12, 0); ctx.stroke();
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
@@ -12272,6 +12474,15 @@ function drawCellTrack(x, y, cells, pitch, body, h, cur, max, colOn, colDim) {
  * share #FF7A1F and differ only in outline.
  */
 const GLYPH = {
+  // The ultimate: an eight-pointed burst. The one glyph here that is neither
+  // a weapon nor a resource, because the ultimate is neither -- it is a
+  // moment, and a star is how this vocabulary can say so.
+  ultimate: (s) => { const m = s / 2; ctx.lineWidth = 2;
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4, len = k % 2 === 0 ? 0.46 : 0.30;
+      ctx.beginPath(); ctx.moveTo(m, m);
+      ctx.lineTo(m + Math.cos(a) * s * len, m + Math.sin(a) * s * len); ctx.stroke();
+    } },
   // Momentum: three speed lines, which is the one idiom in this table that is
   // about the hero rather than about what he throws.
   momentum: (s) => { ctx.lineWidth = 2;
@@ -12407,7 +12618,7 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['brace', 'power', 'shield'],
+  archer: ['brace', 'power', 'ult', 'shield'],
   ranger: ['momentum', 'net', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
@@ -12469,6 +12680,14 @@ const CHIP = {
   // Reuses the snipe crosshair glyph — it is a precision shot, same read as
   // everyone else's aim-down-it key, just cooldown-gated instead of held.
   sapperShot: () => cooldownChip('snipe', sapperShotCD, CONFIG.sapperShotCooldown, 0),
+  // Not a cooldownChip, though it is a cooldown. Deliberately the one chip in
+  // the lane that is not the shared green: it is the one the player must not
+  // miss, and a fifth green READY among four is exactly what gets missed.
+  ult: () => ({
+    glyph: 'ultimate', color: '#FF3EC8', lit: ultimateReady(),
+    label: ultimateReady() ? 'ULT' : Math.ceil(ultimateCD) + 's',
+    frac: ultimateReady() ? null : 1 - ultimateCD / CONFIG.ultimateCooldown,
+  }),
 };
 
 /** Shared shape for anything that recharges: ready, counting down, or live. */
@@ -14345,7 +14564,7 @@ function render(t) {
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
     for (const gd of guards) if (litAt(gd.x, gd.y)) drawGuard(gd);
     drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts(); drawNets(); drawHeldMarkers();
-    drawChargeArc(); drawPlayer();
+    drawChargeArc(); drawUltimateAura(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
     if (!boss || litAt(boss.x, boss.y)) drawBoss();
@@ -14791,6 +15010,13 @@ export const devHooks = {
   // input path a real keyboard does instead of a parallel one.
   keys: () => keys,
   shoot() { shootPressed = true; },
+  // The special, down the same path a keyboard or a mouse takes: `viaKey`
+  // true is the F key, which fires the ultimate when it is up; false is the
+  // right button, which never does.
+  special(viaKey) { startCharge(!!viaKey); releaseCharge(); },
+  ultimate: () => ({ cd: ultimateCD, ready: ultimateReady(),
+                     charge: ULTIMATE_CHARGE[selectedChar]?.() || 0 }),
+  setUltimateCD(secs) { ultimateCD = secs; },
   killCount: () => killCount,
   hp: () => playerHP,
   // One frame with a raw millisecond gap, to test accumulator multi-stepping.
