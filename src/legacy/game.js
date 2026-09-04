@@ -2770,6 +2770,21 @@ const ULTIMATE_CHARGE = {
   sapper: () => sapperChainFrac(),
 };
 
+/**
+ * What each hero's ultimate leaves running, for the two that leave anything.
+ *
+ * A table rather than a line per ability in the update loop. Two of the five
+ * resolve over time -- the crack travels, the singularity holds -- and each
+ * was its own call beside the whirlwind's tick, so a sixth ultimate would
+ * have been a seventh edit inside the frame loop. Here the loop makes one
+ * call for all of them, forever, and an ultimate that resolves on the frame
+ * it fires simply has no row.
+ */
+const ULTIMATE_TICK = {
+  knight: tickEarthshatter,
+  wizard: tickVortex,
+};
+
 /** What each hero's ultimate does. Returns false if it could not fire, in
  *  which case nothing is spent -- the gate belongs to the hero, not here. */
 const ULTIMATE = {
@@ -2799,8 +2814,15 @@ function tryUltimate() {
   return true;
 }
 
-/** The countdown, and the one moment it is worth telling the player about. */
+/**
+ * The whole per-frame cost of the ultimates: whatever one is still resolving,
+ * then the countdown and the one moment worth telling the player about.
+ *
+ * One call from the frame loop covers all five and every one added after
+ * them, which is the point -- see ULTIMATE_TICK.
+ */
 function tickUltimate(dt) {
+  ULTIMATE_TICK[selectedChar]?.(dt);
   if (ultimateCD <= 0) return;
   const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
   ultimateCD = Math.max(0, ultimateCD - dt * (1 + charge * CONFIG.ultimateChargeBoost));
@@ -4826,8 +4848,6 @@ function updatePlayer(dt) {
   }
 
   // ── Knight whirlwind continuous tick ─────────────────────────────────────
-  tickEarthshatter(dt);
-  tickVortex(dt);
   if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
     knightWhirlwindTimer -= dt;
     knightWhirlwindTick  -= dt;

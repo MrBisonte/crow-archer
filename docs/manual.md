@@ -35,7 +35,8 @@ costs the whole timer: the cooldown is spent on firing, not on hitting.
 
 While it is ready the hero carries a visible aura -- a different one each -- and
 the status lane shows a magenta chip, the only one there that is not the
-cooldown green.
+cooldown green. [Balance](balance.md#the-ultimates) carries every figure and
+the reasoning behind it.
 
 ### Archer
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
