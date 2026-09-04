@@ -130,6 +130,12 @@ export type GameEvent =
    * became ready for, since every hero's is a different thing.
    */
   | { type: 'ULTIMATE_READY'; hero: string; x: number; y: number }
+  /** The knight's crack, at the moment it opens. `angle` is where it runs,
+   *  fixed at the press: the shot cannot be steered once it is away. */
+  | { type: 'KNIGHT_EARTHSHATTER'; x: number; y: number; angle: number }
+  /** The sapper's line going down. `count` is how many charges were actually
+   *  laid, which is fewer than the full line when it was aimed at a border. */
+  | { type: 'SAPPER_CARPET'; x: number; y: number; angle: number; count: number }
   /** An ultimate was spent. One event for all five: what each one does is
    *  its own business, but the commitment reads the same every time. */
   | { type: 'ULTIMATE_FIRED'; hero: string; x: number; y: number }

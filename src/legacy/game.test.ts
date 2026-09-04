@@ -5477,14 +5477,20 @@ describe('the ultimate', () => {
     const p = g.player() as { x: number; y: number; aimAngle: number };
     p.x = 6.5 * g.config().tileSize;
     p.y = 6.5 * g.config().tileSize;
-    p.aimAngle = 0;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
     return p;
   }
 
   it('starts a run charging rather than in hand', () => {
     readyRun('archer');
     expect(g.ultimate().ready).toBe(false);
-    expect(g.ultimate().cd).toBe(g.config().ultimateCooldown);
+    // Close, not exact: the helper settles two frames of aim before returning.
+    expect(g.ultimate().cd).toBeCloseTo(g.config().ultimateCooldown, 0);
   });
 
   // The whole of the per-hero part of the timer. An archer who is braced is
@@ -5560,6 +5566,13 @@ describe('the ultimate', () => {
 });
 
 describe('HEADSHOT, the archer ultimate', () => {
+  /**
+   * Fires a headshot, braced or not.
+   *
+   * "Not braced" has to be made true rather than assumed: standing still is
+   * what fills the meter, and every helper here stands still. Walking a moment
+   * empties it, which is the only way to get a genuinely cold shot.
+   */
   function firedFrom(braced: boolean): Record<string, number> {
     g.pick('archer');
     g.go('playing');
@@ -5567,8 +5580,21 @@ describe('HEADSHOT, the archer ultimate', () => {
     const p = g.player() as { x: number; y: number; aimAngle: number };
     p.x = 6.5 * g.config().tileSize;
     p.y = 6.5 * g.config().tileSize;
-    p.aimAngle = 0;
-    if (braced) stepPast(2 * ONE_SECOND);
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    if (braced) {
+      stepPast(2 * ONE_SECOND);
+      expect(g.brace().level).toBe(1);
+    } else {
+      (g.keys() as Record<string, boolean>)['ArrowDown'] = true;
+      stepPast(20);
+      (g.keys() as Record<string, boolean>)['ArrowDown'] = false;
+      expect(g.brace().level).toBe(0);
+    }
     g.setUltimateCD(0);
     g.special(true);
     const shot = g.arrows()[g.arrows().length - 1] as Record<string, number>;
@@ -5592,5 +5618,139 @@ describe('HEADSHOT, the archer ultimate', () => {
     expect(shot.initSpeed).toBe(c.arrowSpeed * c.archerHeadshotSpeedMult);
     expect(shot.pierceLeft).toBeGreaterThan(c.archerPowerBounces);
     expect(shot.pierceLeft).toBe(c.archerHeadshotPierce);
+  });
+});
+
+describe('EARTHSHATTER, the knight ultimate', () => {
+  /** A knight in a cleared arena at a known tile, aiming due east. */
+  function knightAt(col = 6, row = 6): { x: number; y: number; aimAngle: number } {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  // Read on the terrain rather than on crows. A crow is spawned by the wave,
+  // walks toward the hero, and can be replaced by another that looks the same
+  // to an assertion; terrain is where it is put and stays there. The crack
+  // breaks ground and kills through one call, so the ground is the honest
+  // witness for how far it reached and how narrow it stayed.
+  it('breaks the ground down its line, far past a spear length, and not beside it', () => {
+    const p = knightAt();
+    const c = g.config();
+    const tiles = g.tiles() as { get(r: number, col: number): TileId;
+                                 set(r: number, col: number, t: TileId): void };
+    const row = Math.floor(p.y / c.tileSize);
+    // Six tiles out: two and a half spear lengths, well past anything he can
+    // reach by swinging.
+    const col = Math.floor(p.x / c.tileSize) + 6;
+    tiles.set(row, col, TILE.TREE);          // on the line
+    tiles.set(row + 4, col, TILE.TREE);      // four tiles to the side of it
+
+    g.special(true);
+    stepPast(ONE_SECOND);
+    expect(tiles.get(row, col)).not.toBe(TILE.TREE);
+    expect(tiles.get(row + 4, col)).toBe(TILE.TREE);
+  });
+  // The angle is committed at the press, which is what makes it a shot. Steer
+  // it after the fact and it would be a spell you point.
+  //
+  // Aimed through the MOUSE, not by assigning player.aimAngle: updatePlayer
+  // rewrites that field from the input command every frame, so an assignment
+  // is gone before the next step and this test passed against a crack that
+  // steered perfectly.
+  it('cannot be steered once it is away', () => {
+    const p = knightAt();
+    aimAt(p.x + 400, p.y);              // due east
+    stepPast(2);
+    g.special(true);
+    const committed = (g.earthshatter() as { angle: number }).angle;
+    expect(committed).toBeCloseTo(0, 3);
+
+    aimAt(p.x, p.y + 400);              // swing the mouse due south
+    stepPast(6);
+    expect(p.aimAngle).toBeCloseTo(Math.PI / 2, 3);   // the hero did turn
+    const still = g.earthshatter() as { angle: number; x: number; y: number } | null;
+    expect(still).not.toBeNull();
+    expect(still!.angle).toBe(committed);             // the crack did not
+    expect(still!.x).toBeGreaterThan(p.x);
+    expect(still!.y).toBeCloseTo(p.y, 3);
+  });
+  it('stops after its own range rather than running forever', () => {
+    knightAt();
+    g.special(true);
+    stepPast(3 * ONE_SECOND);
+    expect(g.earthshatter()).toBeNull();
+  });
+});
+
+describe('CARPET BOMB, the sapper ultimate', () => {
+  function sapperAt(col = 6, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick('sapper');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  it('lays a line down the aim line, on fuses that run outward from his feet', () => {
+    const p = sapperAt();
+    const c = g.config();
+    (g.dynamites() as unknown[]).length = 0;
+    g.special(true);
+
+    const laid = g.dynamites() as Array<Record<string, number>>;
+    expect(laid).toHaveLength(c.sapperCarpetCount);
+    laid.forEach((bomb, i) => {
+      expect(bomb.x).toBeCloseTo(p.x + c.sapperCarpetSpacing * (i + 1), 4);
+      expect(bomb.y).toBeCloseTo(p.y, 4);
+      // Each further out than the last, and each on a longer fuse: that pair
+      // is the whole of "outward from his feet".
+      if (i > 0) {
+        expect(bomb.x).toBeGreaterThan(laid[i - 1]!.x!);
+        expect(bomb.life).toBeGreaterThan(laid[i - 1]!.life!);
+      }
+    });
+  });
+
+  // The ability, in one assertion. Every charge carries the chain's ceiling
+  // rather than climbing to it, so the first blast already reports full depth.
+  it('detonates at the chain ceiling instead of climbing to it', () => {
+    sapperAt();
+    (g.dynamites() as unknown[]).length = 0;
+    g.special(true);
+    const ceiling = (g.dynamites() as Array<Record<string, number>>)[0]!.chainLink!;
+    expect(ceiling).toBeGreaterThan(1);
+
+    stepPast(ONE_SECOND);
+    expect(g.sapperChain().peak).toBe(ceiling + 1);
+  });
+
+  it('costs the pouch nothing, so he is not left empty after using it', () => {
+    sapperAt();
+    const inv = g.inv() as { bombs: number };
+    const before = inv.bombs;
+    expect(before).toBeGreaterThan(0);
+    g.special(true);
+    expect(inv.bombs).toBe(before);
   });
 });

@@ -834,6 +834,31 @@ const CONFIG = {
   // dial, not five, and the per-hero part is only which meter is read.
   ultimateCooldown: 60, ultimateChargeBoost: 1.0,
 
+  // EARTHSHATTER. The knight's problem is reach: every swing needs him inside
+  // 80 px of something that orbits him. This is the one thing on his sheet
+  // that goes out and gets it -- a crack running down the aim line, widening
+  // as it travels, killing what it crosses and breaking the ground with it.
+  // The angle is fixed at the press and cannot be steered, which is what
+  // makes it a shot rather than a spell. He is not protected while it runs.
+  knightEarthshatterSpeed: 900,      // px/s the crack head runs
+  knightEarthshatterRange: 640,      // twenty tiles, eight spear lengths
+  knightEarthshatterRadius: 26,      // px at his feet
+  knightEarthshatterWiden: 0.055,    // px of radius per px run -- 61 px at the end
+  knightEarthshatterDamage: 6,       // enough that a shieldman is not a survivor
+  knightEarthshatterBossDamage: 5,   // once per crack, not once per tick
+
+  // CARPET BOMB. A line of charges laid down the aim line, each on a longer
+  // fuse than the one behind it, so the line goes up in sequence running
+  // away from his feet rather than all at once. Every one of them goes off
+  // at the chain's FULL depth, which is the whole of the ability: his
+  // cascade is his boss lever and this is the cascade handed to him.
+  //
+  // The charges are the ultimate's own, not out of his pouch of ten. A
+  // once-a-minute move that emptied the pouch would leave him swinging a
+  // pitchfork immediately after using it.
+  sapperCarpetCount: 7, sapperCarpetSpacing: 78,
+  sapperCarpetFirstFuse: 0.18, sapperCarpetStagger: 0.085,
+
   // HEADSHOT. One arrow down the aim line that crosses the map, passes
   // through effectively anything, and always lands critical -- the x2 is
   // applied ON TOP of brace, so the stance still pays. Pierce is a large
@@ -1520,6 +1545,14 @@ let knightBloodlust = 0;
  */
 let knightSpearConnected = false;
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
+/**
+ * The crack in flight, or null. One at a time: it is an ultimate, and a
+ * second one could only exist if the first had already cost its minute.
+ *
+ * `bossHit` is the same guard `knightDash` carries -- the head passes over a
+ * boss for several ticks and the boss is meant to take the hit once.
+ */
+let earthshatter = null;
 // Counts down to the next free Block charge while no shield is banked (see
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
 // since there's nothing to wait for until the current charge is used.
@@ -1855,6 +1888,28 @@ function mapHasCrows() {
 /** Does a garrison hold this map? */
 function mapHasSoldiers() {
   return mapPopulation() === 'soldiers';
+}
+
+/**
+ * Smashes every destructible tile whose centre falls inside a circle.
+ *
+ * Lifted out of the whirlwind, which was the only caller until the crack
+ * wanted the same ten lines. The column guard skips the left edge and the
+ * row guards the top and bottom, which is the map border rather than
+ * terrain -- breaking it would open the arena.
+ */
+function smashTilesInRadius(cx, cy, radius) {
+  const r2 = radius * radius;
+  const tileR = Math.ceil(radius / CONFIG.tileSize);
+  const tc = Math.floor(cx / CONFIG.tileSize), tr = Math.floor(cy / CONFIG.tileSize);
+  for (let dr = -tileR; dr <= tileR; dr++) {
+    for (let dc = -tileR; dc <= tileR; dc++) {
+      const row = tr + dr, col = tc + dc;
+      if (row <= 0 || row >= CONFIG.rows - 1 || col <= 0) continue;
+      const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
+      if (dist2(cx, cy, wx, wy) < r2) smashTile(row, col);
+    }
+  }
 }
 
 function smashTile(row, col) {
@@ -2684,6 +2739,8 @@ const ULTIMATE_CHARGE = {
  *  which case nothing is spent -- the gate belongs to the hero, not here. */
 const ULTIMATE = {
   archer: fireHeadshot,
+  knight: fireEarthshatter,
+  sapper: fireCarpetBomb,
 };
 
 /** True while the ultimate is up. The aura, the HUD chip and the key all ask.*/
@@ -4033,6 +4090,25 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'SAPPER_CARPET':
+      // The laying, not the blasts: each charge emits its own EXPLOSION as
+      // its fuse runs out, so a loud one here would double every one of them.
+      playSound(sndArm); triggerShake(2, 100);
+      burst(e.x, e.y, {
+        count: 8, colors: ['#FF7A1A','#FFE9A0'], speedMin: 20, speedMax: 70,
+        decay: 3.0, shape: 'spark', shadowBlur: 6, shadowColor: '#FF7A1A'
+      });
+      break;
+    case 'KNIGHT_EARTHSHATTER':
+      // Heavier than the whirlwind and longer: the ground is coming apart
+      // twenty tiles out, and a knight who has waited a minute for it should
+      // feel the floor go.
+      playSound(sndExplosion); triggerShake(9, 380);
+      burst(e.x, e.y, {
+        count: 20, colors: ['#FF7A1F','#3A1B08','#FFE9A0'], speedMin: 40, speedMax: 150,
+        decay: 2.4, shape: 'spark', shadowBlur: 8, shadowColor: '#FF7A1F'
+      });
+      break;
     case 'ULTIMATE_READY':
       // Loud, and allowed to be: it happens about once a minute and the
       // whole point is that the player notices. The aura on the body is the
@@ -4233,7 +4309,7 @@ function initGame() {
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0; waveAnnounceText = '';
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightBloodlust = 0; knightSpearConnected = false;
-  knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
+  knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0; earthshatter = null;
   knightBlockCD = 0;
   knightCharge.on = false; knightDash.timer = 0; knightDash.bossHit = false; knightDash.chained = false;
   knightChargeTick = 0; knightChargeCD = 0;
@@ -4685,26 +4761,16 @@ function updatePlayer(dt) {
   }
 
   // ── Knight whirlwind continuous tick ─────────────────────────────────────
+  tickEarthshatter(dt);
   if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
     knightWhirlwindTimer -= dt;
     knightWhirlwindTick  -= dt;
     if (knightWhirlwindTick <= 0) {
       knightWhirlwindTick = CONFIG.knightWhirlwindTickRate;
-      const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
+      const wr = CONFIG.knightWhirlwindRadius;
       damageEnemiesInRadius(player.x, player.y, wr,
         { amount: 1, source: 'whirlwind', flash: 0.1 });
-      // Break tiles in radius
-      const tileR = Math.ceil(wr / CONFIG.tileSize);
-      const tc = Math.floor(player.x / CONFIG.tileSize);
-      const tr = Math.floor(player.y / CONFIG.tileSize);
-      for (let dr = -tileR; dr <= tileR; dr++) {
-        for (let dc = -tileR; dc <= tileR; dc++) {
-          const row = tr + dr, col = tc + dc;
-          if (row <= 0 || row >= CONFIG.rows - 1 || col <= 0) continue;
-          const wx = (col+0.5)*CONFIG.tileSize, wy = (row+0.5)*CONFIG.tileSize;
-          if (dist2(player.x, player.y, wx, wy) < wr2) smashTile(row, col);
-        }
-      }
+      smashTilesInRadius(player.x, player.y, wr);
       events.emit({ type: 'WHIRLWIND_TICK', x: player.x, y: player.y });
     }
     if (knightWhirlwindTimer <= 0) {
@@ -4919,6 +4985,58 @@ function tryKnightAttack() {
   events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
 }
 
+/** How wide the crack is once it has run this far. Linear: a wedge. */
+function earthshatterRadius(travelled) {
+  return CONFIG.knightEarthshatterRadius + travelled * CONFIG.knightEarthshatterWiden;
+}
+
+/**
+ * EARTHSHATTER -- the knight's ultimate.
+ *
+ * Refused while one is already running, which cannot happen from the key
+ * (the timer gates it) but can from a test or a console.
+ */
+function fireEarthshatter() {
+  if (earthshatter) return false;
+  earthshatter = {
+    x0: player.x, y0: player.y, x: player.x, y: player.y,
+    angle: player.aimAngle, travelled: 0, bossHit: false,
+  };
+  events.emit({ type: 'KNIGHT_EARTHSHATTER', x: player.x, y: player.y, angle: player.aimAngle });
+  return true;
+}
+
+/**
+ * Advances the crack, resolving what it crosses as it goes.
+ *
+ * Resolved along the travel rather than all at once on the frame it fires:
+ * the picture is a crack running out, and damage that landed before the
+ * crack arrived would be a picture that lies. It costs one guard -- the boss
+ * takes its hit once, not once per tick -- and that guard is the same one
+ * the charge dash already carries for the same reason.
+ */
+function tickEarthshatter(dt) {
+  if (!earthshatter) return;
+  const e = earthshatter;
+  const step = CONFIG.knightEarthshatterSpeed * dt;
+  e.travelled += step;
+  e.x += Math.cos(e.angle) * step;
+  e.y += Math.sin(e.angle) * step;
+  const r = earthshatterRadius(e.travelled);
+
+  const reaches = bossInPlay() && !boss.shield && dist2(e.x, e.y, boss.x, boss.y) < r * r;
+  const bossHit = (!e.bossHit && reaches)
+    ? { amount: CONFIG.knightEarthshatterBossDamage, source: 'earthshatter', flash: 0.2 }
+    : null;
+  damageEnemiesInRadius(e.x, e.y, r, bossHit, { amount: CONFIG.knightEarthshatterDamage });
+  if (bossHit) e.bossHit = true;
+  smashTilesInRadius(e.x, e.y, r);
+
+  const offMap = e.x < 0 || e.y < 0
+    || e.x > CONFIG.cols * CONFIG.tileSize || e.y > CONFIG.rows * CONFIG.tileSize;
+  if (e.travelled >= CONFIG.knightEarthshatterRange || offMap) earthshatter = null;
+}
+
 function startWhirlwind() {
   knightWhirlwindCD    = CONFIG.knightWhirlwindCooldown;
   knightWhirlwindTimer = CONFIG.knightWhirlwindDuration;
@@ -5072,6 +5190,53 @@ function tickSapperBurst(dt) {
  * touches rather than counting down a fuse — what "having only dynamite" was
  * missing, area denial that doesn't wait a second and a half to matter.
  */
+/**
+ * CARPET BOMB -- the sapper's ultimate.
+ *
+ * Lays charges down the aim line at a fixed spacing, each with a longer fuse
+ * than the last so the line detonates outward from his feet. Aimed once, at
+ * the press: the line is committed where it is laid.
+ *
+ * Two things are set deliberately at lay time:
+ *
+ * `chainLink` at the chain's ceiling, so each blast lands at the depth a
+ * five-link cascade would have reached instead of climbing to it. That is
+ * the ability -- the sapper's ramp, handed over rather than built.
+ *
+ * `chainLit` true, which sounds wrong and is the point: an unlit charge is
+ * eligible to be lit by the blast in front of it, and chainOne shortens a
+ * lit fuse to the chain delay. The whole line would collapse into one
+ * simultaneous blast and the sequence -- the thing that makes it a carpet
+ * rather than a crater -- would never be seen. Marking them lit takes them
+ * out of each other's reach while leaving them free to light HIS bombs.
+ */
+function fireCarpetBomb() {
+  const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
+  const maxX = CONFIG.cols * CONFIG.tileSize, maxY = CONFIG.rows * CONFIG.tileSize;
+  let laid = 0;
+  for (let i = 0; i < CONFIG.sapperCarpetCount; i++) {
+    const away = CONFIG.sapperCarpetSpacing * (i + 1);
+    const x = player.x + nx * away, y = player.y + ny * away;
+    // Stops at the border rather than laying charges off the map. A line
+    // fired at a wall is a short line, which is a fair price for aiming it
+    // at a wall.
+    if (x < 0 || y < 0 || x > maxX || y > maxY) break;
+    const life = CONFIG.sapperCarpetFirstFuse + i * CONFIG.sapperCarpetStagger;
+    dynamites.push({
+      x, y, vx: 0, vy: 0,
+      life, fuseTotal: life, kind: 'bomb', element: 'none',
+      hop: false, shortFuse: false,
+      angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2,
+      chainLit: true, chainLink: TALENTS.stat('moreLinks'),
+    });
+    laid++;
+  }
+  if (laid === 0) return false;
+  events.emit({ type: 'SAPPER_CARPET', x: player.x, y: player.y,
+                angle: player.aimAngle, count: laid });
+  return true;
+}
+
 function trySapperBarrage() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperBarrageCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
@@ -6491,6 +6656,53 @@ function drawHeldMarkers() {
   }
   ctx.globalAlpha = 1;
 }
+
+/**
+ * The crack, drawn as the ragged split it is rather than a beam.
+ *
+ * The zigzag is derived from the run, not stored: the same distance always
+ * gives the same kink, so the split does not shimmer as the head advances.
+ * It widens with the same figure the damage uses, so what you see is the
+ * reach that actually resolved.
+ */
+function drawEarthshatter() {
+  const e = earthshatter;
+  if (!e) return;
+  const HH = CONFIG.hudHeight;
+  const nx = Math.cos(e.angle), ny = Math.sin(e.angle);
+  const px = -ny, py = nx;               // across the crack
+
+  // One split, drawn as a filled wedge rather than a stroked line: a stroke
+  // has one width and this thing widens the whole way out. Out along one
+  // ragged edge and back along the other closes the shape in a single fill.
+  // The kink is derived from the distance run, so a given point of the crack
+  // always breaks the same way and the split does not shimmer as it advances.
+  const edge = (side) => {
+    const pts = [];
+    for (let d = 0; d <= e.travelled; d += 12) {
+      const w = earthshatterRadius(d);
+      const off = side * w * (0.55 + 0.45 * Math.sin(d * 0.23 + side));
+      pts.push([e.x0 + nx * d + px * off, e.y0 + ny * d + py * off + HH]);
+    }
+    return pts;
+  };
+
+  ctx.save();
+  ctx.beginPath();
+  const outline = edge(1).concat(edge(-1).reverse());
+  outline.forEach(([x, y], i) => { if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+  ctx.closePath();
+  ctx.fillStyle = '#2A1206'; ctx.fill();                       // the ground, opened
+  ctx.strokeStyle = '#FF7A1F'; ctx.lineWidth = 2;
+  ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 12; ctx.stroke();  // the heat in it
+
+  // The head, where the ground is breaking right now.
+  const r = earthshatterRadius(e.travelled);
+  ctx.fillStyle = 'rgba(255,233,160,0.40)'; ctx.shadowBlur = 20;
+  ctx.beginPath(); ctx.arc(e.x, e.y + HH, r * 0.7, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 
 function drawShockRings() {
   for (const r of shockRings) {
@@ -9861,6 +10073,40 @@ const ULTIMATE_AURA = {
       ctx.stroke();
     }
   },
+  // EARTHSHATTER: the ground under him already split, breathing light. His is
+  // the only aura on the floor rather than around the body, because his is
+  // the only ultimate that comes out of the floor.
+  knight: (t) => {
+    const beat = 0.55 + 0.45 * Math.sin(t * 3);
+    ctx.strokeStyle = '#FF7A1F'; ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 10 * beat;
+    ctx.globalAlpha = 0.30 + 0.45 * beat; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (let k = 0; k < 5; k++) {
+      const a = k * (Math.PI * 2 / 5) + 0.4;
+      const r0 = 7, r1 = 13 + 7 * beat;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0 * 0.5 + 11);
+      ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1 * 0.5 + 11);
+      ctx.stroke();
+    }
+  },
+  // CARPET BOMB: a fuse already burning around him. Sparks running a circle,
+  // not a glow -- the thing that is ready is a line of lit charges, and a
+  // fuse is the one image in his kit that means 'about to'.
+  sapper: (t) => {
+    ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 8;
+    for (let k = 0; k < 7; k++) {
+      // Each spark runs the ring on its own offset, so they chase rather
+      // than rotate as one rigid wheel.
+      const a = t * 2.4 + k * (Math.PI * 2 / 7);
+      const flare = 0.5 + 0.5 * Math.sin(t * 9 + k * 1.7);
+      ctx.globalAlpha = 0.35 + 0.55 * flare;
+      ctx.fillStyle = flare > 0.75 ? '#FFE9A0' : '#FF7A1A';
+      const r = 17 + 2 * Math.sin(t * 5 + k);
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.62 - 5, 1 + 1.6 * flare, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
 };
 
 /** Paints the ready aura, if the hero out has an ultimate and it is up. */
@@ -12620,9 +12866,9 @@ const LANE_B = {
 const LANE_D = {
   archer: ['brace', 'power', 'ult', 'shield'],
   ranger: ['momentum', 'net', 'shield'],
-  knight: ['whirlwind', 'block', 'fireSword', 'shield'],
+  knight: ['whirlwind', 'block', 'fireSword', 'ult', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'shield'],
-  sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'shield'],
+  sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'ult', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -14551,7 +14797,7 @@ function render(t) {
     // anything that walks over it. Blasts go over the bodies instead -- they
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
-    drawPickups(); drawFires(); drawParticles(); drawShockRings();
+    drawPickups(); drawFires(); drawEarthshatter(); drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
@@ -15017,6 +15263,8 @@ export const devHooks = {
   ultimate: () => ({ cd: ultimateCD, ready: ultimateReady(),
                      charge: ULTIMATE_CHARGE[selectedChar]?.() || 0 }),
   setUltimateCD(secs) { ultimateCD = secs; },
+  /** The crack in flight, or null once it has run its length. */
+  earthshatter: () => earthshatter,
   killCount: () => killCount,
   hp: () => playerHP,
   // One frame with a raw millisecond gap, to test accumulator multi-stepping.
