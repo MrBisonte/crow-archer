@@ -472,3 +472,39 @@ describe('masteryThroughACampaign', () => {
   });
 });
 
+describe('every talent id, across the whole roster', () => {
+  /** Every id the trees define: talents and rites, hero by hero. */
+  function allIds(): { id: string; where: string }[] {
+    const out: { id: string; where: string }[] = [];
+    for (const hero of CHARACTERS) {
+      const tree = CHAR_TREES[hero];
+      for (const t of tree.talents) out.push({ id: t.id, where: `${hero} talent` });
+      for (const c of tree.capstones) out.push({ id: c.id, where: `${hero} rite` });
+    }
+    return out;
+  }
+
+  // The hole a clean merge went through. Two branches each added a row to
+  // this table under the same id; the hunks did not overlap, so git merged
+  // them without a word, and the language has nothing to say about two
+  // entries of an ARRAY sharing a field -- unlike two keys of an object
+  // literal, which the compiler refuses. `TALENTS.stat` reads by id and
+  // takes whichever it finds, so one branch's meaning of the stat silently
+  // won. See LESSONS.jsonl, merged-table-duplicate-key.
+  it('is unique, so a merge cannot give one id two meanings', () => {
+    const seen = new Map<string, string>();
+    const collisions: string[] = [];
+    for (const { id, where } of allIds()) {
+      const first = seen.get(id);
+      if (first !== undefined) collisions.push(`${id}: ${first} and ${where}`);
+      else seen.set(id, where);
+    }
+    expect(collisions).toEqual([]);
+  });
+
+  it('finds ids to check, so a broken walk cannot pass as agreement', () => {
+    expect(allIds().length).toBeGreaterThan(CHARACTERS.length * 4);
+  });
+});
+
+

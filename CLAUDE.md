@@ -52,6 +52,9 @@ just read it.
 | Every event declared, handled and emitted | `events.coverage.test.ts` |
 | A siege run can be finished | the ten-wave play-through |
 | Every `LESSONS.jsonl` line parses and conforms | `src/lessons.test.ts` |
+| No talent or rite id is used twice | `src/sim/talents.test.ts` |
+| No tracked text file mixes its line endings | `src/line-endings.test.ts` |
+| Figures quoted in `docs/balance.md` match `CONFIG` | `src/legacy/ultimate-doc.test.ts` |
 | Everything below | nothing. You. |
 
 Run `npm run hooks:install` once per clone **and once per worktree** —

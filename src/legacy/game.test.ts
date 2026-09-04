@@ -5927,3 +5927,41 @@ describe('HARPOON, the ranger ultimate', () => {
     expect(c.arrowHitRadius).toBeGreaterThan(step / 2);
   });
 });
+
+
+describe('aiming, and why assigning the angle is not it', () => {
+  // A characterisation test, not a demand. A dozen tests in this repo set
+  // player.aimAngle directly and are fine: they never step afterwards, or
+  // they do not care where the shot went. The ones that DO step are the
+  // hazard -- updatePlayer copies the angle from the pointer every frame, so
+  // the aim silently becomes whatever the previous test left the mouse at,
+  // which is how four ultimate tests passed alone and failed in the full
+  // suite. Pinned here so the trap is discoverable by name rather than by
+  // losing an hour to it. See LESSONS.jsonl, green-alone-red-in-suite.
+  function archerAtCentre(): { x: number; y: number; aimAngle: number } {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 10 * g.config().tileSize;
+    p.y = 10 * g.config().tileSize;
+    return p;
+  }
+
+  it('takes the angle from the pointer, discarding whatever was assigned', () => {
+    const p = archerAtCentre();
+    aimAt(p.x + 400, p.y);            // pointer due east
+    p.aimAngle = Math.PI;             // and the field says due west
+    expect(p.aimAngle).toBe(Math.PI); // until a single frame passes
+
+    stepPast(1);
+    expect(p.aimAngle).toBeCloseTo(0, 3);
+  });
+
+  it('is what aimAt exists for, so a test aims the way a player does', () => {
+    const p = archerAtCentre();
+    aimAt(p.x, p.y + 400);            // due south
+    stepPast(1);
+    expect(p.aimAngle).toBeCloseTo(Math.PI / 2, 3);
+  });
+});
