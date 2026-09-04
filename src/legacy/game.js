@@ -859,6 +859,31 @@ const CONFIG = {
   sapperCarpetCount: 7, sapperCarpetSpacing: 78,
   sapperCarpetFirstFuse: 0.18, sapperCarpetStagger: 0.085,
 
+  // VORTEX. A singularity dropped at the cursor that drags a field into one
+  // point and then goes off. It is aimed at a PLACE rather than down a line,
+  // which is the one thing his Lightning Storm -- a circle centred on him --
+  // cannot be: an ultimate that was a bigger version of the storm would be
+  // the same button twice.
+  //
+  // Bosses are damaged by the collapse but never dragged. Being able to reel
+  // a boss out of position once a minute is a different ability from the one
+  // that was asked for, and the net already settled that a hold is for the
+  // field and not for the boss.
+  wizVortexRange: 420,        // how far from him it can be placed
+  wizVortexRadius: 150,       // what it reaches, pulling and at the collapse
+  wizVortexPull: 260,         // px/s a body is dragged toward the centre
+  wizVortexDuration: 1.5,     // how long it holds before it goes off
+  wizVortexDamage: 8, wizVortexBossDamage: 6,
+
+  // HARPOON. One heavy bolt that, on a hit, reels HIM to it. Only fireable at
+  // the momentum cap, and firing does not spend the meter -- it is the payoff
+  // for having run the whole fight, not a resource dumped into an attack.
+  //
+  // The bolt is the ultimate's own and costs the quiver nothing. Against a
+  // body it is worth what every player arrow is worth, which is the rule the
+  // whole quiver is balanced on; what it carries is a boss multiplier.
+  rangerHarpoonSpeed: 1100, rangerHarpoonBossMult: 4, rangerHarpoonReach: 520,
+
   // HEADSHOT. One arrow down the aim line that crosses the map, passes
   // through effectively anything, and always lands critical -- the x2 is
   // applied ON TOP of brace, so the stance still pays. Pierce is a large
@@ -1553,6 +1578,11 @@ let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
  * boss for several ticks and the boss is meant to take the hit once.
  */
 let earthshatter = null;
+/**
+ * The wizard's singularity while it holds, or null. One at a time, for the
+ * reason the crack is: it costs a minute.
+ */
+let vortex = null;
 // Counts down to the next free Block charge while no shield is banked (see
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
 // since there's nothing to wait for until the current charge is used.
@@ -2431,8 +2461,13 @@ function pushBodiesFrom(cx, cy, radius, px) {
       const d2 = dist2(cx, cy, b.x, b.y);
       if (d2 > r2 || d2 === 0) continue;
       const d = Math.sqrt(d2);
-      const nx = b.x + ((b.x - cx) / d) * px;
-      const ny = b.y + ((b.y - cy) / d) * px;
+      // A negative push is a pull, which is how the vortex drags a field into
+      // one point. It is clamped to the distance so a body cannot be dragged
+      // through the centre and out the far side, which reads as jitter rather
+      // than as being crushed. A positive push is untouched by the clamp.
+      const move = px < 0 ? -Math.min(-px, Math.max(0, d - 1)) : px;
+      const nx = b.x + ((b.x - cx) / d) * move;
+      const ny = b.y + ((b.y - cy) / d) * move;
       if (tilePassable(tileAt(nx, b.y))) b.x = clampArenaX(nx);
       if (tilePassable(tileAt(b.x, ny))) b.y = clampArenaY(ny);
     }
@@ -2741,6 +2776,8 @@ const ULTIMATE = {
   archer: fireHeadshot,
   knight: fireEarthshatter,
   sapper: fireCarpetBomb,
+  wizard: fireVortex,
+  ranger: fireHarpoon,
 };
 
 /** True while the ultimate is up. The aura, the HUD chip and the key all ask.*/
@@ -4090,6 +4127,33 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'WIZARD_VORTEX':
+      // Low and sustained rather than a bang: the moment it is placed is a
+      // held breath, and the bang is WIZARD_VORTEX_COLLAPSE a second later.
+      playSound(sndAggro);
+      burst(e.x, e.y, {
+        count: 14, colors: ['#A08CFF','#4B3B9E'], speedMin: 20, speedMax: 60,
+        decay: 1.6, shape: 'spark', shadowBlur: 10, shadowColor: '#A08CFF'
+      });
+      break;
+    case 'WIZARD_VORTEX_COLLAPSE':
+      playSound(sndLightning); triggerShake(7, 300);
+      burst(e.x, e.y, {
+        count: 26, colors: ['#A08CFF','#FFFFFF','#4B3B9E'], speedMin: 70, speedMax: 210,
+        decay: 2.0, shape: 'spark', shadowBlur: 12, shadowColor: '#A08CFF'
+      });
+      break;
+    case 'RANGER_HARPOON_PULL':
+      // Scaled by the distance reeled, so a line that caught something at
+      // his feet is not the same event as one that dragged him across the
+      // field. A wall-shortened pull says so by being quieter.
+      playSound(sndChargeWhoosh);
+      triggerShake(2 + 4 * Math.min(1, e.moved / CONFIG.rangerHarpoonReach), 160);
+      burst(e.x, e.y, {
+        count: 10, colors: ['#FFCC00','#FFFFFF'], speedMin: 40, speedMax: 120,
+        decay: 2.8, shape: 'spark', shadowBlur: 6, shadowColor: '#FFCC00'
+      });
+      break;
     case 'SAPPER_CARPET':
       // The laying, not the blasts: each charge emits its own EXPLOSION as
       // its fuse runs out, so a loud one here would double every one of them.
@@ -4325,6 +4389,7 @@ function initGame() {
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
   wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
+  vortex = null;
   rangerSlip = 0;
   chooser = null; chooserQueue = []; riteOffered = false;
 
@@ -4762,6 +4827,7 @@ function updatePlayer(dt) {
 
   // ── Knight whirlwind continuous tick ─────────────────────────────────────
   tickEarthshatter(dt);
+  tickVortex(dt);
   if (selectedChar === 'knight' && knightWhirlwindTimer > 0) {
     knightWhirlwindTimer -= dt;
     knightWhirlwindTick  -= dt;
@@ -4983,6 +5049,92 @@ function tryKnightAttack() {
   knightSpearPhase2Hit = false;
   knightSpearConnected = false;
   events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
+}
+
+/**
+ * VORTEX -- the wizard's ultimate.
+ *
+ * Dropped where he is pointing, clamped to its own range so it stays a shot
+ * rather than a click anywhere on the map. Cast from any Focus and it empties
+ * the pool: he is on the broom for the six seconds it takes to come back,
+ * which is the price of the best moment he has.
+ */
+function fireVortex() {
+  if (vortex) return false;
+  const aim = aimWorld();
+  const dx = aim.x - player.x, dy = aim.y - player.y;
+  const away = Math.hypot(dx, dy);
+  const reach = Math.min(away, CONFIG.wizVortexRange);
+  // Pointing at his own feet has no direction to place it in; the aim angle is
+  // the only intent available, the same fallback hopFromBlast makes.
+  const angle = away < 0.001 ? player.aimAngle : Math.atan2(dy, dx);
+  vortex = {
+    x: clampArenaX(player.x + Math.cos(angle) * reach),
+    y: clampArenaY(player.y + Math.sin(angle) * reach),
+    timer: CONFIG.wizVortexDuration,
+  };
+  inv.focus = 0;
+  events.emit({ type: 'WIZARD_VORTEX', x: vortex.x, y: vortex.y });
+  return true;
+}
+
+/** Drags, then collapses. The drag is pushBodiesFrom with the sign flipped. */
+function tickVortex(dt) {
+  if (!vortex) return;
+  const v = vortex;
+  const r = CONFIG.wizVortexRadius;
+  pushBodiesFrom(v.x, v.y, r, -CONFIG.wizVortexPull * dt);
+  v.timer -= dt;
+  if (v.timer > 0) return;
+
+  vortex = null;
+  damageEnemiesInRadius(v.x, v.y, r,
+    { amount: CONFIG.wizVortexBossDamage, source: 'vortex', flash: 0.3 },
+    { amount: CONFIG.wizVortexDamage });
+  smashTilesInRadius(v.x, v.y, r);
+  spawnShockRing(v.x, v.y, r, '#A08CFF');
+  events.emit({ type: 'WIZARD_VORTEX_COLLAPSE', x: v.x, y: v.y, radius: r });
+}
+
+/**
+ * HARPOON -- the ranger's ultimate.
+ *
+ * Refused below the momentum cap, and refusing costs nothing: the gate belongs
+ * to the hero rather than to tryUltimate, so a ranger who presses too early
+ * keeps the charge and can press again a stride later.
+ */
+function fireHarpoon() {
+  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  const spd = CONFIG.rangerHarpoonSpeed;
+  arrows.push({ x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd,
+    vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.arrowLifetime, type: 'plain', bounces: 0,
+    initSpeed: spd,
+    trailHistory: [], fireSeed: 0, trailTimer: 0,
+    harpoon: true, pierceLeft: 1,
+    dmgMult: CONFIG.rangerHarpoonBossMult });
+  return true;
+}
+
+/**
+ * Reels him in to where the harpoon landed.
+ *
+ * Called from the two places a player arrow is resolved against something
+ * solid enough to hold a line -- the shared pierce spend, which every body
+ * hit goes through, and the boss hit, which does not. Walls are respected by
+ * probeAhead, the same walk the wizard's blink uses, so a line over a rock
+ * lands him against it rather than inside it.
+ */
+function harpoonYank(a) {
+  if (!a.harpoon) return;
+  const away = Math.hypot(a.x - player.x, a.y - player.y);
+  if (away < 1) return;
+  const angle = Math.atan2(a.y - player.y, a.x - player.x);
+  const end = probeAhead(player.x, player.y, angle,
+                         Math.min(away, CONFIG.rangerHarpoonReach));
+  player.x = end.x; player.y = end.y;
+  events.emit({ type: 'RANGER_HARPOON_PULL', x: end.x, y: end.y, moved: end.moved });
 }
 
 /** How wide the crack is once it has run this far. Linear: a wedge. */
@@ -5565,6 +5717,10 @@ function updateArrows(dt) {
     const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage * (a.dmgMult || 1), 'arrow');
     if (arrowHit === BossHit.DAMAGED) {
       if (a.type === 'fire') spawnFire(a.x, a.y);
+      // A boss hit does not go through spendArrowPierce, so the harpoon needs
+      // its own call here or the one target worth reeling to would be the one
+      // it never pulled him to.
+      harpoonYank(a);
       arrows.splice(i, 1); continue;
     }
     if (arrowHit === BossHit.ABSORBED) { arrows.splice(i, 1); continue; }
@@ -5732,6 +5888,8 @@ const ZERO_KNOCK = { x: 0, y: 0 };
  * is one shape for both rather than a branch at each hit site.
  */
 function spendArrowPierce(a, i) {
+  // The harpoon reels him in on the body it caught, before the arrow is gone.
+  harpoonYank(a);
   // Emitted per body, including the last, so a shot that goes through three
   // enemies reads as three hits rather than as one arrow disappearing.
   if (a.power) {
@@ -6665,6 +6823,51 @@ function drawHeldMarkers() {
  * It widens with the same figure the damage uses, so what you see is the
  * reach that actually resolved.
  */
+/**
+ * The singularity: a dark core, a bright rim, and matter falling in.
+ *
+ * The infalling streaks are drawn from the rim toward the centre with their
+ * angle advanced by the elapsed hold, so the whole thing rotates as it eats.
+ * The core grows as the timer runs down, which is the only warning the
+ * collapse gets.
+ */
+function drawVortex() {
+  const v = vortex;
+  if (!v) return;
+  const HH = CONFIG.hudHeight;
+  const r = CONFIG.wizVortexRadius;
+  const done = 1 - v.timer / CONFIG.wizVortexDuration;
+  ctx.save();
+  ctx.translate(v.x, v.y + HH);
+
+  // The reach, so what is about to be hit is visible before it is hit.
+  ctx.strokeStyle = 'rgba(160,140,255,0.35)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+
+  ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 12;
+  ctx.strokeStyle = '#A08CFF'; ctx.lineWidth = 2;
+  for (let k = 0; k < 14; k++) {
+    const a = k * (Math.PI * 2 / 14) + loopT * 2.2;
+    const from = r * (1 - (k % 3) * 0.12);
+    const to = from * 0.35;
+    ctx.globalAlpha = 0.25 + 0.4 * ((k % 3) / 2);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * from, Math.sin(a) * from);
+    // Curled inward rather than radial: a straight spoke reads as a star.
+    ctx.quadraticCurveTo(Math.cos(a + 0.7) * to * 1.6, Math.sin(a + 0.7) * to * 1.6,
+                         Math.cos(a + 1.4) * to, Math.sin(a + 1.4) * to);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
+  const core = r * (0.12 + 0.18 * done);
+  ctx.fillStyle = '#120C2E'; ctx.shadowBlur = 22;
+  ctx.beginPath(); ctx.arc(0, 0, core, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.5 + 0.5 * done;
+  ctx.beginPath(); ctx.arc(0, 0, core, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
 function drawEarthshatter() {
   const e = earthshatter;
   if (!e) return;
@@ -10107,6 +10310,37 @@ const ULTIMATE_AURA = {
       ctx.fill();
     }
   },
+  // VORTEX: motes already falling toward him. The only aura that moves
+  // inward, because his is the only ultimate that pulls.
+  wizard: (t) => {
+    ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 8;
+    for (let k = 0; k < 9; k++) {
+      // Each mote runs its own fall, staggered, so they arrive one after
+      // another rather than as a closing ring.
+      const fall = ((t * 0.55) + k / 9) % 1;
+      const a = k * 2.2 + t * 0.8;
+      const r = 4 + (1 - fall) * 22;
+      ctx.globalAlpha = 0.15 + 0.6 * fall;
+      ctx.fillStyle = fall > 0.8 ? '#FFFFFF' : '#A08CFF';
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.8 - 6, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+  // HARPOON: a line already coiled and loaded. Two arcs whipping round him,
+  // in the yellow his momentum meter uses -- the ultimate is gated on that
+  // meter, so the aura is only ever seen with it full and the colours agree.
+  ranger: (t) => {
+    ctx.strokeStyle = '#FFCC00'; ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 9;
+    ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (const dir of [1, -1]) {
+      const a = t * 3.4 * dir;
+      ctx.globalAlpha = 0.30 + 0.45 * (0.5 + 0.5 * Math.sin(t * 4 + dir));
+      ctx.beginPath();
+      ctx.ellipse(0, -5, 19, 11, 0, a, a + 1.1);
+      ctx.stroke();
+    }
+  },
 };
 
 /** Paints the ready aura, if the hero out has an ultimate and it is up. */
@@ -10786,6 +11020,21 @@ function drawArrows() {
     // A drawn shot has to read as heavier than a loosed one, whichever ammo
     // it spent: a bright streak behind the shaft, as long as the number of
     // bodies it can still pass through.
+    // The harpoon is a line, and a line has to be visibly attached to him or
+    // being yanked down it comes out of nowhere. Drawn back to his hands
+    // rather than as a streak behind the head.
+    if (a.harpoon) {
+      ctx.save();
+      ctx.rotate(-angle);                       // back into world space
+      ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1.5;
+      ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 6; ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(player.x - a.x, player.y - a.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     if (a.power) {
       // A headshot pierces effectively without limit, so pierceLeft cannot
       // size its streak -- 99 would draw a wall. It takes a fixed, heavier
@@ -12865,9 +13114,9 @@ const LANE_B = {
  */
 const LANE_D = {
   archer: ['brace', 'power', 'ult', 'shield'],
-  ranger: ['momentum', 'net', 'shield'],
+  ranger: ['momentum', 'net', 'ult', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'ult', 'shield'],
-  wizard: ['bolt', 'storm', 'blink', 'shield'],
+  wizard: ['bolt', 'storm', 'blink', 'ult', 'shield'],
   sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'ult', 'shield'],
 };
 
@@ -14797,7 +15046,7 @@ function render(t) {
     // anything that walks over it. Blasts go over the bodies instead -- they
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
-    drawPickups(); drawFires(); drawEarthshatter(); drawParticles(); drawShockRings();
+    drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
@@ -15265,6 +15514,8 @@ export const devHooks = {
   setUltimateCD(secs) { ultimateCD = secs; },
   /** The crack in flight, or null once it has run its length. */
   earthshatter: () => earthshatter,
+  /** The singularity while it holds, or null once it has collapsed. */
+  vortex: () => vortex,
   killCount: () => killCount,
   hp: () => playerHP,
   // One frame with a raw millisecond gap, to test accumulator multi-stepping.

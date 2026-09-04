@@ -136,6 +136,16 @@ export type GameEvent =
   /** The sapper's line going down. `count` is how many charges were actually
    *  laid, which is fewer than the full line when it was aimed at a border. */
   | { type: 'SAPPER_CARPET'; x: number; y: number; angle: number; count: number }
+  /** The wizard's singularity, at the moment it is placed. */
+  | { type: 'WIZARD_VORTEX'; x: number; y: number }
+  /** And at the moment it goes off. `radius` is the reach the damage really
+   *  used, the same contract EXPLOSION carries, so the ring cannot claim
+   *  more than was hit. */
+  | { type: 'WIZARD_VORTEX_COLLAPSE'; x: number; y: number; radius: number }
+  /** The ranger, arriving where his harpoon landed. `moved` is how far he
+   *  was actually reeled, which is short of the line's length when a wall
+   *  stopped him. */
+  | { type: 'RANGER_HARPOON_PULL'; x: number; y: number; moved: number }
   /** An ultimate was spent. One event for all five: what each one does is
    *  its own business, but the commitment reads the same every time. */
   | { type: 'ULTIMATE_FIRED'; hero: string; x: number; y: number }

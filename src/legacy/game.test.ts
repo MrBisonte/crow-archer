@@ -5754,3 +5754,176 @@ describe('CARPET BOMB, the sapper ultimate', () => {
     expect(inv.bombs).toBe(before);
   });
 });
+
+
+describe('VORTEX, the wizard ultimate', () => {
+  function wizardAt(col = 6, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick('wizard');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  it('is placed where he points, never further than its own range', () => {
+    const p = wizardAt();
+    const c = g.config();
+    // Pointed far past the range, which is the case the clamp exists for.
+    aimAt(p.x + 4 * c.wizVortexRange, p.y);
+    stepPast(2);
+    g.special(true);
+    const v = g.vortex() as { x: number; y: number };
+    expect(v).not.toBeNull();
+    expect(Math.hypot(v.x - p.x, v.y - p.y)).toBeCloseTo(c.wizVortexRange, 0);
+  });
+
+  // The whole ability. Nothing in this game pulled before it.
+  it('drags a body to its centre while it holds', () => {
+    wizardAt();
+    const c = g.config();
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0]!;
+    g.special(true);
+    const v = g.vortex() as { x: number; y: number };
+
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
+    crow.heldTimer = 5;
+
+    crow.x = v.x + c.wizVortexRadius * 0.8; crow.y = v.y;
+    expect(Math.hypot(crow.x - v.x, crow.y - v.y)).toBeGreaterThan(100);
+    // Stopped short of the collapse, which would kill it and take it out of
+    // the array before it could be measured.
+    stepPast(Math.floor(c.wizVortexDuration * ONE_SECOND) - 10);
+    expect(Math.hypot(crow.x - v.x, crow.y - v.y)).toBeLessThan(15);
+  });
+  it('collapses on its own timer and breaks the ground under it', () => {
+    const p = wizardAt();
+    const c = g.config();
+    const tiles = g.tiles() as { get(r: number, col: number): TileId;
+                                 set(r: number, col: number, t: TileId): void };
+    g.special(true);
+    const v = g.vortex() as { x: number; y: number };
+    const row = Math.floor(v.y / c.tileSize), col = Math.floor(v.x / c.tileSize);
+    tiles.set(row, col, TILE.TREE);
+    expect(g.vortex()).not.toBeNull();
+    stepPast(Math.ceil(c.wizVortexDuration * ONE_SECOND) + 4);
+    expect(g.vortex()).toBeNull();
+    expect(tiles.get(row, col)).not.toBe(TILE.TREE);
+  });
+
+  it('empties the Focus pool, so the broom is what comes next', () => {
+    wizardAt();
+    const inv = g.inv() as { focus: number };
+    expect(inv.focus).toBeGreaterThan(0);
+    g.special(true);
+    expect(inv.focus).toBe(0);
+  });
+});
+
+describe('HARPOON, the ranger ultimate', () => {
+  function rangerAt(col = 6, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  // The gate, and the fact that failing it costs nothing. A ranger who
+  // presses a stride too early has to be able to press again.
+  it('refuses below the momentum cap and keeps the charge', () => {
+    rangerAt();
+    expect(g.momentum().level).toBeLessThan(1);
+    const arrows = g.arrows() as unknown[];
+    arrows.length = 0;
+    g.special(true);
+    expect(arrows).toHaveLength(0);
+    expect(g.ultimate().ready).toBe(true);
+  });
+
+  it('reels him to what it catches, in one movement he could not walk', () => {
+    const p = rangerAt();
+    const c = g.config();
+    const keys = g.keys() as Record<string, boolean>;
+
+    // Fired while still running. Momentum decays the instant he stops, so
+    // the cap is a state he passes through rather than one he stands in --
+    // which is the ranger's whole point and not a wrinkle of the test.
+    keys['ArrowRight'] = true;
+    stepPast(3 * ONE_SECOND);
+    expect(g.momentum().level).toBe(1);
+
+    // Aim, then one more running frame so the aim is actually read. Setting
+    // the mouse does not move player.aimAngle -- updatePlayer copies it from
+    // the pointer on the next step -- and he has just run three seconds past
+    // where the pointer used to be, so firing without that frame sends the
+    // line back the way he came. The key stays held through it: stopping for
+    // even one frame drops him off the cap and the ultimate refuses.
+    aimAt(p.x + 400, p.y);
+    stepPast(1);
+    expect(g.momentum().level).toBe(1);
+
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
+    crows[0]!.x = p.x + 220; crows[0]!.y = p.y; crows[0]!.heldTimer = 5;
+
+    const lineX = p.x, lineY = p.y;
+    const arrows = g.arrows() as Array<Record<string, number>>;
+    arrows.length = 0;
+    g.setUltimateCD(0);
+    g.special(true);
+    expect(arrows).toHaveLength(1);          // the line went out
+    expect(arrows[0]!.vx).toBeGreaterThan(0);  // and went where he was pointing
+    keys['ArrowRight'] = false;
+
+    // The reel is one movement, not a walk: the largest single frame of it
+    // has to be far beyond anything his legs can do in a frame. Compared
+    // against his own speed rather than a bare number, so a balance change
+    // to how fast he runs cannot quietly turn this green.
+    let biggest = 0, last = p.x;
+    for (let i = 0; i < 20; i++) {
+      stepPast(1);
+      biggest = Math.max(biggest, Math.abs(p.x - last));
+      last = p.x;
+    }
+    const perFrameOnFoot = CHARACTER_STATS.ranger.speed / ONE_SECOND;
+    expect(biggest).toBeGreaterThan(perFrameOnFoot * 10);
+    // Down the line he fired, and still on it.
+    expect(p.x).toBeGreaterThan(lineX + 150);
+    expect(Math.abs(p.y - lineY)).toBeLessThan(c.tileSize);
+  });
+
+  // The bolt is the fastest thing a player fires and hits are tested after
+  // it has moved, so it samples the world every 18 px. Nothing enforces that
+  // an arrow's catch is wider than its own step, and a fast enough one would
+  // fly straight through a body sitting between two samples. This is the
+  // arithmetic that keeps it from happening, stated where a speed change
+  // will trip over it.
+  it('cannot step over a body between two of its own samples', () => {
+    const c = g.config();
+    const step = c.rangerHarpoonSpeed / ONE_SECOND;
+    expect(c.arrowHitRadius).toBeGreaterThan(step / 2);
+  });
+});
