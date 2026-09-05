@@ -146,6 +146,26 @@ export type GameEvent =
    *  was actually reeled, which is short of the line's length when a wall
    *  stopped him. */
   | { type: 'RANGER_HARPOON_PULL'; x: number; y: number; moved: number }
+  /** The archer's circle marked, before anything falls into it. */
+  | { type: 'ARCHER_RAIN'; x: number; y: number; radius: number }
+  /** One arrow of that volley landing. Fourteen of these, one at a time. */
+  | { type: 'ARCHER_RAIN_HIT'; x: number; y: number }
+  /** The wizard plants his feet, and stops being able to move. */
+  | { type: 'WIZARD_BEAM'; x: number; y: number }
+  /** And gets them back. */
+  | { type: 'WIZARD_BEAM_END'; x: number; y: number }
+  /** The knight leaving the ground. `toX`/`toY` is where he will come down,
+   *  which is decided at the press and not steered. */
+  | { type: 'KNIGHT_LEAP'; x: number; y: number; toX: number; toY: number }
+  /** And landing. `radius` is the reach the impact really used. */
+  | { type: 'KNIGHT_LEAP_LAND'; x: number; y: number; radius: number }
+  /** The ranger's burst starting. Each volley inside it emits WEAPON_FIRED of
+   *  its own, so this is the commitment rather than the shooting. */
+  | { type: 'RANGER_FULL_AUTO'; x: number; y: number }
+  | { type: 'RANGER_FULL_AUTO_END'; x: number; y: number }
+  /** The sapper's one big charge, at the moment it is placed. Its blast is an
+   *  ordinary EXPLOSION, three times the usual radius. */
+  | { type: 'SAPPER_BIG_ONE'; x: number; y: number }
   /** An ultimate was spent. One event for all five: what each one does is
    *  its own business, but the commitment reads the same every time. */
   | { type: 'ULTIMATE_FIRED'; hero: string; x: number; y: number }

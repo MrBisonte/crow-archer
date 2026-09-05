@@ -884,6 +884,43 @@ const CONFIG = {
   // whole quiver is balanced on; what it carries is a boss multiplier.
   rangerHarpoonSpeed: 1100, rangerHarpoonBossMult: 4, rangerHarpoonReach: 520,
 
+  // ── The second ultimate of each hero ─────────────────────────────────────
+  // One per character, and a character has one or the other, never both.
+
+  // ARROW RAIN. A spot marked, then arrows falling over it for a second and a
+  // half. The crowd answer HEADSHOT is not. It spends a queued arrow the way
+  // HEADSHOT does -- the archer is the one hero whose ultimates cost ammo, and
+  // that was his own call rather than a rule.
+  archerRainRange: 420, archerRainRadius: 130, archerRainDelay: 0.55,
+  archerRainDuration: 1.4, archerRainImpacts: 14, archerRainImpactRadius: 30,
+  archerRainDamage: 4, archerRainBossDamage: 5,
+
+  // THE BEAM. Two seconds of lance, swept with the mouse, and he is ROOTED for
+  // all of it -- the archer's bargain on a 7-health body. Damage is applied on
+  // a tick rather than per frame so the figure does not change with the frame
+  // rate, and the boss takes it once per tick however many samples the line
+  // puts on him.
+  wizBeamDuration: 2.0, wizBeamRange: 520, wizBeamWidth: 20,
+  wizBeamTickRate: 0.12, wizBeamDamage: 6, wizBeamBossPerTick: 0.35,
+
+  // THE LEAP. Over walls, which is the whole difference from a blink: he
+  // arrives where he could not have walked. No invulnerability -- EARTHSHATTER
+  // gives none either, and a wall-crossing escape with i-frames is a different
+  // ability from the one that was asked for.
+  knightLeapRange: 400, knightLeapSecs: 0.42, knightLeapRadius: 100,
+  knightLeapDamage: 6, knightLeapBossDamage: 4, knightLeapArcPx: 46,
+
+  // FULL AUTO. Three seconds of volleys that only fire while he keeps moving.
+  // They come out of the QUIVER, unlike his harpoon: this is a burst of his
+  // primary rather than a thing of its own, and free bolts would make it
+  // strictly better than the weapon it is a burst of. Running dry ends it,
+  // which is a real cost and reads as one.
+  rangerFullAutoSecs: 3.0, rangerFullAutoInterval: 0.16,
+
+  // THE BIG ONE. One charge with a long visible fuse and a crater three times
+  // the usual. The fuse is the skill: things can walk out of it.
+  sapperBigOneRange: 340, sapperBigOneFuse: 1.7, sapperBigOneRadiusMult: 3,
+
   // HEADSHOT. One arrow down the aim line that crosses the map, passes
   // through effectively anything, and always lands critical -- the x2 is
   // applied ON TOP of brace, so the stance still pays. Pierce is a large
@@ -1583,6 +1620,24 @@ let earthshatter = null;
  * reason the crack is: it costs a minute.
  */
 let vortex = null;
+/** The archer's marked circle while it is falling, or null. */
+let arrowRain = null;
+/** The wizard's lance while it burns. He cannot move for as long as it exists. */
+let beam = null;
+/** The knight in the air, or null. Carries where he left and where he lands. */
+let knightLeap = null;
+/** The ranger's burst while it runs, or null. */
+let fullAuto = null;
+/**
+ * How far the player moved on the last step.
+ *
+ * FULL AUTO only fires while he is moving, and the movement meters already
+ * measure exactly that -- but they are handed it as an argument rather than
+ * storing it, and the ultimate ticks somewhere else entirely. Recorded here at
+ * the one place it is computed rather than measured a second time from a
+ * remembered position, which would drift the moment anything else moved him.
+ */
+let lastMovedPx = 0;
 // Counts down to the next free Block charge while no shield is banked (see
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
 // since there's nothing to wait for until the current charge is used.
@@ -2771,32 +2826,55 @@ const ULTIMATE_CHARGE = {
 };
 
 /**
- * What each hero's ultimate leaves running, for the two that leave anything.
+ * Which of his two ultimates a hero has equipped. One per run, never both.
  *
- * A table rather than a line per ability in the update loop. Two of the five
- * resolve over time -- the crack travels, the singularity holds -- and each
- * was its own call beside the whirlwind's tick, so a sixth ultimate would
- * have been a seventh edit inside the frame loop. Here the loop makes one
- * call for all of them, forever, and an ultimate that resolves on the frame
- * it fires simply has no row.
+ * The pick itself is not built: nothing in the game sets this yet, and the
+ * screen that will is Alex's call. It lives here as the seam that screen
+ * writes to, so the second five are reachable and testable now and the
+ * screen later changes one value rather than the ten abilities under it.
  */
-const ULTIMATE_TICK = {
-  knight: tickEarthshatter,
-  wizard: tickVortex,
+const ULTIMATE_SLOT = { FIRST: 'first', SECOND: 'second' };
+let ultimateSlot = ULTIMATE_SLOT.FIRST;
+
+/**
+ * The ten ultimates: one record per ability, two per hero.
+ *
+ * `fire` returns false if the ability refused, in which case nothing is spent
+ * -- the gate belongs to the hero rather than to tryUltimate. `tick` is
+ * optional and only the ones that resolve over TIME have it: the crack
+ * travels, the singularity holds, the beam burns, the volley runs. One record
+ * rather than a `fire` table beside a `tick` table, because an ultimate is one
+ * thing and splitting it across two tables was already a pair that agreed
+ * only by luck.
+ */
+const ULTIMATE = {
+  archer: {
+    first:  { fire: fireHeadshot },
+    second: { fire: fireArrowRain, tick: tickArrowRain },
+  },
+  wizard: {
+    first:  { fire: fireVortex, tick: tickVortex },
+    second: { fire: fireBeam, tick: tickBeam },
+  },
+  knight: {
+    first:  { fire: fireEarthshatter, tick: tickEarthshatter },
+    second: { fire: fireLeap, tick: tickLeap },
+  },
+  ranger: {
+    first:  { fire: fireHarpoon },
+    second: { fire: fireFullAuto, tick: tickFullAuto },
+  },
+  sapper: {
+    first:  { fire: fireCarpetBomb },
+    second: { fire: fireBigOne },
+  },
 };
 
-/** What each hero's ultimate does. Returns false if it could not fire, in
- *  which case nothing is spent -- the gate belongs to the hero, not here. */
-const ULTIMATE = {
-  archer: fireHeadshot,
-  knight: fireEarthshatter,
-  sapper: fireCarpetBomb,
-  wizard: fireVortex,
-  ranger: fireHarpoon,
-};
+/** The ability the hero currently has equipped, or undefined. */
+function equippedUltimate() { return ULTIMATE[selectedChar]?.[ultimateSlot]; }
 
 /** True while the ultimate is up. The aura, the HUD chip and the key all ask.*/
-function ultimateReady() { return ultimateCD <= 0 && !!ULTIMATE[selectedChar]; }
+function ultimateReady() { return ultimateCD <= 0 && !!equippedUltimate(); }
 
 /**
  * Fires the ultimate if it is up, and says whether it went.
@@ -2808,7 +2886,7 @@ function ultimateReady() { return ultimateCD <= 0 && !!ULTIMATE[selectedChar]; }
  */
 function tryUltimate() {
   if (!inGame() || !ultimateReady()) return false;
-  if (!ULTIMATE[selectedChar]()) return false;
+  if (!equippedUltimate().fire()) return false;
   ultimateCD = CONFIG.ultimateCooldown;
   events.emit({ type: 'ULTIMATE_FIRED', hero: selectedChar, x: player.x, y: player.y });
   return true;
@@ -2818,15 +2896,15 @@ function tryUltimate() {
  * The whole per-frame cost of the ultimates: whatever one is still resolving,
  * then the countdown and the one moment worth telling the player about.
  *
- * One call from the frame loop covers all five and every one added after
- * them, which is the point -- see ULTIMATE_TICK.
+ * One call from the frame loop covers all ten and every one added after
+ * them, which is the point -- see ULTIMATE.
  */
 function tickUltimate(dt) {
-  ULTIMATE_TICK[selectedChar]?.(dt);
+  equippedUltimate()?.tick?.(dt);
   if (ultimateCD <= 0) return;
   const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
   ultimateCD = Math.max(0, ultimateCD - dt * (1 + charge * CONFIG.ultimateChargeBoost));
-  if (ultimateCD <= 0 && ULTIMATE[selectedChar]) {
+  if (ultimateCD <= 0 && equippedUltimate()) {
     events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
   }
 }
@@ -4164,6 +4242,53 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'ARCHER_RAIN':
+      // Quiet: the mark is a promise, and the noise belongs to what lands.
+      playSound(sndArm);
+      spawnShockRing(e.x, e.y, e.radius, '#EAFF6A');
+      break;
+    case 'ARCHER_RAIN_HIT':
+      playSound(sndShoot); triggerShake(1, 50);
+      burst(e.x, e.y, {
+        count: 5, colors: ['#EAFF6A', '#FFFFFF'], speedMin: 20, speedMax: 70,
+        decay: 3.2, shape: 'spark', shadowBlur: 4, shadowColor: '#EAFF6A'
+      });
+      break;
+    case 'WIZARD_BEAM':
+      playSound(sndLightning); triggerShake(3, 160);
+      burst(e.x, e.y, {
+        count: 12, colors: ['#A08CFF', '#FFFFFF'], speedMin: 20, speedMax: 80,
+        decay: 2.4, shape: 'spark', shadowBlur: 8, shadowColor: '#A08CFF'
+      });
+      break;
+    case 'WIZARD_BEAM_END':
+      playSound(sndPickup);
+      break;
+    case 'KNIGHT_LEAP':
+      playSound(sndChargeWhoosh); triggerShake(2, 90);
+      break;
+    case 'KNIGHT_LEAP_LAND':
+      // The landing is the ability; the jump is only how it got there.
+      playSound(sndExplosion); triggerShake(8, 320);
+      spawnShockRing(e.x, e.y, e.radius, '#C8C8E8');
+      burst(e.x, e.y, {
+        count: 20, colors: ['#C8C8E8', '#8A7A5A', '#FFFFFF'], speedMin: 50, speedMax: 170,
+        decay: 2.2, shape: 'spark', shadowBlur: 8, shadowColor: '#C8C8E8'
+      });
+      break;
+    case 'RANGER_FULL_AUTO':
+      playSound(sndArm); triggerShake(2, 110);
+      break;
+    case 'RANGER_FULL_AUTO_END':
+      playSound(sndPickup);
+      break;
+    case 'SAPPER_BIG_ONE':
+      playSound(sndArm); triggerShake(3, 130);
+      burst(e.x, e.y, {
+        count: 10, colors: ['#FF7A1A', '#FFE9A0'], speedMin: 20, speedMax: 60,
+        decay: 2.6, shape: 'spark', shadowBlur: 6, shadowColor: '#FF7A1A'
+      });
+      break;
     case 'WIZARD_VORTEX':
       // Low and sustained rather than a bang: the moment it is placed is a
       // held breath, and the bang is WIZARD_VORTEX_COLLAPSE a second later.
@@ -4432,6 +4557,8 @@ function initGame() {
 
   knightChainTimer = 0;
   ultimateCD = CONFIG.ultimateCooldown;
+  arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
+  lastMovedPx = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
@@ -4627,8 +4754,9 @@ function updatePlayer(dt) {
   }
 
   // Drawing and charging root their owners the same way sniper mode roots the
-  // sapper. For the archer that root is the whole cost of the power shot.
-  if (!knightCharge.on && !archerDraw.on) {
+  // sapper. For the archer that root is the whole cost of the power shot, and
+  // for the wizard's beam it is the whole cost of the ultimate.
+  if (!knightCharge.on && !archerDraw.on && !beam) {
     let vx = 0, vy = 0;
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
@@ -4663,6 +4791,11 @@ function updatePlayer(dt) {
     // paper -- which is the exact "earn a stance by leaning on terrain" this
     // comment claimed was prevented, and was not.
     const movedPx = Math.hypot(player.x - fromX, player.y - fromY);
+    // Recorded at the one place it is computed. FULL AUTO fires only while he
+    // is moving and ticks somewhere else entirely; measuring it a second time
+    // from a remembered position would drift the moment anything else moved
+    // him -- a blast hop, a harpoon, a leap.
+    lastMovedPx = movedPx;
     const meter = MOVEMENT_METERS[selectedChar];
     if (meter) meter(dt, movedPx);
     else braceLevel = 0;
@@ -5087,6 +5220,27 @@ function tryKnightAttack() {
 }
 
 /**
+ * A point on the aim line, no further from the hero than `range`.
+ *
+ * Four ultimates aim at a PLACE rather than down a line, and each wants the
+ * same thing: where the pointer is, pulled back to the ability's own reach and
+ * clamped into the arena. Pointing at his own feet has no direction in it, so
+ * the aim angle is the only intent available -- the same fallback hopFromBlast
+ * makes for the same reason.
+ */
+function aimPointWithin(range) {
+  const aim = aimWorld();
+  const dx = aim.x - player.x, dy = aim.y - player.y;
+  const away = Math.hypot(dx, dy);
+  const angle = away < 0.001 ? player.aimAngle : Math.atan2(dy, dx);
+  const reach = Math.min(away, range);
+  return {
+    x: clampArenaX(player.x + Math.cos(angle) * reach),
+    y: clampArenaY(player.y + Math.sin(angle) * reach),
+  };
+}
+
+/**
  * VORTEX -- the wizard's ultimate.
  *
  * Dropped where he is pointing, clamped to its own range so it stays a shot
@@ -5096,18 +5250,8 @@ function tryKnightAttack() {
  */
 function fireVortex() {
   if (vortex) return false;
-  const aim = aimWorld();
-  const dx = aim.x - player.x, dy = aim.y - player.y;
-  const away = Math.hypot(dx, dy);
-  const reach = Math.min(away, CONFIG.wizVortexRange);
-  // Pointing at his own feet has no direction to place it in; the aim angle is
-  // the only intent available, the same fallback hopFromBlast makes.
-  const angle = away < 0.001 ? player.aimAngle : Math.atan2(dy, dx);
-  vortex = {
-    x: clampArenaX(player.x + Math.cos(angle) * reach),
-    y: clampArenaY(player.y + Math.sin(angle) * reach),
-    timer: CONFIG.wizVortexDuration,
-  };
+  const at = aimPointWithin(CONFIG.wizVortexRange);
+  vortex = { x: at.x, y: at.y, timer: CONFIG.wizVortexDuration };
   inv.focus = 0;
   events.emit({ type: 'WIZARD_VORTEX', x: vortex.x, y: vortex.y });
   return true;
@@ -5170,6 +5314,211 @@ function harpoonYank(a) {
                          Math.min(away, CONFIG.rangerHarpoonReach));
   player.x = end.x; player.y = end.y;
   events.emit({ type: 'RANGER_HARPOON_PULL', x: end.x, y: end.y, moved: end.moved });
+}
+
+/**
+ * ARROW RAIN -- the archer's second ultimate.
+ *
+ * A spot is marked, and a beat later arrows come down over it one at a time.
+ * The delay is the skill: you are aiming at where things WILL be, which is the
+ * opposite question to HEADSHOT's.
+ *
+ * The boss takes it once per volley rather than once per arrow, the same guard
+ * the crack carries -- fourteen impacts each landing full boss damage would
+ * make this the only ultimate on the roster worth firing at a boss.
+ */
+function fireArrowRain() {
+  if (arrowRain) return false;
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  spendShaft();
+  const at = aimPointWithin(CONFIG.archerRainRange);
+  arrowRain = {
+    x: at.x, y: at.y, delay: CONFIG.archerRainDelay,
+    left: CONFIG.archerRainImpacts, nextIn: 0, bossHit: false,
+  };
+  events.emit({ type: 'ARCHER_RAIN', x: at.x, y: at.y, radius: CONFIG.archerRainRadius });
+  return true;
+}
+
+function tickArrowRain(dt) {
+  const r = arrowRain;
+  if (!r) return;
+  if (r.delay > 0) { r.delay -= dt; return; }
+  r.nextIn -= dt;
+  if (r.nextIn > 0) return;
+  r.nextIn = CONFIG.archerRainDuration / CONFIG.archerRainImpacts;
+
+  // Uniform over the DISC, not over the radius: without the square root the
+  // arrows crowd the centre and the rim of the marked circle never gets one.
+  const a = Math.random() * Math.PI * 2;
+  const d = Math.sqrt(Math.random()) * CONFIG.archerRainRadius;
+  const x = r.x + Math.cos(a) * d, y = r.y + Math.sin(a) * d;
+  const reach = CONFIG.archerRainImpactRadius;
+  const onBoss = bossInPlay() && !boss.shield && dist2(x, y, boss.x, boss.y) < reach * reach;
+  const bossHit = (!r.bossHit && onBoss)
+    ? { amount: CONFIG.archerRainBossDamage, source: 'arrowRain', flash: 0.2 } : null;
+  damageEnemiesInRadius(x, y, reach, bossHit, { amount: CONFIG.archerRainDamage });
+  if (bossHit) r.bossHit = true;
+  events.emit({ type: 'ARCHER_RAIN_HIT', x, y });
+
+  r.left--;
+  if (r.left <= 0) arrowRain = null;
+}
+
+/**
+ * THE BEAM -- the wizard's second ultimate.
+ *
+ * He plants his feet and sweeps a lance with the mouse. The root is the price,
+ * and it is the archer's bargain: two seconds standing still in the open on the
+ * thinnest body on the roster. It empties the Focus pool, as VORTEX does.
+ */
+function fireBeam() {
+  if (beam) return false;
+  beam = { timer: CONFIG.wizBeamDuration, tickIn: 0 };
+  inv.focus = 0;
+  events.emit({ type: 'WIZARD_BEAM', x: player.x, y: player.y });
+  return true;
+}
+
+/** How far the lance reaches right now: down the aim, stopped by terrain. */
+function beamEnd() {
+  return probeAhead(player.x, player.y, player.aimAngle, CONFIG.wizBeamRange);
+}
+
+function tickBeam(dt) {
+  const b = beam;
+  if (!b) return;
+  b.timer -= dt;
+  b.tickIn -= dt;
+  if (b.tickIn <= 0) {
+    b.tickIn = CONFIG.wizBeamTickRate;
+    const end = beamEnd();
+    const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
+    // Sampled along the line rather than resolved as one long box: the arena
+    // has no such primitive, and a handful of circles is cheaper than adding
+    // one for a single caller.
+    const step = CONFIG.wizBeamWidth;
+    for (let d = step; d <= end.moved; d += step) {
+      // Bodies only. The boss is resolved once below, however many samples
+      // land on him -- otherwise a lance held on a wide boss ticks five times.
+      damageEnemiesInRadius(player.x + nx * d, player.y + ny * d,
+                            CONFIG.wizBeamWidth, null,
+                            { amount: CONFIG.wizBeamDamage });
+    }
+    if (bossInPlay() && !boss.shield) {
+      const along = (boss.x - player.x) * nx + (boss.y - player.y) * ny;
+      const off = Math.abs((boss.x - player.x) * -ny + (boss.y - player.y) * nx);
+      if (along > 0 && along <= end.moved && off <= CONFIG.wizBeamWidth) {
+        damageBoss(CONFIG.wizBeamBossPerTick, player.x, player.y, 'beam', 0.1);
+      }
+    }
+  }
+  if (b.timer <= 0) {
+    beam = null;
+    events.emit({ type: 'WIZARD_BEAM_END', x: player.x, y: player.y });
+  }
+}
+
+/**
+ * THE LEAP -- the knight's second ultimate.
+ *
+ * He goes OVER what is in the way, which is the whole difference from the
+ * wizard's blink: the blink walks the aim and stops at the last point the body
+ * fits, and this one only cares where it lands. If the landing itself is solid
+ * it is walked back toward him until it is not, so he cannot end up inside a
+ * rock -- but everything between is simply passed over.
+ */
+function fireLeap() {
+  if (knightLeap) return false;
+  const at = aimPointWithin(CONFIG.knightLeapRange);
+  const back = Math.atan2(player.y - at.y, player.x - at.x);
+  let lx = at.x, ly = at.y;
+  for (let i = 0; i < 60 && !playerFits(lx, ly); i++) {
+    lx += Math.cos(back) * 4; ly += Math.sin(back) * 4;
+  }
+  if (!playerFits(lx, ly)) return false;   // nowhere to land, and costs nothing
+  knightLeap = { x0: player.x, y0: player.y, x1: lx, y1: ly, t: 0 };
+  events.emit({ type: 'KNIGHT_LEAP', x: player.x, y: player.y, toX: lx, toY: ly });
+  return true;
+}
+
+function tickLeap(dt) {
+  const l = knightLeap;
+  if (!l) return;
+  l.t = Math.min(1, l.t + dt / CONFIG.knightLeapSecs);
+  // A straight line across the ground; the arc is drawn rather than simulated.
+  // Nothing collides with him while he is on it, which is what over-the-wall
+  // means, and he takes damage the whole time, which is what no i-frames means.
+  player.x = l.x0 + (l.x1 - l.x0) * l.t;
+  player.y = l.y0 + (l.y1 - l.y0) * l.t;
+  if (l.t < 1) return;
+
+  knightLeap = null;
+  const r = CONFIG.knightLeapRadius;
+  damageEnemiesInRadius(player.x, player.y, r,
+    { amount: CONFIG.knightLeapBossDamage, source: 'leap', flash: 0.25 },
+    { amount: CONFIG.knightLeapDamage });
+  smashTilesInRadius(player.x, player.y, r);
+  spawnShockRing(player.x, player.y, r, '#C8C8E8');
+  events.emit({ type: 'KNIGHT_LEAP_LAND', x: player.x, y: player.y, radius: r });
+}
+
+/**
+ * FULL AUTO -- the ranger's second ultimate.
+ *
+ * Volleys for as long as he keeps moving, out of the same quiver his primary
+ * empties. Deliberately NOT free, unlike his harpoon: this is a burst of the
+ * crossbow rather than a thing of its own, and free bolts would make it
+ * strictly better than the weapon it is a burst of. Running dry ends it early,
+ * which is a real cost and reads as one.
+ */
+function fireFullAuto() {
+  if (fullAuto) return false;
+  fullAuto = { timer: CONFIG.rangerFullAutoSecs, shotIn: 0 };
+  events.emit({ type: 'RANGER_FULL_AUTO', x: player.x, y: player.y });
+  return true;
+}
+
+function tickFullAuto(dt) {
+  const f = fullAuto;
+  if (!f) return;
+  f.timer -= dt;
+  if (f.timer <= 0) {
+    fullAuto = null;
+    events.emit({ type: 'RANGER_FULL_AUTO_END', x: player.x, y: player.y });
+    return;
+  }
+  // The clock runs whether he moves or not; only the FIRING waits on him.
+  // Standing still costs him the burst rather than pausing it, which is the
+  // whole point of giving this to the hero who is paid for never setting his
+  // feet.
+  if (lastMovedPx <= MOVED_EPSILON) return;
+  f.shotIn -= dt;
+  if (f.shotIn > 0) return;
+  f.shotIn = CONFIG.rangerFullAutoInterval;
+  tryCrossbowBolt();
+}
+
+/**
+ * THE BIG ONE -- the sapper's second ultimate.
+ *
+ * One charge, a long fuse you can watch, and a crater three times the usual.
+ * The radius rides on `chainMult`, which is the field a bomb already carries to
+ * say how wide it goes up -- the combo shot sets the same one -- so this needs
+ * no new branch inside explodeExplosive.
+ */
+function fireBigOne() {
+  const at = aimPointWithin(CONFIG.sapperBigOneRange);
+  dynamites.push({
+    x: at.x, y: at.y, vx: 0, vy: 0,
+    life: CONFIG.sapperBigOneFuse, fuseTotal: CONFIG.sapperBigOneFuse,
+    kind: 'bomb', element: 'none', hop: false, shortFuse: false,
+    angle: player.aimAngle, bobPhase: 0,
+    // Lit already, so a cascade cannot shorten the fuse that IS the ability.
+    chainLit: true, chainMult: CONFIG.sapperBigOneRadiusMult, bigOne: true,
+  });
+  events.emit({ type: 'SAPPER_BIG_ONE', x: at.x, y: at.y });
+  return true;
 }
 
 /** How wide the crack is once it has run this far. Linear: a wedge. */
@@ -15550,6 +15899,15 @@ export const devHooks = {
   setUltimateCD(secs) { ultimateCD = secs; },
   /** The crack in flight, or null once it has run its length. */
   earthshatter: () => earthshatter,
+  /** Which of the hero's two ultimates is equipped, and a way to swap it.
+   *  The pick SCREEN is not built; this is the seam it will write to. */
+  ultimateSlot: () => ultimateSlot,
+  setUltimateSlot(slot) { ultimateSlot = slot; },
+  ULTIMATE_SLOT,
+  arrowRain: () => arrowRain,
+  beam: () => beam,
+  knightLeap: () => knightLeap,
+  fullAuto: () => fullAuto,
   /** The singularity while it holds, or null once it has collapsed. */
   vortex: () => vortex,
   killCount: () => killCount,
