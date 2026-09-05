@@ -111,3 +111,56 @@ describe('the tables an ultimate is spread across', () => {
     }
   });
 });
+
+/**
+ * The icon set is ten drawings, one per ultimate, and the ability each one is
+ * FOR lives in game.js while the list of them lives in a Python manifest the
+ * design pipeline reads. Nothing bound the two together: an ability renamed or
+ * a slot re-cast left an icon for something that no longer exists, and the
+ * pipeline's own coverage check would go on reporting ten of ten because it
+ * only ever compares the icons against that manifest.
+ *
+ * The join is the ability's `id`, carried explicitly in the table. It used to
+ * be read off the fire function's name, and the first run of this guard showed
+ * why that was wrong: `fireBeam` draws `theBeam`, `fireLeap` draws `theLeap`,
+ * and three of the ten did not match. A join on a coincidence of naming is one
+ * rename away from being wrong about everything.
+ */
+describe('the icon manifest and the abilities it draws', () => {
+  const manifest = readFileSync(
+    resolve(here, '../../_design/talent-feedback/ultimates.py'), 'utf8');
+
+  /** Every ability in the table, as the hero and slot it sits under plus its id. */
+  function abilityIds(): Array<{ hero: string; slot: string; id: string }> {
+    const out: Array<{ hero: string; slot: string; id: string }> = [];
+    let hero = '';
+    for (const line of tableBody('ULTIMATE')) {
+      const top = keysAtDepth([line], 2)[0];
+      if (top !== undefined) { hero = top; continue; }
+      const slot = keysAtDepth([line], 4)[0];
+      if (slot === undefined || !hero) continue;
+      const marker = "id: '";
+      const at = line.indexOf(marker);
+      expect(at, `${hero}.${slot} carries no id`).toBeGreaterThan(-1);
+      const rest = line.slice(at + marker.length);
+      out.push({ hero, slot, id: rest.slice(0, rest.indexOf("'")) });
+    }
+    return out;
+  }
+
+  it('lists exactly the abilities the game has, under the same hero and slot', () => {
+    const abilities = abilityIds();
+    expect(abilities.length).toBeGreaterThan(0);
+    const missing = abilities.filter(({ hero, slot, id }) =>
+      !manifest.includes(`'${id}'`)
+      || !new RegExp(`'${id}'[^)]*'${hero}', '${slot}'`).test(manifest));
+    expect(missing.map((m) => `${m.id} (${m.hero} ${m.slot})`)).toEqual([]);
+  });
+
+  it('draws nothing the game does not have', () => {
+    const known = new Set(abilityIds().map((a) => a.id));
+    const listed = [...manifest.matchAll(/^ {4}\('(\w+)'/gm)].map((m) => m[1]!);
+    expect(listed.length).toBe(known.size);
+    expect(listed.filter((id) => !known.has(id))).toEqual([]);
+  });
+});

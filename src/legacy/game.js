@@ -2839,6 +2839,11 @@ let ultimateSlot = ULTIMATE_SLOT.FIRST;
 /**
  * The ten ultimates: one record per ability, two per hero.
  *
+ * `id` is the ability's name in the design pipeline, where its icon is drawn
+ * and its card will be laid out. Carried explicitly rather than derived from
+ * the fire function's name: `fireBeam` and the icon `theBeam` do not match,
+ * and a join on a coincidence of naming is one rename from being wrong.
+ *
  * `fire` returns false if the ability refused, in which case nothing is spent
  * -- the gate belongs to the hero rather than to tryUltimate. `tick` is
  * optional and only the ones that resolve over TIME have it: the crack
@@ -2849,24 +2854,24 @@ let ultimateSlot = ULTIMATE_SLOT.FIRST;
  */
 const ULTIMATE = {
   archer: {
-    first:  { fire: fireHeadshot },
-    second: { fire: fireArrowRain, tick: tickArrowRain },
+    first:  { id: 'headshot', fire: fireHeadshot },
+    second: { id: 'arrowRain', fire: fireArrowRain, tick: tickArrowRain },
   },
   wizard: {
-    first:  { fire: fireVortex, tick: tickVortex },
-    second: { fire: fireBeam, tick: tickBeam },
+    first:  { id: 'vortex', fire: fireVortex, tick: tickVortex },
+    second: { id: 'theBeam', fire: fireBeam, tick: tickBeam },
   },
   knight: {
-    first:  { fire: fireEarthshatter, tick: tickEarthshatter },
-    second: { fire: fireLeap, tick: tickLeap },
+    first:  { id: 'earthshatter', fire: fireEarthshatter, tick: tickEarthshatter },
+    second: { id: 'theLeap', fire: fireLeap, tick: tickLeap },
   },
   ranger: {
-    first:  { fire: fireHarpoon },
-    second: { fire: fireFullAuto, tick: tickFullAuto },
+    first:  { id: 'harpoon', fire: fireHarpoon },
+    second: { id: 'fullAuto', fire: fireFullAuto, tick: tickFullAuto },
   },
   sapper: {
-    first:  { fire: fireCarpetBomb },
-    second: { fire: fireBigOne },
+    first:  { id: 'carpetBomb', fire: fireCarpetBomb },
+    second: { id: 'theBigOne', fire: fireBigOne },
   },
 };
 
