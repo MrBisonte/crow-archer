@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ultimate check 48</title>
+<!--
+  The ultimates' own preview. Same job as preview32.html: render and LOOK.
+
+  The two sizes that decide an icon are here for a reason. 224 px is where you
+  fix the form; 48 px is where you find out whether it reads at all, which is
+  the size the pick card actually shows. An icon that only works big is not
+  finished, and every one of the forty talent sigils took three to five passes
+  between these two views.
+
+  The pairs are laid out hero by hero, first and second side by side, because
+  the thing being judged is a CHOICE: if the two do not look like two different
+  answers at a glance, the art has failed even if each is good alone.
+-->
+<style>
+  body { margin: 0; background: #0d0f0c; font-family: "Courier New", monospace;
+         color: #C8D0C4; padding: 26px; }
+  h1 { font-size: 14px; color: #39FF14; letter-spacing: .14em; font-weight: normal;
+       margin: 0 0 18px; }
+  h2 { font-size: 11px; color: #6f8a6c; letter-spacing: .2em; font-weight: normal;
+       margin: 26px 0 10px; }
+  .pair { display: flex; gap: 34px; align-items: flex-start;
+          border-left: 1px solid #23301f; padding-left: 18px; margin-bottom: 8px; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .cell svg { image-rendering: pixelated; }
+  .nm { font-size: 11px; letter-spacing: .12em; }
+  .slot { font-size: 9px; letter-spacing: .14em; color: #5c6459; }
+  .why { font-size: 9.5px; color: #6f8a6c; text-align: center; max-width: 20ch;
+         line-height: 1.5; }
+  .row { display: flex; gap: 14px; align-items: center; background: #11150f;
+         border: 1px solid #23301f; padding: 10px 14px; margin-bottom: 8px; }
+  .todo { color: #B0301C; font-size: 11px; letter-spacing: .1em; }
+</style>
+<h1>— ULTIMATES · 48×48, GOLD BEZEL, SHARED GROUND —</h1>
+<div id="big"></div>
+<h1 style="margin-top:34px">— AT CARD SIZE (48 px), WHICH IS WHERE IT HAS TO READ —</h1>
+<div id="small"></div>
+<script type="module">
+import { ULTIMATES } from './ultimates48.js';
+import { svg, svgSheen } from './compose.mjs';
+
+const HEROES = ['archer', 'wizard', 'knight', 'ranger', 'sapper'];
+const big = document.getElementById('big');
+const small = document.getElementById('small');
+
+if (ULTIMATES.length === 0) {
+  big.innerHTML = '<p class="todo">nothing drawn yet — add a module under ultimates/ '
+    + 'and run: python draw-ultimates.py</p>';
+}
+
+for (const hero of HEROES) {
+  const mine = ULTIMATES.filter((u) => u.hero === hero);
+  if (!mine.length) continue;
+
+  const h = document.createElement('h2');
+  h.textContent = hero.toUpperCase();
+  big.appendChild(h);
+
+  const pair = document.createElement('div');
+  pair.className = 'pair';
+  for (const icon of mine) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.innerHTML = svgSheen(icon, 224)
+      + `<div class="nm">${icon.name}</div>`
+      + `<div class="slot">${icon.slot}</div>`
+      + `<div class="why">${icon.why}</div>`;
+    pair.appendChild(cell);
+  }
+  big.appendChild(pair);
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<span class="slot">${hero.toUpperCase()}</span>`
+    + mine.map((i) => svg(i, 48) + `<span class="nm">${i.name}</span>`).join('');
+  small.appendChild(row);
+}
+</script>

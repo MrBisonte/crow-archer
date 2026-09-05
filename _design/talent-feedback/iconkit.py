@@ -9,7 +9,14 @@ An icon now declares what it IS beside the code that draws it.
 """
 import math
 
+# The talent grid.
 N = 32
+
+# The ultimate grid. Half again the resolution, because an ultimate is one
+# choice of two on a card rather than one of forty in a row. A separate
+# number rather than a bigger N: the forty talent icons must go on rendering
+# byte for byte, and they were proven to after this was added.
+ULT_N = 48
 
 # The ramps, richer than the sprite ramps because these are read on dark brass.
 # Real data here rather than text inside the JS header, so that a Python check
@@ -27,24 +34,33 @@ RAMPS = {
 # The five sockets compose.mjs can tint. An unknown one there falls back to the
 # golden `movement` ground WITHOUT complaining, which is a wrong-looking icon
 # and no error, so it is checked at registration instead.
-CATS = ('movement', 'defence', 'damage', 'speed', 'healing')
+CATS = ('movement', 'defence', 'damage', 'speed', 'healing', 'ultimate')
 
 # What the talent does to the sim. Carried through to the artboard.
 KINDS = ('direct', 'indirect', 'mechanic')
 
 
 class G:
-    def __init__(self):
-        self.g = [['.'] * N for _ in range(N)]
+    """A square grid of ramp characters.
+
+    `n` is the icon's OWN size -- 32 for a talent, ULT_N for an ultimate --
+    rather than a module constant every method reads. Defaulted, so every one
+    of the forty existing modules goes on saying `G()` and means exactly what
+    it always meant, and the clipping follows the grid it is clipping.
+    """
+
+    def __init__(self, n=N):
+        self.n = n
+        self.g = [['.'] * n for _ in range(n)]
 
     def put(self, y, x, s):
         """Places a row segment. ' ' leaves a cell alone, '.' erases it."""
         for i, ch in enumerate(s):
-            if ch != ' ' and 0 <= x + i < N and 0 <= y < N:
+            if ch != ' ' and 0 <= x + i < self.n and 0 <= y < self.n:
                 self.g[y][x + i] = ch
 
     def px(self, x, y, ch):
-        if 0 <= x < N and 0 <= y < N:
+        if 0 <= x < self.n and 0 <= y < self.n:
             self.g[y][x] = ch
 
     def rows(self):
@@ -101,8 +117,11 @@ def register(icon_id, label, hero, kind, cat, why, ramps, grid):
         assert name in RAMPS, '%s: no ramp called %r' % (icon_id, name)
         legend.update(RAMPS[name])
     rows = grid.rows()
+    size = getattr(grid, 'n', N)
+    assert len(rows) == size, '%s has %d rows, expected %d' % (icon_id, len(rows), size)
     for i, row in enumerate(rows):
-        assert len(row) == N, '%s row %d is %d wide' % (icon_id, i, len(row))
+        assert len(row) == size, ('%s row %d is %d wide, expected %d'
+                                  % (icon_id, i, len(row), size))
     # The one that cost an afternoon: TOWER GUARD's face was drawn in leather
     # against a steel-and-gold legend, so every E C H h L painted NOTHING and
     # what showed was the rim filling the silhouette. No error anywhere.
@@ -112,4 +131,5 @@ def register(icon_id, label, hero, kind, cat, why, ramps, grid):
                          'paint nothing. Its ramps are %s.'
                          % (icon_id, missing, list(ramps)))
     ICONS.append({'id': icon_id, 'label': label, 'hero': hero, 'kind': kind,
-                  'cat': cat, 'why': why, 'ramps': list(ramps), 'rows': rows})
+                  'cat': cat, 'why': why, 'ramps': list(ramps), 'rows': rows,
+                  'size': size})
