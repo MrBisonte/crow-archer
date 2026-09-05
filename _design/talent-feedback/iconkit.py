@@ -108,6 +108,43 @@ def limb(g, x0, y0, x1, y1, w0, w1, ramp):
 ICONS = []
 
 
+def load_modules(directory, only=None):
+    """Imports every `*.py` under `directory`, which is what registers them.
+
+    Both draw scripts had this, character for character, including the two
+    assertions -- and those assertions are the point: a file that registers
+    nothing is an icon nobody notices is missing, and one that registers a name
+    other than its own is a file nobody finds again. Two copies of a check is
+    one copy that can quietly stop matching the other.
+
+    `only` narrows it to a few ids. Several people draw these at once, and a
+    module half-written by one of them is a syntax error that stops everyone
+    else looking at their own work.
+    """
+    import glob
+    import importlib.util
+    import os
+    import sys
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in sorted(glob.glob(os.path.join(here, directory, '*.py'))):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if stem.startswith('_'):
+            continue
+        if only is not None and stem not in only:
+            continue
+        before = {i['id'] for i in ICONS}
+        spec = importlib.util.spec_from_file_location(
+            '%s_%s' % (directory, stem), path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        added = {i['id'] for i in ICONS} - before
+        assert added == {stem}, (
+            '%s/%s.py registered %s, expected exactly {%r}'
+            % (directory, stem, sorted(added) or 'nothing', stem))
+
+
 def register(icon_id, label, hero, kind, cat, why, ramps, grid):
     """Records one finished icon, refusing the mistakes that fail silently."""
     assert cat in CATS, '%s: cat %r is not one of %s' % (icon_id, cat, CATS)

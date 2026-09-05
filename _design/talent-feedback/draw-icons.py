@@ -23,26 +23,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TREES = os.path.join(HERE, '..', '..', 'src', 'sim', 'talents.ts')
 
 
-def load_modules():
-    """Imports every icons/*.py, which is what registers them."""
-    for path in sorted(glob.glob(os.path.join(HERE, 'icons', '*.py'))):
-        stem = os.path.splitext(os.path.basename(path))[0]
-        if stem.startswith('_'):
-            continue
-        before = {i['id'] for i in iconkit.ICONS}
-        spec = importlib.util.spec_from_file_location('icon_%s' % stem, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        added = {i['id'] for i in iconkit.ICONS} - before
-        # A file that registers nothing is an icon nobody will notice is
-        # missing, and one that registers a different name than it is called is
-        # a file nobody will find again.
-        assert added == {stem}, (
-            'icons/%s.py registered %s, expected exactly {%r}'
-            % (stem, sorted(added) or 'nothing', stem))
-
-
 def talent_order():
     """Every talent id in tree order, from the game's own table.
 
@@ -63,7 +43,7 @@ def talent_order():
 
 
 def main():
-    load_modules()
+    iconkit.load_modules('icons')
     order, hero_of = talent_order()
     have = {i['id']: i for i in iconkit.ICONS}
 

@@ -25,33 +25,6 @@ from ultimates import BY_ID, ORDER, ULTIMATES
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def load_modules(only=None):
-    """Imports every ultimates/*.py, which is what registers them.
-
-    `only` narrows that to a few ids. Several people draw these at once, and
-    a module half-written by one of them is a syntax error that stops everyone
-    else from looking at their own work -- which turns a private mistake into
-    a shared outage. With --only, each draws against their own files alone.
-    """
-    for path in sorted(glob.glob(os.path.join(HERE, 'ultimates', '*.py'))):
-        stem = os.path.splitext(os.path.basename(path))[0]
-        if stem.startswith('_'):
-            continue
-        if only is not None and stem not in only:
-            continue
-        before = {i['id'] for i in iconkit.ICONS}
-        spec = importlib.util.spec_from_file_location('ult_%s' % stem, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        added = {i['id'] for i in iconkit.ICONS} - before
-        # A file that registers nothing is an icon nobody will notice is
-        # missing; one that registers another name is a file nobody finds again.
-        assert added == {stem}, (
-            'ultimates/%s.py registered %s, expected exactly {%r}'
-            % (stem, sorted(added) or 'nothing', stem))
-
-
 def check_manifest():
     """Every hero has exactly one of each slot, and no id is used twice."""
     assert len(ORDER) == len(set(ORDER)), 'duplicate id in ultimates.py'
@@ -74,7 +47,7 @@ def main():
         only = set(sys.argv[sys.argv.index('--only') + 1:])
         unknown = sorted(only - set(ORDER))
         assert not unknown, 'no such ultimate: %s' % unknown
-    load_modules(only)
+    iconkit.load_modules('ultimates', only)
     have = {i['id']: i for i in iconkit.ICONS}
 
     # Both directions, the way draw-icons.py checks talents: an icon for an
