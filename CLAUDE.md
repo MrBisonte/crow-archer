@@ -115,6 +115,11 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Asserting a table's shape?** Compare the exact key set, not
   `toHaveLength(n)`. A length check catches a deletion and misses an
   addition.
+- **Measuring a base off the field?** Own nothing first, and say so in the
+  test. Grants persist across tests in a file by design, so a baseline that
+  relies on a rule elsewhere to make an earlier test's leftovers harmless is
+  one rule change away from measuring the wrong thing
+  (`inert-leftovers-go-live-with-the-rule`).
 - **Green alone, red in the suite?** Not flake — two causes, both real
   (`green-alone-red-in-suite`). **Aim with `aimAt`**, never by assigning
   `player.aimAngle`: `updatePlayer` copies the angle from the pointer every
@@ -124,6 +129,20 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   advanced, so a crow that sits still alone outruns your measurement in a
   suite. Counting survivors is the wrong assertion while waves spawn:
   compare by identity.
+
+## Deleting a rule
+
+- **Deleting a gameplay rule?** Look at what its short-circuit SKIPS, not only
+  at what it decides. An early return that answers before a throwing call is a
+  guard whether or not anyone wrote it as one, and taking the rule away
+  uncovers the crash it was absorbing (`a-deleted-rule-was-guarding-a-throw`).
+  When a deletion produces failures by the hundred, read one of them properly
+  before reverting.
+- **Changing what makes state EFFECTIVE?** The breakage is not where you
+  edited. Anything the old rule rendered inert -- a leftover grant, a stale
+  flag -- goes live the moment the rule does, so look where shared state was
+  being kept harmless by the property you just removed
+  (`inert-leftovers-go-live-with-the-rule`).
 
 ## Docs
 
