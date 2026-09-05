@@ -3370,14 +3370,29 @@ function knightChargeTelegraph() {
 }
 
 /**
- * The special. Bound twice -- to F and to the right mouse button -- which is
- * the redundancy the ultimate is paid for with: `viaUltimateKey` is true
- * only on the key, so the key fires the ultimate while it is up and the
- * button always fires the plain special. Nothing new to bind, and no press
- * is taken away from a player who wants the special instead.
+ * Which of the special's two bindings a press came from.
+ *
+ * A closed set rather than a boolean, because the two are not "the special,
+ * and a special that is somehow more true": they are the KEY and the BUTTON,
+ * and the whole ultimate trigger rests on telling them apart. A flag would
+ * read as `startCharge(true)` at the call site and say nothing.
  */
-function startCharge(viaUltimateKey) {
-  if (viaUltimateKey && tryUltimate()) return;
+const SPECIAL_SOURCE = { KEY: 'key', BUTTON: 'button' };
+
+/**
+ * The special. Bound twice -- to F and to the right mouse button -- which is
+ * the redundancy the ultimate is paid for with: only the KEY fires the
+ * ultimate while it is up, and the BUTTON always fires the plain special.
+ * Nothing new to bind, and no press is taken away from a player who wants the
+ * special instead.
+ */
+function startCharge(source) {
+  // Named arms, no default: an unknown source is a wiring mistake and should
+  // say so here rather than quietly behaving like the button.
+  if (source !== SPECIAL_SOURCE.KEY && source !== SPECIAL_SOURCE.BUTTON) {
+    throw new Error(`startCharge: unknown source ${String(source)}`);
+  }
+  if (source === SPECIAL_SOURCE.KEY && tryUltimate()) return;
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
   } else if (selectedChar === 'knight') {
@@ -3456,7 +3471,7 @@ function installInput() {
       // shown mid-run with the keyboard already busy with movement held down.
       else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
     }
-    if (e.button === 2) { mouseRightHeld = true; startCharge(); }
+    if (e.button === 2) { mouseRightHeld = true; startCharge(SPECIAL_SOURCE.BUTTON); }
   });
   canvas.addEventListener('mouseup',    e => {
     if (e.button === 0) mouseLeftHeld = false;
@@ -3471,7 +3486,7 @@ function installInput() {
       remapTarget = null; e.preventDefault(); return;
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
-    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge(true);
+    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge(SPECIAL_SOURCE.KEY);
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
     if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
     // The name bookkeeping — including the held key that starts repeating
@@ -15525,10 +15540,11 @@ export const devHooks = {
   // input path a real keyboard does instead of a parallel one.
   keys: () => keys,
   shoot() { shootPressed = true; },
-  // The special, down the same path a keyboard or a mouse takes: `viaKey`
-  // true is the F key, which fires the ultimate when it is up; false is the
-  // right button, which never does.
-  special(viaKey) { startCharge(!!viaKey); releaseCharge(); },
+  // The special, down the same path a keyboard or a mouse takes. Takes the
+  // source by name -- 'key' fires the ultimate when it is up, 'button' never
+  // does -- so a test reads as the press it is making.
+  special(source) { startCharge(source); releaseCharge(); },
+  SPECIAL_SOURCE,
   ultimate: () => ({ cd: ultimateCD, ready: ultimateReady(),
                      charge: ULTIMATE_CHARGE[selectedChar]?.() || 0 }),
   setUltimateCD(secs) { ultimateCD = secs; },
@@ -15718,7 +15734,9 @@ export const devHooks = {
   // whirlwind, the ranger's satchel, the sapper's barrage, the archer's
   // dynamite charge -- and a test that called one of those directly would not
   // be exercising the routing that picks it.
-  secondary() { startCharge(); },
+  // The plain special, which is the BUTTON's meaning: a secondary press in a
+  // test is not somebody reaching for their ultimate.
+  secondary() { startCharge(SPECIAL_SOURCE.BUTTON); },
   secondaryUp() { releaseCharge(); },
   // The whole sniper-key path, so a test exercises the same routing the
   // keyboard does rather than calling one ability directly.
@@ -15739,6 +15757,10 @@ export const devHooks = {
     lit: !!d.chainLit, link: d.chainLink ?? 0,
   })),
   /** Momentum's meter and what it multiplies a bolt by. */
+  // Test-only. The meter is filled by ground covered, which is fine to drive
+  // in an open arena and painful inside a boss fight -- and a test of the
+  // harpoon should not also be a test of whether he can find 375 px to run.
+  setMomentum(level) { rangerMomentum = level; },
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: TALENTS.stat('fullTilt') }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress

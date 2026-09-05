@@ -5533,13 +5533,13 @@ describe('the ultimate', () => {
 
     // The button: the plain special, and the ultimate is untouched.
     const dynamitesBefore = g.dynamites().length;
-    g.special(false);
+    g.special('button');
     expect(g.ultimate().ready).toBe(true);
     expect(g.dynamites().length).toBeGreaterThan(dynamitesBefore);
 
     // The key: the ultimate, and it costs the whole timer.
     const arrowsBefore = g.arrows().length;
-    g.special(true);
+    g.special('key');
     expect(g.arrows().length).toBe(arrowsBefore + 1);
     expect(g.ultimate().cd).toBe(g.config().ultimateCooldown);
   });
@@ -5549,7 +5549,7 @@ describe('the ultimate', () => {
   it('costs the full timer even when the shot hits nothing', () => {
     readyRun('archer');
     g.setUltimateCD(0);
-    g.special(true);
+    g.special('key');
     stepPast(ONE_SECOND);
     expect(g.ultimate().ready).toBe(false);
     expect(g.ultimate().cd).toBeGreaterThan(g.config().ultimateCooldown * 0.9);
@@ -5560,7 +5560,7 @@ describe('the ultimate', () => {
     const inv = g.inv() as { arrows: number; fireArrows: number; ricochetArrows: number };
     inv.arrows = 0; inv.fireArrows = 0; inv.ricochetArrows = 0;
     g.setUltimateCD(0);
-    g.special(true);
+    g.special('key');
     expect(g.ultimate().ready).toBe(true);
   });
 });
@@ -5596,7 +5596,7 @@ describe('HEADSHOT, the archer ultimate', () => {
       expect(g.brace().level).toBe(0);
     }
     g.setUltimateCD(0);
-    g.special(true);
+    g.special('key');
     const shot = g.arrows()[g.arrows().length - 1] as Record<string, number>;
     return shot;
   }
@@ -5657,7 +5657,7 @@ describe('EARTHSHATTER, the knight ultimate', () => {
     tiles.set(row, col, TILE.TREE);          // on the line
     tiles.set(row + 4, col, TILE.TREE);      // four tiles to the side of it
 
-    g.special(true);
+    g.special('key');
     stepPast(ONE_SECOND);
     expect(tiles.get(row, col)).not.toBe(TILE.TREE);
     expect(tiles.get(row + 4, col)).toBe(TILE.TREE);
@@ -5673,7 +5673,7 @@ describe('EARTHSHATTER, the knight ultimate', () => {
     const p = knightAt();
     aimAt(p.x + 400, p.y);              // due east
     stepPast(2);
-    g.special(true);
+    g.special('key');
     const committed = (g.earthshatter() as { angle: number }).angle;
     expect(committed).toBeCloseTo(0, 3);
 
@@ -5688,7 +5688,7 @@ describe('EARTHSHATTER, the knight ultimate', () => {
   });
   it('stops after its own range rather than running forever', () => {
     knightAt();
-    g.special(true);
+    g.special('key');
     stepPast(3 * ONE_SECOND);
     expect(g.earthshatter()).toBeNull();
   });
@@ -5716,7 +5716,7 @@ describe('CARPET BOMB, the sapper ultimate', () => {
     const p = sapperAt();
     const c = g.config();
     (g.dynamites() as unknown[]).length = 0;
-    g.special(true);
+    g.special('key');
 
     const laid = g.dynamites() as Array<Record<string, number>>;
     expect(laid).toHaveLength(c.sapperCarpetCount);
@@ -5737,7 +5737,7 @@ describe('CARPET BOMB, the sapper ultimate', () => {
   it('detonates at the chain ceiling instead of climbing to it', () => {
     sapperAt();
     (g.dynamites() as unknown[]).length = 0;
-    g.special(true);
+    g.special('key');
     const ceiling = (g.dynamites() as Array<Record<string, number>>)[0]!.chainLink!;
     expect(ceiling).toBeGreaterThan(1);
 
@@ -5750,7 +5750,7 @@ describe('CARPET BOMB, the sapper ultimate', () => {
     const inv = g.inv() as { bombs: number };
     const before = inv.bombs;
     expect(before).toBeGreaterThan(0);
-    g.special(true);
+    g.special('key');
     expect(inv.bombs).toBe(before);
   });
 });
@@ -5776,7 +5776,7 @@ describe('VORTEX, the wizard ultimate', () => {
     // Pointed far past the range, which is the case the clamp exists for.
     aimAt(p.x + 4 * c.wizVortexRange, p.y);
     stepPast(2);
-    g.special(true);
+    g.special('key');
     const v = g.vortex() as { x: number; y: number };
     expect(v).not.toBeNull();
     expect(Math.hypot(v.x - p.x, v.y - p.y)).toBeCloseTo(c.wizVortexRange, 0);
@@ -5790,7 +5790,7 @@ describe('VORTEX, the wizard ultimate', () => {
     crows.length = 0;
     g.spawnCrow();
     const crow = crows[0]!;
-    g.special(true);
+    g.special('key');
     const v = g.vortex() as { x: number; y: number };
 
     // Held, the way the ranger's net holds one: a held enemy stops moving
@@ -5812,7 +5812,7 @@ describe('VORTEX, the wizard ultimate', () => {
     const c = g.config();
     const tiles = g.tiles() as { get(r: number, col: number): TileId;
                                  set(r: number, col: number, t: TileId): void };
-    g.special(true);
+    g.special('key');
     const v = g.vortex() as { x: number; y: number };
     const row = Math.floor(v.y / c.tileSize), col = Math.floor(v.x / c.tileSize);
     tiles.set(row, col, TILE.TREE);
@@ -5826,7 +5826,7 @@ describe('VORTEX, the wizard ultimate', () => {
     wizardAt();
     const inv = g.inv() as { focus: number };
     expect(inv.focus).toBeGreaterThan(0);
-    g.special(true);
+    g.special('key');
     expect(inv.focus).toBe(0);
   });
 });
@@ -5852,7 +5852,7 @@ describe('HARPOON, the ranger ultimate', () => {
     expect(g.momentum().level).toBeLessThan(1);
     const arrows = g.arrows() as unknown[];
     arrows.length = 0;
-    g.special(true);
+    g.special('key');
     expect(arrows).toHaveLength(0);
     expect(g.ultimate().ready).toBe(true);
   });
@@ -5893,7 +5893,7 @@ describe('HARPOON, the ranger ultimate', () => {
     const arrows = g.arrows() as Array<Record<string, number>>;
     arrows.length = 0;
     g.setUltimateCD(0);
-    g.special(true);
+    g.special('key');
     expect(arrows).toHaveLength(1);          // the line went out
     expect(arrows[0]!.vx).toBeGreaterThan(0);  // and went where he was pointing
     keys['ArrowRight'] = false;
@@ -5963,5 +5963,51 @@ describe('aiming, and why assigning the angle is not it', () => {
     aimAt(p.x, p.y + 400);            // due south
     stepPast(1);
     expect(p.aimAngle).toBeCloseTo(Math.PI / 2, 3);
+  });
+});
+
+describe('HARPOON against a boss', () => {
+  // The boss is the one target worth reeling to, and it does NOT go through
+  // spendArrowPierce -- a boss hit has its own resolution, so harpoonYank is
+  // called from a second site there. That second call had no test: every
+  // harpoon test above catches a crow, which takes the other path entirely.
+  it('reels him to the boss, not only to bodies', () => {
+    g.pick('ranger');
+    // A run first: entering the boss fight without one leaves the player at
+    // NaN, and every assertion below then passes or fails for the wrong reason.
+    g.go('playing');
+    enterBossFight();
+    g.healHero();
+    const p = g.player() as { x: number; y: number };
+    const boss = g.boss() as { x: number; y: number; shield: number } | null;
+    expect(boss).not.toBeNull();
+    // A shielded boss absorbs the bolt and is rightly not reeled to, so the
+    // shield is cleared to test the path that does yank.
+    boss!.shield = 0;
+    boss!.x = p.x + 300;
+    boss!.y = p.y;
+
+    aimAt(boss!.x, boss!.y);
+    stepPast(1);
+    g.setMomentum(1);
+    g.setUltimateCD(0);
+
+    const arrows = g.arrows() as unknown[];
+    arrows.length = 0;
+    g.special('key');
+    expect(arrows).toHaveLength(1);
+
+    let biggest = 0, last = p.x;
+    for (let i = 0; i < 20; i++) {
+      // Pinned each frame: a boss that drifts while the bolt is in flight
+      // would make this a test of its movement rather than of the yank.
+      boss!.x = last + 300; boss!.y = p.y;
+      g.healHero();
+      stepPast(1);
+      biggest = Math.max(biggest, Math.abs(p.x - last));
+      last = p.x;
+    }
+    const perFrameOnFoot = CHARACTER_STATS.ranger.speed / ONE_SECOND;
+    expect(biggest).toBeGreaterThan(perFrameOnFoot * 10);
   });
 });
