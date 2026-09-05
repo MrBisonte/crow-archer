@@ -5520,9 +5520,10 @@ function tickFullAuto(dt) {
  * THE BIG ONE -- the sapper's second ultimate.
  *
  * One charge, a long fuse you can watch, and a crater three times the usual.
- * The radius rides on `chainMult`, which is the field a bomb already carries to
- * say how wide it goes up -- the combo shot sets the same one -- so this needs
- * no new branch inside explodeExplosive.
+ * The radius rides ENTIRELY on `chainMult`, which is the field a bomb already
+ * carries to say how wide it goes up -- the combo shot sets the same one -- so
+ * this needs no new branch inside explodeExplosive, and no flag of its own
+ * either. It briefly had one; nothing read it.
  */
 function fireBigOne() {
   const at = aimPointWithin(CONFIG.sapperBigOneRange);
@@ -5532,7 +5533,7 @@ function fireBigOne() {
     kind: 'bomb', element: 'none', hop: false, shortFuse: false,
     angle: player.aimAngle, bobPhase: 0,
     // Lit already, so a cascade cannot shorten the fuse that IS the ability.
-    chainLit: true, chainMult: CONFIG.sapperBigOneRadiusMult, bigOne: true,
+    chainLit: true, chainMult: CONFIG.sapperBigOneRadiusMult,
   });
   events.emit({ type: 'SAPPER_BIG_ONE', x: at.x, y: at.y });
   return true;
@@ -11342,7 +11343,12 @@ function drawKnightChargeTravel(g, tele, facing) {
 
 function drawKnight() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
-  ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+  // Off the ground while THE LEAP carries him. drawLeapShadow has already
+  // shrunk the shadow underneath to say so, and a shadow that pulls away from
+  // a body still pinned to the floor reads as a drawing mistake rather than as
+  // a jump. Applied to the whole transform so the spear and the bloodlust
+  // drops rise with him.
+  ctx.save(); ctx.translate(px, py - leapLiftPx()); ctx.scale(f, 1);
 
   // ── Whirlwind visual (behind player) ────────────────────────────────────
   if (knightWhirlwindTimer > 0) {
