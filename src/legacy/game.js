@@ -63,6 +63,8 @@ import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, mak
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { paintTalentSigil } from '../render/talent-sigil-paint';
 import { SIGILS } from '../render/talent-sigils';
+import { paintUltimateIcon } from '../render/ultimate-icon-paint';
+import { ULTIMATE_ICON_ROWS } from '../render/ultimate-icons';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
@@ -14736,6 +14738,9 @@ const TALENT_KINDS = {
  * look would draw a blank panel, which is the sapper's old missing-portrait
  * gap wearing new clothes.
  */
+/** Which offers are drawn as painted icons rather than as stroked sigils. */
+const ULTIMATE_ICON_IDS = new Set(Object.keys(ULTIMATE_ICON_ROWS));
+
 const TALENT_LOOK = {
   // The ten ultimates. Here rather than in a table of their own: the chooser
   // panel reads exactly this for its colour and its one-line hook, and a
@@ -14916,17 +14921,26 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   // type sizes are deliberately NOT fractions: shrinking the box must not
   // shrink the reading, and the sigil holds its stroke weight for the same
   // reason.
-  paintTalentSigil(ctx, id, {
-    // Centred on the fraction, with no baseline fudge: the painter centres on
-    // the point it is given, where fillText hung a glyph off a baseline.
-    // Larger than the glyphs were, too — a 46 px letter fills its em box and a
-    // stroked drawing on a 24 grid does not, so matching the old number gave
-    // a sigil that read as an afterthought in the middle of the panel.
-    x: cx, y: y + h * (sel ? 0.32 : 0.44),
-    size: sel ? 74 : 58,
-    color: sel ? kind.color : kind.dim,
-    glow: sel ? 12 : 0,
-  });
+  // An ultimate brings its own painted icon -- a 48px drawing in a gold bezel,
+  // already lit and grounded -- where a talent brings a stroked sigil the panel
+  // colours itself. Sized in whole multiples of 48 so the art stays on whole
+  // pixels; a fractional scale is how pixel art turns to soup.
+  const iconY = y + h * (sel ? 0.32 : 0.44);
+  if (ULTIMATE_ICON_IDS.has(id)) {
+    paintUltimateIcon(ctx, id, { x: cx, y: iconY, size: sel ? 96 : 48 });
+  } else {
+    paintTalentSigil(ctx, id, {
+      // Centred on the fraction, with no baseline fudge: the painter centres on
+      // the point it is given, where fillText hung a glyph off a baseline.
+      // Larger than the glyphs were, too — a 46 px letter fills its em box and a
+      // stroked drawing on a 24 grid does not, so matching the old number gave
+      // a sigil that read as an afterthought in the middle of the panel.
+      x: cx, y: iconY,
+      size: sel ? 74 : 58,
+      color: sel ? kind.color : kind.dim,
+      glow: sel ? 12 : 0,
+    });
+  }
 
   ctx.font = '10.5px "Courier New",monospace';
   ctx.fillStyle = '#93a08f';
@@ -14937,7 +14951,8 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
     ry = _drawChooserRow(x + pad, ry, innerW, 'EFFECT', spec.desc, '#C8D0C4');
     _drawChooserRow(x + pad, ry, innerW,
       isRite ? 'LASTS' : 'DRAFT',
-      isRite ? 'This run only, once the rite is sealed'
+      ULTIMATE_ICON_IDS.has(id) ? 'Yours for this run, once you take it'
+      : isRite ? 'This run only, once the rite is sealed'
              : 'Live this run only; the next wakes at each boss',
       '#C8D0C4');
   }

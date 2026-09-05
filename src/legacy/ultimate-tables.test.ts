@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
+import { ULTIMATE_ICON_ROWS, ULTIMATE_ICON_SIZE } from '../render/ultimate-icons';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(here, 'game.js'), 'utf8');
@@ -66,6 +67,30 @@ function heroesWithUltChip(): string[] {
   return tableBody('LANE_D')
     .filter((l) => l.includes("'ult'"))
     .map((l) => l.slice(2, l.indexOf(':')).trim());
+}
+
+/**
+ * Every ability in the table, as the hero and slot it sits under plus its id.
+ *
+ * At module scope because two things are bound to it now — the design
+ * pipeline's manifest and the icons ported into the renderer — and a second
+ * copy of a parser this fiddly is the drift both of them exist to catch.
+ */
+function abilityIds(): Array<{ hero: string; slot: string; id: string }> {
+  const out: Array<{ hero: string; slot: string; id: string }> = [];
+  let hero = '';
+  for (const line of tableBody('ULTIMATE')) {
+    const top = keysAtDepth([line], 2)[0];
+    if (top !== undefined) { hero = top; continue; }
+    const slot = keysAtDepth([line], 4)[0];
+    if (slot === undefined || !hero) continue;
+    const marker = "id: '";
+    const at = line.indexOf(marker);
+    expect(at, `${hero}.${slot} carries no id`).toBeGreaterThan(-1);
+    const rest = line.slice(at + marker.length);
+    out.push({ hero, slot, id: rest.slice(0, rest.indexOf("'")) });
+  }
+  return out;
 }
 
 describe('the tables an ultimate is spread across', () => {
@@ -130,24 +155,6 @@ describe('the icon manifest and the abilities it draws', () => {
   const manifest = readFileSync(
     resolve(here, '../../_design/talent-feedback/ultimates.py'), 'utf8');
 
-  /** Every ability in the table, as the hero and slot it sits under plus its id. */
-  function abilityIds(): Array<{ hero: string; slot: string; id: string }> {
-    const out: Array<{ hero: string; slot: string; id: string }> = [];
-    let hero = '';
-    for (const line of tableBody('ULTIMATE')) {
-      const top = keysAtDepth([line], 2)[0];
-      if (top !== undefined) { hero = top; continue; }
-      const slot = keysAtDepth([line], 4)[0];
-      if (slot === undefined || !hero) continue;
-      const marker = "id: '";
-      const at = line.indexOf(marker);
-      expect(at, `${hero}.${slot} carries no id`).toBeGreaterThan(-1);
-      const rest = line.slice(at + marker.length);
-      out.push({ hero, slot, id: rest.slice(0, rest.indexOf("'")) });
-    }
-    return out;
-  }
-
   it('lists exactly the abilities the game has, under the same hero and slot', () => {
     const abilities = abilityIds();
     expect(abilities.length).toBeGreaterThan(0);
@@ -162,5 +169,38 @@ describe('the icon manifest and the abilities it draws', () => {
     const listed = [...manifest.matchAll(/^ {4}\('(\w+)'/gm)].map((m) => m[1]!);
     expect(listed.length).toBe(known.size);
     expect(listed.filter((id) => !known.has(id))).toEqual([]);
+  });
+});
+
+/**
+ * The same join one step further down the pipe.
+ *
+ * The manifest check above proves the design side drew the right ten. It says
+ * nothing about what the GAME can render: `ultimates48.js` is generated,
+ * gitignored and outside src/, so the drawings only reach a screen once
+ * `port-ultimates.mjs` has composited them into `src/render/ultimate-icons.ts`.
+ * A pick screen asking for an icon that was never ported gets `undefined` and
+ * draws nothing — no error, an empty card, and a manifest check still
+ * reporting ten of ten because it is looking at the wrong end of the pipeline.
+ *
+ * Keyed on the ability id, the same join and for the same reason: it is
+ * carried explicitly in the table rather than read off a function name.
+ */
+describe('the icons the renderer holds and the abilities they draw', () => {
+  it('has one for every ability, and none for anything else', () => {
+    // The exact key set rather than a count: a length check catches a deletion
+    // and misses an addition, and here the two would cancel out.
+    expect(new Set(Object.keys(ULTIMATE_ICON_ROWS)))
+      .toEqual(new Set(abilityIds().map((a) => a.id)));
+  });
+
+  it('holds a square grid of the size the painter lays out', () => {
+    // The painter walks 48 rows and trusts every one of them to be 48 wide. A
+    // short row is a silently cropped icon, which reads as a drawing mistake.
+    const wrong = Object.entries(ULTIMATE_ICON_ROWS)
+      .filter(([, rows]) => rows.length !== ULTIMATE_ICON_SIZE
+        || rows.some((r) => r.length !== ULTIMATE_ICON_SIZE))
+      .map(([id]) => id);
+    expect(wrong).toEqual([]);
   });
 });

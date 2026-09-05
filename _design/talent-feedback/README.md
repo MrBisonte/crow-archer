@@ -6,6 +6,8 @@ from.
     python draw-icons.py     # shapes  -> icons32.js
     node render-svg.mjs      # icons32 -> icons32.rendered.json (via compose.mjs)
     python build-dc.py       # renders -> Sigils.dc.html
+    python draw-ultimates.py # shapes  -> ultimates48.js
+    node port-ultimates.mjs  # ultimates48 + compose -> src/render/ultimate-icons.ts
     # then reseed with the /design helper and republish
 
 - `draw-icons.py` is the one home for the shapes. `icons32.js` is generated;
@@ -13,6 +15,10 @@ from.
 - `compose.mjs` is the one home for the bezel, ground, cast shadow and outline.
   The browser preview and the artboards both import it, so what you look at in
   `preview32.html` is what the canvas shows.
+- `port-ultimates.mjs` is the only step here that writes into `src/`. It runs
+  `composite()` over the ten and emits the finished pictures as rows and a
+  shared legend, so the game draws the framed icon rather than the bare
+  object. Re-run it after any ultimate edit; the file it writes is generated.
 - `Main.dc.html` is hand-written; its four inline icons are swapped in by a
   patch step, so re-generating it by hand means re-swapping them.
 
