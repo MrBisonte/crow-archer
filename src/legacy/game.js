@@ -833,6 +833,10 @@ const CONFIG = {
   // playing his kit properly waits. That is the whole of the boost: one
   // dial, not five, and the per-hero part is only which meter is read.
   ultimateCooldown: 60, ultimateChargeBoost: 1.0,
+  // How close a hostile has to be for the ultimate pick to keep waiting. Wide
+  // enough that the screen does not open with something about to reach him,
+  // narrow enough that a crow across the map cannot hold the choice hostage.
+  chooserLullRadius: 320,
 
   // EARTHSHATTER. The knight's problem is reach: every swing needs him inside
   // 80 px of something that orbits him. This is the one thing on his sheet
@@ -1065,6 +1069,17 @@ function showStageIntro(kind) {
 let chooser = null;
 let chooserQueue = [];
 let riteOffered = false;   // once per run, taken or not
+/**
+ * Whether the run's ultimate has been chosen: false, 'offered' once the screen
+ * is queued, true once it is sealed.
+ *
+ * Three states rather than two because the gap matters. Between the timer
+ * coming up and the player answering, the ultimate is charged and NOT yet
+ * fireable, and the HUD has to be able to say which of those it is.
+ *
+ * @type {false | 'offered' | true}
+ */
+let ultimatePicked = false;
 
 function queueDraft(resume) {
   const offers = TALENTS.offers(3);
@@ -1082,6 +1097,57 @@ function queueDraft(resume) {
 function queueTree(resume) {
   if (!anyAffordable(CHAR_TREES[selectedChar], TALENTS.state())) return;
   chooserQueue.push({ kind: 'tree', resume });
+}
+
+/**
+ * The ultimate pick, offered the first time the timer comes up.
+ *
+ * Chosen mid-run and sealed for the run, the way the rite seals a capstone --
+ * but NOT at the rite. The rite waits on a boss, and a hero who has charged an
+ * ultimate he cannot name has an ability going spare for minutes. Offering it
+ * the first time it is actually ready means there is no dead time at all: it
+ * was unusable before that instant because it was still charging.
+ *
+ * Queued rather than opened, because the instant a timer comes up is not a
+ * safe instant to stop the field -- see queueBossChoosers on ceremonies over a
+ * running wave. `openChooserWhenClear` picks the moment.
+ */
+function queueUltimatePick(resume) {
+  // No "already offered?" guard, and one is not missing: tickUltimate returns
+  // at its own `ultimateCD <= 0` line on every later frame, so this runs on
+  // the single frame the timer CROSSES zero and never again. A guard here
+  // could not be made to fail, which by the proving-a-change playbook means
+  // deleting it rather than writing a test that cannot go red.
+  const pair = ULTIMATE[selectedChar];
+  if (!pair) return;
+  ultimatePicked = 'offered';
+  chooserQueue.push({
+    kind: 'ultimate',
+    offers: [pair.first.id, pair.second.id],
+    cursor: 0,
+    resume,
+  });
+}
+
+/**
+ * Opens a queued ceremony as soon as the field is quiet enough to stop.
+ *
+ * The boss ceremonies get their moment for free: a boss dying IS the lull. The
+ * ultimate pick has no such beat, so it waits for one -- nothing hostile within
+ * reach of the player, no boss in play, and never mid-siege, which is the same
+ * rule queueBossChoosers already applies for the same reason.
+ *
+ * Costs nothing on the frames that matter: it returns on the first line unless
+ * something is actually waiting to be shown.
+ */
+function openChooserWhenClear() {
+  if (chooser !== null || chooserQueue.length === 0) return;
+  if (appState !== 'playing' || siegeRun || bossInPlay()) return;
+  const r2 = CONFIG.chooserLullRadius * CONFIG.chooserLullRadius;
+  let crowded = false;
+  forEachHostile((e) => { if (dist2(player.x, player.y, e.x, e.y) < r2) crowded = true; });
+  if (crowded) return;
+  openNextChooser();
 }
 
 function queueRite(resume) {
@@ -1147,7 +1213,9 @@ function inCeremony() {
 
 function confirmChooser() {
   const id = chooser.offers[chooser.cursor];
-  if (chooser.kind === 'draft') TALENTS.draft(id); else TALENTS.sealCapstone(id);
+  if (chooser.kind === 'ultimate') sealUltimate(id);
+  else if (chooser.kind === 'draft') TALENTS.draft(id);
+  else TALENTS.sealCapstone(id);
   finishCeremony();
 }
 
@@ -2885,32 +2953,46 @@ let ultimateSlot = ULTIMATE_SLOT.FIRST;
  */
 const ULTIMATE = {
   archer: {
-    first:  { id: 'headshot', fire: fireHeadshot },
-    second: { id: 'arrowRain', fire: fireArrowRain, tick: tickArrowRain },
+    first:  { id: 'headshot', label: 'HEADSHOT', desc: 'Across the map, always critical. Spends an arrow.', fire: fireHeadshot },
+    second: { id: 'arrowRain', label: 'ARROW RAIN', desc: 'A marked circle, filled. Spends an arrow.', fire: fireArrowRain, tick: tickArrowRain },
   },
   wizard: {
-    first:  { id: 'vortex', fire: fireVortex, tick: tickVortex },
-    second: { id: 'theBeam', fire: fireBeam, tick: tickBeam },
+    first:  { id: 'vortex', label: 'VORTEX', desc: 'Drags them to one point. Empties Focus.', fire: fireVortex, tick: tickVortex },
+    second: { id: 'theBeam', label: 'THE BEAM', desc: 'A swept lance. Rooted, and empties Focus.', fire: fireBeam, tick: tickBeam },
   },
   knight: {
-    first:  { id: 'earthshatter', fire: fireEarthshatter, tick: tickEarthshatter },
-    second: { id: 'theLeap', fire: fireLeap, tick: tickLeap },
+    first:  { id: 'earthshatter', label: 'EARTHSHATTER', desc: 'The ground opens. No protection while it runs.', fire: fireEarthshatter, tick: tickEarthshatter },
+    second: { id: 'theLeap', label: 'THE LEAP', desc: 'Over the wall, down hard. Hittable the whole way.', fire: fireLeap, tick: tickLeap },
   },
   ranger: {
-    first:  { id: 'harpoon', fire: fireHarpoon },
-    second: { id: 'fullAuto', fire: fireFullAuto, tick: tickFullAuto },
+    first:  { id: 'harpoon', label: 'HARPOON', desc: 'Reels him to it. Only at the momentum cap.', fire: fireHarpoon },
+    second: { id: 'fullAuto', label: 'FULL AUTO', desc: 'Volleys while he runs. Out of the quiver.', fire: fireFullAuto, tick: tickFullAuto },
   },
   sapper: {
-    first:  { id: 'carpetBomb', fire: fireCarpetBomb },
-    second: { id: 'theBigOne', fire: fireBigOne },
+    first:  { id: 'carpetBomb', label: 'CARPET BOMB', desc: 'A line outward, every charge at full depth.', fire: fireCarpetBomb },
+    second: { id: 'theBigOne', label: 'THE BIG ONE', desc: 'One long fuse, one crater three times over.', fire: fireBigOne },
   },
 };
+
+/**
+ * Takes the pick. Sealed for the run: the choice has weight, the way the rite's
+ * does, and a hero who could swap mid-run would carry both by turns.
+ */
+function sealUltimate(id) {
+  const pair = ULTIMATE[selectedChar];
+  ultimateSlot = pair.second.id === id ? ULTIMATE_SLOT.SECOND : ULTIMATE_SLOT.FIRST;
+  ultimatePicked = true;
+  // Ready only now: it was charged before the answer and unusable without one.
+  events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
+}
 
 /** The ability the hero currently has equipped, or undefined. */
 function equippedUltimate() { return ULTIMATE[selectedChar]?.[ultimateSlot]; }
 
 /** True while the ultimate is up. The aura, the HUD chip and the key all ask.*/
-function ultimateReady() { return ultimateCD <= 0 && !!equippedUltimate(); }
+function ultimateReady() {
+  return ultimateCD <= 0 && ultimatePicked === true && !!equippedUltimate();
+}
 
 /**
  * Fires the ultimate if it is up, and says whether it went.
@@ -2940,9 +3022,12 @@ function tickUltimate(dt, movedPx) {
   if (ultimateCD <= 0) return;
   const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
   ultimateCD = Math.max(0, ultimateCD - dt * (1 + charge * CONFIG.ultimateChargeBoost));
-  if (ultimateCD <= 0 && equippedUltimate()) {
-    events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
-  }
+  if (ultimateCD > 0 || !equippedUltimate()) return;
+  // First time up in a run, the hero has not said which of his two he carries.
+  // The pick is queued here and shown at the next lull; ULTIMATE_READY waits
+  // for the answer, because until then there is nothing to be ready with.
+  if (ultimatePicked !== true) { queueUltimatePick(appState); return; }
+  events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
 }
 
 const HERO_UPKEEP = {
@@ -4590,7 +4675,7 @@ function initGame() {
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
   vortex = null;
   rangerSlip = 0;
-  chooser = null; chooserQueue = []; riteOffered = false;
+  chooser = null; chooserQueue = []; riteOffered = false; ultimatePicked = false;
 
   knightChainTimer = 0;
   ultimateCD = CONFIG.ultimateCooldown;
@@ -4898,6 +4983,7 @@ function updatePlayer(dt) {
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   HERO_UPKEEP[selectedChar]?.(dt);
   tickUltimate(dt, movedPx);
+  openChooserWhenClear();
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
@@ -14651,6 +14737,20 @@ const TALENT_KINDS = {
  * gap wearing new clothes.
  */
 const TALENT_LOOK = {
+  // The ten ultimates. Here rather than in a table of their own: the chooser
+  // panel reads exactly this for its colour and its one-line hook, and a
+  // second lookup beside it would be two homes for one question.
+  headshot:     { kind: 'direct',   hook: 'One arrow, and it does not stop' },
+  arrowRain:    { kind: 'direct',   hook: 'The circle you marked is not survivable' },
+  vortex:       { kind: 'mechanic', hook: 'Everything in reach arrives at one point' },
+  theBeam:      { kind: 'direct',   hook: 'He plants his feet and keeps burning' },
+  earthshatter: { kind: 'direct',   hook: 'The ground opens away from him' },
+  theLeap:      { kind: 'mechanic', hook: 'He arrives where he could not have walked' },
+  harpoon:      { kind: 'mechanic', hook: 'The line brings him to it' },
+  fullAuto:     { kind: 'direct',   hook: 'Fires for as long as he keeps running' },
+  carpetBomb:   { kind: 'direct',   hook: 'The line goes up outward from his feet' },
+  theBigOne:    { kind: 'direct',   hook: 'One crater, three times over' },
+
   // Wizard.
   focusDepth:    { kind: 'indirect', hook: 'A full pool casts four bolts' },
   blinkReach:    { kind: 'mechanic', hook: 'The wall you could not reach is now cover' },
@@ -14722,6 +14822,13 @@ const TIER_ROMAN  = { 1: 'I', 2: 'II', 3: 'III' };
 
 /** The spec behind a chooser offer — a talent row or a capstone row. */
 function chooserSpec(id) {
+  // An ultimate is not in the tree: it is not bought, drafted or ranked into.
+  // Its label and description ride on the ability record itself, which is
+  // already the one home for everything else about it.
+  const pair = ULTIMATE[selectedChar];
+  if (pair) {
+    for (const slot of [pair.first, pair.second]) if (slot.id === id) return slot;
+  }
   const tree = CHAR_TREES[selectedChar];
   const spec = tree.talents.find((t) => t.id === id) || tree.capstones.find((c) => c.id === id);
   if (!spec) throw new Error(`chooser offer '${id}' is not in ${selectedChar}'s tree`);
@@ -14901,20 +15008,23 @@ function chooserLayout() {
  * rather than on one.
  */
 function drawChooser() {
+  const isUlt = chooser.kind === 'ultimate';
   const isRite = chooser.kind === 'rite';
   const rank = rankOf(TALENTS.state().mastery);
   _selectionScreenBackdrop(
-    isRite ? '── THE RITE ──' : '── THE DRAFT ──',
-    isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
-           : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
+    isUlt ? '── THE ULTIMATE ──' : isRite ? '── THE RITE ──' : '── THE DRAFT ──',
+    isUlt ? `${selectedChar.toUpperCase()} · IT IS CHARGED · ONE OF THE TWO, THIS RUN ONLY`
+    : isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
+    : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
 
   const { slots, selected, hintY } = chooserLayout();
-  chooser.offers.forEach((id, i) => _drawChooserPanel(slots[i], id, i, i === selected, isRite));
+  chooser.offers.forEach((id, i) => _drawChooserPanel(slots[i], id, i, i === selected, isRite || isUlt));
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
   const digits = chooser.offers.map((_, i) => `[${i + 1}]`).join(' ');
-  ctx.fillText(`CLICK OR ← →  /  ${digits}  SWITCH    ENTER  ${isRite ? 'SEAL THE RITE' : 'WAKE IT'}`,
+  const verb = isUlt ? 'TAKE IT' : isRite ? 'SEAL THE RITE' : 'WAKE IT';
+  ctx.fillText(`CLICK OR ← →  /  ${digits}  SWITCH    ENTER  ${verb}`,
     CONFIG.canvasW / 2, hintY);
 }
 
@@ -16084,7 +16194,11 @@ export const devHooks = {
   /** Which of the hero's two ultimates is equipped, and a way to swap it.
    *  The pick SCREEN is not built; this is the seam it will write to. */
   ultimateSlot: () => ultimateSlot,
-  setUltimateSlot(slot) { ultimateSlot = slot; },
+  // Choosing a slot IS the pick, so this seals it: a test that equips an
+  // ultimate and then finds it unfireable because nobody answered a screen is
+  // testing the ceremony, not the ability.
+  setUltimateSlot(slot) { ultimateSlot = slot; ultimatePicked = true; },
+  ultimatePicked: () => ultimatePicked,
   ULTIMATE_SLOT,
   arrowRain: () => arrowRain,
   beam: () => beam,
@@ -16328,6 +16442,7 @@ export const devHooks = {
   upgradeLevels: () => FEATHERS.levels(),
   /** The mid-run chooser, and a pick that goes through the real confirm. */
   chooser: () => chooser,
+  chooserQueue: () => chooserQueue,
   /** How each talent is presented: its kind, sigil and hook. Exposed so the
    *  colour code can be held to a test — a scheme that drifts talent by
    *  talent is worse than no scheme, because it teaches the wrong thing. */

@@ -5528,6 +5528,7 @@ describe('the ultimate', () => {
   // both F and the right button, so one of the two can carry the ultimate.
   it('fires on the special KEY and never on the right button', () => {
     readyRun('archer');
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     expect(g.ultimate().ready).toBe(true);
 
@@ -5548,6 +5549,7 @@ describe('the ultimate', () => {
   // The arena is empty, so this shot hits nothing at all.
   it('costs the full timer even when the shot hits nothing', () => {
     readyRun('archer');
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     g.special('key');
     stepPast(ONE_SECOND);
@@ -5559,6 +5561,7 @@ describe('the ultimate', () => {
     readyRun('archer');
     const inv = g.inv() as { arrows: number; fireArrows: number; ricochetArrows: number };
     inv.arrows = 0; inv.fireArrows = 0; inv.ricochetArrows = 0;
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     g.special('key');
     expect(g.ultimate().ready).toBe(true);
@@ -5595,6 +5598,7 @@ describe('HEADSHOT, the archer ultimate', () => {
       (g.keys() as Record<string, boolean>)['ArrowDown'] = false;
       expect(g.brace().level).toBe(0);
     }
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     g.special('key');
     const shot = g.arrows()[g.arrows().length - 1] as Record<string, number>;
@@ -5636,6 +5640,7 @@ describe('EARTHSHATTER, the knight ultimate', () => {
     // how this passed alone and failed in the full suite.
     aimAt(p.x + 400, p.y);
     stepPast(2);
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     return p;
   }
@@ -5708,6 +5713,7 @@ describe('CARPET BOMB, the sapper ultimate', () => {
     // how this passed alone and failed in the full suite.
     aimAt(p.x + 400, p.y);
     stepPast(2);
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     return p;
   }
@@ -5766,6 +5772,7 @@ describe('VORTEX, the wizard ultimate', () => {
     p.y = (row + 0.5) * g.config().tileSize;
     aimAt(p.x + 400, p.y);
     stepPast(2);
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     return p;
   }
@@ -5841,6 +5848,7 @@ describe('HARPOON, the ranger ultimate', () => {
     p.y = (row + 0.5) * g.config().tileSize;
     aimAt(p.x + 400, p.y);
     stepPast(2);
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     return p;
   }
@@ -5892,6 +5900,7 @@ describe('HARPOON, the ranger ultimate', () => {
     const lineX = p.x, lineY = p.y;
     const arrows = g.arrows() as Array<Record<string, number>>;
     arrows.length = 0;
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
     g.special('key');
     expect(arrows).toHaveLength(1);          // the line went out
@@ -5995,6 +6004,7 @@ describe('HARPOON against a boss', () => {
     aimAt(boss!.x, boss!.y);
     stepPast(1);
     g.setMomentum(1);
+    g.setUltimateSlot('first');
     g.setUltimateCD(0);
 
     const arrows = g.arrows() as unknown[];
@@ -6207,5 +6217,91 @@ describe('ARROW RAIN covers the circle it marks', () => {
     stepPast(Math.ceil((c.archerRainDelay + c.archerRainDuration) * ONE_SECOND) + 12);
     expect(inside.filter((crow) => crows.includes(crow))).toEqual([]);
     expect(crows).toContain(outside);
+  });
+});
+
+describe('choosing which ultimate the run carries', () => {
+  /** An archer mid-run whose ultimate has just finished charging. */
+  function charged(): { x: number; y: number } {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 20 * g.config().tileSize;
+    p.y = 10 * g.config().tileSize;
+    // Deliberately NOT setUltimateSlot: the whole point is that nobody has
+    // chosen yet, and the timer coming up is what asks.
+    g.setUltimateCD(0.001);
+    return p;
+  }
+
+  it('asks the first time it comes up, and not before', () => {
+    charged();
+    expect(g.ultimatePicked()).toBe(false);
+    expect(g.chooser()).toBeNull();
+    stepPast(4);
+    // Queued by the timer reaching zero, whether or not it has opened yet.
+    expect(g.ultimatePicked()).toBe('offered');
+  });
+
+  it('waits for a lull rather than stopping the field mid-fight', () => {
+    const p = charged();
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    // Right on top of him: a screen opening now stops a fight in progress.
+    crows[0]!.x = p.x + 40; crows[0]!.y = p.y; crows[0]!.heldTimer = 9;
+    stepPast(20);
+    expect(g.ultimatePicked()).toBe('offered');
+    expect(g.chooser()).toBeNull();
+    // ONE offer, not one per frame. The timer stays at zero while the pick is
+    // pending, so the tick asks again every single frame and only the guard in
+    // queueUltimatePick stops the queue growing without bound.
+    expect((g.chooserQueue() as unknown[]).length).toBe(1);
+
+    // The field clears, and the ceremony takes its moment.
+    crows.length = 0;
+    stepPast(4);
+    const open = g.chooser() as { kind: string; offers: string[] } | null;
+    expect(open).not.toBeNull();
+    expect(open!.kind).toBe('ultimate');
+    expect(open!.offers).toEqual(['headshot', 'arrowRain']);
+  });
+
+  it('is not ready until it has been answered, however long it has been charged', () => {
+    charged();
+    (g.crows() as unknown[]).length = 0;
+    stepPast(4);
+    // Charged for a while now, and still not fireable: nobody has said which.
+    stepPast(60);
+    expect(g.ultimate().cd).toBe(0);
+    expect(g.ultimate().ready).toBe(false);
+  });
+
+  it('equips what was taken, and only then is it ready', () => {
+    charged();
+    (g.crows() as unknown[]).length = 0;
+    stepPast(4);
+    expect(g.chooser()).not.toBeNull();
+
+    g.chooserPick(1);                       // the second of the two
+    expect(g.chooser()).toBeNull();
+    expect(g.ultimateSlot()).toBe('second');
+    expect(g.ultimatePicked()).toBe(true);
+    expect(g.ultimate().ready).toBe(true);
+  });
+
+  it('seals for the run: a second charge does not ask again', () => {
+    charged();
+    (g.crows() as unknown[]).length = 0;
+    stepPast(4);
+    g.chooserPick(0);
+    expect(g.ultimateSlot()).toBe('first');
+
+    // Spend it, charge it again, and no screen returns.
+    g.setUltimateCD(0.001);
+    stepPast(10);
+    expect(g.chooser()).toBeNull();
+    expect(g.ultimate().ready).toBe(true);
   });
 });
