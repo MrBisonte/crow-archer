@@ -25,6 +25,10 @@ dist-server/
 # A bare `!` inside an ignored directory does nothing: git never descends into
 # `_design/`, so the parent has to be re-included before anything under it can
 # be. Hence the widen-then-narrow shape below.
+# Per-task agent working state: the task board a multi-worker run keeps while
+# it is running. The repo's own cross-session ledger is COORDINATION.md at the
+# root and IS tracked; this is not that.
+.agents/
 _design/*
 !_design/talent-feedback/
 _design/talent-feedback/*
