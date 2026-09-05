@@ -13,8 +13,6 @@ functions wearing one name.
 What they DO share is iconkit: the ramps, the grid, the registry, and every
 check that refuses a mistake which would otherwise fail silently.
 """
-import glob
-import importlib.util
 import io
 import os
 import sys

@@ -5903,7 +5903,12 @@ describe('HARPOON, the ranger ultimate', () => {
     // against his own speed rather than a bare number, so a balance change
     // to how fast he runs cannot quietly turn this green.
     let biggest = 0, last = p.x;
-    for (let i = 0; i < 20; i++) {
+    // Close, and over a handful of frames. The bolt travels 1100 px/s, so
+    // ninety pixels is about five frames -- short enough that the boss's own
+    // state machine cannot turn over under the shot. Stretched across three
+    // hundred pixels this failed two runs in five, because a shield coming
+    // back mid-flight absorbs the bolt, and absorbing is not yanking.
+    for (let i = 0; i < 12; i++) {
       stepPast(1);
       biggest = Math.max(biggest, Math.abs(p.x - last));
       last = p.x;
@@ -5984,7 +5989,7 @@ describe('HARPOON against a boss', () => {
     // A shielded boss absorbs the bolt and is rightly not reeled to, so the
     // shield is cleared to test the path that does yank.
     boss!.shield = 0;
-    boss!.x = p.x + 300;
+    boss!.x = p.x + 90;
     boss!.y = p.y;
 
     aimAt(boss!.x, boss!.y);
@@ -6000,8 +6005,12 @@ describe('HARPOON against a boss', () => {
     let biggest = 0, last = p.x;
     for (let i = 0; i < 20; i++) {
       // Pinned each frame: a boss that drifts while the bolt is in flight
-      // would make this a test of its movement rather than of the yank.
-      boss!.x = last + 300; boss!.y = p.y;
+      // would make this a test of its movement rather than of the yank. The
+      // SHIELD is pinned for the same reason and it is the one that bit --
+      // it comes back mid-flight, the bolt is absorbed rather than landing,
+      // and the yank never runs. That made this pass in the file and fail on
+      // its own, which is the usual order-dependence upside down.
+      boss!.x = last + 90; boss!.y = p.y; boss!.shield = 0;
       g.healHero();
       stepPast(1);
       biggest = Math.max(biggest, Math.abs(p.x - last));

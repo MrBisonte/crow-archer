@@ -1628,16 +1628,6 @@ let beam = null;
 let knightLeap = null;
 /** The ranger's burst while it runs, or null. */
 let fullAuto = null;
-/**
- * How far the player moved on the last step.
- *
- * FULL AUTO only fires while he is moving, and the movement meters already
- * measure exactly that -- but they are handed it as an argument rather than
- * storing it, and the ultimate ticks somewhere else entirely. Recorded here at
- * the one place it is computed rather than measured a second time from a
- * remembered position, which would drift the moment anything else moved him.
- */
-let lastMovedPx = 0;
 // Counts down to the next free Block charge while no shield is banked (see
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
 // since there's nothing to wait for until the current charge is used.
@@ -1984,6 +1974,9 @@ function mapHasSoldiers() {
  * terrain -- breaking it would open the arena.
  */
 function smashTilesInRadius(cx, cy, radius) {
+  // Asked once rather than once per tile: smashTile checks it too, and the
+  // crack sweeps ~15 tiles a frame for most of a second.
+  if (!terrainDestructible()) return;
   const r2 = radius * radius;
   const tileR = Math.ceil(radius / CONFIG.tileSize);
   const tc = Math.floor(cx / CONFIG.tileSize), tr = Math.floor(cy / CONFIG.tileSize);
@@ -2529,6 +2522,48 @@ function pushBodiesFrom(cx, cy, radius, px) {
   }
 }
 
+/**
+ * Every hostile body on the field, offered to `hit(entity, index, damageIt)`.
+ *
+ * Extracted when the beam arrived. `damageEnemiesInRadius` walks these three
+ * lists to answer "is it inside a circle"; a beam asks "is it inside a
+ * segment", and the walk is the same either way -- what differs is the shape.
+ * Backwards, because damaging a body can splice it out of the list under us.
+ *
+ * The garrison is here because it was once NOT: soldiers arrived with the
+ * cavern after the radius helper was written and every caller quietly skipped
+ * them for a release. One walk means the next shape cannot repeat that.
+ */
+function forEachHostile(hit) {
+  for (let j = crows.length - 1; j >= 0; j--) hit(crows[j], j, damageCrow);
+  for (let j = skeletons.length - 1; j >= 0; j--) hit(skeletons[j], j, damageSkeleton);
+  for (let j = soldiers.length - 1; j >= 0; j--) hit(soldiers[j], j, damageSoldier);
+}
+
+/**
+ * Everything hostile inside a SEGMENT: a line from (x0,y0) along `angle` for
+ * `length`, `halfWidth` either side of it.
+ *
+ * Its own shape rather than a row of circles down the line. Sampling a beam
+ * with overlapping circles hit a body on the axis TWICE per tick, so the lance
+ * dealt double the figure `docs/balance.md` binds it to, and it walked the
+ * whole field once per sample -- twenty-six times a tick at the configured
+ * range. This walks it once and hits each body once, which is both cheaper and
+ * the damage the document promises.
+ */
+function damageEnemiesInSegment(x0, y0, angle, length, halfWidth, opts = {}) {
+  const nx = Math.cos(angle), ny = Math.sin(angle);
+  const amount = opts.amount ?? 1;
+  const onIt = (ex, ey) => {
+    const dx = ex - x0, dy = ey - y0;
+    const along = dx * nx + dy * ny;
+    if (along <= 0 || along > length) return false;
+    return Math.abs(dx * -ny + dy * nx) <= halfWidth;
+  };
+  forEachHostile((e, j, damage) => { if (onIt(e.x, e.y)) damage(j, amount); });
+  return bossInPlay() && !boss.shield && onIt(boss.x, boss.y);
+}
+
 function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   const r2 = radius * radius;
 
@@ -2548,25 +2583,21 @@ function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : base * falloffAt(tx, ty));
   const chill = (e) => { if (ice) freezeEnemy(e, CONFIG.iceBlastFreezeSecs); };
 
-  for (let j = crows.length - 1; j >= 0; j--) {
-    const c = crows[j];
-    if (dist2(cx, cy, c.x, c.y) < r2) { chill(c); damageCrow(j, hitFor(c.x, c.y)); }
-  }
-  for (let j = skeletons.length - 1; j >= 0; j--) {
-    const k = skeletons[j];
-    if (dist2(cx, cy, k.x, k.y) < r2) { chill(k); damageSkeleton(j, hitFor(k.x, k.y)); }
-  }
-  // The garrison arrived with the cavern on a different branch, after this
-  // helper was written. Every caller — storm, whirlwind, blink pulse, chain
-  // whirl, every explosive — was quietly skipping soldiers until this line.
-  for (let j = soldiers.length - 1; j >= 0; j--) {
-    const s = soldiers[j];
-    if (dist2(cx, cy, s.x, s.y) < r2) { chill(s); damageSoldier(j, hitFor(s.x, s.y)); }
-  }
+  forEachHostile((e, j, damage) => {
+    if (dist2(cx, cy, e.x, e.y) >= r2) return;
+    chill(e);
+    damage(j, hitFor(e.x, e.y));
+  });
   // Bosses take an ice bomb's damage but not its freeze — see freezeEnemy.
-  if (bossHit && bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2)
+  const onBoss = bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2;
+  if (bossHit && onBoss)
     damageBoss(ice ? CONFIG.iceBlastDamage : bossHit.amount * falloffAt(boss.x, boss.y),
                cx, cy, bossHit.source, bossHit.flash);
+  // Says whether the BOSS was reached, which is the one thing a caller cannot
+  // work out afterwards. Two ultimates latch a "once per volley" flag on it,
+  // and computing the same predicate at the call site put the shield rule in
+  // three places that have to agree.
+  return onBoss;
 }
 
 /**
@@ -2904,8 +2935,8 @@ function tryUltimate() {
  * One call from the frame loop covers all ten and every one added after
  * them, which is the point -- see ULTIMATE.
  */
-function tickUltimate(dt) {
-  equippedUltimate()?.tick?.(dt);
+function tickUltimate(dt, movedPx) {
+  equippedUltimate()?.tick?.(dt, movedPx);
   if (ultimateCD <= 0) return;
   const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
   ultimateCD = Math.max(0, ultimateCD - dt * (1 + charge * CONFIG.ultimateChargeBoost));
@@ -4305,6 +4336,7 @@ events.on(e => {
       break;
     case 'WIZARD_VORTEX_COLLAPSE':
       playSound(sndLightning); triggerShake(7, 300);
+      spawnShockRing(e.x, e.y, e.radius, '#A08CFF');
       burst(e.x, e.y, {
         count: 26, colors: ['#A08CFF','#FFFFFF','#4B3B9E'], speedMin: 70, speedMax: 210,
         decay: 2.0, shape: 'spark', shadowBlur: 12, shadowColor: '#A08CFF'
@@ -4568,7 +4600,6 @@ function initGame() {
   // one that was there before there was a choice -- and a slot left set from
   // a previous run is a hero who quietly has the other ability.
   ultimateSlot = ULTIMATE_SLOT.FIRST;
-  lastMovedPx = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
@@ -4763,6 +4794,13 @@ function updatePlayer(dt) {
     }
   }
 
+  // How far he moved this step, for whoever downstream cares. Declared out
+  // here rather than kept in a module global: the only consumer is the
+  // ultimate tick at the bottom of this same function, and a global would need
+  // a paragraph explaining when it is stale. Zero while he is rooted, which is
+  // the truth about a rooted hero.
+  let movedPx = 0;
+
   // Drawing and charging root their owners the same way sniper mode roots the
   // sapper. For the archer that root is the whole cost of the power shot, and
   // for the wizard's beam it is the whole cost of the ultimate.
@@ -4800,12 +4838,7 @@ function updatePlayer(dt) {
     // Reading the request meant a hero shoving into a wall covered ground on
     // paper -- which is the exact "earn a stance by leaning on terrain" this
     // comment claimed was prevented, and was not.
-    const movedPx = Math.hypot(player.x - fromX, player.y - fromY);
-    // Recorded at the one place it is computed. FULL AUTO fires only while he
-    // is moving and ticks somewhere else entirely; measuring it a second time
-    // from a remembered position would drift the moment anything else moved
-    // him -- a blast hop, a harpoon, a leap.
-    lastMovedPx = movedPx;
+    movedPx = Math.hypot(player.x - fromX, player.y - fromY);
     const meter = MOVEMENT_METERS[selectedChar];
     if (meter) meter(dt, movedPx);
     else braceLevel = 0;
@@ -4864,7 +4897,7 @@ function updatePlayer(dt) {
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   HERO_UPKEEP[selectedChar]?.(dt);
-  tickUltimate(dt);
+  tickUltimate(dt, movedPx);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
@@ -5281,7 +5314,6 @@ function tickVortex(dt) {
     { amount: CONFIG.wizVortexBossDamage, source: 'vortex', flash: 0.3 },
     { amount: CONFIG.wizVortexDamage });
   smashTilesInRadius(v.x, v.y, r);
-  spawnShockRing(v.x, v.y, r, '#A08CFF');
   events.emit({ type: 'WIZARD_VORTEX_COLLAPSE', x: v.x, y: v.y, radius: r });
 }
 
@@ -5371,11 +5403,13 @@ function tickArrowRain(dt) {
   const d = Math.sqrt((i + 0.5) / CONFIG.archerRainImpacts) * CONFIG.archerRainRadius;
   const x = r.x + Math.cos(a) * d, y = r.y + Math.sin(a) * d;
   const reach = CONFIG.archerRainImpactRadius;
-  const onBoss = bossInPlay() && !boss.shield && dist2(x, y, boss.x, boss.y) < reach * reach;
-  const bossHit = (!r.bossHit && onBoss)
-    ? { amount: CONFIG.archerRainBossDamage, source: 'arrowRain', flash: 0.2 } : null;
-  damageEnemiesInRadius(x, y, reach, bossHit, { amount: CONFIG.archerRainDamage });
-  if (bossHit) r.bossHit = true;
+  const bossHit = r.bossHit
+    ? null : { amount: CONFIG.archerRainBossDamage, source: 'arrowRain', flash: 0.2 };
+  // The helper decides whether the boss was reached and says so, rather than
+  // the shield-and-in-play rule being written out again here to latch on.
+  if (damageEnemiesInRadius(x, y, reach, bossHit, { amount: CONFIG.archerRainDamage })) {
+    r.bossHit = true;
+  }
   events.emit({ type: 'ARCHER_RAIN_HIT', x, y });
 
   r.left--;
@@ -5407,28 +5441,16 @@ function tickBeam(dt) {
   if (!b) return;
   b.timer -= dt;
   b.tickIn -= dt;
+  // Probed once a frame and remembered, because the drawer wants the same
+  // answer: probeAhead walks 520 px in 4 px steps, and asking twice in one
+  // frame is 1300 tile lookups for a number that cannot have changed.
+  b.end = beamEnd();
   if (b.tickIn <= 0) {
     b.tickIn = CONFIG.wizBeamTickRate;
-    const end = beamEnd();
-    const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
-    // Sampled along the line rather than resolved as one long box: the arena
-    // has no such primitive, and a handful of circles is cheaper than adding
-    // one for a single caller.
-    const step = CONFIG.wizBeamWidth;
-    for (let d = step; d <= end.moved; d += step) {
-      // Bodies only. The boss is resolved once below, however many samples
-      // land on him -- otherwise a lance held on a wide boss ticks five times.
-      damageEnemiesInRadius(player.x + nx * d, player.y + ny * d,
-                            CONFIG.wizBeamWidth, null,
-                            { amount: CONFIG.wizBeamDamage });
-    }
-    if (bossInPlay() && !boss.shield) {
-      const along = (boss.x - player.x) * nx + (boss.y - player.y) * ny;
-      const off = Math.abs((boss.x - player.x) * -ny + (boss.y - player.y) * nx);
-      if (along > 0 && along <= end.moved && off <= CONFIG.wizBeamWidth) {
-        damageBoss(CONFIG.wizBeamBossPerTick, player.x, player.y, 'beam', 0.1);
-      }
-    }
+    const onBoss = damageEnemiesInSegment(
+      player.x, player.y, player.aimAngle, b.end.moved, CONFIG.wizBeamWidth,
+      { amount: CONFIG.wizBeamDamage });
+    if (onBoss) damageBoss(CONFIG.wizBeamBossPerTick, player.x, player.y, 'beam', 0.1);
   }
   if (b.timer <= 0) {
     beam = null;
@@ -5476,7 +5498,6 @@ function tickLeap(dt) {
     { amount: CONFIG.knightLeapBossDamage, source: 'leap', flash: 0.25 },
     { amount: CONFIG.knightLeapDamage });
   smashTilesInRadius(player.x, player.y, r);
-  spawnShockRing(player.x, player.y, r, '#C8C8E8');
   events.emit({ type: 'KNIGHT_LEAP_LAND', x: player.x, y: player.y, radius: r });
 }
 
@@ -5496,7 +5517,7 @@ function fireFullAuto() {
   return true;
 }
 
-function tickFullAuto(dt) {
+function tickFullAuto(dt, movedPx) {
   const f = fullAuto;
   if (!f) return;
   f.timer -= dt;
@@ -5509,7 +5530,7 @@ function tickFullAuto(dt) {
   // Standing still costs him the burst rather than pausing it, which is the
   // whole point of giving this to the hero who is paid for never setting his
   // feet.
-  if (lastMovedPx <= MOVED_EPSILON) return;
+  if (movedPx <= MOVED_EPSILON) return;
   f.shotIn -= dt;
   if (f.shotIn > 0) return;
   f.shotIn = CONFIG.rangerFullAutoInterval;
@@ -5578,12 +5599,12 @@ function tickEarthshatter(dt) {
   e.y += Math.sin(e.angle) * step;
   const r = earthshatterRadius(e.travelled);
 
-  const reaches = bossInPlay() && !boss.shield && dist2(e.x, e.y, boss.x, boss.y) < r * r;
-  const bossHit = (!e.bossHit && reaches)
-    ? { amount: CONFIG.knightEarthshatterBossDamage, source: 'earthshatter', flash: 0.2 }
-    : null;
-  damageEnemiesInRadius(e.x, e.y, r, bossHit, { amount: CONFIG.knightEarthshatterDamage });
-  if (bossHit) e.bossHit = true;
+  const bossHit = e.bossHit
+    ? null
+    : { amount: CONFIG.knightEarthshatterBossDamage, source: 'earthshatter', flash: 0.2 };
+  if (damageEnemiesInRadius(e.x, e.y, r, bossHit, { amount: CONFIG.knightEarthshatterDamage })) {
+    e.bossHit = true;
+  }
   smashTilesInRadius(e.x, e.y, r);
 
   const offMap = e.x < 0 || e.y < 0
@@ -6166,7 +6187,15 @@ function updateArrows(dt) {
         // Spent either way — an arrow stopped by a shield is still stopped —
         // but only a hit that landed sets fire to anything.
         if (landed && a.type === 'fire') spawnFire(a.x, a.y);
-        arrows.splice(i, 1); hit = true; break;
+        // Through the shared spend, like the crow and skeleton loops above it.
+        // This loop used to splice on its own, which meant everything hanging
+        // off spendArrowPierce simply did not happen against the garrison: a
+        // HEADSHOT sold as piercing without limit stopped dead on the first
+        // soldier, and the ranger's HARPOON never reeled him to one. The same
+        // shape as the note at damageEnemiesInRadius -- the soldiers arrived
+        // with the cavern after this loop was written, and were quietly
+        // skipped ever since.
+        if (spendArrowPierce(a, i)) { hit = true; break; }
       }
     }
     if (hit) continue;
@@ -6279,17 +6308,6 @@ function hitKnockOffset(e) {
 const ZERO_KNOCK = { x: 0, y: 0 };
 
 /**
- * Spends one body of an arrow's pierce budget, and says whether it is finished.
- *
- * `pierceLeft` was set on every power shot and read by nothing but the
- * renderer: the javelin's hit path honoured it, the ordinary arrow path spliced
- * on first contact, and a power arrow goes down the ordinary path. So a third
- * of what the hold bought never existed.
- *
- * An arrow with no pierce is finished by its first contact, which is why this
- * is one shape for both rather than a branch at each hit site.
- */
-/**
  * The trail bookkeeping every player-fired arrow carries and none of them
  * varies.
  *
@@ -6308,6 +6326,17 @@ const ZERO_KNOCK = { x: 0, y: 0 };
 const arrowTrail = (seed = Math.random() * Math.PI * 2) =>
   ({ trailHistory: [], fireSeed: seed, trailTimer: 0 });
 
+/**
+ * Spends one body of an arrow's pierce budget, and says whether it is finished.
+ *
+ * `pierceLeft` was set on every power shot and read by nothing but the
+ * renderer: the javelin's hit path honoured it, the ordinary arrow path spliced
+ * on first contact, and a power arrow goes down the ordinary path. So a third
+ * of what the hold bought never existed.
+ *
+ * An arrow with no pierce is finished by its first contact, which is why this
+ * is one shape for both rather than a branch at each hit site.
+ */
 function spendArrowPierce(a, i) {
   // The harpoon reels him in on the body it caught, before the arrow is gone.
   harpoonYank(a);
@@ -7237,22 +7266,6 @@ function drawHeldMarkers() {
 }
 
 /**
- * The crack, drawn as the ragged split it is rather than a beam.
- *
- * The zigzag is derived from the run, not stored: the same distance always
- * gives the same kink, so the split does not shimmer as the head advances.
- * It widens with the same figure the damage uses, so what you see is the
- * reach that actually resolved.
- */
-/**
- * The singularity: a dark core, a bright rim, and matter falling in.
- *
- * The infalling streaks are drawn from the rim toward the centre with their
- * angle advanced by the elapsed hold, so the whole thing rotates as it eats.
- * The core grows as the timer runs down, which is the only warning the
- * collapse gets.
- */
-/**
  * The archer's mark, while it waits and while it falls.
  *
  * The ring is the promise and the delay is the skill, so the ring has to be
@@ -7295,10 +7308,20 @@ function drawArrowRain() {
  * because it is swept live -- this is the one effect on the roster whose angle
  * is read as it is drawn rather than committed at the press.
  */
+/** The lance's three passes, widest and darkest first. Hoisted: drawBeam runs
+ *  every frame the beam burns and the table never changes. */
+const BEAM_PASSES = [
+  { colour: '#4B3B9E', width: 1.0, glow: 0 },
+  { colour: '#A08CFF', width: 0.55, glow: 14 },
+  { colour: '#FFFFFF', width: 0.22, glow: 10 },
+];
+
 function drawBeam() {
   if (!beam) return;
   const HH = CONFIG.hudHeight;
-  const end = beamEnd();
+  // The reach the tick just resolved damage at, not a second probe of the same
+  // terrain: what is drawn is then exactly what was hit.
+  const end = beam.end ?? beamEnd();
   const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
   const x0 = player.x, y0 = player.y + HH;
   const x1 = player.x + nx * end.moved, y1 = player.y + ny * end.moved;
@@ -7306,9 +7329,7 @@ function drawBeam() {
   ctx.lineCap = 'round';
   // Three passes, widest and darkest first: the core reads as hot because
   // there is something cooler either side of it, not because it is bright.
-  for (const pass of [{ colour: '#4B3B9E', width: 1.0, glow: 0 },
-                      { colour: '#A08CFF', width: 0.55, glow: 14 },
-                      { colour: '#FFFFFF', width: 0.22, glow: 10 }]) {
+  for (const pass of BEAM_PASSES) {
     ctx.strokeStyle = pass.colour;
     ctx.lineWidth = Math.max(1, CONFIG.wizBeamWidth * pass.width);
     ctx.shadowColor = '#A08CFF';
@@ -7327,33 +7348,19 @@ function drawBeam() {
   ctx.restore();
 }
 
-/**
- * The knight in the air.
- *
- * The simulation moves him in a straight line across the ground, because what
- * matters is that nothing stops him. The ARC is drawn: a shadow left on the
- * ground under him and the body lifted off it, which is what says he is over
- * the wall rather than through it.
- */
-function drawLeapShadow() {
-  const l = knightLeap;
-  if (!l) return;
-  const HH = CONFIG.hudHeight;
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.34)';
-  ctx.beginPath();
-  // Smallest at the top of the arc, which is where he is furthest from it.
-  const lift = Math.sin(l.t * Math.PI);
-  ctx.ellipse(player.x, player.y + HH + 12, 12 - 5 * lift, 4 - 1.6 * lift, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
 /** How far off the ground the leap has carried him, in pixels, for the body. */
 function leapLiftPx() {
   return knightLeap ? Math.sin(knightLeap.t * Math.PI) * CONFIG.knightLeapArcPx : 0;
 }
 
+/**
+ * The singularity: a dark core, a bright rim, and matter falling in.
+ *
+ * The infalling streaks are drawn from the rim toward the centre with their
+ * angle advanced by the elapsed hold, so the whole thing rotates as it eats.
+ * The core grows as the timer runs down, which is the only warning the
+ * collapse gets.
+ */
 function drawVortex() {
   const v = vortex;
   if (!v) return;
@@ -7391,6 +7398,14 @@ function drawVortex() {
   ctx.restore();
 }
 
+/**
+ * The crack, drawn as the ragged split it is rather than a beam.
+ *
+ * The zigzag is derived from the run, not stored: the same distance always
+ * gives the same kink, so the split does not shimmer as the head advances.
+ * It widens with the same figure the damage uses, so what you see is the
+ * reach that actually resolved.
+ */
 function drawEarthshatter() {
   const e = earthshatter;
   if (!e) return;
@@ -10833,8 +10848,9 @@ const ULTIMATE_AURA = {
       ctx.fill();
     }
   },
-  // VORTEX: motes already falling toward him. The only aura that moves
-  // inward, because his is the only ultimate that pulls.
+  // Motes falling inward. Drawn for the wizard rather than for one of his
+  // two ultimates: it says the ultimate is UP, and both of his are worth
+  // pointing somewhere. Per-ability art is owed -- see the note on the table.
   wizard: (t) => {
     ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 8;
     for (let k = 0; k < 9; k++) {
@@ -10850,13 +10866,16 @@ const ULTIMATE_AURA = {
       ctx.fill();
     }
   },
-  // HARPOON: a line already coiled and loaded. Two arcs whipping round him,
-  // in the yellow his momentum meter uses -- the ultimate is gated on that
-  // meter, so the aura is only ever seen with it full and the colours agree.
+  // A line coiled and loaded, in the yellow his momentum meter uses. HARPOON
+  // is gated on that meter so the colours agree there; FULL AUTO is not gated
+  // on it, and reads as "keep running" instead, which the same yellow serves.
   ranger: (t) => {
     ctx.strokeStyle = '#FFCC00'; ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 9;
     ctx.lineWidth = 2; ctx.lineCap = 'round';
-    for (const dir of [1, -1]) {
+    // Counted rather than iterated over a fresh array: this aura runs from the
+    // moment the ultimate comes up until the player spends it, which can be
+    // minutes -- an allocation here is 60 a second indefinitely.
+    for (let dir = 1; dir >= -1; dir -= 2) {
       const a = t * 3.4 * dir;
       ctx.globalAlpha = 0.30 + 0.45 * (0.5 + 0.5 * Math.sin(t * 4 + dir));
       ctx.beginPath();
@@ -10867,6 +10886,18 @@ const ULTIMATE_AURA = {
 };
 
 /** Paints the ready aura, if the hero out has an ultimate and it is up. */
+/**
+ * The aura for whatever is equipped.
+ *
+ * Keyed on the HERO while `ULTIMATE` is keyed on the ability, which is a grain
+ * mismatch and a deliberate one for now: a hero's two ultimates share one
+ * "it is ready" tell, and five second-slot paintings do not exist yet. The
+ * ability's record is where a per-slot `aura` belongs the day one is drawn --
+ * `equippedUltimate()` is already in hand here for exactly that. What was NOT
+ * acceptable was leaving the comments in the table describing the first slot
+ * as though it were the only one; two of them made claims the second slot
+ * contradicts, and they are corrected above.
+ */
 function drawUltimateAura() {
   const paint = ULTIMATE_AURA[selectedChar];
   if (!paint || !ultimateReady()) return;
@@ -11406,9 +11437,16 @@ function drawKnight() {
     ctx.restore();
   }
 
-  // Ground shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.38)';
-  ctx.beginPath(); ctx.ellipse(0, 14, 13, 4, 0, 0, Math.PI*2); ctx.fill();
+  // Ground shadow. Drawn at the ground rather than at the body: the leap
+  // lifts the whole transform, and a shadow that rises with him is the exact
+  // drawing mistake the lift exists to avoid. It shrinks with the lift instead,
+  // which is what says he is off the floor.
+  const lift = leapLiftPx();
+  ctx.fillStyle = `rgba(0,0,0,${(0.38 - 0.18 * (lift / CONFIG.knightLeapArcPx)).toFixed(3)})`;
+  ctx.beginPath();
+  ctx.ellipse(0, 14 + lift, 13 - 5 * (lift / CONFIG.knightLeapArcPx),
+              4 - 1.6 * (lift / CONFIG.knightLeapArcPx), 0, 0, Math.PI * 2);
+  ctx.fill();
 
   const bob      = Math.sin(player.walkPhase || 0) * 1.2;
   const fsActive = inv.knightFireSwordTimer > 0;
@@ -13697,8 +13735,7 @@ const CHIP = {
   chain:      () => ({
     glyph: 'bomb', color: '#FF7A1A', lit: sapperChainPeak > 1,
     label: sapperChainPeak > 1 ? 'x' + sapperChainPeak : '',
-    frac: sapperChainPeak > 1
-      ? Math.min(1, sapperChainPeak / (TALENTS.stat('moreLinks') + 1)) : null,
+    frac: sapperChainPeak > 1 ? sapperChainFrac() : null,
   }),
   // Reuses the snipe crosshair glyph — it is a precision shot, same read as
   // everyone else's aim-down-it key, just cooldown-gated instead of held.
@@ -15575,7 +15612,7 @@ function render(t) {
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
     drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawArrowRain();
-    drawLeapShadow(); drawParticles(); drawShockRings();
+    drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.

@@ -10,12 +10,9 @@ ordered, and writes the JS the preview and the artboards read.
 The JS it writes is generated: hand-tweak a pixel there and the next run
 overwrites it, so bring the tweak back into the icon's module.
 """
-import glob
-import importlib.util
 import io
 import os
 import re
-import sys
 
 import iconkit
 
