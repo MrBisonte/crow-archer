@@ -891,8 +891,8 @@ const CONFIG = {
   // half. The crowd answer HEADSHOT is not. It spends a queued arrow the way
   // HEADSHOT does -- the archer is the one hero whose ultimates cost ammo, and
   // that was his own call rather than a rule.
-  archerRainRange: 420, archerRainRadius: 130, archerRainDelay: 0.55,
-  archerRainDuration: 1.4, archerRainImpacts: 14, archerRainImpactRadius: 30,
+  archerRainRange: 420, archerRainRadius: 110, archerRainDelay: 0.55,
+  archerRainDuration: 1.4, archerRainImpacts: 18, archerRainImpactRadius: 42,
   archerRainDamage: 4, archerRainBossDamage: 5,
 
   // THE BEAM. Two seconds of lance, swept with the mouse, and he is ROOTED for
@@ -4558,6 +4558,11 @@ function initGame() {
   knightChainTimer = 0;
   ultimateCD = CONFIG.ultimateCooldown;
   arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
+  // Back to the first ultimate every run. Which one a hero carries is chosen
+  // on a screen that does not exist yet, so the conservative default is the
+  // one that was there before there was a choice -- and a slot left set from
+  // a previous run is a hero who quietly has the other ability.
+  ultimateSlot = ULTIMATE_SLOT.FIRST;
   lastMovedPx = 0;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
@@ -5348,10 +5353,17 @@ function tickArrowRain(dt) {
   if (r.nextIn > 0) return;
   r.nextIn = CONFIG.archerRainDuration / CONFIG.archerRainImpacts;
 
-  // Uniform over the DISC, not over the radius: without the square root the
-  // arrows crowd the centre and the rim of the marked circle never gets one.
-  const a = Math.random() * Math.PI * 2;
-  const d = Math.sqrt(Math.random()) * CONFIG.archerRainRadius;
+  // Placed on a spiral rather than scattered at random, and that is a balance
+  // decision before it is a tidiness one. Random points over a disc leave
+  // holes: fourteen impacts of 30 px over a 130 px circle gave a body standing
+  // in the middle of the mark about an even chance of being missed, which is
+  // not what a once-a-minute ultimate should do. The golden angle spreads each
+  // new point into the largest remaining gap, so the circle fills evenly and
+  // what stands in it is hit. It also makes the ability the same every time,
+  // which is the difference between a skill shot and a slot machine.
+  const i = CONFIG.archerRainImpacts - r.left;
+  const a = i * 2.399963;                                   // golden angle
+  const d = Math.sqrt((i + 0.5) / CONFIG.archerRainImpacts) * CONFIG.archerRainRadius;
   const x = r.x + Math.cos(a) * d, y = r.y + Math.sin(a) * d;
   const reach = CONFIG.archerRainImpactRadius;
   const onBoss = bossInPlay() && !boss.shield && dist2(x, y, boss.x, boss.y) < reach * reach;
@@ -7215,6 +7227,108 @@ function drawHeldMarkers() {
  * The core grows as the timer runs down, which is the only warning the
  * collapse gets.
  */
+/**
+ * The archer's mark, while it waits and while it falls.
+ *
+ * The ring is the promise and the delay is the skill, so the ring has to be
+ * legible before anything lands -- a player aiming at where things WILL be
+ * needs to see where that is. It tightens as the beat runs out, which is the
+ * only warning the first arrow gets.
+ */
+function drawArrowRain() {
+  const r = arrowRain;
+  if (!r) return;
+  const HH = CONFIG.hudHeight;
+  const wait = Math.max(0, r.delay) / CONFIG.archerRainDelay;
+  ctx.save();
+  ctx.translate(r.x, r.y + HH);
+  ctx.strokeStyle = '#EAFF6A';
+  ctx.shadowColor = '#EAFF6A';
+  ctx.shadowBlur = 10;
+  ctx.globalAlpha = r.delay > 0 ? 0.35 + 0.45 * (1 - wait) : 0.3;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, CONFIG.archerRainRadius, CONFIG.archerRainRadius * 0.42, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // The closing ring: a second ellipse falling inward through the wait, so the
+  // beat is visible as a distance rather than only as a delay.
+  if (r.delay > 0) {
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const k = CONFIG.archerRainRadius * (0.25 + 0.9 * wait);
+    ctx.ellipse(0, 0, k, k * 0.42, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * The wizard's lance.
+ *
+ * Drawn from his hands to wherever the aim currently reaches, every frame,
+ * because it is swept live -- this is the one effect on the roster whose angle
+ * is read as it is drawn rather than committed at the press.
+ */
+function drawBeam() {
+  if (!beam) return;
+  const HH = CONFIG.hudHeight;
+  const end = beamEnd();
+  const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
+  const x0 = player.x, y0 = player.y + HH;
+  const x1 = player.x + nx * end.moved, y1 = player.y + ny * end.moved;
+  ctx.save();
+  ctx.lineCap = 'round';
+  // Three passes, widest and darkest first: the core reads as hot because
+  // there is something cooler either side of it, not because it is bright.
+  for (const pass of [{ colour: '#4B3B9E', width: 1.0, glow: 0 },
+                      { colour: '#A08CFF', width: 0.55, glow: 14 },
+                      { colour: '#FFFFFF', width: 0.22, glow: 10 }]) {
+    ctx.strokeStyle = pass.colour;
+    ctx.lineWidth = Math.max(1, CONFIG.wizBeamWidth * pass.width);
+    ctx.shadowColor = '#A08CFF';
+    ctx.shadowBlur = pass.glow;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  }
+  // Where it stops, which is either its reach or the wall that took it.
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.shadowBlur = 18;
+  ctx.beginPath();
+  ctx.arc(x1, y1, CONFIG.wizBeamWidth * 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * The knight in the air.
+ *
+ * The simulation moves him in a straight line across the ground, because what
+ * matters is that nothing stops him. The ARC is drawn: a shadow left on the
+ * ground under him and the body lifted off it, which is what says he is over
+ * the wall rather than through it.
+ */
+function drawLeapShadow() {
+  const l = knightLeap;
+  if (!l) return;
+  const HH = CONFIG.hudHeight;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.34)';
+  ctx.beginPath();
+  // Smallest at the top of the arc, which is where he is furthest from it.
+  const lift = Math.sin(l.t * Math.PI);
+  ctx.ellipse(player.x, player.y + HH + 12, 12 - 5 * lift, 4 - 1.6 * lift, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/** How far off the ground the leap has carried him, in pixels, for the body. */
+function leapLiftPx() {
+  return knightLeap ? Math.sin(knightLeap.t * Math.PI) * CONFIG.knightLeapArcPx : 0;
+}
+
 function drawVortex() {
   const v = vortex;
   if (!v) return;
@@ -15430,7 +15544,8 @@ function render(t) {
     // anything that walks over it. Blasts go over the bodies instead -- they
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
-    drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawParticles(); drawShockRings();
+    drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawArrowRain();
+    drawLeapShadow(); drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
@@ -15450,7 +15565,7 @@ function render(t) {
     // Over every body, because half of what sells a blast is that it briefly
     // hides what it went off on. Under the floaters, so the damage numbers
     // still read through it.
-    drawBlasts(); drawAbilityFx();
+    drawBeam(); drawBlasts(); drawAbilityFx();
     drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.

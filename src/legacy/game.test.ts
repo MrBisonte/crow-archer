@@ -6011,3 +6011,192 @@ describe('HARPOON against a boss', () => {
     expect(biggest).toBeGreaterThan(perFrameOnFoot * 10);
   });
 });
+
+describe('the second ultimate of each hero', () => {
+  /** A hero in a cleared arena with his SECOND ultimate equipped and ready. */
+  function withSecond(hero: string, col = 8, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    g.setUltimateSlot('second');
+    aimAt(p.x + 300, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  /** A crow parked where it is put. Held, so its own flight is not the thing
+   *  being measured -- see LESSONS.jsonl, green-alone-red-in-suite. */
+  function crowAt(x: number, y: number): Record<string, number> {
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    const c = crows[0]!;
+    c.x = x; c.y = y; c.heldTimer = 9;
+    return c;
+  }
+
+  it('ARROW RAIN waits its beat, then falls over the circle it marked', () => {
+    const p = withSecond('archer');
+    const c = g.config();
+    const target = crowAt(p.x + 260, p.y);
+    const crows = g.crows() as unknown[];
+
+    g.special('key');
+    const rain = g.arrowRain() as { x: number; y: number } | null;
+    expect(rain).not.toBeNull();
+    // Marked where he pointed, not on him: this is the one archer ultimate
+    // aimed at a place.
+    expect(Math.hypot(rain!.x - p.x, rain!.y - p.y)).toBeGreaterThan(100);
+
+    // Nothing falls during the delay. That pause is the whole skill of it --
+    // you are aiming at where things will be.
+    stepPast(Math.floor(c.archerRainDelay * ONE_SECOND) - 4);
+    expect(crows).toContain(target);
+
+    stepPast(Math.ceil((c.archerRainDelay + c.archerRainDuration) * ONE_SECOND) + 10);
+    expect(crows).not.toContain(target);
+    expect(g.arrowRain()).toBeNull();
+  });
+
+  it('THE BEAM roots him for as long as it burns, and lets go after', () => {
+    const p = withSecond('wizard');
+    const c = g.config();
+    const keys = g.keys() as Record<string, boolean>;
+
+    g.special('key');
+    expect(g.beam()).not.toBeNull();
+    const planted = p.x;
+    keys['ArrowRight'] = true;
+    stepPast(20);
+    // He is holding a movement key and has not moved a pixel. That is the
+    // price of the ability, and the only one it charges.
+    expect(p.x).toBe(planted);
+
+    stepPast(Math.ceil(c.wizBeamDuration * ONE_SECOND) + 4);
+    expect(g.beam()).toBeNull();
+    stepPast(10);
+    expect(p.x).toBeGreaterThan(planted);
+    keys['ArrowRight'] = false;
+  });
+
+  it('THE BEAM empties the Focus pool, as its sibling does', () => {
+    withSecond('wizard');
+    const inv = g.inv() as { focus: number };
+    expect(inv.focus).toBeGreaterThan(0);
+    g.special('key');
+    expect(inv.focus).toBe(0);
+  });
+
+  it('THE LEAP carries him over a wall he could not have walked through', () => {
+    const p = withSecond('knight');
+    const c = g.config();
+    const tiles = g.tiles() as { set(r: number, col: number, t: TileId): void };
+    const row = Math.floor(p.y / c.tileSize);
+    const col = Math.floor(p.x / c.tileSize);
+    // A solid wall three tiles thick, right across his path.
+    for (let dc = 2; dc <= 4; dc++) {
+      for (let dr = -2; dr <= 2; dr++) tiles.set(row + dr, col + dc, TILE.ROCK);
+    }
+    const from = p.x;
+
+    g.special('key');
+    expect(g.knightLeap()).not.toBeNull();
+    stepPast(Math.ceil(c.knightLeapSecs * ONE_SECOND) + 4);
+    expect(g.knightLeap()).toBeNull();
+    // Past the far side of the wall: walking could not have done this, which
+    // is the whole difference from the wizard's blink.
+    expect(p.x).toBeGreaterThan((col + 5) * c.tileSize);
+    expect(Math.abs(p.y - (row + 0.5) * c.tileSize)).toBeLessThan(c.tileSize);
+  });
+
+  it('FULL AUTO fires while he runs and stops dead when he stops', () => {
+    const p = withSecond('ranger');
+    const keys = g.keys() as Record<string, boolean>;
+    const arrows = g.arrows() as unknown[];
+
+    g.special('key');
+    expect(g.fullAuto()).not.toBeNull();
+
+    // Standing still: the burst is running and nothing leaves the crossbow.
+    arrows.length = 0;
+    stepPast(20);
+    expect(arrows).toHaveLength(0);
+
+    // Moving: it fires. Same burst, same second, only his feet changed.
+    keys['ArrowRight'] = true;
+    stepPast(20);
+    keys['ArrowRight'] = false;
+    expect(arrows.length).toBeGreaterThan(0);
+    expect(p.x).toBeGreaterThan(0);
+  });
+
+  it('THE BIG ONE goes off wider than any charge he can throw', () => {
+    const p = withSecond('sapper');
+    const c = g.config();
+    (g.dynamites() as unknown[]).length = 0;
+
+    g.special('key');
+    const laid = (g.dynamites() as Array<Record<string, number>>)[0]!;
+    expect(laid.chainMult).toBe(c.sapperBigOneRadiusMult);
+    expect(laid.life).toBeCloseTo(c.sapperBigOneFuse, 3);
+
+    // A crow outside an ordinary blast and inside this one. Half way between
+    // the two radii, so the assertion cannot pass on either alone.
+    const ordinary = c.dynamiteBlastRadius;
+    const target = crowAt(laid.x! + ordinary * 1.6, laid.y!);
+    const crows = g.crows() as unknown[];
+    stepPast(Math.ceil(c.sapperBigOneFuse * ONE_SECOND) + 6);
+    expect(crows).not.toContain(target);
+  });
+});
+
+describe('ARROW RAIN covers the circle it marks', () => {
+  // The reason the impacts sit on a spiral instead of falling at random.
+  // Scattered, a body in the middle of the mark had about an even chance of
+  // being missed entirely, which is not what a once-a-minute ultimate does.
+  // Eight crows spread across the disc, and one just outside it.
+  it('kills everything inside it, and nothing outside it', () => {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const c = g.config();
+    const p = g.player() as { x: number; y: number };
+    p.x = 14 * c.tileSize;
+    p.y = 10 * c.tileSize;
+    g.setUltimateSlot('second');
+    aimAt(p.x + 300, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+
+    g.special('key');
+    const rain = g.arrowRain() as { x: number; y: number };
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+
+    const inside: Array<Record<string, number>> = [];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      // At 70% of the radius: well inside the mark, and far enough out that a
+      // rain that only hit its own centre would leave every one of them alive.
+      g.spawnCrow();
+      const crow = crows[crows.length - 1]!;
+      crow.x = rain.x + Math.cos(a) * c.archerRainRadius * 0.7;
+      crow.y = rain.y + Math.sin(a) * c.archerRainRadius * 0.7;
+      crow.heldTimer = 9;
+      inside.push(crow);
+    }
+    g.spawnCrow();
+    const outside = crows[crows.length - 1]!;
+    outside.x = rain.x + c.archerRainRadius * 2.2;
+    outside.y = rain.y;
+    outside.heldTimer = 9;
+
+    stepPast(Math.ceil((c.archerRainDelay + c.archerRainDuration) * ONE_SECOND) + 12);
+    expect(inside.filter((crow) => crows.includes(crow))).toEqual([]);
+    expect(crows).toContain(outside);
+  });
+});
