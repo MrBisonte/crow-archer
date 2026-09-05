@@ -92,8 +92,13 @@ describe('every CONFIG figure quoted in the balance document', () => {
     // means a sixth hero's figures have to reach the document, rather than
     // the test quietly checking four constants and reporting success.
     const quoted = new Set(claims(balanceDoc, config).map((c) => c.key));
-    const perHero = ['archerHeadshot', 'knightEarthshatter', 'sapperCarpet',
-                     'wizVortex', 'rangerHarpoon'];
+    // BOTH of each hero's two. A list of five would go on passing while half
+    // the roster's ultimates had no documented figure at all.
+    const perHero = ['archerHeadshot', 'archerRain',
+                     'wizVortex', 'wizBeam',
+                     'knightEarthshatter', 'knightLeap',
+                     'rangerHarpoon', 'rangerFullAuto',
+                     'sapperCarpet', 'sapperBigOne'];
     const missing = perHero.filter(
       (prefix) => ![...quoted].some((key) => key.startsWith(prefix)));
     expect(missing).toEqual([]);

@@ -386,6 +386,51 @@ same shape as the character-table guard above it: read the document as text,
 compare it against the code it describes. A number tuned in the game and left
 alone here fails the suite rather than rotting quietly.
 
+### The second one, and why it is not the better one
+
+Every hero has two ultimates and carries one, never both. The pair is a fork
+rather than a ladder: each was chosen to answer a different question from its
+sibling, so the choice is about shape and not about which is stronger.
+
+| Ultimate | The figure that decides it | Key | Value |
+|---|---|---|---|
+| ARROW RAIN | how wide the mark is, in px | `archerRainRadius` | 110 |
+| ARROW RAIN | and how many arrows fill it | `archerRainImpacts` | 18 |
+| THE BEAM | seconds he is rooted holding it | `wizBeamDuration` | 2 |
+| THE BEAM | what a body in the line takes per tick | `wizBeamDamage` | 6 |
+| THE LEAP | how far he can jump, in px | `knightLeapRange` | 400 |
+| THE LEAP | what the landing is worth to a boss | `knightLeapBossDamage` | 4 |
+| FULL AUTO | seconds of volleys, while he keeps moving | `rangerFullAutoSecs` | 3 |
+| THE BIG ONE | how many times the usual crater | `sapperBigOneRadiusMult` | 3 |
+| THE BIG ONE | seconds of fuse you can watch | `sapperBigOneFuse` | 1.7 |
+
+**The archer is the only one whose ultimates cost ammunition.** HEADSHOT and
+ARROW RAIN each spend a queued arrow. That was a choice about him rather than a
+rule about ultimates, and the other four are free of their pouches -- except one
+deliberate exception below.
+
+**FULL AUTO spends the quiver, though HARPOON does not.** It is a burst of his
+primary rather than a thing of its own: free bolts would make it strictly better
+than the weapon it is a burst of, in every way, for three seconds. Running dry
+ends it early, which is a real cost and reads as one on screen.
+
+**The rain falls on a spiral, not at random.** Scattered, 14 impacts of 30 px
+over a 130 px circle left a body in the middle of the mark with about an even
+chance of being missed -- measured, at three failures in five runs. A
+once-a-minute ultimate that misses what stands in it is a slot machine rather
+than a skill shot. The impacts now sit on a golden-angle spiral, which fills the
+circle evenly and makes the ability identical every time it is fired.
+
+**THE LEAP crosses walls and grants no protection.** The first of those is the
+whole difference from the wizard's blink, which walks the aim and stops at the
+last point the body fits. The second matches EARTHSHATTER: the knight's
+ultimates do not buy him safety, and a wall-crossing escape with invulnerability
+would be a different ability from the one that was designed.
+
+**THE BEAM roots him for its whole two seconds.** On a 7-health body in the open
+that is the archer's bargain, and it is the only price the ability charges
+besides the Focus pool it empties.
+
 ### The archer's is the only one that spends anything
 
 HEADSHOT takes a queued fire or ricochet arrow and inherits its behaviour, so

@@ -38,6 +38,34 @@ the status lane shows a magenta chip, the only one there that is not the
 cooldown green. [Balance](balance.md#the-ultimates) carries every figure and
 the reasoning behind it.
 
+**Each hero has TWO ultimates and carries one, never both.** The pair is a fork
+rather than a ladder: the second answers a different question from the first,
+not the same question louder. Which one you carry is chosen once; everything
+above about the timer, the key and the cost of a miss is the same either way.
+[Balance](balance.md#the-second-one-and-why-it-is-not-the-better-one) carries
+the figures and the reasoning.
+
+- **Archer — ARROW RAIN.** Mark a spot up to 420 px away and a beat later
+  eighteen arrows come down over a 110 px circle, evenly, so what stands in the
+  mark is hit. HEADSHOT asks where something IS; this asks where it will be.
+  Spends a queued arrow, as HEADSHOT does
+- **Wizard — THE BEAM.** A lance down the aim line for two seconds, swept with
+  the mouse as you hold it, worth 6 to every body it crosses. **He is rooted for
+  all of it** — on a 7-health body in the open that is the archer's bargain, and
+  it empties the Focus pool on top. Single-target where VORTEX is control
+- **Knight — THE LEAP.** He jumps up to 400 px to where you point, **over walls,
+  over anything**, and lands for 4 to a boss inside 100 px. Only the landing
+  point has to be somewhere he fits; everything between is simply passed over.
+  **No protection at any point** — EARTHSHATTER gives none either, and he can be
+  hit out of the air
+- **Ranger — FULL AUTO.** Three seconds of crossbow volleys that fire **only
+  while he keeps moving**. Stop and it stops, and the clock keeps running.
+  Unlike the harpoon it comes out of the quiver: this is a burst of his primary,
+  so running dry ends it early
+- **Sapper — THE BIG ONE.** One charge with a 1.7 second fuse you can watch and
+  a crater three times the usual. The fuse is the skill — things can walk out of
+  it — which is the opposite of CARPET BOMB's line going up the moment it lands
+
 ### Archer
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Body:** 9 health, 200 px/s. The middle of the roster on both counts, and the row the other four are read against
