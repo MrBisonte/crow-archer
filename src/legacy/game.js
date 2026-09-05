@@ -52,8 +52,8 @@ import {
   nextCost, perkHeld, purchase, statValue,
 } from '../sim/upgrades';
 import {
-  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
-  draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
+  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS,
+  masteryAfter, purchaseTalent, rankOf, riteEligible, talentHeld, talentValue,
   anyAffordable, bossMastery, clampCursor, masteryAvailable,
   talentBankFrom, talentLevel, tierOpenAt,
 } from '../sim/talents';
@@ -1056,18 +1056,39 @@ let pendingIntro = null;
  * did: transitionTo('playing') runs initGame() and would wipe the run that
  * just cleared the previous stage.
  */
+/**
+ * A new level is starting: the rite, if the rank has earned one.
+ *
+ * Here rather than on the boss death that led here, so a stage begins with the
+ * choice that shapes it instead of the previous fight ending with a third
+ * screen. Queued, not opened: `openChooserWhenClear` shows it once the intro
+ * has been dismissed and the new field is quiet, which at the start of a level
+ * is immediately.
+ *
+ * One step has no beat of its own -- the dark archer hands straight to the dark
+ * knight on the same map with no intro -- so a rite earned there waits for the
+ * maze. That is a gap in the stage chain rather than in this rule.
+ */
+function beginNewLevel() {
+  pendingIntro = null;
+  appState = 'playing';
+  if (siegeRun) return;
+  // Queued, not opened: openChooserWhenClear shows it once the new field is
+  // quiet, which at the start of a level is the next frame.
+  queueRite('playing');
+}
+
 function showStageIntro(kind) {
   pendingIntro = kind;
   appState = 'stage_intro';
 }
 
-// ── The mid-run choosers: the draft and the rite ─────────────────────────────
+// ── The mid-run choosers: the rite and the ultimate ──────────────────────────
 //
-// One screen shape for both: the run-start and boss drafts wake an owned
-// talent for this run, and the rite seals a capstone the rank earned.
-// `resume` is the appState a pick returns to, so a chooser can sit over a
-// staged stage_intro or a boss entrance without either noticing — the same
-// direct-assignment reasoning showStageIntro gives above.
+// One screen shape for both: a row of panels, one of which is sealed for the
+// rest of the run. `resume` is the appState a pick returns to, so a chooser
+// can sit over a staged stage_intro or a boss entrance without either
+// noticing — the same direct-assignment reasoning showStageIntro gives above.
 let chooser = null;
 let chooserQueue = [];
 let riteOffered = false;   // once per run, taken or not
@@ -1083,11 +1104,7 @@ let riteOffered = false;   // once per run, taken or not
  */
 let ultimatePicked = false;
 
-function queueDraft(resume) {
-  const offers = TALENTS.offers(3);
-  if (offers.length === 0) return;   // an empty pool skips the ceremony
-  chooserQueue.push({ kind: 'draft', offers, cursor: 0, resume });
-}
+
 
 /**
  * The tree, if the boss just paid for something buyable.
@@ -1191,7 +1208,7 @@ function finishCeremony() {
   appState = resume;
 }
 
-/** A boss just died: the rite outranks the draft when both are owed. */
+/** A boss just died: the tree, and only if there is something to spend on. */
 function queueBossChoosers() {
   if (appState === 'win' || appState === 'gameover') return;   // run over
   // Never mid-siege. A siege boss is one enemy inside a wave rather than the
@@ -1200,11 +1217,12 @@ function queueBossChoosers() {
   // pays its mastery like any other boss; what it does not do is hold a
   // ceremony about it. CLAUDE.md's siege rule, applied to a screen.
   if (siegeRun) return;
-  queueRite(appState);
-  // The tree before the draft: what a boss just paid for can be spent now,
-  // and the draft that follows deals from a pool the spending may have grown.
+  // The boss pays, and spending it is the whole beat. The rite used to sit in
+  // front of this and a draft behind it, so one death could be three
+  // consecutive screens. The rite now belongs to the START of the next level
+  // -- see beginNewLevel -- which keeps one thing per moment and leaves the
+  // death itself free to become a loot pickup later.
   queueTree(appState);
-  queueDraft(appState);
   openNextChooser();
 }
 
@@ -1216,7 +1234,6 @@ function inCeremony() {
 function confirmChooser() {
   const id = chooser.offers[chooser.cursor];
   if (chooser.kind === 'ultimate') sealUltimate(id);
-  else if (chooser.kind === 'draft') TALENTS.draft(id);
   else TALENTS.sealCapstone(id);
   finishCeremony();
 }
@@ -3670,7 +3687,7 @@ function installInput() {
       if (inGame()) shootPressed = true;
       // A stage intro waits for exactly this: one click, no key, since it is
       // shown mid-run with the keyboard already busy with movement held down.
-      else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
+      else if (appState === 'stage_intro') beginNewLevel();
     }
     if (e.button === 2) { mouseRightHeld = true; startCharge(SPECIAL_SOURCE.BUTTON); }
   });
@@ -4673,7 +4690,6 @@ function initGame() {
   stormFx = 0; blinkFx = 0;
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
-  wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
   vortex = null;
   rangerSlip = 0;
@@ -10405,9 +10421,11 @@ const TALENTS = (() => {
   const LS_KEY = 'crow_archer_talents_v1';
 
   let _bank = talentBankFrom(null);
-  // The run layer. Never saved: a draft and a sealed capstone are this run's
-  // only, which is the whole reason ownership grows options rather than power.
-  let _drafted = [];
+  // The run layer, now one thing rather than two: the sealed capstone. The
+  // draft used to sit beside it, so a bought talent did nothing until a run
+  // dealt it back to you at random -- a second decision made by dice over a
+  // pool you had already chosen with feathers. Buying is the decision now, and
+  // what you own is live.
   let _capstone = null;
   // The shop screen's cursor, and the note it prints under the rows. The note
   // is a purchase result rather than a string, so the screen decides its own
@@ -10493,15 +10511,32 @@ const TALENTS = (() => {
   function buy(id) {
     const result = purchaseTalent(tree(), state(), id);
     if (result.kind !== 'bought') return result;
-    _bank[selectedChar] = result.state;
+    _own(result.state);
     _save();
     return result;
+  }
+
+  /**
+   * The one write to this character's row, and the one place a purchase
+   * reaches the run.
+   *
+   * Most talents are read live -- `stat` is called at the moment the net is
+   * thrown -- but FOCUS DEPTH is not: the resource pool holds a ceiling that
+   * is set rather than asked for. While ownership was inert until a run
+   * drafted it, `resetRun` was a fine moment to set that ceiling, because
+   * nothing between two runs could change it. Buying is what makes a talent
+   * live now, so a wizard who buys FOCUS DEPTH mid-run and casts on the base
+   * pool for the rest of it is what a lone assignment here would ship.
+   */
+  function _own(next) {
+    _bank[selectedChar] = next;
+    applyToRun();
   }
 
   /** Test-only ladder bypass — this module's healHero. */
   function grant(id, level) {
     const s = state();
-    _bank[selectedChar] = { mastery: s.mastery, spent: s.spent, levels: { ...s.levels, [id]: level } };
+    _own({ mastery: s.mastery, spent: s.spent, levels: { ...s.levels, [id]: level } });
   }
 
   /** The same bypass for mastery, so a screen can be staged without playing
@@ -10513,13 +10548,10 @@ const TALENTS = (() => {
     // spend at it, and clamping `spent` to the new total is what the save
     // loader would do anyway.
     const mastery = Math.max(0, Math.trunc(points));
-    _bank[selectedChar] = { mastery, spent: Math.min(s.spent, mastery), levels: s.levels };
+    _own({ mastery, spent: Math.min(s.spent, mastery), levels: s.levels });
   }
 
-  function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
-  function draft(id) { if (!_drafted.includes(id)) _drafted.push(id); applyToRun(); }
-  function drafted() { return _drafted.slice(); }
-  function offers(count) { return draftOffers(ownedIds(tree(), state()), Math.random, count, _drafted); }
+  function resetRun() { _capstone = null; applyToRun(); }
   function sealCapstone(id) { _capstone = id; }
   function capstoneActive(id) { return _capstone === id; }
 
@@ -10566,31 +10598,45 @@ const TALENTS = (() => {
     moreLinks:   { key: 'sapperChainMaxLinks' },
   };
 
-  /** A talent's effective figure: its CONFIG base, plus the levels this run
-   *  drafted. Undrafted and unowned both come back as the base. */
+/**
+ * Is this talent in the tree of the character being played?
+ *
+ * STATS spans the whole roster and `stat` is called by name from code that has
+ * no idea whose talent it is -- the archer's brace asks for `setFeet` while the
+ * wizard is out. `talentValue` THROWS on an id from another tree; the draft
+ * rule used to absorb that by accident, returning the base before it ever did
+ * the lookup, and removing the draft turned 172 tests into "no talent
+ * 'focusDepth' in this tree". The guard is explicit now rather than a
+ * side-effect of a rule that no longer exists.
+ */
+  function inThisTree(id) { return tree().talents.some((t) => t.id === id); }
+
+  /** A talent's effective figure: its CONFIG base, plus the levels owned.
+   *  Unowned, or another character's, comes back as the base. */
   function stat(id) {
     const row = STATS[id];
-    const value = draftedValue(tree(), state(), _drafted, id, CONFIG[row.key]);
+    const base = CONFIG[row.key];
+    const value = inThisTree(id) ? talentValue(tree(), state(), id, base) : base;
     return row.min === undefined ? value : Math.max(row.min, value);
   }
 
   assertTalentStatsWired(STATS);
 
-  /** An unlock talent, held only if this run drafted it. */
-  function held(id) { return draftedHeld(tree(), state(), _drafted, id); }
+  /** An unlock talent, held as soon as it is owned. */
+  function held(id) { return inThisTree(id) && talentHeld(tree(), state(), id); }
 
   function stormCooldown() { return capstoneActive('stormcaller') ? CONFIG.stormCooldown / 2 : CONFIG.stormCooldown; }
 
   function applyToRun() {
     // The one CONFIG field talents move, moved the way FEATHERS.applyToGame
-    // moves arrow capacity: effective = base + drafted, re-derived in full so
+    // moves arrow capacity: effective = base + owned, re-derived in full so
     // runs never compound onto each other.
     CONFIG.resources.focus.max = stat('focusDepth');
   }
 
   return {
     init, state, award, awardBoss, purse, buy, grant, grantMastery,
-    resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
+    resetRun, sealCapstone, capstoneActive,
     stat, held, stormCooldown, applyToRun,
     cursor, moveCursor, setCursor, buyCurrent, lastBuy,
   };
@@ -16028,6 +16074,10 @@ function stepGame(dt) {
       if (keys['ArrowUp'])   { FEATHERS.moveCursor(-1); keys['ArrowUp']   = false; }
       if (keys['ArrowDown']) { FEATHERS.moveCursor( 1); keys['ArrowDown'] = false; }
       if (keys['Enter'])     { FEATHERS.buyCurrent();   keys['Enter']     = false; }
+      // Half of a two-way shortcut between the two shops -- `talents` has the
+      // matching U. Not a third door into the talent screen: inventory itself
+      // is only reachable from pause, so this crosses between shops rather
+      // than opening one. Deleting it left the crossing one-way.
       if (keys['t']||keys['T']) { transitionTo('talents'); keys['t']=keys['T']=false; }
       if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
       break;
@@ -16313,7 +16363,7 @@ export const devHooks = {
   }),
   // The same two lines the click handler runs, so a harness advances the
   // stage hand-off through the real path rather than assigning appState.
-  dismissIntro() { if (appState !== 'stage_intro') return false; pendingIntro = null; appState = 'playing'; return true; },
+  dismissIntro() { if (appState !== 'stage_intro') return false; beginNewLevel(); return true; },
   maze: () => (mazeRun ? {
     silver: mazeRun.held.silver, golden: mazeRun.held.golden,
     chestOpened: mazeRun.locks.chest.opened, doorOpened: mazeRun.locks.door.opened,
@@ -16797,18 +16847,12 @@ export function boot() {
   // is unreachable any more. Both still sit at the end of a grind: the draft
   // deals only from talents already owned, and the rite wants rank III on top
   // of that. One word each is the short way in.
-  window.draft = (char = selectedChar) => {
-    devHooks.pick(char);
-    for (const t of CHAR_TREES[char].talents) TALENTS.grant(t.id, 1);
-    transitionTo('playing');   // initGame queues the run's opening draft itself
-    return chooser ? chooser.offers : `${char} owns no talents to draft`;
-  };
   window.rite = (char = selectedChar) => {
     devHooks.pick(char);
     TALENTS.grantMastery(RANK_THRESHOLDS[CAPSTONE_RANK - 1]);
     transitionTo('playing');
-    // The run just started, so an opening draft may be queued in front of the
-    // rite; this verb is for looking at the rite, so it goes first.
+    // The rite belongs to the start of a level, which a run in progress is
+    // not; opened here rather than queued so the verb shows it at once.
     chooser = null; chooserQueue = []; riteOffered = false;
     queueRite('playing');
     openNextChooser();
@@ -16816,7 +16860,7 @@ export function boot() {
   };
   // Printed once so the verbs are discoverable from the console itself rather
   // than only from a document the player would have to already be reading.
-  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue() draft(char) rite(char)');
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue() rite(char)');
 
   FEATHERS.init();
   TALENTS.init();
