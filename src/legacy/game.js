@@ -2695,7 +2695,7 @@ function fireHeadshot() {
     vy: Math.sin(player.aimAngle) * spd,
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: spd,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    ...arrowTrail(),
     power: true, headshot: true,
     fireTrail: type === 'fire' ? 0 : null,
     pierceLeft: CONFIG.archerHeadshotPierce,
@@ -2738,7 +2738,7 @@ function releaseArcherDraw() {
     vy: Math.sin(player.aimAngle) * spd,
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: spd,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    ...arrowTrail(),
     power: true,
     // What the pickup is worth on a powered shot. Fire lays a lane instead of
     // one patch; ricochet stops running out of bounces. Each is the arrow
@@ -5096,7 +5096,7 @@ function tryShoot() {
       vy: Math.sin(a) * CONFIG.arrowSpeed,
       life: CONFIG.arrowLifetime, type, bounces: 0,
       initSpeed: CONFIG.arrowSpeed,
-      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      ...arrowTrail(),
       dmgMult: braceBossMult() });
   }
   archerLoose = ARCHER_LOOSE_SECS;
@@ -5130,7 +5130,7 @@ function tryCrossbowBolt() {
       vy: Math.sin(boltAngle) * CONFIG.arrowSpeed,
       life: CONFIG.arrowLifetime, type, bounces: 0,
       initSpeed: CONFIG.arrowSpeed,
-      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      ...arrowTrail(),
       bolt: true,
       hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
       dmgMult: CONFIG.crossbowBoltDamageMult * rangerMomentumMult() });
@@ -5160,7 +5160,7 @@ function tryWizardBolt() {
     vx: Math.cos(player.aimAngle) * spd,
     vy: Math.sin(player.aimAngle) * spd,
     life: CONFIG.wizBoltLifetime, type, bounces: 0, initSpeed: spd,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    ...arrowTrail(),
     wiz: true,
     homing:      type !== 'wiz_laser',
     passesTiles: type === 'wiz_laser',  // bypasses walls/rocks/trees
@@ -5207,7 +5207,7 @@ function tryKnightAttack() {
       vx: Math.cos(player.aimAngle) * spd,
       vy: Math.sin(player.aimAngle) * spd,
       life: 2.2, type: 'javelin', bounces: 0, initSpeed: spd,
-      trailHistory: [], fireSeed: 0, trailTimer: 0,
+      ...arrowTrail(0),
       pierceLeft: CONFIG.knightJavelinPierce
     });
     events.emit({ type: 'WEAPON_FIRED', kind: 'javelin' });
@@ -5300,7 +5300,7 @@ function fireHarpoon() {
     vy: Math.sin(player.aimAngle) * spd,
     life: CONFIG.arrowLifetime, type: 'plain', bounces: 0,
     initSpeed: spd,
-    trailHistory: [], fireSeed: 0, trailTimer: 0,
+    ...arrowTrail(0),
     harpoon: true, pierceLeft: 1,
     dmgMult: CONFIG.rangerHarpoonBossMult });
   return true;
@@ -6288,6 +6288,25 @@ const ZERO_KNOCK = { x: 0, y: 0 };
  * An arrow with no pierce is finished by its first contact, which is why this
  * is one shape for both rather than a branch at each hit site.
  */
+/**
+ * The trail bookkeeping every player-fired arrow carries and none of them
+ * varies.
+ *
+ * Written out at eight call sites, which is five past the point the rule
+ * says to extract it -- and two of those eight were added by the ultimates,
+ * so it was getting worse rather than settling. `seed` is the one part that
+ * ever differs: a fire arrow's flame is offset by it so a volley does not
+ * flicker in lockstep, and the arrows that carry no flame pass 0 rather than
+ * paying for a random number nothing reads.
+ *
+ * Deliberately NOT a whole-arrow factory. The guard and tower arrows a few
+ * hundred lines below share none of this -- they carry `allied`, `damage` and
+ * `pierce` instead -- and folding ten things into one shape when eight agree
+ * would mean a factory that knows which caller it has.
+ */
+const arrowTrail = (seed = Math.random() * Math.PI * 2) =>
+  ({ trailHistory: [], fireSeed: seed, trailTimer: 0 });
+
 function spendArrowPierce(a, i) {
   // The harpoon reels him in on the body it caught, before the arrow is gone.
   harpoonYank(a);
@@ -6888,7 +6907,7 @@ function explodeExplosive(d, source, opts = {}) {
         vx: Math.cos(a) * CONFIG.arrowSpeed, vy: Math.sin(a) * CONFIG.arrowSpeed,
         life: CONFIG.arrowLifetime, type: 'normal', bounces: 0,
         initSpeed: CONFIG.arrowSpeed,
-        trailHistory: [], fireSeed: 0, trailTimer: 0,
+        ...arrowTrail(0),
         bolt: true,
         hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
         dmgMult: CONFIG.crossbowBoltDamageMult });
