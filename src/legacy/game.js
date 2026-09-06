@@ -64,6 +64,9 @@ import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { paintTalentSigil } from '../render/talent-sigil-paint';
 import { SIGILS } from '../render/talent-sigils';
 import { paintUltimateIcon } from '../render/ultimate-icon-paint';
+import {
+  paintDetCord, paintUltimateBlast, paintUltimateCast, paintUltimateCharge,
+} from '../render/ultimate-fx';
 import { ULTIMATE_ICON_ROWS } from '../render/ultimate-icons';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
@@ -835,6 +838,7 @@ const CONFIG = {
   // playing his kit properly waits. That is the whole of the boost: one
   // dial, not five, and the per-hero part is only which meter is read.
   ultimateCooldown: 60, ultimateChargeBoost: 1.0,
+  ultimateCastSecs: 0.42,            // the gold ring every ultimate opens on
   // How close a hostile has to be for the ultimate pick to keep waiting. Wide
   // enough that the screen does not open with something about to reach him,
   // narrow enough that a crow across the map cannot hold the choice hostage.
@@ -1713,6 +1717,16 @@ let arrowRain = null;
 let beam = null;
 /** The knight in the air, or null. Carries where he left and where he lands. */
 let knightLeap = null;
+/**
+ * The gold ring every ultimate opens on, or null.
+ *
+ * Render state, not simulation: it decides nothing and is set from the
+ * ULTIMATE_FIRED handler, which is the one place all ten abilities pass
+ * through. `tryUltimate` stays the sim's story and this stays the picture.
+ */
+let ultimateCast = null;
+/** CARPET BOMB's cord while its charges are still going off, or null. */
+let carpetCord = null;
 /** The ranger's burst while it runs, or null. */
 let fullAuto = null;
 // Counts down to the next free Block charge while no shield is banked (see
@@ -3037,6 +3051,14 @@ function tryUltimate() {
  * them, which is the point -- see ULTIMATE.
  */
 function tickUltimate(dt, movedPx) {
+  if (ultimateCast !== null) {
+    ultimateCast.timer -= dt;
+    if (ultimateCast.timer <= 0) ultimateCast = null;
+  }
+  if (carpetCord !== null) {
+    carpetCord.timer -= dt;
+    if (carpetCord.timer <= 0) carpetCord = null;
+  }
   equippedUltimate()?.tick?.(dt, movedPx);
   if (ultimateCD <= 0) return;
   const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
@@ -3410,7 +3432,38 @@ function drawBlasts() {
       x: b.x, y: b.y + CONFIG.hudHeight, radius: b.radius,
       age: b.t / BLAST_SECS, onWater: b.onWater,
     });
+    if (b.ult) {
+      paintUltimateBlast(ctx, {
+        x: b.x, y: b.y + CONFIG.hudHeight, radius: b.radius, age: b.t / BLAST_SECS,
+      });
+    }
   }
+}
+
+/** The gold ring an ultimate opens on, over the field and under the ability. */
+function drawUltimateCast() {
+  if (ultimateCast === null) return;
+  paintUltimateCast(ctx, {
+    x: ultimateCast.x, y: ultimateCast.y + CONFIG.hudHeight,
+    age: 1 - ultimateCast.timer / CONFIG.ultimateCastSecs,
+    w: CONFIG.canvasW, h: CONFIG.canvasH,
+  });
+}
+
+/** CARPET BOMB's cord, with the spark running it ahead of the blasts. */
+function drawDetCord() {
+  if (carpetCord === null) return;
+  // The spark's position is derived from the fuses rather than stored: the
+  // charges' own stagger is what decides which goes next, so a spark carrying
+  // its own speed would drift out of step with the line it is meant to light.
+  const run = carpetCord.laid
+    * (1 - Math.max(0, carpetCord.timer - 0.5)
+        / Math.max(0.001, CONFIG.sapperCarpetFirstFuse
+                          + CONFIG.sapperCarpetStagger * CONFIG.sapperCarpetCount));
+  paintDetCord(ctx, {
+    x0: carpetCord.x0, y0: carpetCord.y0 + CONFIG.hudHeight,
+    angle: carpetCord.angle, laid: carpetCord.laid, spark: run,
+  });
 }
 
 /** Nets lying on the ground, under everything that walks on them. */
@@ -4219,7 +4272,8 @@ events.on(e => {
 
     case 'EXPLOSION':
       playSound(sndExplosion); impact('explosion');
-      blasts.push({ x: e.x, y: e.y, radius: e.radius, onWater: e.onWater, t: 0 });
+      blasts.push({ x: e.x, y: e.y, radius: e.radius, onWater: e.onWater, t: 0,
+                    ult: e.ult === true });
       if (e.onWater) {
         burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
           speedMin: 80, speedMax: 200, decay: 1.6,
@@ -4487,6 +4541,9 @@ events.on(e => {
       });
       break;
     case 'ULTIMATE_FIRED':
+      // The one place all ten open the same way. Set here rather than in
+      // `tryUltimate` because it is a picture, and `tryUltimate` is the rule.
+      ultimateCast = { x: e.x, y: e.y, timer: CONFIG.ultimateCastSecs };
       playSound(sndChargeWhoosh); triggerShake(5, 220);
       burst(e.x, e.y, {
         count: 22, colors: ['#FF3EC8','#FFFFFF'], speedMin: 60, speedMax: 180,
@@ -4698,6 +4755,7 @@ function initGame() {
   knightChainTimer = 0;
   ultimateCD = CONFIG.ultimateCooldown;
   arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
+  ultimateCast = null; carpetCord = null;
   // Back to the first ultimate every run. Which one a hero carries is chosen
   // on a screen that does not exist yet, so the conservative default is the
   // one that was there before there was a choice -- and a slot left set from
@@ -5656,6 +5714,9 @@ function fireBigOne() {
     x: at.x, y: at.y, vx: 0, vy: 0,
     life: CONFIG.sapperBigOneFuse, fuseTotal: CONFIG.sapperBigOneFuse,
     kind: 'bomb', element: 'none', hop: false, shortFuse: false,
+    // Drawn as an ultimate, chained as a bomb: `kind` is what the simulation
+    // treats it as and `ult` is what it is drawn as, which are two questions.
+    ult: 'theBigOne',
     angle: player.aimAngle, bobPhase: 0,
     // Lit already, so a cascade cannot shorten the fuse that IS the ability.
     chainLit: true, chainMult: CONFIG.sapperBigOneRadiusMult,
@@ -5903,7 +5964,7 @@ function fireCarpetBomb() {
     const life = CONFIG.sapperCarpetFirstFuse + i * CONFIG.sapperCarpetStagger;
     dynamites.push({
       x, y, vx: 0, vy: 0,
-      life, fuseTotal: life, kind: 'bomb', element: 'none',
+      life, fuseTotal: life, kind: 'bomb', element: 'none', ult: 'carpetBomb',
       hop: false, shortFuse: false,
       angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2,
       chainLit: true, chainLink: TALENTS.stat('moreLinks'),
@@ -5911,6 +5972,14 @@ function fireCarpetBomb() {
     laid++;
   }
   if (laid === 0) return false;
+  // The cord is one object the seven charges sit on, which is the difference
+  // between an ability and the sapper throwing quickly. It outlives the last
+  // fuse by a beat so the line is still readable as the far end goes up.
+  carpetCord = {
+    x0: player.x, y0: player.y, angle: player.aimAngle,
+    laid: CONFIG.sapperCarpetSpacing * laid,
+    timer: CONFIG.sapperCarpetFirstFuse + laid * CONFIG.sapperCarpetStagger + 0.5,
+  };
   events.emit({ type: 'SAPPER_CARPET', x: player.x, y: player.y,
                 angle: player.aimAngle, count: laid });
   return true;
@@ -6977,6 +7046,25 @@ function clearTilesInBlast(x, y, radius) {
   }
 }
 
+/**
+ * The radius this explosive will actually damage at, in pixels.
+ *
+ * One home, because it is asked twice for two different reasons and the two
+ * must agree: `explodeExplosive` damages at it, and `drawDynamites` draws the
+ * ring a player decides where to stand by. They did not agree -- the ring was
+ * drawn at the bare `dynamiteBlastRadius` for every charge, so THE BIG ONE
+ * promised a third of the reach it took, and DEMOLITIONIST's growing chain
+ * under-promised every link of it. A drawing that lies about a danger zone is
+ * worse than no drawing.
+ */
+function blastReachPx(d) {
+  const mult = d.chainMult ?? 1;
+  const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
+  const grow = TALENTS.capstoneActive('demolitionist')
+    ? 1 + link * CONFIG.sapperDemolitionGrowth : 1;
+  return CONFIG.dynamiteBlastRadius * mult * grow;
+}
+
 function explodeExplosive(d, source, opts = {}) {
   // A bomb carries its own radius multiplier so a chain inherits it. The shift
   // shot detonates one bomb wider than usual, and the point of the ability is
@@ -6996,10 +7084,11 @@ function explodeExplosive(d, source, opts = {}) {
     sapperChainPeak = Math.max(sapperChainPeak, link + 1);
     sapperChainRead = CONFIG.sapperChainReadSecs;
   }
-  const radius = (opts.radius ?? CONFIG.dynamiteBlastRadius * mult) * grow;
+  const radius = opts.radius ?? blastReachPx(d);
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
-  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius });
+  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius,
+                ult: d.ult !== undefined });
   const r2 = radius ** 2;
 
   clearTilesInBlast(d.x, d.y, radius);
@@ -11896,6 +11985,13 @@ function drawFires() {
 function drawDynamites() {
   for (const d of dynamites) {
     const dx = d.x, dy = d.y + CONFIG.hudHeight;
+    if (d.ult !== undefined) {
+      paintUltimateCharge(ctx, {
+        x: dx, y: dy, left: d.life / (d.fuseTotal || CONFIG.dynamiteLifetime),
+        reach: blastReachPx(d), big: d.ult === 'theBigOne', t: loopT,
+      });
+      continue;
+    }
     const fuseT     = d.life;
     const fuseTotal = d.fuseTotal || CONFIG.dynamiteLifetime;
     const burntFrac = Math.min(0.8, 1 - fuseT / fuseTotal);
@@ -11906,7 +12002,7 @@ function drawDynamites() {
 
     // Blast radius ring
     ctx.globalAlpha = 0.15; ctx.strokeStyle = '#ff6600'; ctx.lineWidth = 1;
-    ctx.setLineDash([4,4]); ctx.beginPath(); ctx.arc(0, 0, CONFIG.dynamiteBlastRadius, 0, Math.PI*2); ctx.stroke();
+    ctx.setLineDash([4,4]); ctx.beginPath(); ctx.arc(0, 0, blastReachPx(d), 0, Math.PI*2); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha = 1;
 
     ctx.rotate(d.angle);
@@ -15782,6 +15878,7 @@ function render(t) {
     // anything that walks over it. Blasts go over the bodies instead -- they
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
+    drawUltimateCast(); drawDetCord();
     drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawArrowRain();
     drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
@@ -16252,7 +16349,11 @@ export const devHooks = {
   special(source) { startCharge(source); releaseCharge(); },
   SPECIAL_SOURCE,
   ultimate: () => ({ cd: ultimateCD, ready: ultimateReady(),
-                     charge: ULTIMATE_CHARGE[selectedChar]?.() || 0 }),
+                     charge: ULTIMATE_CHARGE[selectedChar]?.() || 0,
+                     // The gold beat all ten open on. Exposed as a boolean
+                     // rather than the object: what a test has any business
+                     // asserting is that the tell fired and then let go.
+                     cast: ultimateCast !== null }),
   setUltimateCD(secs) { ultimateCD = secs; },
   /** The crack in flight, or null once it has run its length. */
   earthshatter: () => earthshatter,

@@ -76,7 +76,10 @@ export type GameEvent =
   // reconstructing size from `big` alone paints the hostile bomber's 55 px
   // blast at the dynamite's 90, which is 64% too wide — and that emit is not
   // the sapper's, so no flag on it could ever have said so.
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean; radius: number }
+  // `ult` marks a blast an ULTIMATE produced. `big` cannot stand in for it:
+  // the sapper's shock-combo widens an ordinary charge and is big without
+  // being an ultimate, and the extra beats belong only to the once-a-minute one.
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean; radius: number; ult?: boolean }
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
