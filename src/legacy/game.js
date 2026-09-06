@@ -65,7 +65,10 @@ import { paintTalentSigil } from '../render/talent-sigil-paint';
 import { SIGILS } from '../render/talent-sigils';
 import { paintUltimateIcon } from '../render/ultimate-icon-paint';
 import {
-  paintDetCord, paintUltimateBlast, paintUltimateCast, paintUltimateCharge,
+  paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
+  paintEarthshatterDebris, paintFullAutoTrail, paintGoldCorridor,
+  paintHarpoonChain, paintLeapArc, paintLeapLanding, paintPiercePip,
+  paintUltimateBlast, paintUltimateCast, paintUltimateCharge, paintVortex,
 } from '../render/ultimate-fx';
 import { ULTIMATE_ICON_ROWS } from '../render/ultimate-icons';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
@@ -918,6 +921,7 @@ const CONFIG = {
   // gives none either, and a wall-crossing escape with i-frames is a different
   // ability from the one that was asked for.
   knightLeapRange: 400, knightLeapSecs: 0.42, knightLeapRadius: 100,
+  knightLeapMarkSecs: 0.7,           // how long the landing stays in the floor
   knightLeapDamage: 6, knightLeapBossDamage: 4, knightLeapArcPx: 46,
 
   // FULL AUTO. Three seconds of volleys that only fire while he keeps moving.
@@ -926,6 +930,7 @@ const CONFIG = {
   // strictly better than the weapon it is a burst of. Running dry ends it,
   // which is a real cost and reads as one.
   rangerFullAutoSecs: 3.0, rangerFullAutoInterval: 0.16,
+  rangerFullAutoCoolSecs: 0.35,      // how fast the trail goes out once she stops
 
   // THE BIG ONE. One charge with a long visible fuse and a crater three times
   // the usual. The fuse is the skill: things can walk out of it.
@@ -937,6 +942,7 @@ const CONFIG = {
   // finite number rather than Infinity: the value rides on the arrow and
   // the arrow is serialised.
   archerHeadshotCrit: 2, archerHeadshotSpeedMult: 3, archerHeadshotPierce: 99,
+  archerHeadshotTrailSecs: 0.9,      // how long the corridor holds after it
   // The streak the renderer draws behind it. Fixed, because pierceLeft
   // sizes an ordinary power shot's streak and 99 would draw a wall.
   archerHeadshotPips: 6,
@@ -1727,6 +1733,28 @@ let knightLeap = null;
 let ultimateCast = null;
 /** CARPET BOMB's cord while its charges are still going off, or null. */
 let carpetCord = null;
+/**
+ * The line HEADSHOT took, held after the arrow has gone, or null.
+ *
+ * The shot crosses the map in about a third of a second at three times arrow
+ * speed, so a player watching the field never catches the sprite: what they
+ * can read is the corridor it left, and the pips where it went through
+ * something. `hits` is filled by the pierce spend, which every body a player
+ * arrow crosses already goes through.
+ */
+let headshotTrail = null;
+/**
+ * ARROW RAIN's arrows, while they are falling or standing in the ground.
+ *
+ * Render state rather than a field on `arrowRain`, because the two have
+ * different lives: the last of eighteen is still in the air when the ability
+ * is spent, and holding the volley open to carry a drawing would make
+ * "is the rain running" mean two things.
+ */
+let rainHits = [];
+
+/** How long one impact is drawn for: the fall, then the shaft standing. */
+const RAIN_HIT_SECS = 0.9;
 /** The ranger's burst while it runs, or null. */
 let fullAuto = null;
 // Counts down to the next free Block charge while no shield is banked (see
@@ -2834,6 +2862,10 @@ function fireHeadshot() {
     dmgMult: CONFIG.archerHeadshotCrit * braceBossMult() });
   archerLoose = ARCHER_LOOSE_SECS;
   archerLoosePower = 1;
+  headshotTrail = {
+    x0: player.x, y0: player.y, x1: player.x, y1: player.y,
+    timer: CONFIG.archerHeadshotTrailSecs, hits: [],
+  };
   return true;
 }
 
@@ -3058,6 +3090,18 @@ function tickUltimate(dt, movedPx) {
   if (carpetCord !== null) {
     carpetCord.timer -= dt;
     if (carpetCord.timer <= 0) carpetCord = null;
+  }
+  if (leapLanding !== null) {
+    leapLanding.timer -= dt;
+    if (leapLanding.timer <= 0) leapLanding = null;
+  }
+  if (headshotTrail !== null) {
+    headshotTrail.timer -= dt;
+    if (headshotTrail.timer <= 0) headshotTrail = null;
+  }
+  for (let i = rainHits.length - 1; i >= 0; i--) {
+    rainHits[i].t += dt;
+    if (rainHits[i].t >= RAIN_HIT_SECS) rainHits.splice(i, 1);
   }
   equippedUltimate()?.tick?.(dt, movedPx);
   if (ultimateCD <= 0) return;
@@ -3438,6 +3482,13 @@ function drawBlasts() {
       });
     }
   }
+}
+
+/** The corridor burning off the ranger's heels, while FULL AUTO runs. */
+function drawFullAutoTrail() {
+  if (fullAuto === null) return;
+  paintFullAutoTrail(ctx, player.x, player.y + CONFIG.hudHeight,
+                     player.aimAngle, fullAuto.heat);
 }
 
 /** The gold ring an ultimate opens on, over the field and under the ability. */
@@ -4755,7 +4806,8 @@ function initGame() {
   knightChainTimer = 0;
   ultimateCD = CONFIG.ultimateCooldown;
   arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
-  ultimateCast = null; carpetCord = null;
+  ultimateCast = null; carpetCord = null; leapLanding = null; headshotTrail = null;
+  rainHits = [];
   // Back to the first ultimate every run. Which one a hero carries is chosen
   // on a screen that does not exist yet, so the conservative default is the
   // one that was there before there was a choice -- and a slot left set from
@@ -5574,6 +5626,7 @@ function tickArrowRain(dt) {
   }
   events.emit({ type: 'ARCHER_RAIN_HIT', x, y });
 
+  rainHits.push({ x, y, t: 0 });
   r.left--;
   if (r.left <= 0) arrowRain = null;
 }
@@ -5587,7 +5640,11 @@ function tickArrowRain(dt) {
  */
 function fireBeam() {
   if (beam) return false;
-  beam = { timer: CONFIG.wizBeamDuration, tickIn: 0 };
+  // `swept` is the arc already covered, one angle per damage tick. Sampled
+  // on the tick rather than per frame because that is what the ability
+  // actually did: a scorch drawn at frame rate would promise a burn between
+  // two ticks that nothing was hit by.
+  beam = { timer: CONFIG.wizBeamDuration, tickIn: 0, swept: [] };
   inv.focus = 0;
   events.emit({ type: 'WIZARD_BEAM', x: player.x, y: player.y });
   return true;
@@ -5609,6 +5666,7 @@ function tickBeam(dt) {
   b.end = beamEnd();
   if (b.tickIn <= 0) {
     b.tickIn = CONFIG.wizBeamTickRate;
+    b.swept.push(player.aimAngle);
     const onBoss = damageEnemiesInSegment(
       player.x, player.y, player.aimAngle, b.end.moved, CONFIG.wizBeamWidth,
       { amount: CONFIG.wizBeamDamage });
@@ -5639,6 +5697,7 @@ function fireLeap() {
   }
   if (!playerFits(lx, ly)) return false;   // nowhere to land, and costs nothing
   knightLeap = { x0: player.x, y0: player.y, x1: lx, y1: ly, t: 0 };
+  leapLanding = null;
   events.emit({ type: 'KNIGHT_LEAP', x: player.x, y: player.y, toX: lx, toY: ly });
   return true;
 }
@@ -5655,6 +5714,7 @@ function tickLeap(dt) {
   if (l.t < 1) return;
 
   knightLeap = null;
+  leapLanding = { x: player.x, y: player.y, timer: CONFIG.knightLeapMarkSecs };
   const r = CONFIG.knightLeapRadius;
   damageEnemiesInRadius(player.x, player.y, r,
     { amount: CONFIG.knightLeapBossDamage, source: 'leap', flash: 0.25 },
@@ -5674,7 +5734,9 @@ function tickLeap(dt) {
  */
 function fireFullAuto() {
   if (fullAuto) return false;
-  fullAuto = { timer: CONFIG.rangerFullAutoSecs, shotIn: 0 };
+  // `heat` is whether she is running, which is the only condition the
+  // ability has and the one thing that was nowhere on screen.
+  fullAuto = { timer: CONFIG.rangerFullAutoSecs, shotIn: 0, heat: 1 };
   events.emit({ type: 'RANGER_FULL_AUTO', x: player.x, y: player.y });
   return true;
 }
@@ -5692,7 +5754,11 @@ function tickFullAuto(dt, movedPx) {
   // Standing still costs him the burst rather than pausing it, which is the
   // whole point of giving this to the hero who is paid for never setting his
   // feet.
-  if (movedPx <= MOVED_EPSILON) return;
+  if (movedPx <= MOVED_EPSILON) {
+    f.heat = Math.max(0, f.heat - dt / CONFIG.rangerFullAutoCoolSecs);
+    return;
+  }
+  f.heat = 1;
   f.shotIn -= dt;
   if (f.shotIn > 0) return;
   f.shotIn = CONFIG.rangerFullAutoInterval;
@@ -6513,6 +6579,7 @@ const arrowTrail = (seed = Math.random() * Math.PI * 2) =>
 function spendArrowPierce(a, i) {
   // The harpoon reels him in on the body it caught, before the arrow is gone.
   harpoonYank(a);
+  if (a.headshot && headshotTrail !== null) headshotTrail.hits.push({ x: a.x, y: a.y });
   // Emitted per body, including the last, so a shot that goes through three
   // enemies reads as three hits rather than as one arrow disappearing.
   if (a.power) {
@@ -7467,31 +7534,13 @@ function drawHeldMarkers() {
  * only warning the first arrow gets.
  */
 function drawArrowRain() {
-  const r = arrowRain;
-  if (!r) return;
   const HH = CONFIG.hudHeight;
-  const wait = Math.max(0, r.delay) / CONFIG.archerRainDelay;
-  ctx.save();
-  ctx.translate(r.x, r.y + HH);
-  ctx.strokeStyle = '#EAFF6A';
-  ctx.shadowColor = '#EAFF6A';
-  ctx.shadowBlur = 10;
-  ctx.globalAlpha = r.delay > 0 ? 0.35 + 0.45 * (1 - wait) : 0.3;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, CONFIG.archerRainRadius, CONFIG.archerRainRadius * 0.42, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  // The closing ring: a second ellipse falling inward through the wait, so the
-  // beat is visible as a distance rather than only as a delay.
-  if (r.delay > 0) {
-    ctx.globalAlpha = 0.5;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    const k = CONFIG.archerRainRadius * (0.25 + 0.9 * wait);
-    ctx.ellipse(0, 0, k, k * 0.42, 0, 0, Math.PI * 2);
-    ctx.stroke();
+  if (arrowRain !== null) {
+    paintArrowRainMark(ctx, arrowRain.x, arrowRain.y + HH, CONFIG.archerRainRadius,
+                       Math.max(0, arrowRain.delay) / CONFIG.archerRainDelay);
   }
-  ctx.restore();
+  paintArrowRainImpacts(ctx,
+    rainHits.map((h) => ({ x: h.x, y: h.y + HH, age: h.t / RAIN_HIT_SECS })));
 }
 
 /**
@@ -7512,6 +7561,9 @@ const BEAM_PASSES = [
 function drawBeam() {
   if (!beam) return;
   const HH = CONFIG.hudHeight;
+  // Under the lance and over the ground: what has already been swept.
+  paintBeamScorch(ctx, player.x, player.y + HH, beam.swept, CONFIG.wizBeamRange);
+  paintBeamRoots(ctx, player.x, player.y + HH, loopT);
   // The reach the tick just resolved damage at, not a second probe of the same
   // terrain: what is drawn is then exactly what was hit.
   const end = beam.end ?? beamEnd();
@@ -7541,6 +7593,37 @@ function drawBeam() {
   ctx.restore();
 }
 
+/**
+ * Where THE LEAP came down, while the floor is still showing it, or null.
+ *
+ * Its own state rather than a tail on `knightLeap`, because the landing
+ * outlives the jump: the fracture star is the ability's mark and it is drawn
+ * after he is standing again.
+ */
+let leapLanding = null;
+
+/**
+ * The arc THE LEAP is on, and the mark it left where it came down.
+ *
+ * A function of its own in the ground pass rather than a step inside
+ * `drawKnight`: the arc has to be under him and the landing outlives him
+ * being in the air at all, and the body's own painter runs inside a transform
+ * that has already been lifted off the floor.
+ */
+function drawLeapFx() {
+  const HH = CONFIG.hudHeight;
+  if (leapLanding !== null) {
+    paintLeapLanding(ctx, leapLanding.x, leapLanding.y + HH, CONFIG.knightLeapRadius,
+                     1 - leapLanding.timer / CONFIG.knightLeapMarkSecs);
+  }
+  const l = knightLeap;
+  if (l === null) return;
+  // Where he is going, dotted, for as long as he is in the air. A jump that
+  // crosses walls has to be aimable, and nothing showed where it came down.
+  paintLeapArc(ctx, l.x0, l.y0 + HH, l.x1, l.y1 + HH,
+               CONFIG.knightLeapArcPx, CONFIG.knightLeapRadius, loopT);
+}
+
 /** How far off the ground the leap has carried him, in pixels, for the body. */
 function leapLiftPx() {
   return knightLeap ? Math.sin(knightLeap.t * Math.PI) * CONFIG.knightLeapArcPx : 0;
@@ -7557,38 +7640,10 @@ function leapLiftPx() {
 function drawVortex() {
   const v = vortex;
   if (!v) return;
-  const HH = CONFIG.hudHeight;
-  const r = CONFIG.wizVortexRadius;
-  const done = 1 - v.timer / CONFIG.wizVortexDuration;
-  ctx.save();
-  ctx.translate(v.x, v.y + HH);
-
-  // The reach, so what is about to be hit is visible before it is hit.
-  ctx.strokeStyle = 'rgba(160,140,255,0.35)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
-
-  ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 12;
-  ctx.strokeStyle = '#A08CFF'; ctx.lineWidth = 2;
-  for (let k = 0; k < 14; k++) {
-    const a = k * (Math.PI * 2 / 14) + loopT * 2.2;
-    const from = r * (1 - (k % 3) * 0.12);
-    const to = from * 0.35;
-    ctx.globalAlpha = 0.25 + 0.4 * ((k % 3) / 2);
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * from, Math.sin(a) * from);
-    // Curled inward rather than radial: a straight spoke reads as a star.
-    ctx.quadraticCurveTo(Math.cos(a + 0.7) * to * 1.6, Math.sin(a + 0.7) * to * 1.6,
-                         Math.cos(a + 1.4) * to, Math.sin(a + 1.4) * to);
-    ctx.stroke();
-  }
-
-  ctx.globalAlpha = 1;
-  const core = r * (0.12 + 0.18 * done);
-  ctx.fillStyle = '#120C2E'; ctx.shadowBlur = 22;
-  ctx.beginPath(); ctx.arc(0, 0, core, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.5 + 0.5 * done;
-  ctx.beginPath(); ctx.arc(0, 0, core, 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
+  paintVortex(ctx, {
+    x: v.x, y: v.y + CONFIG.hudHeight, radius: CONFIG.wizVortexRadius,
+    done: 1 - v.timer / CONFIG.wizVortexDuration, t: loopT,
+  });
 }
 
 /**
@@ -7630,11 +7685,14 @@ function drawEarthshatter() {
   ctx.strokeStyle = '#FF7A1F'; ctx.lineWidth = 2;
   ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 12; ctx.stroke();  // the heat in it
 
-  // The head, where the ground is breaking right now.
-  const r = earthshatterRadius(e.travelled);
-  ctx.fillStyle = 'rgba(255,233,160,0.40)'; ctx.shadowBlur = 20;
-  ctx.beginPath(); ctx.arc(e.x, e.y + HH, r * 0.7, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
+
+  // And what comes out of it. The wedge above says the ground is open; this
+  // says something happened to it.
+  paintEarthshatterDebris(ctx, {
+    x0: e.x0, y0: e.y0 + HH, angle: e.angle, travelled: e.travelled,
+    widthAt: earthshatterRadius, t: loopT,
+  });
 }
 
 
@@ -11597,8 +11655,8 @@ function drawKnightChargeTravel(g, tele, facing) {
 
 function drawKnight() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
-  // Off the ground while THE LEAP carries him. drawLeapShadow has already
-  // shrunk the shadow underneath to say so, and a shadow that pulls away from
+  // Off the ground while THE LEAP carries him. The ground shadow below has
+  // already shrunk to say so, and a shadow that pulls away from
   // a body still pinned to the floor reads as a drawing mistake rather than as
   // a jump. Applied to the whole transform so the spear and the bloodlust
   // drops rise with him.
@@ -11786,8 +11844,36 @@ function drawKnight() {
   if (knightCharge.on) drawChargeBar(px, py, knightChargeFrac());
 }
 
+/**
+ * HEADSHOT's corridor and HARPOON's chain: the two arrows that are not arrows.
+ *
+ * Drawn from `arrows` rather than from state of their own wherever the arrow
+ * itself is the authority -- the chain has to end exactly where the head is,
+ * and a second copy of that position would lag it by a frame.
+ */
+function drawUltimateArrows() {
+  const HH = CONFIG.hudHeight;
+  const shot = arrows.find((a) => a.headshot);
+  if (headshotTrail !== null) {
+    // While it is in the air the corridor grows behind it; once it is gone the
+    // far end stays where it stopped and the whole line fades.
+    if (shot) {
+      headshotTrail.x1 = shot.x; headshotTrail.y1 = shot.y;
+      headshotTrail.timer = CONFIG.archerHeadshotTrailSecs;
+    }
+    const fade = shot ? 1 : headshotTrail.timer / CONFIG.archerHeadshotTrailSecs;
+    paintGoldCorridor(ctx, headshotTrail.x0, headshotTrail.y0 + HH,
+                      headshotTrail.x1, headshotTrail.y1 + HH, fade, 1);
+    for (const h of headshotTrail.hits) paintPiercePip(ctx, h.x, h.y + HH, 10, fade);
+  }
+  for (const a of arrows) {
+    if (a.harpoon) paintHarpoonChain(ctx, player.x, player.y + HH, a.x, a.y + HH);
+  }
+}
+
 function drawArrows() {
   const HH = CONFIG.hudHeight;
+  drawUltimateArrows();
   for (const a of arrows) {
     const angle = Math.atan2(a.vy, a.vx);
 
@@ -15878,7 +15964,7 @@ function render(t) {
     // anything that walks over it. Blasts go over the bodies instead -- they
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
-    drawUltimateCast(); drawDetCord();
+    drawUltimateCast(); drawDetCord(); drawLeapFx(); drawFullAutoTrail();
     drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawArrowRain();
     drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.

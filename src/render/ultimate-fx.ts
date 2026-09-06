@@ -466,3 +466,493 @@ export function paintPiercePip(
   ctx.drawImage(stamp, x - stamp.width / 2, y - stamp.height / 2);
   ctx.restore();
 }
+
+// ── The archer ───────────────────────────────────────────────────────────────
+
+/**
+ * ARROW RAIN's mark, and the arrows arriving over it.
+ *
+ * The old drawing was two ellipses and then nothing: eighteen arrows landed
+ * and not one of them was drawn, so the loudest half of the ability happened
+ * off-screen. The mark now FILLS as the wait runs out — a shadow the volley
+ * casts ahead of itself — and every impact the simulation resolves puts a
+ * shaft in the ground and a puff of dust round it.
+ */
+/**
+ * One arrow of the volley: where it comes down, and how far through its own
+ * arrival it is.
+ *
+ * Taken from the run rather than re-derived here: the golden-angle spiral is
+ * the simulation's own, and a second copy of it in a painter would be one
+ * balance pass away from drawing arrows where nothing was hit.
+ */
+export interface RainImpact {
+  /** Where it lands, in the frame the world is drawn in. */
+  readonly x: number;
+  /** As `x`. Remember `CONFIG.hudHeight`. */
+  readonly y: number;
+  /** 0 as it is loosed, 1 once the shaft has faded out of the ground. */
+  readonly age: number;
+}
+
+/** How far above the ground an arrow is drawn falling from. */
+const RAIN_DROP_PX = 96;
+
+/** How much of an impact's life is the fall, the rest being the shaft in the
+ *  ground. Short: the arrow is fast and the mark it leaves is the point. */
+const RAIN_FALL = 0.25;
+
+/**
+ * The mark, while the volley is still owed.
+ *
+ * Darkening rather than only closing: a ring alone says where, and the fill
+ * says something is on its way. `wait` is 1 at the cast and 0 as the first
+ * arrow is loosed.
+ */
+export function paintArrowRainMark(
+  ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, wait: number,
+): void {
+  ctx.save();
+  ctx.globalAlpha = 0.10 + 0.28 * (1 - clamp01(wait));
+  ctx.fillStyle = '#0D0716';
+  groundEllipse(ctx, x, y, radius);
+  ctx.fill();
+  ctx.globalAlpha = 0.45 + 0.45 * (1 - clamp01(wait));
+  ctx.strokeStyle = ULTIMATE_GOLD.bright;
+  ctx.lineWidth = 1.5;
+  groundEllipse(ctx, x, y, radius);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * The arrows themselves, falling and then standing in the ground.
+ *
+ * Separate from the mark because they outlive it: the last of eighteen is
+ * still in the air when the ability is over, and the alternative was holding
+ * the volley open past its own end so one drawing could do both.
+ */
+export function paintArrowRainImpacts(
+  ctx: CanvasRenderingContext2D, landed: readonly RainImpact[],
+): void {
+  if (landed.length === 0) return;
+  ctx.save();
+  for (const hit of landed) {
+    const age = clamp01(hit.age);
+    if (age < RAIN_FALL) {
+      // Still falling: a streak that lengthens as it accelerates down.
+      const k = age / RAIN_FALL;
+      const len = 10 + 26 * k;
+      const top = hit.y - (1 - k) * RAIN_DROP_PX - len;
+      ctx.globalAlpha = 0.5 + 0.5 * k;
+      ctx.strokeStyle = ULTIMATE_GOLD.lit;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(hit.x, top);
+      ctx.lineTo(hit.x, top + len);
+      ctx.stroke();
+      continue;
+    }
+    // Landed: a shaft standing in the ground, and the dust it threw.
+    const out = (age - RAIN_FALL) / (1 - RAIN_FALL);
+    ctx.globalAlpha = 1 - out;
+    ctx.strokeStyle = ULTIMATE_GOLD.mid;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(hit.x, hit.y - 11);
+    ctx.lineTo(hit.x, hit.y);
+    ctx.stroke();
+    ctx.globalAlpha = (1 - out) * 0.5;
+    ctx.strokeStyle = ULTIMATE_GOLD.deep;
+    ctx.lineWidth = 1;
+    groundEllipse(ctx, hit.x, hit.y, 5 + out * 10);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ── The wizard ───────────────────────────────────────────────────────────────
+
+/**
+ * VORTEX as a disk in the floor, with ground drawn into it.
+ *
+ * The old drawing was a true circle with fourteen curled spokes, which reads
+ * as a decal painted on the floor rather than a hole in it — the exact fault
+ * `explosion.ts` squashes its splash ring to avoid. And what the ability DOES
+ * is drag everything to one point, which nothing on screen showed happening,
+ * so the pull is drawn on the ground itself.
+ */
+export interface VortexPose {
+  /** The singularity, in the frame the rest of the world is drawn in. */
+  readonly x: number;
+  /** As `x`. Remember `CONFIG.hudHeight`. */
+  readonly y: number;
+  /** What it reaches, in pixels: the circle the pull and the collapse use. */
+  readonly radius: number;
+  /** 0 when it is placed, 1 at the collapse. */
+  readonly done: number;
+  /** Free-running seconds, for the spin. */
+  readonly t: number;
+}
+
+/** How many chunks of ground are on their way in at any moment. */
+const VORTEX_MOTES = 20;
+
+/** Paints the disk, the infall and the core. */
+export function paintVortex(ctx: CanvasRenderingContext2D, p: VortexPose): void {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+
+  // The reach, one pixel wide and left clear, the way paintWhirlwind draws
+  // its: the boundary is the thing that states where the pull stops.
+  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = ULTIMATE_GOLD.bright;
+  ctx.lineWidth = 1;
+  groundEllipse(ctx, 0, 0, p.radius);
+  ctx.stroke();
+
+  // The disk, in the floor plane. Violet, which is his own colour and the
+  // ultimates' ground both; the gold is spent on the rim and the infall.
+  for (let ring = 5; ring >= 1; ring--) {
+    ctx.globalAlpha = 0.08 + 0.06 * (5 - ring);
+    ctx.fillStyle = ring > 3 ? '#331D4B' : '#4A2A6E';
+    groundEllipse(ctx, 0, 0, p.radius * (ring / 5));
+    ctx.fill();
+  }
+
+  // Ground on its way in: chunks on spiral paths, shrinking as they go.
+  // Derived from the index and the clock rather than rolled, so it is the same
+  // picture every cast and costs no state.
+  for (let k = 0; k < VORTEX_MOTES; k++) {
+    const seed = (k * 0.618) % 1;
+    const life = (p.t * 0.85 + seed) % 1;
+    const a = seed * TAU + life * 3.4 + p.t * 1.6;
+    const rr = p.radius * (1 - life) * (0.55 + 0.5 * seed);
+    const s = 1 + 3 * (1 - life);
+    ctx.globalAlpha = 0.35 + 0.55 * life;
+    ctx.fillStyle = life > 0.6 ? ULTIMATE_GOLD.lit
+      : life > 0.3 ? ULTIMATE_GOLD.bright : ULTIMATE_GOLD.deep;
+    ctx.fillRect(Math.cos(a) * rr - s / 2, Math.sin(a) * rr * GROUND_SQUASH - s / 2, s, s * 0.7);
+  }
+
+  // The core: a hole ringed in gold, opening as the collapse nears. It is the
+  // only warning the detonation gets.
+  const core = p.radius * (0.10 + 0.20 * clamp01(p.done));
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#0D0716';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, core, core * 0.7, 0, 0, TAU);
+  ctx.fill();
+  ctx.globalAlpha = 0.5 + 0.5 * clamp01(p.done);
+  ctx.strokeStyle = ULTIMATE_GOLD.bright;
+  ctx.lineWidth = 1 + p.done * 1.6;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * The scorch THE BEAM leaves behind its sweep.
+ *
+ * Drawn under the lance from the angles it has already covered, so what a
+ * player reads is how much of the arc is spent. Nothing else in the wizard's
+ * kit remembers where it has been, and a two-second sweep is the one ability
+ * that needs it: without a trail there is no way to aim the second half.
+ */
+export function paintBeamScorch(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, angles: readonly number[], reach: number,
+): void {
+  if (angles.length === 0) return;
+  ctx.save();
+  ctx.strokeStyle = ULTIMATE_GOLD.dark;
+  ctx.lineWidth = 16;
+  for (let i = 0; i < angles.length; i++) {
+    const a = angles[i];
+    if (a === undefined) continue;
+    // Oldest faintest: the burn cools behind him.
+    ctx.globalAlpha = 0.30 * ((i + 1) / angles.length);
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * 40, y + Math.sin(a) * 40);
+    ctx.lineTo(x + Math.cos(a) * reach, y + Math.sin(a) * reach);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** The braces at his feet: he is rooted, and nothing else said so. */
+export function paintBeamRoots(
+  ctx: CanvasRenderingContext2D, x: number, y: number, t: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = ULTIMATE_GOLD.bright;
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.5 + 0.35 * Math.sin(t * 9);
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(x + side * 4, y + 3);
+    ctx.lineTo(x + side * 13, y + 9);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 0.35;
+  groundEllipse(ctx, x, y + 5, 16);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── The knight ───────────────────────────────────────────────────────────────
+
+/**
+ * The slabs and dust EARTHSHATTER throws, over the split itself.
+ *
+ * The crack's wedge is drawn by the caller, which already has the shape; this
+ * is what comes OUT of it. Without them the ground opens and nothing happens,
+ * which is the fault a filled outline always has whatever colour it is given.
+ */
+export interface EarthshatterDebrisPose {
+  /** Where the crack started, in the frame the world is drawn in. */
+  readonly x0: number;
+  /** As `x0`. Remember `CONFIG.hudHeight`. */
+  readonly y0: number;
+  /** The heading it committed to at the press, in radians. */
+  readonly angle: number;
+  /** How far the head has run, in pixels. */
+  readonly travelled: number;
+  /**
+   * Half-width this far along, in pixels.
+   *
+   * The simulation's own widening rule, handed over rather than repeated: the
+   * lips drawn here have to sit on the edges the caller fills, and two copies
+   * of one linear rule is one tuning pass away from a slab in mid-air.
+   */
+  readonly widthAt: (d: number) => number;
+  /** Free-running seconds, for the dust. */
+  readonly t: number;
+}
+
+/** How far apart the slabs sit along the run, in pixels. */
+const SLAB_STEP = 34;
+
+/** Paints slabs along both lips, dust across them, and the breaking head. */
+export function paintEarthshatterDebris(
+  ctx: CanvasRenderingContext2D, p: EarthshatterDebrisPose,
+): void {
+  if (!(p.travelled > 0)) return;
+  const nx = Math.cos(p.angle), ny = Math.sin(p.angle);
+  const px = -ny, py = nx;
+  /** The lip offset the caller's own edge walk uses, so the two line up. */
+  const lip = (d: number, side: number): number =>
+    side * p.widthAt(d) * (0.55 + 0.45 * Math.sin(d * 0.23 + side));
+  const at = (d: number, off: number): readonly [number, number] =>
+    [p.x0 + nx * d + px * off, p.y0 + ny * d + py * off];
+
+  ctx.save();
+  // Heat in the mouth, hottest at the head: the ground is breaking THERE, and
+  // the far end of a long crack has had a second to cool.
+  for (let d = 0; d < p.travelled; d += 14) {
+    const near = d / Math.max(1, p.travelled);
+    ctx.globalAlpha = 0.15 + 0.55 * near * near;
+    ctx.fillStyle = near > 0.75 ? '#FFE9A0' : near > 0.4 ? '#FF7A1F' : '#7E2A05';
+    const w = p.widthAt(d);
+    const [hx, hy] = at(d, 0);
+    ctx.fillRect(hx - 6, hy - w * 0.35, 12, w * 0.7);
+  }
+
+  // Slabs tipped up along both lips, each with a lit top edge. The lit edge is
+  // what makes them read as pieces of floor rather than more holes beside it.
+  ctx.globalAlpha = 1;
+  for (let d = 16; d < p.travelled; d += SLAB_STEP) {
+    for (const side of [-1, 1]) {
+      const w = p.widthAt(d);
+      const h = 5 + w * 0.55;
+      const base = lip(d, side);
+      const out = base + side * h;
+      const [ax, ay] = at(d - 9, base);
+      const [bx, by] = at(d + 9, base);
+      const [cx, cy] = at(d + 7, out);
+      const [dx, dy] = at(d - 7, out);
+      ctx.fillStyle = '#241A2E';
+      ctx.beginPath();
+      ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy); ctx.lineTo(dx, dy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = ULTIMATE_GOLD.mid;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(dx, dy); ctx.lineTo(cx, cy);
+      ctx.stroke();
+    }
+  }
+
+  // Dust off the lips, thrown across the run and thinning as it goes.
+  ctx.fillStyle = '#5A4A70';
+  for (let i = 0; i < 26; i++) {
+    const seed = (i * 0.618) % 1;
+    const d = seed * p.travelled;
+    const life = (p.t * 1.4 + seed) % 1;
+    const side = i % 2 ? 1 : -1;
+    ctx.globalAlpha = (1 - life) * 0.5;
+    const s = 2 + life * 3;
+    const [gx, gy] = at(d, lip(d, side) + side * life * 20);
+    ctx.fillRect(gx, gy, s, s);
+  }
+
+  // The head, where it is opening right now.
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = ULTIMATE_GOLD.lit;
+  const [hx, hy] = at(p.travelled, 0);
+  ctx.beginPath();
+  ctx.arc(hx, hy, p.widthAt(p.travelled) * 0.8, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * The arc THE LEAP will follow, dotted, to the ground it lands on.
+ *
+ * A jump that crosses walls is only a skill if it can be aimed, and nothing
+ * showed where it was going: the old drawing was a shadow that shrank, which
+ * says he is in the air and not where he comes down.
+ */
+export function paintLeapArc(
+  ctx: CanvasRenderingContext2D,
+  x0: number, y0: number, x1: number, y1: number,
+  lift: number, radius: number, t: number,
+): void {
+  ctx.save();
+  ctx.globalAlpha = 0.75;
+  ctx.strokeStyle = ULTIMATE_GOLD.bright;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 5]);
+  ctx.lineDashOffset = -t * 26;
+  ctx.beginPath();
+  for (let k = 0; k <= 1.001; k += 0.04) {
+    const px = x0 + (x1 - x0) * k;
+    const py = y0 + (y1 - y0) * k - Math.sin(k * Math.PI) * lift;
+    if (k) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // The ground he is coming down on, at the reach the landing will damage.
+  ctx.globalAlpha = 0.5;
+  groundEllipse(ctx, x1, y1 + 6, radius);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * The landing: a fracture star driven into the floor, and slabs kicked up.
+ *
+ * THE LEAP's landing IS the ability and it drew one shock ring. The star
+ * outlasts the ring it arrives with, which is what says the slowest body on
+ * the roster just came down from over a wall.
+ */
+export function paintLeapLanding(
+  ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, age: number,
+): void {
+  if (!(age >= 0) || age >= 1) return;
+  const k = clamp01(age);
+  ctx.save();
+  // The star. Fades slowest, so it is still there once the ring has gone.
+  ctx.globalAlpha = Math.max(0, 1 - k * 0.7);
+  ctx.strokeStyle = '#0D0716';
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < 9; i++) {
+    const a = i * (TAU / 9) + 0.4;
+    const len = radius * (0.5 + 0.5 * ((i * 5) % 4) / 4) * Math.min(1, k * 3);
+    ctx.beginPath();
+    ctx.moveTo(x, y + 6);
+    ctx.lineTo(x + Math.cos(a) * len, y + 6 + Math.sin(a) * len * GROUND_SQUASH);
+    ctx.stroke();
+  }
+  // Slabs round the boot.
+  ctx.globalAlpha = Math.max(0, 1 - k * 1.6);
+  for (let i = 0; i < 7; i++) {
+    const a = i * (TAU / 7) + 0.9;
+    const rr = radius * (0.35 + k * 0.55);
+    const s = 5 - k * 3;
+    const sx = x + Math.cos(a) * rr - s / 2;
+    const sy = y + 6 + Math.sin(a) * rr * GROUND_SQUASH - s;
+    ctx.fillStyle = '#241A2E';
+    ctx.fillRect(sx, sy, s, s);
+    ctx.fillStyle = ULTIMATE_GOLD.mid;
+    ctx.fillRect(sx, sy, s, 1);
+  }
+  // The reach, in the ability's gold, opening out to exactly what was hit.
+  ctx.globalAlpha = 1 - k;
+  for (const [width, colour] of [
+    [4, ULTIMATE_GOLD.deep], [2, ULTIMATE_GOLD.bright], [1, ULTIMATE_GOLD.lit],
+  ] as const) {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = width * (1 - k * 0.5);
+    groundEllipse(ctx, x, y + 6, radius * (0.3 + 0.75 * k));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ── The ranger ───────────────────────────────────────────────────────────────
+
+/**
+ * The chain between the ranger and her harpoon.
+ *
+ * Nothing else in the game draws a line back to the hero, which is why it
+ * reads as the ultimate: the old drawing was an ordinary arrow, and then she
+ * was somewhere else — the ability's whole idea, that the shot brings HER,
+ * happened without a picture.
+ */
+export function paintHarpoonChain(
+  ctx: CanvasRenderingContext2D,
+  hx: number, hy: number, headX: number, headY: number,
+): void {
+  const span = Math.hypot(headX - hx, headY - hy);
+  if (span < 2) return;
+  const n = Math.max(2, Math.round(span / 7));
+
+  ctx.save();
+  ctx.strokeStyle = '#8A7BA8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const k = i / n;
+    // Paid out loose behind the head. It is only ever drawn in flight -- the
+    // instant it bites, the arrow is spent and she is already moving -- so
+    // there is no taut case to carry a flag for.
+    const sag = Math.sin(k * Math.PI) * 12;
+    if (i) ctx.lineTo(hx + (headX - hx) * k, hy + (headY - hy) * k + sag);
+    else ctx.moveTo(hx, hy);
+  }
+  ctx.stroke();
+  // Links, so it is a chain and not a wire.
+  ctx.fillStyle = ULTIMATE_GOLD.mid;
+  for (let i = 0; i <= n; i += 2) {
+    const k = i / n;
+    const sag = Math.sin(k * Math.PI) * 12;
+    ctx.fillRect(hx + (headX - hx) * k - 1, hy + (headY - hy) * k + sag - 1, 3, 3);
+  }
+  ctx.restore();
+}
+
+/**
+ * The corridor burning off the ranger's heels through FULL AUTO.
+ *
+ * The rule the ability lives by is "only while she keeps running", and it was
+ * nowhere on screen: the bolts simply stopped coming. This is that rule drawn
+ * — bright while she moves, out the instant she does not — so nobody has to be
+ * told what the ability wants from them.
+ */
+export function paintFullAutoTrail(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, angle: number, heat: number,
+): void {
+  const h = clamp01(heat);
+  if (h <= 0) return;
+  const bx = -Math.cos(angle), by = -Math.sin(angle);
+  ctx.save();
+  for (let i = 0; i < 14; i++) {
+    const back = 8 + i * 9;
+    ctx.globalAlpha = h * 0.42 * (1 - i / 14);
+    ctx.fillStyle = i < 5 ? ULTIMATE_GOLD.bright : ULTIMATE_GOLD.deep;
+    ctx.fillRect(x + bx * back - 4, y + by * back + 1, 8, 4);
+  }
+  ctx.restore();
+}
