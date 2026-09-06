@@ -15,6 +15,8 @@
         A R C H E R
 ```
 
+> _Trying to implement structure, standards and design principles against my own vibecoded madness._
+
 Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it. Hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file.
 
 ![Gameplay: the Archer fighting a crow swarm, a dynamite blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
