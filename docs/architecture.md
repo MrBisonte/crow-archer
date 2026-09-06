@@ -39,12 +39,11 @@ one word and a number.
 | `hurt(n)` | `1` | Takes `n` HP off every guard, never below 1, so the priest has work to do | one `kind hp/maxHp` line per guard |
 | `crack(hp)` | `1` | Puts both towers **at** `hp`, to watch cover come off as one falls. It sets the figure rather than subtracting it | the two tower HPs |
 | `retinue()` | | The retinue as readable lines: rank marker, kind, `hp/maxHp` | one string per guard |
-| `draft(char)` | the selected hero | Grants every talent in `char`'s tree and starts a run, so the opening draft has a full hand to deal | the talent ids offered |
-| `rite(char)` | the selected hero | Puts `char` at rank III and opens the rite ahead of the opening draft | the capstone ids offered |
+| `rite(char)` | the selected hero | Puts `char` at rank III and opens the rite, which a run otherwise reaches at the start of a level | the capstone ids offered |
 
 `char` is a `CharacterKind`: `archer`, `wizard`, `knight`, `ranger` or
-`sapper`. A hero with an empty tree or no capstones gets a plain sentence back
-instead of a list, and the run starts undisturbed.
+`sapper`. A hero with no capstones gets a plain sentence back instead of a
+list, and the run starts undisturbed.
 
 `siege(n)` walks the real `completeWave` for every wave it skips rather than
 assigning the number, so the retinue that greets you on wave 9 is the one nine
@@ -59,14 +58,14 @@ while a siege is running. Anywhere else there are no guards and no towers, so
 all three answer with an empty list; `siege(n)` is what puts you somewhere they
 mean something.
 
-`draft` and `rite` grant into the in-memory talent bank without writing it, but
-a purchase or a banked milestone later in the same page saves the whole bank.
+`rite` grants into the in-memory talent bank without writing it, but a
+purchase or a banked milestone later in the same page saves the whole bank.
 Stage a tree on a save you care about and it can reach `localStorage`.
-[Talents](talents.md#where-the-code-lives) says what the two screens are for.
+[Talents](talents.md#where-the-code-lives) says what the screen is for.
 
 `window.__game` is the other half of this surface: the dev-hook object the
 headless tests drive, over a hundred members wide. A dev hook is for a test,
-which can afford to be explicit; these six are for a person at a console who
+which can afford to be explicit; these five are for a person at a console who
 cannot. It is not a curated set and it is not listed here.
 
 `src/legacy/globals.coverage.test.ts` holds the table above to the same set as

@@ -76,7 +76,10 @@ export type GameEvent =
   // reconstructing size from `big` alone paints the hostile bomber's 55 px
   // blast at the dynamite's 90, which is 64% too wide — and that emit is not
   // the sapper's, so no flag on it could ever have said so.
-  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean; radius: number }
+  // `ult` marks a blast an ULTIMATE produced. `big` cannot stand in for it:
+  // the sapper's shock-combo widens an ordinary charge and is big without
+  // being an ultimate, and the extra beats belong only to the once-a-minute one.
+  | { type: 'EXPLOSION'; x: number; y: number; onWater: boolean; big: boolean; radius: number; ult?: boolean }
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
@@ -123,6 +126,52 @@ export type GameEvent =
    * filling rather than as a shot landing.
    */
   | { type: 'ARCHER_POWER_HIT'; x: number; y: number; left: number }
+  /**
+   * The ultimate has finished charging. Fires once, on the frame the timer
+   * reaches zero, for the same reason ARCHER_BRACED and RANGER_MOMENTUM do:
+   * the useful moment is the threshold, not the countdown. `hero` is who it
+   * became ready for, since every hero's is a different thing.
+   */
+  | { type: 'ULTIMATE_READY'; hero: string; x: number; y: number }
+  /** The knight's crack, at the moment it opens. `angle` is where it runs,
+   *  fixed at the press: the shot cannot be steered once it is away. */
+  | { type: 'KNIGHT_EARTHSHATTER'; x: number; y: number; angle: number }
+  /** The sapper's line going down. `count` is how many charges were actually
+   *  laid, which is fewer than the full line when it was aimed at a border. */
+  | { type: 'SAPPER_CARPET'; x: number; y: number; angle: number; count: number }
+  /** The wizard's singularity, at the moment it is placed. */
+  | { type: 'WIZARD_VORTEX'; x: number; y: number }
+  /** And at the moment it goes off. `radius` is the reach the damage really
+   *  used, the same contract EXPLOSION carries, so the ring cannot claim
+   *  more than was hit. */
+  | { type: 'WIZARD_VORTEX_COLLAPSE'; x: number; y: number; radius: number }
+  /** The ranger, arriving where his harpoon landed. `moved` is how far he
+   *  was actually reeled, which is short of the line's length when a wall
+   *  stopped him. */
+  | { type: 'RANGER_HARPOON_PULL'; x: number; y: number; moved: number }
+  /** The archer's circle marked, before anything falls into it. */
+  | { type: 'ARCHER_RAIN'; x: number; y: number; radius: number }
+  /** One arrow of that volley landing. Fourteen of these, one at a time. */
+  | { type: 'ARCHER_RAIN_HIT'; x: number; y: number }
+  /** The wizard plants his feet, and stops being able to move. */
+  | { type: 'WIZARD_BEAM'; x: number; y: number }
+  /** And gets them back. */
+  | { type: 'WIZARD_BEAM_END'; x: number; y: number }
+  /** The knight leaving the ground. `toX`/`toY` is where he will come down,
+   *  which is decided at the press and not steered. */
+  | { type: 'KNIGHT_LEAP'; x: number; y: number; toX: number; toY: number }
+  /** And landing. `radius` is the reach the impact really used. */
+  | { type: 'KNIGHT_LEAP_LAND'; x: number; y: number; radius: number }
+  /** The ranger's burst starting. Each volley inside it emits WEAPON_FIRED of
+   *  its own, so this is the commitment rather than the shooting. */
+  | { type: 'RANGER_FULL_AUTO'; x: number; y: number }
+  | { type: 'RANGER_FULL_AUTO_END'; x: number; y: number }
+  /** The sapper's one big charge, at the moment it is placed. Its blast is an
+   *  ordinary EXPLOSION, three times the usual radius. */
+  | { type: 'SAPPER_BIG_ONE'; x: number; y: number }
+  /** An ultimate was spent. One event for all five: what each one does is
+   *  its own business, but the commitment reads the same every time. */
+  | { type: 'ULTIMATE_FIRED'; hero: string; x: number; y: number }
   | { type: 'RANGER_NET_OPEN'; x: number; y: number; radius: number; caught: number }
   | { type: 'STORM_CAST'; x: number; y: number }
   | { type: 'SATCHEL_ARMED'; x: number; y: number }

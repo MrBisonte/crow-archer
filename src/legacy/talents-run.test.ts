@@ -1,11 +1,11 @@
 /**
- * The talent system's wiring: mastery paid by real milestones, and drafted
+ * The talent system's wiring: mastery paid by real milestones, and owned
  * talents reaching the figures the wizard's kit actually runs on.
  *
  * The tree arithmetic is pinned pure in sim/talents.test.ts; nothing here
  * re-checks a price or a threshold. What this file holds is the seams —
  * that a boss dying through the real death sequence banks mastery, that a
- * drafted LONG STEP moves the player further on a real blink, that FOCUS
+ * an owned LONG STEP moves the player further on a real blink, that FOCUS
  * DEPTH raises the ceiling the regen actually clamps to, and that the two
  * capstones change the storm and the bolt the way the rite promises.
  *
@@ -39,8 +39,6 @@ interface Talents {
   state: () => TalentState;
   award: (milestone: string) => void;
   grant: (id: string, level: number) => void;
-  draft: (id: string) => void;
-  drafted: () => string[];
   sealCapstone: (id: string) => void;
   resetRun: () => void;
   buy: (id: string) => { kind: string };
@@ -98,7 +96,8 @@ beforeEach(() => {
   g.takeClock();
   g.pick('wizard');
   // Zero every ladder before entering play: grants persist across tests, and
-  // a non-empty pool would open the run-start draft over this beforeEach.
+  // a talent left owned by an earlier test is a talent this one is measuring
+  // the base of while it is live.
   for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
   g.go('playing');
   g.generateMap('forest');
@@ -110,22 +109,14 @@ beforeEach(() => {
 });
 
 describe('LONG STEP reaches the blink', () => {
-  it('blinks the base distance with nothing drafted', () => {
+  it('blinks the base distance with nothing owned', () => {
     const from = playerAt();
     g.blink();
     expect(movedSince(from)).toBeCloseTo(g.config().wizBlinkDistance, 6);
   });
 
-  it('blinks no further merely for owning it — undrafted is the base', () => {
+  it('blinks 40 px further with two levels owned', () => {
     talents().grant('blinkReach', 2);
-    const from = playerAt();
-    g.blink();
-    expect(movedSince(from)).toBeCloseTo(g.config().wizBlinkDistance, 6);
-  });
-
-  it('blinks 40 px further with two levels drafted', () => {
-    talents().grant('blinkReach', 2);
-    talents().draft('blinkReach');
     const from = playerAt();
     g.blink();
     expect(movedSince(from)).toBeCloseTo(g.config().wizBlinkDistance + 40, 6);
@@ -137,7 +128,7 @@ describe('LONG STEP reaches the blink', () => {
  * read straight.
  *
  * `TALENTS.STATS` says which CONFIG number each talent moves, and `stat(id)`
- * returns the base plus what this run drafted. But nothing makes the CODE use
+ * returns the base plus what this character owns. But nothing makes the CODE use
  * it: a call site left reading `CONFIG.thatKey` keeps the base forever, and
  * the talent is bought, drawn, described and inert. It fails silently in
  * both directions — a stat wired for damage but not for the telegraph draws a
@@ -217,7 +208,7 @@ describe('every talent stat reaches its call sites', () => {
  * wizard's shape.
  *
  * Two halves, and neither is enough alone. The table below says each talent's
- * figure actually MOVES when it is owned and drafted, which is the sim.js side
+ * figure actually MOVES when it is owned, which is the sim.js side
  * of it; `every talent stat reaches its call sites` above says no call site is
  * still reading the base, which is the game.js side. A talent needs both to do
  * anything, and each fails in a way the other cannot see.
@@ -446,14 +437,13 @@ describe('the third rite of the four heroes who had two', () => {
 });
 
 describe('the four trees levelled up to the wizard\'s shape', () => {
-  /** Owns every level of `id` and wakes it for this run. */
+  /** Owns every level of `id`, which is all it takes to make it live. */
   function take(char: string, id: string, levels: number): void {
     g.pick(char);
     g.go('playing');
     clearArena();
     g.healHero();
     talents().grant(id, levels);
-    talents().draft(id);
   }
 
   const MOVED: ReadonlyArray<{
@@ -475,19 +465,12 @@ describe('the four trees levelled up to the wizard\'s shape', () => {
       g.pick(char);
       g.go('playing');
       talents().grant(id, 0);
-      expect(talents().stat(id), `${id} undrafted must be the base`).toBeCloseTo(base, 6);
+      expect(talents().stat(id), `${id} at no levels must be the base`).toBeCloseTo(base, 6);
 
       take(char, id, levels);
       expect(talents().stat(id)).toBeCloseTo(base + delta, 6);
     });
 
-    it(`${id} is inert while merely owned`, () => {
-      const base = (g.config() as unknown as Record<string, number>)[from]!;
-      g.pick(char);
-      g.go('playing');
-      talents().grant(id, levels);          // owned, never drafted
-      expect(talents().stat(id)).toBeCloseTo(base, 6);
-    });
   }
 
   it('FOURTH BOLT puts a fourth bolt on the field', () => {
@@ -509,6 +492,7 @@ describe('the four trees levelled up to the wizard\'s shape', () => {
 
     g.pick('ranger');
     g.go('playing');
+    talents().grant('fourthBolt', 0);   // an earlier test in this file owns it
     clearArena();
     g.healHero();
     expect(volley(), 'the base volley never left').toBe(base);
@@ -531,6 +515,7 @@ describe('the four trees levelled up to the wizard\'s shape', () => {
 
     g.pick('ranger');
     g.go('playing');
+    talents().grant('wideNet', 0);      // an earlier test in this file owns it
     clearArena();
     g.healHero();
     const plain = netRadius();
@@ -545,6 +530,7 @@ describe('the four trees levelled up to the wizard\'s shape', () => {
   it('WIDER FAN puts two more bombs in a barrage', () => {
     g.pick('sapper');
     g.go('playing');
+    talents().grant('widerFan', 0);     // an earlier test in this file owns it
     clearArena();
     g.healHero();
     g.barrage();
@@ -559,14 +545,13 @@ describe('the four trees levelled up to the wizard\'s shape', () => {
 });
 
 describe('HELD STEP holds the chain window open', () => {
-  it('opens the base window with nothing drafted', () => {
+  it('opens the base window with nothing owned', () => {
     g.blink();
     expect(g.wizBlink().chainWindow).toBeCloseTo(g.config().shiftChainSecs, 6);
   });
 
-  it('adds 0.8 s with two levels drafted', () => {
+  it('adds 0.8 s with two levels owned', () => {
     talents().grant('heldStep', 2);
-    talents().draft('heldStep');
     g.blink();
     expect(g.wizBlink().chainWindow).toBeCloseTo(g.config().shiftChainSecs + 0.8, 6);
   });
@@ -583,7 +568,6 @@ describe('HELD STEP holds the chain window open', () => {
     expect(movedSince(refused), 'the base window did not shut').toBe(0);
 
     talents().grant('heldStep', 2);
-    talents().draft('heldStep');
     stepPast(ONE_SECOND * 7);            // clear of the 6 s cooldown
     g.blink();
     stepPast(late);
@@ -601,7 +585,6 @@ describe('HELD STEP holds the chain window open', () => {
   it('leaves the shared figure the knight chains on exactly where it was', () => {
     const before = g.config().shiftChainSecs;
     talents().grant('heldStep', 2);
-    talents().draft('heldStep');
 
     expect(g.config().shiftChainSecs).toBe(before);
     expect(talents().stat('heldStep')).toBeCloseTo(before + 0.8, 6);
@@ -624,20 +607,15 @@ describe('THIRD STEP adds a hop to the chain', () => {
     return hops;
   }
 
-  it('chains twice with nothing drafted, which is what it shipped with', () => {
+  it('chains twice with nothing owned, which is what it shipped with', () => {
     expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops);
   });
 
-  it('chains three times when drafted', () => {
+  it('chains three times when owned', () => {
     talents().grant('thirdStep', 1);
-    talents().draft('thirdStep');
     expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops + 1);
   });
 
-  it('chains twice for merely owning it — undrafted is the base', () => {
-    talents().grant('thirdStep', 1);
-    expect(hopsInOneChain()).toBe(g.config().wizBlinkMaxHops);
-  });
 });
 
 describe('THUNDERSTEP makes arriving the attack', () => {
@@ -687,7 +665,7 @@ describe('THUNDERSTEP makes arriving the attack', () => {
       for (let hop = 0; hop < 2; hop++) {
         // The pulse resolves where the blink LANDS, not where it left, so the
         // boss is parked on the destination rather than on the wizard — the
-        // first draft of this test moved him to the departure point and
+        // first throw of this test moved him to the departure point and
         // measured a chain that never touched him.
         const p = g.player() as { x: number; y: number };
         aimAt(p.x + 500, p.y);                   // due east, so the landing is known
@@ -710,14 +688,13 @@ describe('THUNDERSTEP makes arriving the attack', () => {
 });
 
 describe('FOCUS DEPTH raises the ceiling the regen clamps to', () => {
-  it('caps at the base pool with nothing drafted', () => {
+  it('caps at the base pool with nothing owned', () => {
     stepPast(10 * ONE_SECOND);
     expect(focus().points).toBe(g.config().wizFocusMax);
   });
 
-  it('caps one higher — and the HUD reports it — when drafted', () => {
+  it('caps one higher — and the HUD reports it — when owned', () => {
     talents().grant('focusDepth', 1);
-    talents().draft('focusDepth');
     stepPast(10 * ONE_SECOND);
     expect(focus().points).toBe(g.config().wizFocusMax + 1);
     expect(focus().max).toBe(g.config().wizFocusMax + 1);
@@ -731,16 +708,15 @@ describe('WIDER SKY reaches the storm', () => {
   const EDGE = 480;
 
   it('leaves the edge crow alive at the base radius', () => {
-    talents().grant('stormWidth', 1);
+    talents().grant('stormWidth', 0);
     parkCrowAt(EDGE);
     g.secondary();
     g.stepSim(1);
     expect((g.crows() as unknown[]).length).toBe(1);
   });
 
-  it('kills the edge crow once the level is drafted', () => {
+  it('kills the edge crow once the level is owned', () => {
     talents().grant('stormWidth', 1);
-    talents().draft('stormWidth');
     parkCrowAt(EDGE);
     g.secondary();
     g.stepSim(1);
@@ -827,11 +803,11 @@ interface Chooser { kind: string; offers: string[]; cursor: number; resume: stri
  * Kills a boss through the real death sequence, which is the only thing that
  * offers a talent choice.
  *
- * It used to be reachable far more cheaply — a run opened with a draft, so
- * `go('playing')` was enough. That opening ceremony is gone: a choice between
- * three names, offered before anything has happened, asks the player to prefer
- * one for no reason and delays the run to do it. The first boss pays for the
- * first choice now, so every test that wants a chooser has to earn one.
+ * It used to be reachable far more cheaply — a run opened on a ceremony, so
+ * `go('playing')` was enough. That opening screen is gone: a choice offered
+ * before anything has happened asks the player to prefer one name over another
+ * for no reason, and delays the run to do it. The first boss pays for the first
+ * choice now, so every test that wants a chooser has to earn one.
  *
  * The 1.5 s is the death sequence: the tail pays out at 1.2 s and hands off.
  */
@@ -844,6 +820,22 @@ function killABoss(): void {
   stepPast(Math.ceil(1.5 * ONE_SECOND));
 }
 
+/**
+ * Starts the next level, which is where the rite is offered now.
+ *
+ * A stage intro is a screen the run stops on, and dismissing it is the moment
+ * `beginNewLevel` queues the rite. The state is set through `go` rather than
+ * by walking the campaign to a real intro: the dark archer hands straight to
+ * the dark knight with no intro at all, so the first real one is three stages
+ * further on than any of these tests want to drive.
+ */
+function startNewLevel(): void {
+  g.go('stage_intro');
+  expect(g.dismissIntro(), 'the intro refused to be dismissed').toBe(true);
+  clearArena();
+  g.stepSim(1);
+}
+
 describe('the choosers', () => {
   it('offers nothing at run start, however much is owned', () => {
     // The rule this replaced: a run opened on the chooser. Owning the whole
@@ -853,15 +845,12 @@ describe('the choosers', () => {
     g.go('playing');
     expect(g.state(), 'the run opened on a ceremony').toBe('playing');
     expect(g.chooser()).toBeNull();
-    expect(talents().drafted(), 'a run start woke a talent').toEqual([]);
   });
 
   it('opens the tree when the first boss pays and nothing is owned yet', () => {
-    // The gap this closes, reported from a real play-through: the draft deals
-    // from OWNED talents and mastery is what buys ownership, so a new player
+    // The gap this closes, reported from a real play-through: a new player
     // killed the boss, banked the mastery and was handed straight to the next
-    // stage. The pool was empty, the ceremony skipped itself, and nothing
-    // invited them to spend what they had just been paid.
+    // stage with nothing inviting them to spend what they had just been paid.
     for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
     talents().grantMastery(0);
     g.go('menu');
@@ -891,70 +880,54 @@ describe('the choosers', () => {
     expect(g.chooser()).toBeNull();
   });
 
-  it('skips the tree when the purse can buy nothing', () => {
-    // Every ladder at its top, so there is nothing to spend on. A screen
-    // offering only prices the purse cannot meet is a stop with no decision.
+  it('lets the boss hand straight on when the purse can buy nothing', () => {
+    // Every ladder at its top, so there is nothing to spend on. The tree is
+    // the only thing a boss death offers now, and a screen listing only prices
+    // the purse cannot meet is a stop with no decision in it.
     for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
     g.go('menu');
     g.go('playing');
     killABoss();
 
-    const c = g.chooser() as unknown as Chooser | null;
-    expect(c, 'a boss offered nothing at all').not.toBeNull();
-    expect(c!.kind, 'the tree opened with nothing to sell').toBe('draft');
+    expect(g.chooser(), 'a boss with nothing to sell stopped the run').toBeNull();
+    expect(g.state()).toBe('boss_entrance');
   });
 
-  it('opens the draft once something is owned, and a pick wakes it', () => {
-    // Maxed, so the tree is skipped and the draft is what a boss opens.
-    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
-    g.go('menu');
-    g.go('playing');
-    killABoss();
-
-    expect(g.state()).toBe('chooser');
-    // A boss queues rite, then tree, then draft, and which of those actually
-    // open depends on the mastery this character has banked -- which earlier
-    // tests in this file have moved. That used to be invisible because the
-    // rite sat at 18 points and nothing here ever reached it; at 8 it is
-    // reachable and outranks the draft. So walk the queue to the draft rather
-    // than assuming it is first.
-    let c = g.chooser() as unknown as Chooser | null;
-    for (let i = 0; i < 3 && c !== null && c.kind !== 'draft'; i++) {
-      if (c.kind === 'tree') press('b'); else g.chooserPick(0);
-      c = g.chooser() as unknown as Chooser | null;
-    }
-    expect(c, 'no draft followed the boss').not.toBeNull();
-    expect(c!.kind).toBe('draft');
-    g.chooserPick(0);
-    expect(talents().drafted().length).toBe(1);
-  });
-
-  it('offers the rite, then the tree, then the draft', () => {
+  it('holds the rite for the start of the next level, not the boss that paid', () => {
+    // Two beats rather than one screen behind another: the death pays, and the
+    // level that death opened is where the rank gets spent. What this pins is
+    // the ORDER -- that nothing about the rite fires on the death itself.
     for (let i = 0; i < 6; i++) talents().award('siege_cleared');   // rank 3
-    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
-    talents().grant('blinkReach', 1);
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.go('menu');
+    g.go('playing');
     killABoss();
+    expect(g.chooser(), 'the rite sat on the boss death').toBeNull();
 
-    const rite = g.chooser() as unknown as Chooser;
-    expect(g.state()).toBe('chooser');
-    expect(rite.kind).toBe('rite');
+    startNewLevel();
+
+    const rite = g.chooser() as unknown as Chooser | null;
+    expect(rite, 'the new level opened without the rite it had earned').not.toBeNull();
+    expect(rite!.kind).toBe('rite');
     // The exact set, not a length: a length catches a capstone deleted and
     // misses one added, which is the rule CLAUDE.md states for tables.
-    expect(rite.offers).toEqual(['overchannel', 'stormcaller', 'thunderstep']);
+    expect(rite!.offers).toEqual(['overchannel', 'stormcaller', 'thunderstep']);
     g.chooserPick(1);   // stormcaller, whose halved cooldown this asserts below
 
-    // The tree comes next: the rank is spent, and the mastery is not.
-    expect(g.state(), 'the tree did not follow the rite').toBe('talents');
-    expect((g.chooser() as unknown as Chooser).kind).toBe('tree');
-    press('b');
+    expect(talents().stormCooldown()).toBe(g.config().stormCooldown / 2);
+    expect(g.state(), 'the rite kept the run it interrupted').toBe('playing');
+  });
 
-    // And the draft behind it, without leaving the ceremony.
-    const draft = g.chooser() as unknown as Chooser;
-    expect(draft.kind).toBe('draft');
+  it('offers the rite once a run, taken or not', () => {
+    for (let i = 0; i < 6; i++) talents().award('siege_cleared');
+    g.go('menu');
+    g.go('playing');
+    startNewLevel();
+    expect((g.chooser() as unknown as Chooser).kind).toBe('rite');
     g.chooserPick(0);
 
-    expect(talents().stormCooldown()).toBe(g.config().stormCooldown / 2);
-    expect(g.state()).toBe('boss_entrance');
+    startNewLevel();
+    expect(g.chooser(), 'a second level offered the rite again').toBeNull();
   });
 });
 
@@ -964,12 +937,12 @@ interface ChooserLayout { slots: Slot[]; selected: number; hintY: number }
 describe('the chooser row obeys the screens playbook', () => {
   const layout = (): ChooserLayout => g.chooserLayout() as unknown as ChooserLayout;
 
-  /** Opens a draft with everything owned, so the row has three panels. */
-  function openDraft(): void {
-    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 1);
+  /** Opens the rite, which is the widest row of panels the game lays out. */
+  function openRow(): void {
+    for (let i = 0; i < 6; i++) talents().award('siege_cleared');   // rank 3
     g.go('menu');
     g.go('playing');
-    killABoss();
+    startNewLevel();
     expect(g.state()).toBe('chooser');
   }
 
@@ -982,7 +955,7 @@ describe('the chooser row obeys the screens playbook', () => {
     // tuning that — which the owner has already done once — would then read
     // as this rule breaking. Widen the canvas and the row must widen with it;
     // a literal would not move at all.
-    openDraft();
+    openRow();
     const rowW = (): number => {
       const slots = layout().slots;
       return Math.max(...slots.map((s) => s.x + s.w)) - Math.min(...slots.map((s) => s.x));
@@ -999,7 +972,7 @@ describe('the chooser row obeys the screens playbook', () => {
   });
 
   it('keeps every panel inside the canvas, edges included', () => {
-    openDraft();
+    openRow();
     const W = g.config().canvasW, H = g.config().canvasH;
     // A real margin, not merely on-canvas: `panelSlots` clamps a panel that
     // would overflow, so "inside" is satisfied by one that is jammed flush
@@ -1016,7 +989,7 @@ describe('the chooser row obeys the screens playbook', () => {
   it('moves nothing but the picked panel when the cursor changes', () => {
     // The other fault: the old screen re-centred the row on every switch, so
     // the panel a player was reaching for moved out from under the cursor.
-    openDraft();
+    openRow();
     const centres = (): number[] => layout().slots.map((s) => Math.round(s.x + s.w / 2));
     const first = centres();
     const c = g.chooser() as unknown as { cursor: number };
@@ -1033,7 +1006,7 @@ describe('the chooser row obeys the screens playbook', () => {
  * Every hero's tree reaches its own kit.
  *
  * One test per talent would be four times this file; what these hold instead
- * is the seam each tree hangs on — that the drafted figure reaches the code
+ * is the seam each tree hangs on — that the owned figure reaches the code
  * that runs on it, measured through the real path rather than by reading the
  * accessor back. The accessor agreeing with itself proves nothing.
  */
@@ -1048,20 +1021,19 @@ describe('the archer tree reaches Brace', () => {
     g.healHero();
   });
 
-  it('fills faster with SET FEET drafted', () => {
+  it('fills faster with SET FEET', () => {
     // Half a second of standing still, with and without the talent.
     const half = Math.ceil(0.5 * ONE_SECOND);
     stepPast(half);
     const plain = brace();
     g.go('menu'); g.go('playing'); clearArena(); g.healHero();
     talents().grant('setFeet', 2);
-    talents().draft('setFeet');
     stepPast(half);
     expect(brace(), 'a set-feet archer braces further in the same time')
       .toBeGreaterThan(plain);
   });
 
-  it('punches through more bodies with SPLIT SHAFT drafted', () => {
+  it('punches through more bodies with SPLIT SHAFT', () => {
     // Read off the tree rather than written down: this asserted a literal 5,
     // which is a figure a balance pass moves, and a test that fails on tuning
     // teaches nothing about whether the talent works.
@@ -1070,11 +1042,10 @@ describe('the archer tree reaches Brace', () => {
     const base = g.config().archerPowerPierce;
     const levels = spec.costs.length;
 
-    talents().grant('splitShaft', levels);
-    expect(talents().stat('splitShaft'), 'owned but undrafted should be the base')
+    expect(talents().stat('splitShaft'), 'a talent nobody owns is not the base')
       .toBe(base);
 
-    talents().draft('splitShaft');
+    talents().grant('splitShaft', levels);
     expect(talents().stat('splitShaft')).toBe(base + per * levels);
     expect(talents().stat('splitShaft'), 'the talent bought no pierce at all')
       .toBeGreaterThan(base);
@@ -1107,10 +1078,9 @@ describe('the knight tree reaches Bloodlust', () => {
     g.healHero();
   });
 
-  it('makes each stack worth more with DEEPER CUT drafted', () => {
+  it('makes each stack worth more with DEEPER CUT', () => {
     const base = g.config().knightBloodlustPer;
     talents().grant('deeperCut', 2);
-    talents().draft('deeperCut');
     expect(talents().stat('deeperCut')).toBeCloseTo(base + 0.06, 6);
   });
 
@@ -1145,17 +1115,16 @@ describe('the knight tree reaches Bloodlust', () => {
 
   const stacks = (): number => (g.bloodlust() as { stacks: number }).stacks;
 
-  it('stops at the base ceiling with nothing drafted', () => {
+  it('stops at the base ceiling with nothing owned', () => {
     const target = plantTarget();
     for (let i = 0; i < 6; i++) swingInto(target);
     expect(stacks()).toBe(g.config().knightBloodlustMax);
   });
 
-  it('banks a fourth stack once FOURTH BLOOD is drafted', () => {
+  it('banks a fourth stack once FOURTH BLOOD is owned', () => {
     // Counted off the real stack the swing banks, not off the table that
     // decides the ceiling.
     talents().grant('fourthBlood', 1);
-    talents().draft('fourthBlood');
     const target = plantTarget();
     for (let i = 0; i < 6; i++) swingInto(target);
     expect(stacks()).toBe(g.config().knightBloodlustMax + 1);
@@ -1179,14 +1148,13 @@ describe('the ranger tree reaches Momentum', () => {
     return g.momentum() as { level: number; mult: number };
   }
 
-  it('is worth 45% at a full meter with FULL TILT drafted', () => {
+  it('is worth 45% at a full meter with FULL TILT', () => {
     // Read off rangerMomentumMult, the figure a bolt's damage runs on. Asking
     // the accessor what the accessor thinks proves nothing, and this file's
     // own opening says exactly that.
     // Two levels now, not three. If the ceiling had moved with the cost this
     // is the assertion that would have caught it.
     talents().grant('fullTilt', 2);
-    talents().draft('fullTilt');
     const m = runFor(4 * ONE_SECOND);
     expect(m.level, 'the ranger should be at full tilt by now').toBe(1);
     expect(m.mult).toBeCloseTo(1.45, 4);
@@ -1198,14 +1166,13 @@ describe('the ranger tree reaches Momentum', () => {
     expect(m.mult).toBeCloseTo(1 + g.config().rangerMomentumMax, 4);
   });
 
-  it('fills over less ground with LIGHT FOOT drafted', () => {
+  it('fills over less ground with LIGHT FOOT', () => {
     // The same run for the same frames: the talent has to show as a fuller
     // meter, not as a different number in the table.
     const plain = runFor(Math.ceil(0.45 * ONE_SECOND)).level;
     expect(plain, 'this run must not already be capped').toBeLessThan(1);
     g.go('menu'); g.go('playing'); clearArena(); g.healHero();
     talents().grant('lightFoot', 2);
-    talents().draft('lightFoot');
     const light = runFor(Math.ceil(0.45 * ONE_SECOND)).level;
     expect(light, 'less ground to cover should mean a fuller meter')
       .toBeGreaterThan(plain);
@@ -1221,37 +1188,37 @@ describe('the sapper tree reaches the chain', () => {
     g.healHero();
   });
 
-  it('reaches further with LONG FUSE drafted', () => {
+  it('reaches further with LONG FUSE', () => {
     const base = g.config().sapperChainRadius;
     talents().grant('longFuse', 2);
-    talents().draft('longFuse');
     expect(talents().stat('longFuse')).toBe(base + 36);
   });
 
-  it('runs through more bombs with MORE LINKS drafted', () => {
+  it('runs through more bombs with MORE LINKS', () => {
     const base = g.config().sapperChainMaxLinks;
     talents().grant('moreLinks', 2);
-    talents().draft('moreLinks');
     expect(talents().stat('moreLinks')).toBe(base + 4);
   });
 });
 
-describe('a numeric talent nothing has drafted is exactly its base', () => {
-  // The whole run layer in one assertion, over every hero: owning a tree does
-  // not change a single figure the game runs on until a run drafts it.
-  it('leaves every hero\'s figures alone', () => {
+describe('owning a numeric talent moves the figure it names', () => {
+  // The whole run layer in one assertion, over every hero. The MOVED table
+  // above walks eight talents all the way to the field; this walks every one
+  // of them as far as `stat`, which is where a talent with no STATS row --
+  // bought, drawn, described and inert -- stops being invisible.
+  it('leaves no hero owning a talent that changes nothing', () => {
     for (const char of CHARACTERS) {
       g.pick(char);
-      for (const t of CHAR_TREES[char].talents) talents().grant(t.id, 2);
       g.go('menu');
       g.go('playing');
-      // The run-start draft may be waiting; nothing has been picked from it.
       for (const t of CHAR_TREES[char].talents) {
         if (t.effect.kind !== 'linear') continue;
-        const before = talents().stat(t.id);
         talents().grant(t.id, 0);
-        expect(talents().stat(t.id), `${char}.${t.id} moved without being drafted`)
-          .toBe(before);
+        const base = talents().stat(t.id);
+        talents().grant(t.id, t.costs.length);
+        expect(talents().stat(t.id), `${char}.${t.id} is owned and inert`)
+          .not.toBe(base);
+        talents().grant(t.id, 0);   // the next test measures its own base
       }
     }
   });
@@ -1266,9 +1233,6 @@ describe('the choosers keep out of a siege', () => {
     talents().grantMastery(100);          // far past the rite's rank
     g.setMode('siege');
     g.go('playing');
-    // The run's opening draft is legitimate and opens first; take it, so what
-    // this test measures afterwards is the siege boss alone.
-    if (g.state() === 'chooser') g.chooserPick(0);
     expect(g.state()).toBe('playing');
     g.jumpToSiegeWave(7);
     const before = talents().state().mastery;
@@ -1373,9 +1337,8 @@ describe('CHARGE THROUGH widens the charge', () => {
     expect(bodyBehindAfterDash(), 'the base charge only cuts ahead').toBe(1);
   });
 
-  it('cuts a body behind him once drafted', () => {
+  it('cuts a body behind him once owned', () => {
     talents().grant('chargeThrough', 1);
-    talents().draft('chargeThrough');
     expect(bodyBehindAfterDash(), 'the charge should cut on every side').toBe(0);
   });
 });
@@ -1411,9 +1374,8 @@ describe('STICKY FAN leaves the fan on the ground', () => {
     expect(barrageIntoBody(), 'bombs should have gone off on the body').toBe(0);
   });
 
-  it('parks them where they land once drafted', () => {
+  it('parks them where they land once owned', () => {
     talents().grant('stickyFan', 1);
-    talents().draft('stickyFan');
     expect(barrageIntoBody(), 'stuck bombs should still be on the map')
       .toBeGreaterThan(0);
   });
@@ -1424,7 +1386,6 @@ describe('STICKY FAN leaves the fan on the ground', () => {
   // delayed blast, it was a blast that never came.
   it('runs the fuse out even with the body still standing on them', () => {
     talents().grant('stickyFan', 1);
-    talents().draft('stickyFan');
     expect(barrageIntoBody()).toBeGreaterThan(0);
     const c = g.config();
     g.spawnSkeleton('normal');
@@ -1454,7 +1415,6 @@ describe('the archer rides his own blast', () => {
   beforeEach(() => {
     g.pick('archer');
     g.go('playing');
-    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
     clearArena();
     g.healHero();
   });
@@ -1546,7 +1506,6 @@ describe('a braced archer looses a volley', () => {
   beforeEach(() => {
     g.pick('archer');
     g.go('playing');
-    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
     clearArena();
     g.healHero();
     (g.arrows() as unknown[]).length = 0;
@@ -1656,7 +1615,6 @@ describe('his stick throws what survives it', () => {
   beforeEach(() => {
     g.pick('archer');
     g.go('playing');
-    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
     clearArena();
     g.healHero();
   });
@@ -1704,7 +1662,6 @@ describe('a powered arrow carries its pickup further', () => {
   beforeEach(() => {
     g.pick('archer');
     g.go('playing');
-    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
     clearArena();
     g.healHero();
   });
@@ -2054,18 +2011,10 @@ describe('the talent shop', () => {
 });
 
 describe('reaching the two shops', () => {
-  /**
-   * Starts a run and clears whatever the run staged in front of it.
-   *
-   * A character that owns talents is dealt the run's opening draft, so
-   * `go('playing')` lands on the chooser rather than on the field. Tests
-   * earlier in this file leave the archer owning most of his tree, which
-   * makes this the normal case here rather than the exception.
-   */
+  /** Starts a run, which lands on the field and never on a ceremony. */
   const enterRun = (): void => {
     g.go('playing');
-    for (let i = 0; i < 8 && g.chooser() !== null; i++) g.chooserPick(0);
-    expect(g.state(), 'a chooser queue that will not drain').toBe('playing');
+    expect(g.state(), 'something stood in front of the run').toBe('playing');
   };
 
   beforeEach(() => {

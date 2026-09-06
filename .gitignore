@@ -25,6 +25,10 @@ dist-server/
 # A bare `!` inside an ignored directory does nothing: git never descends into
 # `_design/`, so the parent has to be re-included before anything under it can
 # be. Hence the widen-then-narrow shape below.
+# Per-task agent working state: the task board a multi-worker run keeps while
+# it is running. The repo's own cross-session ledger is COORDINATION.md at the
+# root and IS tracked; this is not that.
+.agents/
 _design/*
 !_design/talent-feedback/
 _design/talent-feedback/*
@@ -33,8 +37,10 @@ _design/talent-feedback/*
 !_design/talent-feedback/README.md
 !_design/talent-feedback/canvas.json
 !_design/talent-feedback/preview32.html
+!_design/talent-feedback/preview48.html
 !_design/talent-feedback/Main.dc.html
 !_design/talent-feedback/icons/
+!_design/talent-feedback/ultimates/
 
 # Python bytecode. The icon modules are imported by the loader, so this appears
 # the first time anyone runs the build -- and the re-include above would

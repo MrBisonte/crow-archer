@@ -15,6 +15,8 @@
         A R C H E R
 ```
 
+> _Trying to implement structure, standards and design principles against my own vibecoded madness._
+
 Survive the flock, kill the Crow King, then the two dark bosses waiting in his castle, then the warden of the labyrinth beneath it. Hold the bastion at the end of it all. A browser game on HTML5 Canvas and the Web Audio API, every sound synthesized at runtime, built to one self-contained HTML file.
 
 ![Gameplay: the Archer fighting a crow swarm, a dynamite blast, a multi-kill streak, the Crow King's entrance and fight](media/gameplay.gif)
@@ -114,7 +116,7 @@ See the [manual](docs/manual.md#characters) for the full kit of each: primary, s
 |---|---|
 | [Game manual](docs/manual.md) | Full character kits, systems, map, bosses, game loop, hosting and deploying |
 | [Balance](docs/balance.md) | Character stats, boss health, and the one dial that relates them |
-| [Talents](docs/talents.md) | Per-character trees, mastery, and the run draft |
+| [Talents](docs/talents.md) | Per-character trees, mastery, and the rite |
 | [Architecture](docs/architecture.md) | Tech stack, dependencies, netcode, design patterns, the console verbs |
 | [Playbooks](docs/playbooks/README.md) | What building this game has cost: one file per kind of work |
 | [Monitored playtests](docs/playbooks/monitored-playtest.md) | The flight recorder: wire format, record kinds, the four clocks, and how to read a log |

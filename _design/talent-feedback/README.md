@@ -6,6 +6,8 @@ from.
     python draw-icons.py     # shapes  -> icons32.js
     node render-svg.mjs      # icons32 -> icons32.rendered.json (via compose.mjs)
     python build-dc.py       # renders -> Sigils.dc.html
+    python draw-ultimates.py # shapes  -> ultimates48.js
+    node port-ultimates.mjs  # ultimates48 + compose -> src/render/ultimate-icons.ts
     # then reseed with the /design helper and republish
 
 - `draw-icons.py` is the one home for the shapes. `icons32.js` is generated;
@@ -13,6 +15,10 @@ from.
 - `compose.mjs` is the one home for the bezel, ground, cast shadow and outline.
   The browser preview and the artboards both import it, so what you look at in
   `preview32.html` is what the canvas shows.
+- `port-ultimates.mjs` is the only step here that writes into `src/`. It runs
+  `composite()` over the ten and emits the finished pictures as rows and a
+  shared legend, so the game draws the framed icon rather than the bare
+  object. Re-run it after any ultimate edit; the file it writes is generated.
 - `Main.dc.html` is hand-written; its four inline icons are swapped in by a
   patch step, so re-generating it by hand means re-swapping them.
 
@@ -62,6 +68,73 @@ only cool ramp in the set -- on a warm socket, reach for it.
   the lit side too the stripes read as the object rather than as its surface.
 - **A ramp that skips steps reads flat.** The old shield face ran four tones
   and no specular. Six steps or it is a plate of one colour.
+
+## What the ten ultimates cost, at 48 px in a gold frame
+
+Five drawers at once, one per hero, so the same eye judged each pair that had
+to look unlike itself. Thirty-nine passes across the ten, and three sent back
+after review. Everything above still holds; these are the ones that only
+showed up at the larger size, on the violet ground, or with five people
+working at once.
+
+- **Judge it at the size it is SHOWN at, not the size it is drawn at.** ARROW
+  RAIN was well composed and clearly built at 224, and at 48 its ring lost its
+  far arc to the ground and its three shafts merged into one mass. The drawer's
+  own reported worry -- four tones on a 4 px shaft instead of six -- was the
+  smaller problem by a distance. Look at the 48 px column first and the 224 px
+  one second.
+- **The six-step rule names a PLACE, not just a tone.** ARROW RAIN's ring had
+  all six steps and still read as a `C`, because its reflected light sat on the
+  band's INNER pixel, facing the hole, where it does nothing. "One pixel of
+  reflected light on the far edge" means the edge turned away from the key and
+  toward the ground. A checklist that only counts the steps will pass an icon
+  that has every one of them in the wrong place.
+- **Give a wall its size in PIXELS, never as a fraction.** Second time, new
+  costume: MORE LINKS learnt it on a chain, ARROW RAIN relearnt it on a ring.
+  A true annulus sets its wall as a ratio of each radius, so the far arc comes
+  out one pixel wide -- physically right and illegible. Stamp the band a fixed
+  number of pixels inward along the curve's own normal.
+- **"Make it metal" is a SATURATION change, not a material swap.** FULL AUTO
+  read as a wooden crate; painting the same box in the `leather` ramp changed
+  nothing, because leather's middle steps are muted browns and muted brown IS
+  wood. The `gold` ramp, which tops out saturated, is what moved the category.
+  Silhouette had to move with it: a rectangle with a gradient is a box in any
+  material, so the mouth became a flange standing PROUD of the body and the
+  near corner was chamfered. Machined parts have cut corners; crates do not.
+- **Two parallel diagonals are a CREASE.** EARTHSHATTER sheared its slab one
+  way and ran the crack the same way, and the whole thing read as folded paper
+  rather than as two pieces. The slab leans one way and the crack the other.
+- **Two dots flanking a dark seam are a FACE,** whatever the dots are meant to
+  be. THE LEAP's ankle had a rivet either side of its seam and acquired an
+  expression. One strap instead.
+- **A lighting value is not a position value.** Reusing the across-a-rod stop
+  table as the stops for a lighting value drops every dark pixel onto the last
+  character -- the reflected-light step -- because lighting runs past 1.0 on
+  the turned-away side. The surface comes out two-tone with a bright rim, and
+  nothing errors. Keep the two tables separate and named.
+- **`cyl_row` spends a fifth of the width on the specular.** On a 13 px form
+  that is three columns of near-white and the thing reads as chalk. Narrow the
+  specular by hand on anything that slim.
+- **The rhyme that matters is WITHIN a pair.** Seen together, THE BEAM and
+  HARPOON are the same shape -- a diagonal haft with a bright point leading
+  upper right. They belong to different heroes and a player only ever sees the
+  two icons for the character they are playing, so it never reaches a screen.
+  Check the set anyway; the check is cheap and it is how you learn which
+  rhymes are real.
+
+### Working on these at the same time as someone else
+
+`ultimates48.js` is generated and SHARED. `draw-ultimates.py --only <ids>`
+narrows which modules are imported, so a neighbour's half-written file cannot
+break your build -- but it does not narrow the output, and whoever ran last
+owns the file.
+
+`icon-png.mjs` is safe from this on its own: it exits with `no such icon` when
+an id you asked for is not in what it loaded, so a neighbour's build gives you
+an error rather than their art. What is NOT safe is re-opening the generated
+file yourself afterwards to dump a grid or count a colour -- that reads
+whoever ran last. Import your own module and read `iconkit.ICONS` instead,
+which cannot race.
 
 The 16x16 pass (`icons.js`, `build-artboards.py`, `preview.html`) is gone. It
 was rejected twice and the artboard carries what it looked like.

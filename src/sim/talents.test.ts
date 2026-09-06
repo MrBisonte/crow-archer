@@ -25,10 +25,7 @@ import {
   MASTERY_AWARDS,
   RANK_THRESHOLDS,
   bossMastery,
-  draftOffers,
-  draftedValue,
   masteryAfter,
-  ownedIds,
   purchaseTalent,
   rankOf,
   riteEligible,
@@ -246,54 +243,6 @@ describe('reading the save file', () => {
   });
 });
 
-describe('the run layer arithmetic', () => {
-  const tree = CHAR_TREES.wizard;
-  const owned: CharTalentState = { mastery: 0, spent: 0, levels: { blinkReach: 1, focusDepth: 1 } };
-
-  it('lists exactly the talents held at level one or higher as the pool', () => {
-    expect(new Set(ownedIds(tree, owned))).toEqual(new Set(['blinkReach', 'focusDepth']));
-    expect(ownedIds(tree, { mastery: 9, spent: 0, levels: {} })).toEqual([]);
-  });
-
-  it('pays a talent only if this run drafted it', () => {
-    expect(draftedValue(tree, owned, ['blinkReach'], 'blinkReach', 160)).toBe(180);
-    // Owned but undrafted is the base — ownership grows options, not power.
-    expect(draftedValue(tree, owned, [], 'blinkReach', 160)).toBe(160);
-    // Drafted but unowned (level 0) is also the base.
-    expect(draftedValue(tree, owned, ['stormWidth'], 'stormWidth', 450)).toBe(450);
-  });
-});
-
-describe('the run draft', () => {
-  const rng = () => mulberry32(7);
-
-  it('offers only what is owned, without repeats', () => {
-    const pool = ['a', 'b', 'c', 'd', 'e'];
-    const offers = draftOffers(pool, rng(), 3);
-    expect(offers.length).toBe(3);
-    expect(new Set(offers).size).toBe(3);
-    for (const id of offers) expect(pool).toContain(id);
-  });
-
-  it('offers the whole pool when it is smaller than the ask', () => {
-    expect(new Set(draftOffers(['a', 'b'], rng(), 3))).toEqual(new Set(['a', 'b']));
-    expect(draftOffers([], rng(), 3)).toEqual([]);
-  });
-
-  it('never re-offers what this run already drafted', () => {
-    // A second draft at the boss that offers the talent already taken at the
-    // start is a dead pick wearing a choice's clothes.
-    const pool = ['a', 'b', 'c', 'd'];
-    const offers = draftOffers(pool, rng(), 3, ['b', 'd']);
-    expect(offers.every((id) => id === 'a' || id === 'c')).toBe(true);
-  });
-
-  it('deals the same offers for the same seed', () => {
-    const pool = ['a', 'b', 'c', 'd', 'e', 'f'];
-    expect(draftOffers(pool, mulberry32(41), 3)).toEqual(draftOffers(pool, mulberry32(41), 3));
-  });
-});
-
 describe('clampCursor', () => {
   it('keeps a cursor inside the list it is pointing at', () => {
     expect(clampCursor(3, 0)).toBe(0);
@@ -471,4 +420,40 @@ describe('masteryThroughACampaign', () => {
     }
   });
 });
+
+describe('every talent id, across the whole roster', () => {
+  /** Every id the trees define: talents and rites, hero by hero. */
+  function allIds(): { id: string; where: string }[] {
+    const out: { id: string; where: string }[] = [];
+    for (const hero of CHARACTERS) {
+      const tree = CHAR_TREES[hero];
+      for (const t of tree.talents) out.push({ id: t.id, where: `${hero} talent` });
+      for (const c of tree.capstones) out.push({ id: c.id, where: `${hero} rite` });
+    }
+    return out;
+  }
+
+  // The hole a clean merge went through. Two branches each added a row to
+  // this table under the same id; the hunks did not overlap, so git merged
+  // them without a word, and the language has nothing to say about two
+  // entries of an ARRAY sharing a field -- unlike two keys of an object
+  // literal, which the compiler refuses. `TALENTS.stat` reads by id and
+  // takes whichever it finds, so one branch's meaning of the stat silently
+  // won. See LESSONS.jsonl, merged-table-duplicate-key.
+  it('is unique, so a merge cannot give one id two meanings', () => {
+    const seen = new Map<string, string>();
+    const collisions: string[] = [];
+    for (const { id, where } of allIds()) {
+      const first = seen.get(id);
+      if (first !== undefined) collisions.push(`${id}: ${first} and ${where}`);
+      else seen.set(id, where);
+    }
+    expect(collisions).toEqual([]);
+  });
+
+  it('finds ids to check, so a broken walk cannot pass as agreement', () => {
+    expect(allIds().length).toBeGreaterThan(CHARACTERS.length * 4);
+  });
+});
+
 

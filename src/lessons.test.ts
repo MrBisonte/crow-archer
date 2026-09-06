@@ -108,4 +108,21 @@ describe('LESSONS.jsonl', () => {
     const ids = parsed.map((p) => p.obj.id as string);
     expect(new Set(ids).size, 'duplicate id').toBe(ids.length);
   });
+
+  // CLAUDE.md holds the imperative rule and this file holds the dated
+  // episode that earned it, linked by id -- which is a convention until
+  // something checks it. A lesson renamed or dropped leaves a rule pointing
+  // at nothing, and the reader who follows the link to find out WHY is the
+  // reader the link exists for.
+  it('is where every lesson id cited by CLAUDE.md resolves', () => {
+    const rules = readFileSync(resolve(here, '../CLAUDE.md'), 'utf8');
+    const ids = new Set(parsed.map((p) => p.obj.id as string));
+    // Only the parenthesised citation form, `(`some-lesson-id`)`, so an
+    // ordinary backticked filename or function name in the prose is not
+    // mistaken for a link.
+    const cited = [...rules.matchAll(/\(`([a-z][a-z0-9-]{6,})`\)/g)].map((m) => m[1]!);
+    expect(cited.length, 'CLAUDE.md cites no lessons -- has the form changed?')
+      .toBeGreaterThan(0);
+    expect(cited.filter((id) => !ids.has(id))).toEqual([]);
+  });
 });

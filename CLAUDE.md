@@ -52,6 +52,10 @@ just read it.
 | Every event declared, handled and emitted | `events.coverage.test.ts` |
 | A siege run can be finished | the ten-wave play-through |
 | Every `LESSONS.jsonl` line parses and conforms | `src/lessons.test.ts` |
+| Every lesson id this file cites exists | `src/lessons.test.ts` |
+| No talent or rite id is used twice | `src/sim/talents.test.ts` |
+| No tracked text file mixes its line endings | `src/line-endings.test.ts` |
+| Figures quoted in `docs/balance.md` match `CONFIG` | `src/legacy/ultimate-doc.test.ts` |
 | Everything below | nothing. You. |
 
 Run `npm run hooks:install` once per clone **and once per worktree** —
@@ -103,6 +107,10 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Fixed a bug?** Revert the fix and watch the test fail before you
   commit. If it still passes, the test is not covering the fix. Prefer
   reverting the *specific line*: a test can cover half a function.
+- **Timing the suite?** Stop the dev preview first. A game open in the
+  browser pane drives rAF on the same cores vitest is using and turned a 19 s
+  run into 1280 s, which reads exactly like a performance regression in
+  whatever you just changed (`preview-tab-skews-the-suite`).
 - **Driving a long run?** `devHooks.healHero()`. Nobody is holding the
   keys, so an idle hero dies and the test measures that instead.
 - **A siege test that reads ranks?** `g.setSiegeRng(mulberry32(seed))`
@@ -111,6 +119,44 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Asserting a table's shape?** Compare the exact key set, not
   `toHaveLength(n)`. A length check catches a deletion and misses an
   addition.
+- **Measuring a base off the field?** Own nothing first, and say so in the
+  test. Grants persist across tests in a file by design, so a baseline that
+  relies on a rule elsewhere to make an earlier test's leftovers harmless is
+  one rule change away from measuring the wrong thing
+  (`inert-leftovers-go-live-with-the-rule`).
+- **Green alone, red in the suite?** Not flake — two causes, both real
+  (`green-alone-red-in-suite`). **Aim with `aimAt`**, never by assigning
+  `player.aimAngle`: `updatePlayer` copies the angle from the pointer every
+  step, so the field is overwritten with wherever the last test left the
+  mouse. And **park a target with `heldTimer`** — crow speed and aggression
+  climb with the run's escalation clock, which earlier tests have already
+  advanced, so a crow that sits still alone outruns your measurement in a
+  suite. Counting survivors is the wrong assertion while waves spawn:
+  compare by identity.
+
+## Deleting a rule
+
+- **Deleting a gameplay rule?** Look at what its short-circuit SKIPS, not only
+  at what it decides. An early return that answers before a throwing call is a
+  guard whether or not anyone wrote it as one, and taking the rule away
+  uncovers the crash it was absorbing (`a-deleted-rule-was-guarding-a-throw`).
+  When a deletion produces failures by the hundred, read one of them properly
+  before reverting.
+- **Changing what makes state EFFECTIVE?** The breakage is not where you
+  edited. Anything the old rule rendered inert -- a leftover grant, a stale
+  flag -- goes live the moment the rule does, so look where shared state was
+  being kept harmless by the property you just removed
+  (`inert-leftovers-go-live-with-the-rule`).
+
+## Docs
+
+- **Quoting a `CONFIG` figure in prose?** Put it in a `docs/balance.md`
+  table as a cell holding only the backticked name, with the number in the
+  next cell. `src/legacy/ultimate-doc.test.ts` binds every figure written
+  that way to the value the game runs on, in both directions — a tuned
+  constant with the document left alone is the failure that leaves no diff
+  to notice. Prose is deliberately not scanned: the document quotes
+  historical values in sentences that are true.
 
 ## Shell and git
 
@@ -121,3 +167,14 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Scripting an edit?** Assert the match count. A `str.replace()` that
   matches nothing returns the string unchanged and reports success;
   `checkJs` was off, so a silently-missed import shipped as a crash.
+- **That pattern contains a backslash?** Do not type the escape. A doubled backslash in a heredoc collapses before the interpreter sees it,
+  so `\\n` arrives as a real newline and a pattern built to match source
+  text scores zero. Anchor on a backslash-free substring, or build the
+  character with `chr(92)`. Diagnose a mystery zero-match by printing
+  `repr()` of the region, never by reading it (`heredoc-backslash-collapse`).
+- **Editing a file you appended to with a heredoc?** Match the endings that
+  region actually has. A heredoc writes LF into a CRLF file, and a pattern
+  in one flavour finds nothing in the other while being
+  character-for-character correct. Try both, or work per line with
+  `splitlines(keepends=True)`. `src/line-endings.test.ts` now fails on a
+  file left that way (`mixed-line-endings-in-one-file`).

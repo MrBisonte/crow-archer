@@ -342,6 +342,114 @@ The depth a cascade actually reached is on screen now, in the lane-D `chain`
 chip, for the same reason brace and momentum are: a multiplier the player
 cannot see is a multiplier the player cannot play around.
 
+## The ultimates
+
+One per hero, on a timer long enough that using it is an event rather than a
+rotation. Three figures are shared and everything else is per hero.
+
+**The timer is not a wall clock.** It runs at `1 + charge` where `charge` is
+how full that hero's own meter is, so `ultimateCooldown` 60 s is what an idle
+hero waits and half of it is what a hero playing the kit properly waits. The
+boost is one dial, `ultimateChargeBoost` 1, and the per-hero part is only
+which meter is read: brace, momentum, bloodlust against its talent-scaled
+ceiling, chain depth, and -- inverted -- the wizard's spent Focus. His is the
+odd one because Focus refills on its own, so a full pool means he has not been
+casting, and it is the casting that should be paid for.
+
+**A miss costs the whole timer.** The cooldown is spent on firing, not on
+hitting. What it is not spent on is a refusal: a hero whose own gate says no
+-- the ranger below his momentum cap, the archer with an empty quiver -- keeps
+the charge and can press again.
+
+**No new key.** The special is bound twice, to F and to the right mouse
+button, and that redundancy is what pays for the ultimate: the key fires it
+while it is up, the button always fires the plain special. Nothing is taken
+away from a player who wants the dynamite.
+
+### What each one is worth
+
+| Ultimate | The figure that decides it | Key | Value |
+|---|---|---|---|
+| HEADSHOT | always critical, composed with brace rather than replacing it | `archerHeadshotCrit` | 2 |
+| HEADSHOT | and fast enough to cross the field before anything moves | `archerHeadshotSpeedMult` | 3 |
+| EARTHSHATTER | how far the crack runs, in px | `knightEarthshatterRange` | 640 |
+| EARTHSHATTER | what a boss takes, once per crack rather than once per tick | `knightEarthshatterBossDamage` | 5 |
+| CARPET BOMB | charges laid, each on a longer fuse than the last | `sapperCarpetCount` | 7 |
+| VORTEX | how long it drags before it collapses, in seconds | `wizVortexDuration` | 1.5 |
+| VORTEX | and how hard it drags, in px per second | `wizVortexPull` | 260 |
+| HARPOON | what it is worth to a boss, against a plain arrow | `rangerHarpoonBossMult` | 4 |
+| HARPOON | how far it can reel him, in px | `rangerHarpoonReach` | 520 |
+
+Every figure in that table is read off `CONFIG` by
+[`ultimate-doc.test.ts`](../src/legacy/ultimate-doc.test.ts), which is the
+same shape as the character-table guard above it: read the document as text,
+compare it against the code it describes. A number tuned in the game and left
+alone here fails the suite rather than rotting quietly.
+
+### The second one, and why it is not the better one
+
+Every hero has two ultimates and carries one, never both. The pair is a fork
+rather than a ladder: each was chosen to answer a different question from its
+sibling, so the choice is about shape and not about which is stronger.
+
+| Ultimate | The figure that decides it | Key | Value |
+|---|---|---|---|
+| ARROW RAIN | how wide the mark is, in px | `archerRainRadius` | 110 |
+| ARROW RAIN | and how many arrows fill it | `archerRainImpacts` | 18 |
+| THE BEAM | seconds he is rooted holding it | `wizBeamDuration` | 2 |
+| THE BEAM | what a body in the line takes per tick | `wizBeamDamage` | 6 |
+| THE LEAP | how far he can jump, in px | `knightLeapRange` | 400 |
+| THE LEAP | what the landing is worth to a boss | `knightLeapBossDamage` | 4 |
+| FULL AUTO | seconds of volleys, while he keeps moving | `rangerFullAutoSecs` | 3 |
+| THE BIG ONE | how many times the usual crater | `sapperBigOneRadiusMult` | 3 |
+| THE BIG ONE | seconds of fuse you can watch | `sapperBigOneFuse` | 1.7 |
+
+**The archer is the only one whose ultimates cost ammunition.** HEADSHOT and
+ARROW RAIN each spend a queued arrow. That was a choice about him rather than a
+rule about ultimates, and the other four are free of their pouches -- except one
+deliberate exception below.
+
+**FULL AUTO spends the quiver, though HARPOON does not.** It is a burst of his
+primary rather than a thing of its own: free bolts would make it strictly better
+than the weapon it is a burst of, in every way, for three seconds. Running dry
+ends it early, which is a real cost and reads as one on screen.
+
+**The rain falls on a spiral, not at random.** Scattered, 14 impacts of 30 px
+over a 130 px circle left a body in the middle of the mark with about an even
+chance of being missed -- measured, at three failures in five runs. A
+once-a-minute ultimate that misses what stands in it is a slot machine rather
+than a skill shot. The impacts now sit on a golden-angle spiral, which fills the
+circle evenly and makes the ability identical every time it is fired.
+
+**THE LEAP crosses walls and grants no protection.** The first of those is the
+whole difference from the wizard's blink, which walks the aim and stops at the
+last point the body fits. The second matches EARTHSHATTER: the knight's
+ultimates do not buy him safety, and a wall-crossing escape with invulnerability
+would be a different ability from the one that was designed.
+
+**THE BEAM roots him for its whole two seconds.** On a 7-health body in the open
+that is the archer's bargain, and it is the only price the ability charges
+besides the Focus pool it empties.
+
+### The archer's is the only one that spends anything
+
+HEADSHOT takes a queued fire or ricochet arrow and inherits its behaviour, so
+a fire headshot lays a lane. That is a deliberate asymmetry rather than a rule
+the others break: an archer out of the pickup still has plain arrows, whereas
+a sapper whose pouch had paid for a carpet would be swinging a pitchfork the
+moment after his best play, and a ranger's harpoon comes out of the same
+quiver his primary empties three bolts at a time. Both of those are the
+ultimate's own ammunition.
+
+### What the vortex does not do
+
+It damages a boss and never drags one. Reeling a boss out of position once a
+minute is a different ability from the one that was designed, and the net
+already settled where that line sits: a hold is for the field. `pushBodiesFrom`
+walks crows, skeletons and soldiers and has never known about bosses, so this
+costs nothing to hold -- it is the existing shape rather than a special case
+written for it.
+
 ## Multiplayer
 
 Multiplayer is balanced separately and stays that way. `BattleWorld` reads

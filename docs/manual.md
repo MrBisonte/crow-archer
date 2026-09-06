@@ -20,6 +20,52 @@ knight who has bought the health axis stays a point ahead of an archer who has
 bought the same levels. [Balance](balance.md) carries the full table and the
 reasoning behind every figure in it.
 
+**Every hero has an ultimate**, and none of them has a key of its own. The
+special is bound twice -- to **F** and to the **right mouse button** -- so the
+key fires the ultimate whenever it is up and the button always fires the plain
+special. Nothing is taken away: a player who wants the dynamite rather than the
+ultimate right-clicks for it.
+
+It charges on a 60 second timer that runs faster the fuller that hero's own
+meter is -- the archer's brace, the ranger's momentum, the knight's bloodlust,
+the wizard's spent focus, the sapper's chain depth. A full meter runs it at
+double, so a minute is what an idle hero waits and half of it is what a hero
+playing his kit properly waits. Every one of them is a skill shot, and a miss
+costs the whole timer: the cooldown is spent on firing, not on hitting.
+
+While it is ready the hero carries a visible aura -- a different one each -- and
+the status lane shows a magenta chip, the only one there that is not the
+cooldown green. [Balance](balance.md#the-ultimates) carries every figure and
+the reasoning behind it.
+
+**Each hero has TWO ultimates and carries one, never both.** The pair is a fork
+rather than a ladder: the second answers a different question from the first,
+not the same question louder. Which one you carry is chosen once; everything
+above about the timer, the key and the cost of a miss is the same either way.
+[Balance](balance.md#the-second-one-and-why-it-is-not-the-better-one) carries
+the figures and the reasoning.
+
+- **Archer — ARROW RAIN.** Mark a spot up to 420 px away and a beat later
+  eighteen arrows come down over a 110 px circle, evenly, so what stands in the
+  mark is hit. HEADSHOT asks where something IS; this asks where it will be.
+  Spends a queued arrow, as HEADSHOT does
+- **Wizard — THE BEAM.** A lance down the aim line for two seconds, swept with
+  the mouse as you hold it, worth 6 to every body it crosses. **He is rooted for
+  all of it** — on a 7-health body in the open that is the archer's bargain, and
+  it empties the Focus pool on top. Single-target where VORTEX is control
+- **Knight — THE LEAP.** He jumps up to 400 px to where you point, **over walls,
+  over anything**, and lands for 4 to a boss inside 100 px. Only the landing
+  point has to be somewhere he fits; everything between is simply passed over.
+  **No protection at any point** — EARTHSHATTER gives none either, and he can be
+  hit out of the air
+- **Ranger — FULL AUTO.** Three seconds of crossbow volleys that fire **only
+  while he keeps moving**. Stop and it stops, and the clock keeps running.
+  Unlike the harpoon it comes out of the quiver: this is a burst of his primary,
+  so running dry ends it early
+- **Sapper — THE BIG ONE.** One charge with a 1.7 second fuse you can watch and
+  a crater three times the usual. The fuse is the skill — things can walk out of
+  it — which is the opposite of CARPET BOMB's line going up the moment it lands
+
 ### Archer
 Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Body:** 9 health, 200 px/s. The middle of the roster on both counts, and the row the other four are read against
@@ -28,6 +74,7 @@ Classic ranged fighter. Mouse-aimed arrows with a dotted aim line.
 - **Special:** Dynamite, hold to charge, release to throw, blast clears tiles and damages the boss
 - **Brace:** Stand still and he sets his feet, filling over 1.25 s and shown as a chip in the status lane. A full brace multiplies what every arrow is worth **against a boss** by 1.8; against a crow it changes nothing, because a crow dies to any arrow either way. It drains four times faster than it fills, so it is a stance rather than a resource — it cannot be built in cover and carried into the open. It is the answer to his being the smallest hit per press on the roster, and standing still is the whole price
 - **Power shot (hold Shift):** Draws the bow, rooted while he holds it, for up to 1 s. Releasing looses one arrow that pierces up to 3 bodies, flies at up to twice the usual 500 px/s, and hits a boss for up to 3x a plain arrow. A tap gets the bottom of every one of those ranges, so the question the key asks is how long to stand still. 5 s cooldown. It spends one unit of whatever ammo is queued, so a fully drawn fire arrow still burns, and it ignores the in-flight cap. Draw and brace multiply: a full draw from a full brace is the most committed thing he can do and hits a boss for 5.4x a plain arrow, paid for with 1.25 s of standing still, 1 s of drawing and a 5 s cooldown
+- **HEADSHOT (ultimate, F):** One arrow down the aim line at 3x an ordinary arrow's speed. It crosses the map, passes through effectively anything, and always lands critical -- **2x, applied on top of the brace multiplier rather than instead of it**, so a headshot fired from a full brace is worth 3.6x a plain arrow to a boss and the stance still pays. It spends one unit of whatever ammo is queued and takes that arrow's behaviour with it, so a fire headshot lays a lane and a ricochet one keeps bouncing. Out of shafts it does not fire and the ultimate is not spent. Ready, four sight ticks close on him once a second
 - **Pickups:** Ricochet arrows (bounce off walls with a speed boost), fire arrows (leave burning patches)
 
 ### Wizard
@@ -40,6 +87,7 @@ Teleguided magic with area control.
 - **Blink chain:** Tap Shift again within 1.1 s of the first hop and the second one is free, ignoring the cooldown the first started. Two hops is the cap. The window is the only thing that carries it: let it lapse and you are back to waiting out the 6 s. A hop with nowhere to go is refused without spending the chain, so a wall in front of you costs nothing but the press. Both figures are the base ones: his talent tree has a line that buys window, then a third hop, then a rite that pays for using all of it — see [talents](talents.md#the-wizards-tree)
 - **Arrival pulse:** Every hop lets off a 56 px pulse where it lands, killing what is in it and taking 1 off a boss. A ring is drawn at exactly the radius the damage used, so what you see is a report of what was hit rather than a decoration — including when THUNDERSTEP has made the later hops of a chain wider than the first
 - **Special:** Lightning Storm, 450 px AoE around the player, destroys ROCK, TREE and HUT tiles, damages all enemies
+- **VORTEX (ultimate, F):** A singularity dropped where he is pointing, up to 420 px away and clamped to that, reaching 150 px. For 1.5 s it drags everything in reach toward one point at 260 px/s, then collapses for 8 to a body and 6 to a boss, breaking the ground under it. **A boss is damaged by the collapse but never dragged** -- reeling a boss out of position is a different ability from the one this is, and the net already settled that a hold is for the field. **It empties the Focus pool**, so the six seconds after his best moment are spent on the broom. Aimed at a place rather than down a line, which is the one thing Lightning Storm -- a circle centred on him -- can never be. Ready, motes fall inward toward him
 - **Pickups:** Fire bolt (3 damage against a plain bolt's 1), laser stream (same 3 damage, passes through walls, stops on the first enemy)
 
 The wizard has no sniper mode. Bolts steer themselves onto a target after they
@@ -57,6 +105,7 @@ Frontline melee with a long spear.
 - **Special:** Block, passive with no keybind. Banks one absorbed hit, then recharges 10 s after that hit is spent
 - **Bloodlust:** Passive, no keybind. Every swing that connects adds a stack, up to 3, and each stack is worth +10% damage *and* +10% attack speed, so three of them is +30% on both. A swing that hits nothing puts him back to 0. It rewards the one thing his body is built for and the one thing that gets him killed — staying in contact — and it is the only bonus on the roster that is spent by missing rather than by moving. Up to three blood drops over his head say where he is. [Balance](balance.md#the-knight-stays-in-contact) carries what the stacks are worth against a boss
 - **Tool:** Whirlwind, 3-second spinning AoE (72 px radius), damages enemies and destroys ROCK, TREE and HUT tiles, 6 s cooldown
+- **EARTHSHATTER (ultimate, F):** He drives the spear into the ground and a crack races out along the aim line, opening as it goes -- 26 px wide at his feet and 61 px at the end of its 640 px run, twenty tiles, eight spear lengths. Everything it crosses dies, the ground it crosses breaks, and a boss takes 5 **once**, not once per tick. It is the only thing on his sheet that reaches past a spear, and it is the answer to the one problem his kit has. The angle is fixed at the press and cannot be steered. **He is not protected while it runs** -- his charge's invulnerability does not carry over, and a crack that took a minute to charge can still be interrupted by a crow. Ready, five cracks of light breathe on the ground under him
 - **Pickups:** Iron Javelin (thrown piercing spear, 2 pierce charges, 3 per pickup), Fire Sword (2x damage and range for 8 s, leaves burning patches)
 
 ### Ranger
@@ -71,6 +120,7 @@ Skirmisher with a rapid-fire crossbow.
   - Bosses are held through the same daze the game already uses for a stun, the Minotaur included. It is two seconds at the very most and it has to be landed
   - It opens against a wall rather than through one, so a net thrown into cover catches whatever is on your side of it
 - **Special:** Satchel, first click throws it inert, second click arms a 3 s fuse shown as a countdown on the bag; the ranger's own bolt sets it off instantly, armed or not
+- **HARPOON (ultimate, F):** One heavy bolt at 1100 px/s, more than twice a bolt's usual speed. Where it lands it reels **him** to it, up to 520 px, walking the line the way a blink does so a wall stops him against it rather than inside it. Worth what any player arrow is worth to a body, and four times a plain arrow to a boss. **Only fireable at the +30% momentum cap**, and firing does not spend the meter: it is the payoff for having run the whole fight rather than a resource dumped into an attack. Pressing below the cap refuses and costs nothing, so a stride later you can press again. The bolt is the ultimate's own and costs the quiver nothing. Ready, two lines whip around him
 - **Pickups:** Ricochet bolts (bounce off walls with a speed boost), fire bolts (leave burning patches). Both are the archer's own pickup effects, unchanged
 
 ### Sapper
@@ -85,6 +135,7 @@ Demolition. The only hero whose opening move is thrown at a place rather than at
   - It checks his own bombs still in the air before it checks enemies, so catching one sets that bomb off early instead of flying past it. The early blast is wider, 1.33x the usual radius, and its damage is scaled from 10x at the centre down to 2x at the rim
   - Threading the dart through whatever stands between him and his own charge is what the 10 s buys. It is the shot the ability exists for, not a way of wasting it
 - **Pickups:** Fire bombs, which leave the ground burning for 1.5 s where the blast went off, and ice bombs, which deal 1 to everything caught and hold it still for 1.5 s. Three of either per pickup, out of the same two slots that hand the archer his fire and ricochet arrows
+- **CARPET BOMB (ultimate, F):** Seven charges laid down the aim line at 78 px spacing, each on a longer fuse than the one behind it, so the line goes up in sequence running away from his feet rather than all at once. **Every one of them detonates at the chain's full depth** -- the 3.5x a five-link cascade would have reached, immediately, without having to build it -- and they light his own thrown bombs at that depth too, so a pile plus the line is the highest ceiling in the game. They are the ultimate's own charges and cost the pouch nothing, because a once-a-minute move that emptied it would leave him swinging a pitchfork the moment he used it. Aimed at a border, the line stops at the edge and is simply shorter. Ready, sparks chase a fuse around him
 - **Reticle:** the only one that shows an area — a dashed ring at the blast radius, so you can see what the charge will reach and how near that is to your own feet
 
 ## Game loop
@@ -201,7 +252,7 @@ flowchart LR
 | **FORESHADOW** | Sky tint darkens and banners appear at kill milestones leading up to the boss |
 | **STREAK** | Announcer chain: Double Kill, Multi Kill, Mega Kill, Ultra Kill, Monster Kill |
 | **FEATHERS** | Meta-currency earned from kills, persisted in `localStorage`. Spend on the upgrade tree (`src/sim/upgrades.ts`) in the inventory screen: arrow capacity, HP, pitchfork range, move speed, tool capacity, arrows per pickup, a feather bounty, and a shield on every run |
-| **TALENTS** | Per-character trees bought with mastery, which bosses pay and kills never do, drafted one-of-three at run start and each boss, with a capstone rite at the top rank. See [Talents](talents.md) |
+| **TALENTS** | Per-character trees bought with mastery, which bosses pay and kills never do. What you own is live; a capstone rite at the top rank is sealed once a run, at the start of a level. See [Talents](talents.md) |
 | **HANDICAP** | `CONFIG.handicap` (0 to 100) rubber-bands crow speed and drop rate for accessibility |
 | **BOUNTIES** | Two active micro-objectives tied to kill streaks, bonus rewards on completion |
 

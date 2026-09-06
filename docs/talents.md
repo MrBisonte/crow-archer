@@ -1,11 +1,12 @@
 # Talents
 
-What a character *can* buy, what they *own*, and what is *awake* for one run —
-three separate things, deliberately. The generic axes (health, speed, tool
-capacity) stay in the FEATHERS tree the [manual](manual.md#systems) describes;
-this document is the per-character half that sits beside it.
+What a character *can* buy and what they *own* — two separate things,
+deliberately, and owning is what makes a talent live. The generic axes (health,
+speed, tool capacity) stay in the FEATHERS tree the
+[manual](manual.md#systems) describes; this document is the per-character half
+that sits beside it.
 
-- [The three layers](#the-three-layers)
+- [The two layers](#the-two-layers)
 - [Mastery and ranks](#mastery-and-ranks)
 - [The wizard's tree](#the-wizards-tree)
 - [The shape](#the-shape)
@@ -17,13 +18,12 @@ this document is the per-character half that sits beside it.
 - [What a ceremony will not interrupt](#what-a-ceremony-will-not-interrupt)
 - [Where the code lives](#where-the-code-lives)
 
-## The three layers
+## The two layers
 
-Two currencies that never meet, and one filter. **Feathers** are the shared
-wallet earned from kills, and they buy *upgrades* — health, speed, capacity.
-They buy no talents at all. **Mastery** is per character, comes from bosses,
-and is what talents cost. The **draft** then decides which of the talents you
-own are actually live this run.
+Two currencies that never meet. **Feathers** are the shared wallet earned from
+kills, and they buy *upgrades* — health, speed, capacity. They buy no talents
+at all. **Mastery** is per character, comes from bosses, and is what talents
+cost. What a character owns is live from the moment it is bought.
 
 Keeping them apart is the whole point. One purse funding both ladders would
 make the player choose between a talent and a heart, which is not a choice
@@ -38,18 +38,20 @@ flowchart LR
     mastery --> purse["purse\nearned minus spent"]
     purse --> buy["take a level"]
     rank --> buy
-    buy --> owned["owned talents\nthe pool the draft draws from"]
-    owned --> draft["THE DRAFT\n1 of 3, when a level is finished"]
-    rank --> riteScr["THE RITE\none capstone, mid-run"]
-    draft --> live["live for this run only"]
+    buy --> owned["owned talents\nlive from the moment they are bought"]
+    rank --> riteScr["THE RITE\none capstone, sealed for the run"]
+    owned --> live["live, this run and every one after"]
     riteScr --> live
 ```
 
-The rule that makes the third layer worth having: **an owned talent that this
-run did not draft is worth exactly its base figure.** Buying a level does not
-make the wizard stronger everywhere — it adds a card the run may deal you.
-Ownership grows options, not raw power, so a long-played character has a wider
-draft rather than a bigger number.
+**Buying is what makes a talent live.** There was a third layer here once — a
+draft that dealt three owned talents at each boss and woke one of them for the
+run — and it is gone. It made the same decision twice: the player chose a
+talent at the shop and then the game chose again, by dice, whether that choice
+counted. What a decision buys should be the thing itself, so one purchase is
+now one decision, made by the player, with no roll behind it. The rite is the
+one thing still sealed per run, because a capstone is a shape for a run rather
+than a figure that grows.
 
 ## What a boss is worth
 
@@ -97,7 +99,7 @@ A full winning campaign banks **15**: 2 at the crow king, 3 at the dark archer,
 
 Ranks are the thresholds those points cross, and a rank opens the tier one
 above it — so tier I is open to a character who has never finished anything,
-which is what lets the draft pool start existing at all.
+which is what lets a first boss have something to spend its pay on.
 
 | Rank | Mastery | Opens | Reached at |
 |---|---|---|---|
@@ -347,26 +349,40 @@ Those are balance calls, not refactors.
 
 ## What a run looks like
 
-Both ceremonies sit over whatever screen the hand-off staged and give it back
-when you pick, so neither interrupts a stage transition it landed in the middle
-of.
+**One decision per moment.** A boss death and the level it opens are two beats,
+and each carries at most one screen: the death pays mastery and offers the tree
+to spend it in, and the level that death opened is where a rank spends itself
+on the rite. Stacking them was what a single death used to do, and three
+consecutive screens is a stop rather than a beat.
 
 ```mermaid
 flowchart LR
-    start["run starts"] --> d1["THE DRAFT\n1 of 3 owned talents"]
-    d1 --> play["play"]
+    start["run starts"] --> play["play"]
     play --> boss["a boss dies"]
-    boss --> q{"rank III, and the rite\nnot yet offered this run?"}
+    boss --> t{"anything the purse\ncan afford?"}
+    t -->|yes| tree["THE TREE\nspend what the boss just paid"]
+    t -->|no| nxt
+    tree --> nxt["the next level begins"]
+    nxt --> q{"rank III, and the rite\nnot yet offered this run?"}
     q -->|yes| r["THE RITE\none capstone, sealed for the run"]
-    q -->|no| d2["THE DRAFT\nnever re-offers what you already took"]
-    r --> d2
-    d2 --> play
+    q -->|no| play
+    r --> play
 ```
 
-An empty pool skips the ceremony rather than showing an empty screen, so a
-character who owns nothing plays exactly as they did before the system existed.
-The rite is offered once per run whether or not it is liked, and outranks the
-draft when a boss owes both.
+A purse that can afford nothing skips the tree rather than showing a screen of
+prices it cannot meet, so a character with nothing to spend plays straight on.
+The rite is offered once per run whether or not it is liked.
+
+The rite waits for the level to start rather than opening on the field the
+moment the rank lands: `beginNewLevel` queues it and `openChooserWhenClear`
+shows it once nothing hostile is within reach. One step of the campaign has no
+level of its own — the dark archer hands straight to the dark knight on the
+same map, with no intro between them — so a rite earned there waits for the
+maze. That is a gap in the stage chain rather than in this rule.
+
+Both ceremonies sit over whatever screen the hand-off staged and give it back
+when you pick, so neither interrupts a stage transition it landed in the middle
+of.
 
 Both screens are drawn in the character-select screen's own anatomy, over the
 same geometry module (`src/render/panel-row.ts`): the row is sized from the
@@ -527,7 +543,7 @@ drawing depends on nothing. They are generated from the design sheets into path
 data, so the shape has one home and the game never parses markup to draw a
 frame.
 
-Two trees currently read as one colour on the shop screen and in the draft.
+Two trees currently read as one colour on the shop screen.
 The knight's three buyable talents are all `direct`; the ranger's are all
 `indirect`. That is the trees being honest — his three really are all damage,
 hers really are all build-up — and it is the colour code working, not failing.
@@ -562,25 +578,22 @@ a run stays with the game.
 
 | Concern | Home |
 |---|---|
-| Trees, tiers, prices, mastery arithmetic, the draft deal | `src/sim/talents.ts` |
+| Trees, tiers, prices, mastery arithmetic | `src/sim/talents.ts` |
 | Which CONFIG figure each numeric talent moves | `TALENTS.STATS` in `src/legacy/game.js` |
 | Each talent's sigil, as path data | `src/render/talent-sigils.ts`, generated from `_design/talent-icons/` |
 | Drawing one onto a canvas | `src/render/talent-sigil-paint.ts` |
-| Save file, mastery awards, the run's drafted set, the rite's seal, effective figures | `TALENTS` in `src/legacy/game.js` |
-| The draft and rite screens | `drawChooser()` and `TALENT_LOOK` in `src/legacy/game.js` |
+| Save file, mastery awards, the rite's seal, effective figures | `TALENTS` in `src/legacy/game.js` |
+| The rite and ultimate screens | `drawChooser()` and `TALENT_LOOK` in `src/legacy/game.js` |
 | The buy screen | `drawTalentTree()` and `talentTreeLayout()` in `src/legacy/game.js` |
 | Row geometry, shared with the upgrade screen | `src/render/list-rows.ts` |
 | Which upgrade axes reach which hero | `AXIS_HEROES` in `src/sim/upgrades.ts`, measured by `src/legacy/upgrades-reach.test.ts` |
 | Purchases, spending mastery | `TALENTS.buy()`; feathers are never touched |
 | What each boss pays | `BOSS_MASTERY` in `src/sim/talents.ts` |
 
-The two chooser screens can still be staged by hand with the console verbs
-`draft(char)` and `rite(char)` — the same one-word shape `siege(n)` and
-`crack(hp)` use. They are reached in play by owning talents and starting a run,
-but a ceremony you have to earn twice over is a slow thing to look at.
-`draft` grants every talent in that character's tree and starts a run so the
-opening draft has a full hand; `rite` puts the character at the rank the rite
-wants and opens it. A hero with an empty tree answers plainly and keeps
-playing, which is the empty-pool skip doing its job. All six verbs, with what
-each answers with, are in
+The rite can still be staged by hand with the console verb `rite(char)` — the
+same one-word shape `siege(n)` and `crack(hp)` use. It is reached in play by
+banking rank III and starting a level, which is three bosses of work to look at
+one screen. `rite` puts the character at the rank the rite wants and opens it;
+a hero with no capstones answers plainly and keeps playing. All five verbs,
+with what each answers with, are in
 [Architecture](architecture.md#the-console-verbs).

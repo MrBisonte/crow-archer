@@ -52,8 +52,8 @@ import {
   nextCost, perkHeld, purchase, statValue,
 } from '../sim/upgrades';
 import {
-  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS, draftOffers, draftedHeld,
-  draftedValue, masteryAfter, ownedIds, purchaseTalent, rankOf, riteEligible,
+  CAPSTONE_RANK, CHAR_TREES, RANK_THRESHOLDS,
+  masteryAfter, purchaseTalent, rankOf, riteEligible, talentHeld, talentValue,
   anyAffordable, bossMastery, clampCursor, masteryAvailable,
   talentBankFrom, talentLevel, tierOpenAt,
 } from '../sim/talents';
@@ -63,6 +63,14 @@ import { StaticTileLayer, AnimatedTileOverlay, ANIMATED_THEMES, TILE_THEMES, mak
 import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { paintTalentSigil } from '../render/talent-sigil-paint';
 import { SIGILS } from '../render/talent-sigils';
+import { paintUltimateIcon } from '../render/ultimate-icon-paint';
+import {
+  paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
+  paintEarthshatterDebris, paintFullAutoTrail, paintGoldCorridor,
+  paintHarpoonChain, paintLeapArc, paintLeapLanding, paintPiercePip,
+  paintUltimateBlast, paintUltimateCast, paintUltimateCharge, paintVortex,
+} from '../render/ultimate-fx';
+import { ULTIMATE_ICON_ROWS } from '../render/ultimate-icons';
 import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   makePixelGrid, setPixel, pixelRect, pixelEllipse, pixelCurve, pixelOutline, pixelTriangleUp,
@@ -820,6 +828,125 @@ const CONFIG = {
   // reads even on noise; pitch is small and, on shapes 4 and 5, inaudible.
   soundVariation: { gain: 0.1, pitch: 0.04, tail: 0.12 },
 
+  // ── The ultimate ──────────────────────────────────────────────────────
+  // One long timer per hero, and the only thing on the roster that is not
+  // bought with a key of its own: the special is bound twice, to F and to
+  // the right button, so the key fires the ultimate when it is up and the
+  // button always fires the plain special. Nothing new to press, nothing
+  // taken away.
+  //
+  // The timer is not a wall clock. It runs faster the fuller the hero's own
+  // meter is -- brace, momentum, bloodlust, focus spent, chain depth -- so
+  // a minute is what an idle hero waits and half of it is what a hero
+  // playing his kit properly waits. That is the whole of the boost: one
+  // dial, not five, and the per-hero part is only which meter is read.
+  ultimateCooldown: 60, ultimateChargeBoost: 1.0,
+  ultimateCastSecs: 0.42,            // the gold ring every ultimate opens on
+  // How close a hostile has to be for the ultimate pick to keep waiting. Wide
+  // enough that the screen does not open with something about to reach him,
+  // narrow enough that a crow across the map cannot hold the choice hostage.
+  chooserLullRadius: 320,
+
+  // EARTHSHATTER. The knight's problem is reach: every swing needs him inside
+  // 80 px of something that orbits him. This is the one thing on his sheet
+  // that goes out and gets it -- a crack running down the aim line, widening
+  // as it travels, killing what it crosses and breaking the ground with it.
+  // The angle is fixed at the press and cannot be steered, which is what
+  // makes it a shot rather than a spell. He is not protected while it runs.
+  knightEarthshatterSpeed: 900,      // px/s the crack head runs
+  knightEarthshatterRange: 640,      // twenty tiles, eight spear lengths
+  knightEarthshatterRadius: 26,      // px at his feet
+  knightEarthshatterWiden: 0.055,    // px of radius per px run -- 61 px at the end
+  knightEarthshatterDamage: 6,       // enough that a shieldman is not a survivor
+  knightEarthshatterBossDamage: 5,   // once per crack, not once per tick
+
+  // CARPET BOMB. A line of charges laid down the aim line, each on a longer
+  // fuse than the one behind it, so the line goes up in sequence running
+  // away from his feet rather than all at once. Every one of them goes off
+  // at the chain's FULL depth, which is the whole of the ability: his
+  // cascade is his boss lever and this is the cascade handed to him.
+  //
+  // The charges are the ultimate's own, not out of his pouch of ten. A
+  // once-a-minute move that emptied the pouch would leave him swinging a
+  // pitchfork immediately after using it.
+  sapperCarpetCount: 7, sapperCarpetSpacing: 78,
+  sapperCarpetFirstFuse: 0.18, sapperCarpetStagger: 0.085,
+
+  // VORTEX. A singularity dropped at the cursor that drags a field into one
+  // point and then goes off. It is aimed at a PLACE rather than down a line,
+  // which is the one thing his Lightning Storm -- a circle centred on him --
+  // cannot be: an ultimate that was a bigger version of the storm would be
+  // the same button twice.
+  //
+  // Bosses are damaged by the collapse but never dragged. Being able to reel
+  // a boss out of position once a minute is a different ability from the one
+  // that was asked for, and the net already settled that a hold is for the
+  // field and not for the boss.
+  wizVortexRange: 420,        // how far from him it can be placed
+  wizVortexRadius: 150,       // what it reaches, pulling and at the collapse
+  wizVortexPull: 260,         // px/s a body is dragged toward the centre
+  wizVortexDuration: 1.5,     // how long it holds before it goes off
+  wizVortexDamage: 8, wizVortexBossDamage: 6,
+
+  // HARPOON. One heavy bolt that, on a hit, reels HIM to it. Only fireable at
+  // the momentum cap, and firing does not spend the meter -- it is the payoff
+  // for having run the whole fight, not a resource dumped into an attack.
+  //
+  // The bolt is the ultimate's own and costs the quiver nothing. Against a
+  // body it is worth what every player arrow is worth, which is the rule the
+  // whole quiver is balanced on; what it carries is a boss multiplier.
+  rangerHarpoonSpeed: 1100, rangerHarpoonBossMult: 4, rangerHarpoonReach: 520,
+
+  // ── The second ultimate of each hero ─────────────────────────────────────
+  // One per character, and a character has one or the other, never both.
+
+  // ARROW RAIN. A spot marked, then arrows falling over it for a second and a
+  // half. The crowd answer HEADSHOT is not. It spends a queued arrow the way
+  // HEADSHOT does -- the archer is the one hero whose ultimates cost ammo, and
+  // that was his own call rather than a rule.
+  archerRainRange: 420, archerRainRadius: 110, archerRainDelay: 0.55,
+  archerRainDuration: 1.4, archerRainImpacts: 18, archerRainImpactRadius: 42,
+  archerRainDamage: 4, archerRainBossDamage: 5,
+
+  // THE BEAM. Two seconds of lance, swept with the mouse, and he is ROOTED for
+  // all of it -- the archer's bargain on a 7-health body. Damage is applied on
+  // a tick rather than per frame so the figure does not change with the frame
+  // rate, and the boss takes it once per tick however many samples the line
+  // puts on him.
+  wizBeamDuration: 2.0, wizBeamRange: 520, wizBeamWidth: 20,
+  wizBeamTickRate: 0.12, wizBeamDamage: 6, wizBeamBossPerTick: 0.35,
+
+  // THE LEAP. Over walls, which is the whole difference from a blink: he
+  // arrives where he could not have walked. No invulnerability -- EARTHSHATTER
+  // gives none either, and a wall-crossing escape with i-frames is a different
+  // ability from the one that was asked for.
+  knightLeapRange: 400, knightLeapSecs: 0.42, knightLeapRadius: 100,
+  knightLeapMarkSecs: 0.7,           // how long the landing stays in the floor
+  knightLeapDamage: 6, knightLeapBossDamage: 4, knightLeapArcPx: 46,
+
+  // FULL AUTO. Three seconds of volleys that only fire while he keeps moving.
+  // They come out of the QUIVER, unlike his harpoon: this is a burst of his
+  // primary rather than a thing of its own, and free bolts would make it
+  // strictly better than the weapon it is a burst of. Running dry ends it,
+  // which is a real cost and reads as one.
+  rangerFullAutoSecs: 3.0, rangerFullAutoInterval: 0.16,
+  rangerFullAutoCoolSecs: 0.35,      // how fast the trail goes out once she stops
+
+  // THE BIG ONE. One charge with a long visible fuse and a crater three times
+  // the usual. The fuse is the skill: things can walk out of it.
+  sapperBigOneRange: 340, sapperBigOneFuse: 1.7, sapperBigOneRadiusMult: 3,
+
+  // HEADSHOT. One arrow down the aim line that crosses the map, passes
+  // through effectively anything, and always lands critical -- the x2 is
+  // applied ON TOP of brace, so the stance still pays. Pierce is a large
+  // finite number rather than Infinity: the value rides on the arrow and
+  // the arrow is serialised.
+  archerHeadshotCrit: 2, archerHeadshotSpeedMult: 3, archerHeadshotPierce: 99,
+  archerHeadshotTrailSecs: 0.9,      // how long the corridor holds after it
+  // The streak the renderer draws behind it. Fixed, because pierceLeft
+  // sizes an ordinary power shot's streak and 99 would draw a wall.
+  archerHeadshotPips: 6,
+
   keys: {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
@@ -939,27 +1066,55 @@ let pendingIntro = null;
  * did: transitionTo('playing') runs initGame() and would wipe the run that
  * just cleared the previous stage.
  */
+/**
+ * A new level is starting: the rite, if the rank has earned one.
+ *
+ * Here rather than on the boss death that led here, so a stage begins with the
+ * choice that shapes it instead of the previous fight ending with a third
+ * screen. Queued, not opened: `openChooserWhenClear` shows it once the intro
+ * has been dismissed and the new field is quiet, which at the start of a level
+ * is immediately.
+ *
+ * One step has no beat of its own -- the dark archer hands straight to the dark
+ * knight on the same map with no intro -- so a rite earned there waits for the
+ * maze. That is a gap in the stage chain rather than in this rule.
+ */
+function beginNewLevel() {
+  pendingIntro = null;
+  appState = 'playing';
+  if (siegeRun) return;
+  // Queued, not opened: openChooserWhenClear shows it once the new field is
+  // quiet, which at the start of a level is the next frame.
+  queueRite('playing');
+}
+
 function showStageIntro(kind) {
   pendingIntro = kind;
   appState = 'stage_intro';
 }
 
-// ── The mid-run choosers: the draft and the rite ─────────────────────────────
+// ── The mid-run choosers: the rite and the ultimate ──────────────────────────
 //
-// One screen shape for both: the run-start and boss drafts wake an owned
-// talent for this run, and the rite seals a capstone the rank earned.
-// `resume` is the appState a pick returns to, so a chooser can sit over a
-// staged stage_intro or a boss entrance without either noticing — the same
-// direct-assignment reasoning showStageIntro gives above.
+// One screen shape for both: a row of panels, one of which is sealed for the
+// rest of the run. `resume` is the appState a pick returns to, so a chooser
+// can sit over a staged stage_intro or a boss entrance without either
+// noticing — the same direct-assignment reasoning showStageIntro gives above.
 let chooser = null;
 let chooserQueue = [];
 let riteOffered = false;   // once per run, taken or not
+/**
+ * Whether the run's ultimate has been chosen: false, 'offered' once the screen
+ * is queued, true once it is sealed.
+ *
+ * Three states rather than two because the gap matters. Between the timer
+ * coming up and the player answering, the ultimate is charged and NOT yet
+ * fireable, and the HUD has to be able to say which of those it is.
+ *
+ * @type {false | 'offered' | true}
+ */
+let ultimatePicked = false;
 
-function queueDraft(resume) {
-  const offers = TALENTS.offers(3);
-  if (offers.length === 0) return;   // an empty pool skips the ceremony
-  chooserQueue.push({ kind: 'draft', offers, cursor: 0, resume });
-}
+
 
 /**
  * The tree, if the boss just paid for something buyable.
@@ -971,6 +1126,57 @@ function queueDraft(resume) {
 function queueTree(resume) {
   if (!anyAffordable(CHAR_TREES[selectedChar], TALENTS.state())) return;
   chooserQueue.push({ kind: 'tree', resume });
+}
+
+/**
+ * The ultimate pick, offered the first time the timer comes up.
+ *
+ * Chosen mid-run and sealed for the run, the way the rite seals a capstone --
+ * but NOT at the rite. The rite waits on a boss, and a hero who has charged an
+ * ultimate he cannot name has an ability going spare for minutes. Offering it
+ * the first time it is actually ready means there is no dead time at all: it
+ * was unusable before that instant because it was still charging.
+ *
+ * Queued rather than opened, because the instant a timer comes up is not a
+ * safe instant to stop the field -- see queueBossChoosers on ceremonies over a
+ * running wave. `openChooserWhenClear` picks the moment.
+ */
+function queueUltimatePick(resume) {
+  // No "already offered?" guard, and one is not missing: tickUltimate returns
+  // at its own `ultimateCD <= 0` line on every later frame, so this runs on
+  // the single frame the timer CROSSES zero and never again. A guard here
+  // could not be made to fail, which by the proving-a-change playbook means
+  // deleting it rather than writing a test that cannot go red.
+  const pair = ULTIMATE[selectedChar];
+  if (!pair) return;
+  ultimatePicked = 'offered';
+  chooserQueue.push({
+    kind: 'ultimate',
+    offers: [pair.first.id, pair.second.id],
+    cursor: 0,
+    resume,
+  });
+}
+
+/**
+ * Opens a queued ceremony as soon as the field is quiet enough to stop.
+ *
+ * The boss ceremonies get their moment for free: a boss dying IS the lull. The
+ * ultimate pick has no such beat, so it waits for one -- nothing hostile within
+ * reach of the player, no boss in play, and never mid-siege, which is the same
+ * rule queueBossChoosers already applies for the same reason.
+ *
+ * Costs nothing on the frames that matter: it returns on the first line unless
+ * something is actually waiting to be shown.
+ */
+function openChooserWhenClear() {
+  if (chooser !== null || chooserQueue.length === 0) return;
+  if (appState !== 'playing' || siegeRun || bossInPlay()) return;
+  const r2 = CONFIG.chooserLullRadius * CONFIG.chooserLullRadius;
+  let crowded = false;
+  forEachHostile((e) => { if (dist2(player.x, player.y, e.x, e.y) < r2) crowded = true; });
+  if (crowded) return;
+  openNextChooser();
 }
 
 function queueRite(resume) {
@@ -1012,7 +1218,7 @@ function finishCeremony() {
   appState = resume;
 }
 
-/** A boss just died: the rite outranks the draft when both are owed. */
+/** A boss just died: the tree, and only if there is something to spend on. */
 function queueBossChoosers() {
   if (appState === 'win' || appState === 'gameover') return;   // run over
   // Never mid-siege. A siege boss is one enemy inside a wave rather than the
@@ -1021,11 +1227,12 @@ function queueBossChoosers() {
   // pays its mastery like any other boss; what it does not do is hold a
   // ceremony about it. CLAUDE.md's siege rule, applied to a screen.
   if (siegeRun) return;
-  queueRite(appState);
-  // The tree before the draft: what a boss just paid for can be spent now,
-  // and the draft that follows deals from a pool the spending may have grown.
+  // The boss pays, and spending it is the whole beat. The rite used to sit in
+  // front of this and a draft behind it, so one death could be three
+  // consecutive screens. The rite now belongs to the START of the next level
+  // -- see beginNewLevel -- which keeps one thing per moment and leaves the
+  // death itself free to become a loot pickup later.
   queueTree(appState);
-  queueDraft(appState);
   openNextChooser();
 }
 
@@ -1036,7 +1243,8 @@ function inCeremony() {
 
 function confirmChooser() {
   const id = chooser.offers[chooser.cursor];
-  if (chooser.kind === 'draft') TALENTS.draft(id); else TALENTS.sealCapstone(id);
+  if (chooser.kind === 'ultimate') sealUltimate(id);
+  else TALENTS.sealCapstone(id);
   finishCeremony();
 }
 
@@ -1413,6 +1621,15 @@ let sapperChargeCD = 0;  // the sapper's whole ammo economy, see CONFIG.sapperCh
  *  readable. The peak rather than the last bomb: a chain goes off from the
  *  inside out and the final blast is not the deepest one. */
 let sapperChainPeak = 0, sapperChainRead = 0;
+/**
+ * How deep the last cascade ran, against the ceiling MORE LINKS sets rather
+ * than the base one. The HUD chip and the ultimate's charge rate both read
+ * it, and a talent read away in one of the two would be a silent disagreement.
+ */
+function sapperChainFrac() {
+  if (sapperChainPeak <= 1) return 0;
+  return Math.min(1, sapperChainPeak / (TALENTS.stat('moreLinks') + 1));
+}
 /** Charges still owed to the burst in progress, and the timer to the next. */
 let sapperBurstLeft = 0, sapperBurstTimer = 0, sapperBurstThrown = 0;
 let sapperBarrageCD = 0, sapperShotCD = 0;
@@ -1487,6 +1704,59 @@ let knightBloodlust = 0;
  */
 let knightSpearConnected = false;
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
+/**
+ * The crack in flight, or null. One at a time: it is an ultimate, and a
+ * second one could only exist if the first had already cost its minute.
+ *
+ * `bossHit` is the same guard `knightDash` carries -- the head passes over a
+ * boss for several ticks and the boss is meant to take the hit once.
+ */
+let earthshatter = null;
+/**
+ * The wizard's singularity while it holds, or null. One at a time, for the
+ * reason the crack is: it costs a minute.
+ */
+let vortex = null;
+/** The archer's marked circle while it is falling, or null. */
+let arrowRain = null;
+/** The wizard's lance while it burns. He cannot move for as long as it exists. */
+let beam = null;
+/** The knight in the air, or null. Carries where he left and where he lands. */
+let knightLeap = null;
+/**
+ * The gold ring every ultimate opens on, or null.
+ *
+ * Render state, not simulation: it decides nothing and is set from the
+ * ULTIMATE_FIRED handler, which is the one place all ten abilities pass
+ * through. `tryUltimate` stays the sim's story and this stays the picture.
+ */
+let ultimateCast = null;
+/** CARPET BOMB's cord while its charges are still going off, or null. */
+let carpetCord = null;
+/**
+ * The line HEADSHOT took, held after the arrow has gone, or null.
+ *
+ * The shot crosses the map in about a third of a second at three times arrow
+ * speed, so a player watching the field never catches the sprite: what they
+ * can read is the corridor it left, and the pips where it went through
+ * something. `hits` is filled by the pierce spend, which every body a player
+ * arrow crosses already goes through.
+ */
+let headshotTrail = null;
+/**
+ * ARROW RAIN's arrows, while they are falling or standing in the ground.
+ *
+ * Render state rather than a field on `arrowRain`, because the two have
+ * different lives: the last of eighteen is still in the air when the ability
+ * is spent, and holding the volley open to carry a drawing would make
+ * "is the rain running" mean two things.
+ */
+let rainHits = [];
+
+/** How long one impact is drawn for: the fall, then the shaft standing. */
+const RAIN_HIT_SECS = 0.9;
+/** The ranger's burst while it runs, or null. */
+let fullAuto = null;
 // Counts down to the next free Block charge while no shield is banked (see
 // the per-frame tick in updatePlayer); frozen while playerShield is true,
 // since there's nothing to wait for until the current charge is used.
@@ -1528,6 +1798,13 @@ function walkPhaseFor(distancePx) {
   return (distancePx / WALK_CYCLE_PX) * Math.PI * 2;
 }
 
+/**
+ * Seconds until the ultimate is available again, counting down.
+ *
+ * One variable for all five heroes, because only one is ever selected. It
+ * starts a run full, so the first one is earned rather than opened with.
+ */
+let ultimateCD = 0;
 let archerPowerCD = 0;
 /**
  * Seconds left of the snap forward after a shot leaves, counting down.
@@ -1815,6 +2092,31 @@ function mapHasCrows() {
 /** Does a garrison hold this map? */
 function mapHasSoldiers() {
   return mapPopulation() === 'soldiers';
+}
+
+/**
+ * Smashes every destructible tile whose centre falls inside a circle.
+ *
+ * Lifted out of the whirlwind, which was the only caller until the crack
+ * wanted the same ten lines. The column guard skips the left edge and the
+ * row guards the top and bottom, which is the map border rather than
+ * terrain -- breaking it would open the arena.
+ */
+function smashTilesInRadius(cx, cy, radius) {
+  // Asked once rather than once per tile: smashTile checks it too, and the
+  // crack sweeps ~15 tiles a frame for most of a second.
+  if (!terrainDestructible()) return;
+  const r2 = radius * radius;
+  const tileR = Math.ceil(radius / CONFIG.tileSize);
+  const tc = Math.floor(cx / CONFIG.tileSize), tr = Math.floor(cy / CONFIG.tileSize);
+  for (let dr = -tileR; dr <= tileR; dr++) {
+    for (let dc = -tileR; dc <= tileR; dc++) {
+      const row = tr + dr, col = tc + dc;
+      if (row <= 0 || row >= CONFIG.rows - 1 || col <= 0) continue;
+      const wx = (col + 0.5) * CONFIG.tileSize, wy = (row + 0.5) * CONFIG.tileSize;
+      if (dist2(cx, cy, wx, wy) < r2) smashTile(row, col);
+    }
+  }
 }
 
 function smashTile(row, col) {
@@ -2336,12 +2638,59 @@ function pushBodiesFrom(cx, cy, radius, px) {
       const d2 = dist2(cx, cy, b.x, b.y);
       if (d2 > r2 || d2 === 0) continue;
       const d = Math.sqrt(d2);
-      const nx = b.x + ((b.x - cx) / d) * px;
-      const ny = b.y + ((b.y - cy) / d) * px;
+      // A negative push is a pull, which is how the vortex drags a field into
+      // one point. It is clamped to the distance so a body cannot be dragged
+      // through the centre and out the far side, which reads as jitter rather
+      // than as being crushed. A positive push is untouched by the clamp.
+      const move = px < 0 ? -Math.min(-px, Math.max(0, d - 1)) : px;
+      const nx = b.x + ((b.x - cx) / d) * move;
+      const ny = b.y + ((b.y - cy) / d) * move;
       if (tilePassable(tileAt(nx, b.y))) b.x = clampArenaX(nx);
       if (tilePassable(tileAt(b.x, ny))) b.y = clampArenaY(ny);
     }
   }
+}
+
+/**
+ * Every hostile body on the field, offered to `hit(entity, index, damageIt)`.
+ *
+ * Extracted when the beam arrived. `damageEnemiesInRadius` walks these three
+ * lists to answer "is it inside a circle"; a beam asks "is it inside a
+ * segment", and the walk is the same either way -- what differs is the shape.
+ * Backwards, because damaging a body can splice it out of the list under us.
+ *
+ * The garrison is here because it was once NOT: soldiers arrived with the
+ * cavern after the radius helper was written and every caller quietly skipped
+ * them for a release. One walk means the next shape cannot repeat that.
+ */
+function forEachHostile(hit) {
+  for (let j = crows.length - 1; j >= 0; j--) hit(crows[j], j, damageCrow);
+  for (let j = skeletons.length - 1; j >= 0; j--) hit(skeletons[j], j, damageSkeleton);
+  for (let j = soldiers.length - 1; j >= 0; j--) hit(soldiers[j], j, damageSoldier);
+}
+
+/**
+ * Everything hostile inside a SEGMENT: a line from (x0,y0) along `angle` for
+ * `length`, `halfWidth` either side of it.
+ *
+ * Its own shape rather than a row of circles down the line. Sampling a beam
+ * with overlapping circles hit a body on the axis TWICE per tick, so the lance
+ * dealt double the figure `docs/balance.md` binds it to, and it walked the
+ * whole field once per sample -- twenty-six times a tick at the configured
+ * range. This walks it once and hits each body once, which is both cheaper and
+ * the damage the document promises.
+ */
+function damageEnemiesInSegment(x0, y0, angle, length, halfWidth, opts = {}) {
+  const nx = Math.cos(angle), ny = Math.sin(angle);
+  const amount = opts.amount ?? 1;
+  const onIt = (ex, ey) => {
+    const dx = ex - x0, dy = ey - y0;
+    const along = dx * nx + dy * ny;
+    if (along <= 0 || along > length) return false;
+    return Math.abs(dx * -ny + dy * nx) <= halfWidth;
+  };
+  forEachHostile((e, j, damage) => { if (onIt(e.x, e.y)) damage(j, amount); });
+  return bossInPlay() && !boss.shield && onIt(boss.x, boss.y);
 }
 
 function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
@@ -2363,25 +2712,21 @@ function damageEnemiesInRadius(cx, cy, radius, bossHit, opts = {}) {
   const hitFor = (tx, ty) => (ice ? CONFIG.iceBlastDamage : base * falloffAt(tx, ty));
   const chill = (e) => { if (ice) freezeEnemy(e, CONFIG.iceBlastFreezeSecs); };
 
-  for (let j = crows.length - 1; j >= 0; j--) {
-    const c = crows[j];
-    if (dist2(cx, cy, c.x, c.y) < r2) { chill(c); damageCrow(j, hitFor(c.x, c.y)); }
-  }
-  for (let j = skeletons.length - 1; j >= 0; j--) {
-    const k = skeletons[j];
-    if (dist2(cx, cy, k.x, k.y) < r2) { chill(k); damageSkeleton(j, hitFor(k.x, k.y)); }
-  }
-  // The garrison arrived with the cavern on a different branch, after this
-  // helper was written. Every caller — storm, whirlwind, blink pulse, chain
-  // whirl, every explosive — was quietly skipping soldiers until this line.
-  for (let j = soldiers.length - 1; j >= 0; j--) {
-    const s = soldiers[j];
-    if (dist2(cx, cy, s.x, s.y) < r2) { chill(s); damageSoldier(j, hitFor(s.x, s.y)); }
-  }
+  forEachHostile((e, j, damage) => {
+    if (dist2(cx, cy, e.x, e.y) >= r2) return;
+    chill(e);
+    damage(j, hitFor(e.x, e.y));
+  });
   // Bosses take an ice bomb's damage but not its freeze — see freezeEnemy.
-  if (bossHit && bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2)
+  const onBoss = bossInPlay() && !boss.shield && dist2(cx, cy, boss.x, boss.y) < r2;
+  if (bossHit && onBoss)
     damageBoss(ice ? CONFIG.iceBlastDamage : bossHit.amount * falloffAt(boss.x, boss.y),
                cx, cy, bossHit.source, bossHit.flash);
+  // Says whether the BOSS was reached, which is the one thing a caller cannot
+  // work out afterwards. Two ultimates latch a "once per volley" flag on it,
+  // and computing the same predicate at the call site put the shield rule in
+  // three places that have to agree.
+  return onBoss;
 }
 
 /**
@@ -2484,6 +2829,46 @@ function startArcherDraw() {
   archerDraw.t0 = performance.now();
 }
 
+/**
+ * HEADSHOT -- the archer's ultimate.
+ *
+ * The power shot asks how long to stand still. This one does not ask: it is
+ * the shot he would have taken with all the time in the world. It crosses
+ * the map, passes through effectively anything, and always lands critical.
+ *
+ * The x2 is applied on top of the brace multiplier rather than instead of
+ * it, for the same reason DEAD EYE composes with the braced cooldown cut:
+ * the stance was already paid for, and an ultimate that flattened it would
+ * make the best moment to fire the one where he had done the least.
+ *
+ * It spends a queued pickup arrow exactly as a power shot does, and gets
+ * that arrow's behaviour with it -- so a fire headshot lays a lane and a
+ * ricochet one keeps bouncing. Out of shafts, it does not fire and nothing
+ * is spent.
+ */
+function fireHeadshot() {
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  const type = spendShaft();
+  const spd = CONFIG.arrowSpeed * CONFIG.archerHeadshotSpeedMult;
+  arrows.push({ x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd,
+    vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.arrowLifetime, type, bounces: 0,
+    initSpeed: spd,
+    ...arrowTrail(),
+    power: true, headshot: true,
+    fireTrail: type === 'fire' ? 0 : null,
+    pierceLeft: CONFIG.archerHeadshotPierce,
+    dmgMult: CONFIG.archerHeadshotCrit * braceBossMult() });
+  archerLoose = ARCHER_LOOSE_SECS;
+  archerLoosePower = 1;
+  headshotTrail = {
+    x0: player.x, y0: player.y, x1: player.x, y1: player.y,
+    timer: CONFIG.archerHeadshotTrailSecs, hits: [],
+  };
+  return true;
+}
+
 function releaseArcherDraw() {
   if (!archerDraw.on) return;
   const drawn = archerDrawFrac();
@@ -2517,7 +2902,7 @@ function releaseArcherDraw() {
     vy: Math.sin(player.aimAngle) * spd,
     life: CONFIG.arrowLifetime, type, bounces: 0,
     initSpeed: spd,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    ...arrowTrail(),
     power: true,
     // What the pickup is worth on a powered shot. Fire lays a lane instead of
     // one patch; ricochet stops running out of bounces. Each is the arrow
@@ -2584,6 +2969,152 @@ function releaseArcherDraw() {
  * with something to tick every frame is a row here, not another
  * `selectedChar ===` guard bolted onto a block every hero runs.
  */
+/**
+ * Which meter charges each hero's ultimate, 0 to 1.
+ *
+ * A table rather than a branch, the way HERO_UPKEEP and CHIP are, so a hero
+ * is a row. Each reads the meter that hero is already paid for filling, so
+ * the ultimate arrives sooner for playing the kit rather than for waiting.
+ * The wizard's is inverted on purpose: Focus regenerates on its own, so a
+ * full pool means he has not been casting, and it is the casting that
+ * should be rewarded.
+ */
+const ULTIMATE_CHARGE = {
+  archer: () => braceLevel,
+  ranger: () => rangerMomentum,
+  // The talent's ceiling, not the base one: FOURTH BLOOD raises the cap, and
+  // reading CONFIG here would charge a fourth stack as if it were a full meter.
+  knight: () => knightBloodlust / TALENTS.stat('fourthBlood'),
+  wizard: () => 1 - inv.focus / CONFIG.resources.focus.max,
+  sapper: () => sapperChainFrac(),
+};
+
+/**
+ * Which of his two ultimates a hero has equipped. One per run, never both.
+ *
+ * The pick itself is not built: nothing in the game sets this yet, and the
+ * screen that will is Alex's call. It lives here as the seam that screen
+ * writes to, so the second five are reachable and testable now and the
+ * screen later changes one value rather than the ten abilities under it.
+ */
+const ULTIMATE_SLOT = { FIRST: 'first', SECOND: 'second' };
+let ultimateSlot = ULTIMATE_SLOT.FIRST;
+
+/**
+ * The ten ultimates: one record per ability, two per hero.
+ *
+ * `id` is the ability's name in the design pipeline, where its icon is drawn
+ * and its card will be laid out. Carried explicitly rather than derived from
+ * the fire function's name: `fireBeam` and the icon `theBeam` do not match,
+ * and a join on a coincidence of naming is one rename from being wrong.
+ *
+ * `fire` returns false if the ability refused, in which case nothing is spent
+ * -- the gate belongs to the hero rather than to tryUltimate. `tick` is
+ * optional and only the ones that resolve over TIME have it: the crack
+ * travels, the singularity holds, the beam burns, the volley runs. One record
+ * rather than a `fire` table beside a `tick` table, because an ultimate is one
+ * thing and splitting it across two tables was already a pair that agreed
+ * only by luck.
+ */
+const ULTIMATE = {
+  archer: {
+    first:  { id: 'headshot', label: 'HEADSHOT', desc: 'Across the map, always critical. Spends an arrow.', fire: fireHeadshot },
+    second: { id: 'arrowRain', label: 'ARROW RAIN', desc: 'A marked circle, filled. Spends an arrow.', fire: fireArrowRain, tick: tickArrowRain },
+  },
+  wizard: {
+    first:  { id: 'vortex', label: 'VORTEX', desc: 'Drags them to one point. Empties Focus.', fire: fireVortex, tick: tickVortex },
+    second: { id: 'theBeam', label: 'THE BEAM', desc: 'A swept lance. Rooted, and empties Focus.', fire: fireBeam, tick: tickBeam },
+  },
+  knight: {
+    first:  { id: 'earthshatter', label: 'EARTHSHATTER', desc: 'The ground opens. No protection while it runs.', fire: fireEarthshatter, tick: tickEarthshatter },
+    second: { id: 'theLeap', label: 'THE LEAP', desc: 'Over the wall, down hard. Hittable the whole way.', fire: fireLeap, tick: tickLeap },
+  },
+  ranger: {
+    first:  { id: 'harpoon', label: 'HARPOON', desc: 'Reels him to it. Only at the momentum cap.', fire: fireHarpoon },
+    second: { id: 'fullAuto', label: 'FULL AUTO', desc: 'Volleys while he runs. Out of the quiver.', fire: fireFullAuto, tick: tickFullAuto },
+  },
+  sapper: {
+    first:  { id: 'carpetBomb', label: 'CARPET BOMB', desc: 'A line outward, every charge at full depth.', fire: fireCarpetBomb },
+    second: { id: 'theBigOne', label: 'THE BIG ONE', desc: 'One long fuse, one crater three times over.', fire: fireBigOne },
+  },
+};
+
+/**
+ * Takes the pick. Sealed for the run: the choice has weight, the way the rite's
+ * does, and a hero who could swap mid-run would carry both by turns.
+ */
+function sealUltimate(id) {
+  const pair = ULTIMATE[selectedChar];
+  ultimateSlot = pair.second.id === id ? ULTIMATE_SLOT.SECOND : ULTIMATE_SLOT.FIRST;
+  ultimatePicked = true;
+  // Ready only now: it was charged before the answer and unusable without one.
+  events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
+}
+
+/** The ability the hero currently has equipped, or undefined. */
+function equippedUltimate() { return ULTIMATE[selectedChar]?.[ultimateSlot]; }
+
+/** True while the ultimate is up. The aura, the HUD chip and the key all ask.*/
+function ultimateReady() {
+  return ultimateCD <= 0 && ultimatePicked === true && !!equippedUltimate();
+}
+
+/**
+ * Fires the ultimate if it is up, and says whether it went.
+ *
+ * A miss costs the whole timer: the cooldown is spent on firing, not on
+ * hitting. What it does not cost is a refusal -- a hero who cannot fire yet
+ * (the ranger below his momentum cap) returns false from his own function
+ * and keeps the charge.
+ */
+function tryUltimate() {
+  if (!inGame() || !ultimateReady()) return false;
+  if (!equippedUltimate().fire()) return false;
+  ultimateCD = CONFIG.ultimateCooldown;
+  events.emit({ type: 'ULTIMATE_FIRED', hero: selectedChar, x: player.x, y: player.y });
+  return true;
+}
+
+/**
+ * The whole per-frame cost of the ultimates: whatever one is still resolving,
+ * then the countdown and the one moment worth telling the player about.
+ *
+ * One call from the frame loop covers all ten and every one added after
+ * them, which is the point -- see ULTIMATE.
+ */
+function tickUltimate(dt, movedPx) {
+  if (ultimateCast !== null) {
+    ultimateCast.timer -= dt;
+    if (ultimateCast.timer <= 0) ultimateCast = null;
+  }
+  if (carpetCord !== null) {
+    carpetCord.timer -= dt;
+    if (carpetCord.timer <= 0) carpetCord = null;
+  }
+  if (leapLanding !== null) {
+    leapLanding.timer -= dt;
+    if (leapLanding.timer <= 0) leapLanding = null;
+  }
+  if (headshotTrail !== null) {
+    headshotTrail.timer -= dt;
+    if (headshotTrail.timer <= 0) headshotTrail = null;
+  }
+  for (let i = rainHits.length - 1; i >= 0; i--) {
+    rainHits[i].t += dt;
+    if (rainHits[i].t >= RAIN_HIT_SECS) rainHits.splice(i, 1);
+  }
+  equippedUltimate()?.tick?.(dt, movedPx);
+  if (ultimateCD <= 0) return;
+  const charge = ULTIMATE_CHARGE[selectedChar]?.() || 0;
+  ultimateCD = Math.max(0, ultimateCD - dt * (1 + charge * CONFIG.ultimateChargeBoost));
+  if (ultimateCD > 0 || !equippedUltimate()) return;
+  // First time up in a run, the hero has not said which of his two he carries.
+  // The pick is queued here and shown at the next lull; ULTIMATE_READY waits
+  // for the answer, because until then there is nothing to be ready with.
+  if (ultimatePicked !== true) { queueUltimatePick(appState); return; }
+  events.emit({ type: 'ULTIMATE_READY', hero: selectedChar, x: player.x, y: player.y });
+}
+
 const HERO_UPKEEP = {
   // Focus refills at a constant rate whether or not he is casting. Deliberate:
   // a regeneration that paused while acting would make the pool a second,
@@ -2945,7 +3476,45 @@ function drawBlasts() {
       x: b.x, y: b.y + CONFIG.hudHeight, radius: b.radius,
       age: b.t / BLAST_SECS, onWater: b.onWater,
     });
+    if (b.ult) {
+      paintUltimateBlast(ctx, {
+        x: b.x, y: b.y + CONFIG.hudHeight, radius: b.radius, age: b.t / BLAST_SECS,
+      });
+    }
   }
+}
+
+/** The corridor burning off the ranger's heels, while FULL AUTO runs. */
+function drawFullAutoTrail() {
+  if (fullAuto === null) return;
+  paintFullAutoTrail(ctx, player.x, player.y + CONFIG.hudHeight,
+                     player.aimAngle, fullAuto.heat);
+}
+
+/** The gold ring an ultimate opens on, over the field and under the ability. */
+function drawUltimateCast() {
+  if (ultimateCast === null) return;
+  paintUltimateCast(ctx, {
+    x: ultimateCast.x, y: ultimateCast.y + CONFIG.hudHeight,
+    age: 1 - ultimateCast.timer / CONFIG.ultimateCastSecs,
+    w: CONFIG.canvasW, h: CONFIG.canvasH,
+  });
+}
+
+/** CARPET BOMB's cord, with the spark running it ahead of the blasts. */
+function drawDetCord() {
+  if (carpetCord === null) return;
+  // The spark's position is derived from the fuses rather than stored: the
+  // charges' own stagger is what decides which goes next, so a spark carrying
+  // its own speed would drift out of step with the line it is meant to light.
+  const run = carpetCord.laid
+    * (1 - Math.max(0, carpetCord.timer - 0.5)
+        / Math.max(0.001, CONFIG.sapperCarpetFirstFuse
+                          + CONFIG.sapperCarpetStagger * CONFIG.sapperCarpetCount));
+  paintDetCord(ctx, {
+    x0: carpetCord.x0, y0: carpetCord.y0 + CONFIG.hudHeight,
+    angle: carpetCord.angle, laid: carpetCord.laid, spark: run,
+  });
 }
 
 /** Nets lying on the ground, under everything that walks on them. */
@@ -3122,7 +3691,30 @@ function knightChargeTelegraph() {
   return { ...wedge, frac: knightChargeFrac(), endX: end.x, endY: end.y, travel: end.moved };
 }
 
-function startCharge() {
+/**
+ * Which of the special's two bindings a press came from.
+ *
+ * A closed set rather than a boolean, because the two are not "the special,
+ * and a special that is somehow more true": they are the KEY and the BUTTON,
+ * and the whole ultimate trigger rests on telling them apart. A flag would
+ * read as `startCharge(true)` at the call site and say nothing.
+ */
+const SPECIAL_SOURCE = { KEY: 'key', BUTTON: 'button' };
+
+/**
+ * The special. Bound twice -- to F and to the right mouse button -- which is
+ * the redundancy the ultimate is paid for with: only the KEY fires the
+ * ultimate while it is up, and the BUTTON always fires the plain special.
+ * Nothing new to bind, and no press is taken away from a player who wants the
+ * special instead.
+ */
+function startCharge(source) {
+  // Named arms, no default: an unknown source is a wiring mistake and should
+  // say so here rather than quietly behaving like the button.
+  if (source !== SPECIAL_SOURCE.KEY && source !== SPECIAL_SOURCE.BUTTON) {
+    throw new Error(`startCharge: unknown source ${String(source)}`);
+  }
+  if (source === SPECIAL_SOURCE.KEY && tryUltimate()) return;
   if (selectedChar === 'wizard') {
     if (stormCD <= 0 && inGame()) fireLightningStorm();
   } else if (selectedChar === 'knight') {
@@ -3199,9 +3791,9 @@ function installInput() {
       if (inGame()) shootPressed = true;
       // A stage intro waits for exactly this: one click, no key, since it is
       // shown mid-run with the keyboard already busy with movement held down.
-      else if (appState === 'stage_intro') { pendingIntro = null; appState = 'playing'; }
+      else if (appState === 'stage_intro') beginNewLevel();
     }
-    if (e.button === 2) { mouseRightHeld = true; startCharge(); }
+    if (e.button === 2) { mouseRightHeld = true; startCharge(SPECIAL_SOURCE.BUTTON); }
   });
   canvas.addEventListener('mouseup',    e => {
     if (e.button === 0) mouseLeftHeld = false;
@@ -3216,7 +3808,7 @@ function installInput() {
       remapTarget = null; e.preventDefault(); return;
     }
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
-    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge();
+    if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge(SPECIAL_SOURCE.KEY);
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
     if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
     // The name bookkeeping — including the held key that starts repeating
@@ -3731,7 +4323,8 @@ events.on(e => {
 
     case 'EXPLOSION':
       playSound(sndExplosion); impact('explosion');
-      blasts.push({ x: e.x, y: e.y, radius: e.radius, onWater: e.onWater, t: 0 });
+      blasts.push({ x: e.x, y: e.y, radius: e.radius, onWater: e.onWater, t: 0,
+                    ult: e.ult === true });
       if (e.onWater) {
         burst(e.x, e.y, { count: 22, colors: ['#2A66B0','#5A92D8','#A0C8F0','#FFFFFF'],
           speedMin: 80, speedMax: 200, decay: 1.6,
@@ -3893,6 +4486,120 @@ events.on(e => {
       // will lose again in three seconds would wear out fast.
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
+      break;
+    case 'ARCHER_RAIN':
+      // Quiet: the mark is a promise, and the noise belongs to what lands.
+      playSound(sndArm);
+      spawnShockRing(e.x, e.y, e.radius, '#EAFF6A');
+      break;
+    case 'ARCHER_RAIN_HIT':
+      playSound(sndShoot); triggerShake(1, 50);
+      burst(e.x, e.y, {
+        count: 5, colors: ['#EAFF6A', '#FFFFFF'], speedMin: 20, speedMax: 70,
+        decay: 3.2, shape: 'spark', shadowBlur: 4, shadowColor: '#EAFF6A'
+      });
+      break;
+    case 'WIZARD_BEAM':
+      playSound(sndLightning); triggerShake(3, 160);
+      burst(e.x, e.y, {
+        count: 12, colors: ['#A08CFF', '#FFFFFF'], speedMin: 20, speedMax: 80,
+        decay: 2.4, shape: 'spark', shadowBlur: 8, shadowColor: '#A08CFF'
+      });
+      break;
+    case 'WIZARD_BEAM_END':
+      playSound(sndPickup);
+      break;
+    case 'KNIGHT_LEAP':
+      playSound(sndChargeWhoosh); triggerShake(2, 90);
+      break;
+    case 'KNIGHT_LEAP_LAND':
+      // The landing is the ability; the jump is only how it got there.
+      playSound(sndExplosion); triggerShake(8, 320);
+      spawnShockRing(e.x, e.y, e.radius, '#C8C8E8');
+      burst(e.x, e.y, {
+        count: 20, colors: ['#C8C8E8', '#8A7A5A', '#FFFFFF'], speedMin: 50, speedMax: 170,
+        decay: 2.2, shape: 'spark', shadowBlur: 8, shadowColor: '#C8C8E8'
+      });
+      break;
+    case 'RANGER_FULL_AUTO':
+      playSound(sndArm); triggerShake(2, 110);
+      break;
+    case 'RANGER_FULL_AUTO_END':
+      playSound(sndPickup);
+      break;
+    case 'SAPPER_BIG_ONE':
+      playSound(sndArm); triggerShake(3, 130);
+      burst(e.x, e.y, {
+        count: 10, colors: ['#FF7A1A', '#FFE9A0'], speedMin: 20, speedMax: 60,
+        decay: 2.6, shape: 'spark', shadowBlur: 6, shadowColor: '#FF7A1A'
+      });
+      break;
+    case 'WIZARD_VORTEX':
+      // Low and sustained rather than a bang: the moment it is placed is a
+      // held breath, and the bang is WIZARD_VORTEX_COLLAPSE a second later.
+      playSound(sndAggro);
+      burst(e.x, e.y, {
+        count: 14, colors: ['#A08CFF','#4B3B9E'], speedMin: 20, speedMax: 60,
+        decay: 1.6, shape: 'spark', shadowBlur: 10, shadowColor: '#A08CFF'
+      });
+      break;
+    case 'WIZARD_VORTEX_COLLAPSE':
+      playSound(sndLightning); triggerShake(7, 300);
+      spawnShockRing(e.x, e.y, e.radius, '#A08CFF');
+      burst(e.x, e.y, {
+        count: 26, colors: ['#A08CFF','#FFFFFF','#4B3B9E'], speedMin: 70, speedMax: 210,
+        decay: 2.0, shape: 'spark', shadowBlur: 12, shadowColor: '#A08CFF'
+      });
+      break;
+    case 'RANGER_HARPOON_PULL':
+      // Scaled by the distance reeled, so a line that caught something at
+      // his feet is not the same event as one that dragged him across the
+      // field. A wall-shortened pull says so by being quieter.
+      playSound(sndChargeWhoosh);
+      triggerShake(2 + 4 * Math.min(1, e.moved / CONFIG.rangerHarpoonReach), 160);
+      burst(e.x, e.y, {
+        count: 10, colors: ['#FFCC00','#FFFFFF'], speedMin: 40, speedMax: 120,
+        decay: 2.8, shape: 'spark', shadowBlur: 6, shadowColor: '#FFCC00'
+      });
+      break;
+    case 'SAPPER_CARPET':
+      // The laying, not the blasts: each charge emits its own EXPLOSION as
+      // its fuse runs out, so a loud one here would double every one of them.
+      playSound(sndArm); triggerShake(2, 100);
+      burst(e.x, e.y, {
+        count: 8, colors: ['#FF7A1A','#FFE9A0'], speedMin: 20, speedMax: 70,
+        decay: 3.0, shape: 'spark', shadowBlur: 6, shadowColor: '#FF7A1A'
+      });
+      break;
+    case 'KNIGHT_EARTHSHATTER':
+      // Heavier than the whirlwind and longer: the ground is coming apart
+      // twenty tiles out, and a knight who has waited a minute for it should
+      // feel the floor go.
+      playSound(sndExplosion); triggerShake(9, 380);
+      burst(e.x, e.y, {
+        count: 20, colors: ['#FF7A1F','#3A1B08','#FFE9A0'], speedMin: 40, speedMax: 150,
+        decay: 2.4, shape: 'spark', shadowBlur: 8, shadowColor: '#FF7A1F'
+      });
+      break;
+    case 'ULTIMATE_READY':
+      // Loud, and allowed to be: it happens about once a minute and the
+      // whole point is that the player notices. The aura on the body is the
+      // standing tell; this is the moment it arrives.
+      playSound(sndKeyDrop); triggerShake(2, 120);
+      burst(e.x, e.y, {
+        count: 16, colors: ['#FF3EC8','#FFFFFF'], speedMin: 30, speedMax: 110,
+        decay: 2.2, shape: 'spark', shadowBlur: 8, shadowColor: '#FF3EC8'
+      });
+      break;
+    case 'ULTIMATE_FIRED':
+      // The one place all ten open the same way. Set here rather than in
+      // `tryUltimate` because it is a picture, and `tryUltimate` is the rule.
+      ultimateCast = { x: e.x, y: e.y, timer: CONFIG.ultimateCastSecs };
+      playSound(sndChargeWhoosh); triggerShake(5, 220);
+      burst(e.x, e.y, {
+        count: 22, colors: ['#FF3EC8','#FFFFFF'], speedMin: 60, speedMax: 180,
+        decay: 2.0, shape: 'spark', shadowBlur: 10, shadowColor: '#FF3EC8'
+      });
       break;
     case 'ARCHER_BRACED':
       // Quiet and short: a confirmation, not an alarm. He is standing still to
@@ -4077,7 +4784,7 @@ function initGame() {
   score = 0; wave = 1; gameTime = 0; escalationTimer = 0; pfCooldown = 0; pfSwing = 0; pfBossHit = false; pfHitFlash = false; waveAnnounce = 0; waveAnnounceText = '';
   knightSpearCD = 0; knightSpearSwing = 0; knightSpearBossHit = false; knightSpearPhase2Hit = false;
   knightBloodlust = 0; knightSpearConnected = false;
-  knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0;
+  knightWhirlwindCD = 0; knightWhirlwindTimer = 0; knightWhirlwindTick = 0; earthshatter = null;
   knightBlockCD = 0;
   knightCharge.on = false; knightDash.timer = 0; knightDash.bossHit = false; knightDash.chained = false;
   knightChargeTick = 0; knightChargeCD = 0;
@@ -4091,12 +4798,21 @@ function initGame() {
   stormFx = 0; blinkFx = 0;
   sapperBurstLeft = 0; sapperBurstTimer = 0; sapperBurstThrown = 0;
   sapperBarrageCD = 0; sapperShotCD = 0; barrageBombs = []; sapperShots = [];
-  wizBlinkCD = 0; wizBlinkIFrame = 0;
   wizBlinkCD = 0; wizBlinkIFrame = 0; wizBlinkHops = 0; wizBlinkChainTimer = 0; wizOverchannel = 0;
+  vortex = null;
   rangerSlip = 0;
-  chooser = null; chooserQueue = []; riteOffered = false;
+  chooser = null; chooserQueue = []; riteOffered = false; ultimatePicked = false;
 
   knightChainTimer = 0;
+  ultimateCD = CONFIG.ultimateCooldown;
+  arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
+  ultimateCast = null; carpetCord = null; leapLanding = null; headshotTrail = null;
+  rainHits = [];
+  // Back to the first ultimate every run. Which one a hero carries is chosen
+  // on a screen that does not exist yet, so the conservative default is the
+  // one that was there before there was a choice -- and a slot left set from
+  // a previous run is a hero who quietly has the other ability.
+  ultimateSlot = ULTIMATE_SLOT.FIRST;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
@@ -4291,9 +5007,17 @@ function updatePlayer(dt) {
     }
   }
 
+  // How far he moved this step, for whoever downstream cares. Declared out
+  // here rather than kept in a module global: the only consumer is the
+  // ultimate tick at the bottom of this same function, and a global would need
+  // a paragraph explaining when it is stale. Zero while he is rooted, which is
+  // the truth about a rooted hero.
+  let movedPx = 0;
+
   // Drawing and charging root their owners the same way sniper mode roots the
-  // sapper. For the archer that root is the whole cost of the power shot.
-  if (!knightCharge.on && !archerDraw.on) {
+  // sapper. For the archer that root is the whole cost of the power shot, and
+  // for the wizard's beam it is the whole cost of the ultimate.
+  if (!knightCharge.on && !archerDraw.on && !beam) {
     let vx = 0, vy = 0;
     if (knightDash.timer > 0) {
       // The dash drives movement instead of the keys, but shares the collision
@@ -4327,7 +5051,7 @@ function updatePlayer(dt) {
     // Reading the request meant a hero shoving into a wall covered ground on
     // paper -- which is the exact "earn a stance by leaning on terrain" this
     // comment claimed was prevented, and was not.
-    const movedPx = Math.hypot(player.x - fromX, player.y - fromY);
+    movedPx = Math.hypot(player.x - fromX, player.y - fromY);
     const meter = MOVEMENT_METERS[selectedChar];
     if (meter) meter(dt, movedPx);
     else braceLevel = 0;
@@ -4386,6 +5110,8 @@ function updatePlayer(dt) {
   updatePickupMarks(dt);
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   HERO_UPKEEP[selectedChar]?.(dt);
+  tickUltimate(dt, movedPx);
+  openChooserWhenClear();
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
@@ -4532,21 +5258,10 @@ function updatePlayer(dt) {
     knightWhirlwindTick  -= dt;
     if (knightWhirlwindTick <= 0) {
       knightWhirlwindTick = CONFIG.knightWhirlwindTickRate;
-      const wr = CONFIG.knightWhirlwindRadius, wr2 = wr * wr;
+      const wr = CONFIG.knightWhirlwindRadius;
       damageEnemiesInRadius(player.x, player.y, wr,
         { amount: 1, source: 'whirlwind', flash: 0.1 });
-      // Break tiles in radius
-      const tileR = Math.ceil(wr / CONFIG.tileSize);
-      const tc = Math.floor(player.x / CONFIG.tileSize);
-      const tr = Math.floor(player.y / CONFIG.tileSize);
-      for (let dr = -tileR; dr <= tileR; dr++) {
-        for (let dc = -tileR; dc <= tileR; dc++) {
-          const row = tr + dr, col = tc + dc;
-          if (row <= 0 || row >= CONFIG.rows - 1 || col <= 0) continue;
-          const wx = (col+0.5)*CONFIG.tileSize, wy = (row+0.5)*CONFIG.tileSize;
-          if (dist2(player.x, player.y, wx, wy) < wr2) smashTile(row, col);
-        }
-      }
+      smashTilesInRadius(player.x, player.y, wr);
       events.emit({ type: 'WHIRLWIND_TICK', x: player.x, y: player.y });
     }
     if (knightWhirlwindTimer <= 0) {
@@ -4628,7 +5343,7 @@ function tryShoot() {
       vy: Math.sin(a) * CONFIG.arrowSpeed,
       life: CONFIG.arrowLifetime, type, bounces: 0,
       initSpeed: CONFIG.arrowSpeed,
-      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      ...arrowTrail(),
       dmgMult: braceBossMult() });
   }
   archerLoose = ARCHER_LOOSE_SECS;
@@ -4662,7 +5377,7 @@ function tryCrossbowBolt() {
       vy: Math.sin(boltAngle) * CONFIG.arrowSpeed,
       life: CONFIG.arrowLifetime, type, bounces: 0,
       initSpeed: CONFIG.arrowSpeed,
-      trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+      ...arrowTrail(),
       bolt: true,
       hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
       dmgMult: CONFIG.crossbowBoltDamageMult * rangerMomentumMult() });
@@ -4692,7 +5407,7 @@ function tryWizardBolt() {
     vx: Math.cos(player.aimAngle) * spd,
     vy: Math.sin(player.aimAngle) * spd,
     life: CONFIG.wizBoltLifetime, type, bounces: 0, initSpeed: spd,
-    trailHistory: [], fireSeed: Math.random() * Math.PI * 2, trailTimer: 0,
+    ...arrowTrail(),
     wiz: true,
     homing:      type !== 'wiz_laser',
     passesTiles: type === 'wiz_laser',  // bypasses walls/rocks/trees
@@ -4739,7 +5454,7 @@ function tryKnightAttack() {
       vx: Math.cos(player.aimAngle) * spd,
       vy: Math.sin(player.aimAngle) * spd,
       life: 2.2, type: 'javelin', bounces: 0, initSpeed: spd,
-      trailHistory: [], fireSeed: 0, trailTimer: 0,
+      ...arrowTrail(0),
       pierceLeft: CONFIG.knightJavelinPierce
     });
     events.emit({ type: 'WEAPON_FIRED', kind: 'javelin' });
@@ -4759,6 +5474,373 @@ function tryKnightAttack() {
   knightSpearPhase2Hit = false;
   knightSpearConnected = false;
   events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
+}
+
+/**
+ * A point on the aim line, no further from the hero than `range`.
+ *
+ * Four ultimates aim at a PLACE rather than down a line, and each wants the
+ * same thing: where the pointer is, pulled back to the ability's own reach and
+ * clamped into the arena. Pointing at his own feet has no direction in it, so
+ * the aim angle is the only intent available -- the same fallback hopFromBlast
+ * makes for the same reason.
+ */
+function aimPointWithin(range) {
+  const aim = aimWorld();
+  const dx = aim.x - player.x, dy = aim.y - player.y;
+  const away = Math.hypot(dx, dy);
+  const angle = away < 0.001 ? player.aimAngle : Math.atan2(dy, dx);
+  const reach = Math.min(away, range);
+  return {
+    x: clampArenaX(player.x + Math.cos(angle) * reach),
+    y: clampArenaY(player.y + Math.sin(angle) * reach),
+  };
+}
+
+/**
+ * VORTEX -- the wizard's ultimate.
+ *
+ * Dropped where he is pointing, clamped to its own range so it stays a shot
+ * rather than a click anywhere on the map. Cast from any Focus and it empties
+ * the pool: he is on the broom for the six seconds it takes to come back,
+ * which is the price of the best moment he has.
+ */
+function fireVortex() {
+  if (vortex) return false;
+  const at = aimPointWithin(CONFIG.wizVortexRange);
+  vortex = { x: at.x, y: at.y, timer: CONFIG.wizVortexDuration };
+  inv.focus = 0;
+  events.emit({ type: 'WIZARD_VORTEX', x: vortex.x, y: vortex.y });
+  return true;
+}
+
+/** Drags, then collapses. The drag is pushBodiesFrom with the sign flipped. */
+function tickVortex(dt) {
+  if (!vortex) return;
+  const v = vortex;
+  const r = CONFIG.wizVortexRadius;
+  pushBodiesFrom(v.x, v.y, r, -CONFIG.wizVortexPull * dt);
+  v.timer -= dt;
+  if (v.timer > 0) return;
+
+  vortex = null;
+  damageEnemiesInRadius(v.x, v.y, r,
+    { amount: CONFIG.wizVortexBossDamage, source: 'vortex', flash: 0.3 },
+    { amount: CONFIG.wizVortexDamage });
+  smashTilesInRadius(v.x, v.y, r);
+  events.emit({ type: 'WIZARD_VORTEX_COLLAPSE', x: v.x, y: v.y, radius: r });
+}
+
+/**
+ * HARPOON -- the ranger's ultimate.
+ *
+ * Refused below the momentum cap, and refusing costs nothing: the gate belongs
+ * to the hero rather than to tryUltimate, so a ranger who presses too early
+ * keeps the charge and can press again a stride later.
+ */
+function fireHarpoon() {
+  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  const spd = CONFIG.rangerHarpoonSpeed;
+  arrows.push({ x: player.x, y: player.y,
+    vx: Math.cos(player.aimAngle) * spd,
+    vy: Math.sin(player.aimAngle) * spd,
+    life: CONFIG.arrowLifetime, type: 'plain', bounces: 0,
+    initSpeed: spd,
+    ...arrowTrail(0),
+    harpoon: true, pierceLeft: 1,
+    dmgMult: CONFIG.rangerHarpoonBossMult });
+  return true;
+}
+
+/**
+ * Reels him in to where the harpoon landed.
+ *
+ * Called from the two places a player arrow is resolved against something
+ * solid enough to hold a line -- the shared pierce spend, which every body
+ * hit goes through, and the boss hit, which does not. Walls are respected by
+ * probeAhead, the same walk the wizard's blink uses, so a line over a rock
+ * lands him against it rather than inside it.
+ */
+function harpoonYank(a) {
+  if (!a.harpoon) return;
+  const away = Math.hypot(a.x - player.x, a.y - player.y);
+  if (away < 1) return;
+  const angle = Math.atan2(a.y - player.y, a.x - player.x);
+  const end = probeAhead(player.x, player.y, angle,
+                         Math.min(away, CONFIG.rangerHarpoonReach));
+  player.x = end.x; player.y = end.y;
+  events.emit({ type: 'RANGER_HARPOON_PULL', x: end.x, y: end.y, moved: end.moved });
+}
+
+/**
+ * ARROW RAIN -- the archer's second ultimate.
+ *
+ * A spot is marked, and a beat later arrows come down over it one at a time.
+ * The delay is the skill: you are aiming at where things WILL be, which is the
+ * opposite question to HEADSHOT's.
+ *
+ * The boss takes it once per volley rather than once per arrow, the same guard
+ * the crack carries -- fourteen impacts each landing full boss damage would
+ * make this the only ultimate on the roster worth firing at a boss.
+ */
+function fireArrowRain() {
+  if (arrowRain) return false;
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  spendShaft();
+  const at = aimPointWithin(CONFIG.archerRainRange);
+  arrowRain = {
+    x: at.x, y: at.y, delay: CONFIG.archerRainDelay,
+    left: CONFIG.archerRainImpacts, nextIn: 0, bossHit: false,
+  };
+  events.emit({ type: 'ARCHER_RAIN', x: at.x, y: at.y, radius: CONFIG.archerRainRadius });
+  return true;
+}
+
+function tickArrowRain(dt) {
+  const r = arrowRain;
+  if (!r) return;
+  if (r.delay > 0) { r.delay -= dt; return; }
+  r.nextIn -= dt;
+  if (r.nextIn > 0) return;
+  r.nextIn = CONFIG.archerRainDuration / CONFIG.archerRainImpacts;
+
+  // Placed on a spiral rather than scattered at random, and that is a balance
+  // decision before it is a tidiness one. Random points over a disc leave
+  // holes: fourteen impacts of 30 px over a 130 px circle gave a body standing
+  // in the middle of the mark about an even chance of being missed, which is
+  // not what a once-a-minute ultimate should do. The golden angle spreads each
+  // new point into the largest remaining gap, so the circle fills evenly and
+  // what stands in it is hit. It also makes the ability the same every time,
+  // which is the difference between a skill shot and a slot machine.
+  const i = CONFIG.archerRainImpacts - r.left;
+  const a = i * 2.399963;                                   // golden angle
+  const d = Math.sqrt((i + 0.5) / CONFIG.archerRainImpacts) * CONFIG.archerRainRadius;
+  const x = r.x + Math.cos(a) * d, y = r.y + Math.sin(a) * d;
+  const reach = CONFIG.archerRainImpactRadius;
+  const bossHit = r.bossHit
+    ? null : { amount: CONFIG.archerRainBossDamage, source: 'arrowRain', flash: 0.2 };
+  // The helper decides whether the boss was reached and says so, rather than
+  // the shield-and-in-play rule being written out again here to latch on.
+  if (damageEnemiesInRadius(x, y, reach, bossHit, { amount: CONFIG.archerRainDamage })) {
+    r.bossHit = true;
+  }
+  events.emit({ type: 'ARCHER_RAIN_HIT', x, y });
+
+  rainHits.push({ x, y, t: 0 });
+  r.left--;
+  if (r.left <= 0) arrowRain = null;
+}
+
+/**
+ * THE BEAM -- the wizard's second ultimate.
+ *
+ * He plants his feet and sweeps a lance with the mouse. The root is the price,
+ * and it is the archer's bargain: two seconds standing still in the open on the
+ * thinnest body on the roster. It empties the Focus pool, as VORTEX does.
+ */
+function fireBeam() {
+  if (beam) return false;
+  // `swept` is the arc already covered, one angle per damage tick. Sampled
+  // on the tick rather than per frame because that is what the ability
+  // actually did: a scorch drawn at frame rate would promise a burn between
+  // two ticks that nothing was hit by.
+  beam = { timer: CONFIG.wizBeamDuration, tickIn: 0, swept: [] };
+  inv.focus = 0;
+  events.emit({ type: 'WIZARD_BEAM', x: player.x, y: player.y });
+  return true;
+}
+
+/** How far the lance reaches right now: down the aim, stopped by terrain. */
+function beamEnd() {
+  return probeAhead(player.x, player.y, player.aimAngle, CONFIG.wizBeamRange);
+}
+
+function tickBeam(dt) {
+  const b = beam;
+  if (!b) return;
+  b.timer -= dt;
+  b.tickIn -= dt;
+  // Probed once a frame and remembered, because the drawer wants the same
+  // answer: probeAhead walks 520 px in 4 px steps, and asking twice in one
+  // frame is 1300 tile lookups for a number that cannot have changed.
+  b.end = beamEnd();
+  if (b.tickIn <= 0) {
+    b.tickIn = CONFIG.wizBeamTickRate;
+    b.swept.push(player.aimAngle);
+    const onBoss = damageEnemiesInSegment(
+      player.x, player.y, player.aimAngle, b.end.moved, CONFIG.wizBeamWidth,
+      { amount: CONFIG.wizBeamDamage });
+    if (onBoss) damageBoss(CONFIG.wizBeamBossPerTick, player.x, player.y, 'beam', 0.1);
+  }
+  if (b.timer <= 0) {
+    beam = null;
+    events.emit({ type: 'WIZARD_BEAM_END', x: player.x, y: player.y });
+  }
+}
+
+/**
+ * THE LEAP -- the knight's second ultimate.
+ *
+ * He goes OVER what is in the way, which is the whole difference from the
+ * wizard's blink: the blink walks the aim and stops at the last point the body
+ * fits, and this one only cares where it lands. If the landing itself is solid
+ * it is walked back toward him until it is not, so he cannot end up inside a
+ * rock -- but everything between is simply passed over.
+ */
+function fireLeap() {
+  if (knightLeap) return false;
+  const at = aimPointWithin(CONFIG.knightLeapRange);
+  const back = Math.atan2(player.y - at.y, player.x - at.x);
+  let lx = at.x, ly = at.y;
+  for (let i = 0; i < 60 && !playerFits(lx, ly); i++) {
+    lx += Math.cos(back) * 4; ly += Math.sin(back) * 4;
+  }
+  if (!playerFits(lx, ly)) return false;   // nowhere to land, and costs nothing
+  knightLeap = { x0: player.x, y0: player.y, x1: lx, y1: ly, t: 0 };
+  leapLanding = null;
+  events.emit({ type: 'KNIGHT_LEAP', x: player.x, y: player.y, toX: lx, toY: ly });
+  return true;
+}
+
+function tickLeap(dt) {
+  const l = knightLeap;
+  if (!l) return;
+  l.t = Math.min(1, l.t + dt / CONFIG.knightLeapSecs);
+  // A straight line across the ground; the arc is drawn rather than simulated.
+  // Nothing collides with him while he is on it, which is what over-the-wall
+  // means, and he takes damage the whole time, which is what no i-frames means.
+  player.x = l.x0 + (l.x1 - l.x0) * l.t;
+  player.y = l.y0 + (l.y1 - l.y0) * l.t;
+  if (l.t < 1) return;
+
+  knightLeap = null;
+  leapLanding = { x: player.x, y: player.y, timer: CONFIG.knightLeapMarkSecs };
+  const r = CONFIG.knightLeapRadius;
+  damageEnemiesInRadius(player.x, player.y, r,
+    { amount: CONFIG.knightLeapBossDamage, source: 'leap', flash: 0.25 },
+    { amount: CONFIG.knightLeapDamage });
+  smashTilesInRadius(player.x, player.y, r);
+  events.emit({ type: 'KNIGHT_LEAP_LAND', x: player.x, y: player.y, radius: r });
+}
+
+/**
+ * FULL AUTO -- the ranger's second ultimate.
+ *
+ * Volleys for as long as he keeps moving, out of the same quiver his primary
+ * empties. Deliberately NOT free, unlike his harpoon: this is a burst of the
+ * crossbow rather than a thing of its own, and free bolts would make it
+ * strictly better than the weapon it is a burst of. Running dry ends it early,
+ * which is a real cost and reads as one.
+ */
+function fireFullAuto() {
+  if (fullAuto) return false;
+  // `heat` is whether she is running, which is the only condition the
+  // ability has and the one thing that was nowhere on screen.
+  fullAuto = { timer: CONFIG.rangerFullAutoSecs, shotIn: 0, heat: 1 };
+  events.emit({ type: 'RANGER_FULL_AUTO', x: player.x, y: player.y });
+  return true;
+}
+
+function tickFullAuto(dt, movedPx) {
+  const f = fullAuto;
+  if (!f) return;
+  f.timer -= dt;
+  if (f.timer <= 0) {
+    fullAuto = null;
+    events.emit({ type: 'RANGER_FULL_AUTO_END', x: player.x, y: player.y });
+    return;
+  }
+  // The clock runs whether he moves or not; only the FIRING waits on him.
+  // Standing still costs him the burst rather than pausing it, which is the
+  // whole point of giving this to the hero who is paid for never setting his
+  // feet.
+  if (movedPx <= MOVED_EPSILON) {
+    f.heat = Math.max(0, f.heat - dt / CONFIG.rangerFullAutoCoolSecs);
+    return;
+  }
+  f.heat = 1;
+  f.shotIn -= dt;
+  if (f.shotIn > 0) return;
+  f.shotIn = CONFIG.rangerFullAutoInterval;
+  tryCrossbowBolt();
+}
+
+/**
+ * THE BIG ONE -- the sapper's second ultimate.
+ *
+ * One charge, a long fuse you can watch, and a crater three times the usual.
+ * The radius rides ENTIRELY on `chainMult`, which is the field a bomb already
+ * carries to say how wide it goes up -- the combo shot sets the same one -- so
+ * this needs no new branch inside explodeExplosive, and no flag of its own
+ * either. It briefly had one; nothing read it.
+ */
+function fireBigOne() {
+  const at = aimPointWithin(CONFIG.sapperBigOneRange);
+  dynamites.push({
+    x: at.x, y: at.y, vx: 0, vy: 0,
+    life: CONFIG.sapperBigOneFuse, fuseTotal: CONFIG.sapperBigOneFuse,
+    kind: 'bomb', element: 'none', hop: false, shortFuse: false,
+    // Drawn as an ultimate, chained as a bomb: `kind` is what the simulation
+    // treats it as and `ult` is what it is drawn as, which are two questions.
+    ult: 'theBigOne',
+    angle: player.aimAngle, bobPhase: 0,
+    // Lit already, so a cascade cannot shorten the fuse that IS the ability.
+    chainLit: true, chainMult: CONFIG.sapperBigOneRadiusMult,
+  });
+  events.emit({ type: 'SAPPER_BIG_ONE', x: at.x, y: at.y });
+  return true;
+}
+
+/** How wide the crack is once it has run this far. Linear: a wedge. */
+function earthshatterRadius(travelled) {
+  return CONFIG.knightEarthshatterRadius + travelled * CONFIG.knightEarthshatterWiden;
+}
+
+/**
+ * EARTHSHATTER -- the knight's ultimate.
+ *
+ * Refused while one is already running, which cannot happen from the key
+ * (the timer gates it) but can from a test or a console.
+ */
+function fireEarthshatter() {
+  if (earthshatter) return false;
+  earthshatter = {
+    x0: player.x, y0: player.y, x: player.x, y: player.y,
+    angle: player.aimAngle, travelled: 0, bossHit: false,
+  };
+  events.emit({ type: 'KNIGHT_EARTHSHATTER', x: player.x, y: player.y, angle: player.aimAngle });
+  return true;
+}
+
+/**
+ * Advances the crack, resolving what it crosses as it goes.
+ *
+ * Resolved along the travel rather than all at once on the frame it fires:
+ * the picture is a crack running out, and damage that landed before the
+ * crack arrived would be a picture that lies. It costs one guard -- the boss
+ * takes its hit once, not once per tick -- and that guard is the same one
+ * the charge dash already carries for the same reason.
+ */
+function tickEarthshatter(dt) {
+  if (!earthshatter) return;
+  const e = earthshatter;
+  const step = CONFIG.knightEarthshatterSpeed * dt;
+  e.travelled += step;
+  e.x += Math.cos(e.angle) * step;
+  e.y += Math.sin(e.angle) * step;
+  const r = earthshatterRadius(e.travelled);
+
+  const bossHit = e.bossHit
+    ? null
+    : { amount: CONFIG.knightEarthshatterBossDamage, source: 'earthshatter', flash: 0.2 };
+  if (damageEnemiesInRadius(e.x, e.y, r, bossHit, { amount: CONFIG.knightEarthshatterDamage })) {
+    e.bossHit = true;
+  }
+  smashTilesInRadius(e.x, e.y, r);
+
+  const offMap = e.x < 0 || e.y < 0
+    || e.x > CONFIG.cols * CONFIG.tileSize || e.y > CONFIG.rows * CONFIG.tileSize;
+  if (e.travelled >= CONFIG.knightEarthshatterRange || offMap) earthshatter = null;
 }
 
 function startWhirlwind() {
@@ -4914,6 +5996,61 @@ function tickSapperBurst(dt) {
  * touches rather than counting down a fuse — what "having only dynamite" was
  * missing, area denial that doesn't wait a second and a half to matter.
  */
+/**
+ * CARPET BOMB -- the sapper's ultimate.
+ *
+ * Lays charges down the aim line at a fixed spacing, each with a longer fuse
+ * than the last so the line detonates outward from his feet. Aimed once, at
+ * the press: the line is committed where it is laid.
+ *
+ * Two things are set deliberately at lay time:
+ *
+ * `chainLink` at the chain's ceiling, so each blast lands at the depth a
+ * five-link cascade would have reached instead of climbing to it. That is
+ * the ability -- the sapper's ramp, handed over rather than built.
+ *
+ * `chainLit` true, which sounds wrong and is the point: an unlit charge is
+ * eligible to be lit by the blast in front of it, and chainOne shortens a
+ * lit fuse to the chain delay. The whole line would collapse into one
+ * simultaneous blast and the sequence -- the thing that makes it a carpet
+ * rather than a crater -- would never be seen. Marking them lit takes them
+ * out of each other's reach while leaving them free to light HIS bombs.
+ */
+function fireCarpetBomb() {
+  const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
+  const maxX = CONFIG.cols * CONFIG.tileSize, maxY = CONFIG.rows * CONFIG.tileSize;
+  let laid = 0;
+  for (let i = 0; i < CONFIG.sapperCarpetCount; i++) {
+    const away = CONFIG.sapperCarpetSpacing * (i + 1);
+    const x = player.x + nx * away, y = player.y + ny * away;
+    // Stops at the border rather than laying charges off the map. A line
+    // fired at a wall is a short line, which is a fair price for aiming it
+    // at a wall.
+    if (x < 0 || y < 0 || x > maxX || y > maxY) break;
+    const life = CONFIG.sapperCarpetFirstFuse + i * CONFIG.sapperCarpetStagger;
+    dynamites.push({
+      x, y, vx: 0, vy: 0,
+      life, fuseTotal: life, kind: 'bomb', element: 'none', ult: 'carpetBomb',
+      hop: false, shortFuse: false,
+      angle: player.aimAngle, bobPhase: Math.random() * Math.PI * 2,
+      chainLit: true, chainLink: TALENTS.stat('moreLinks'),
+    });
+    laid++;
+  }
+  if (laid === 0) return false;
+  // The cord is one object the seven charges sit on, which is the difference
+  // between an ability and the sapper throwing quickly. It outlives the last
+  // fuse by a beat so the line is still readable as the far end goes up.
+  carpetCord = {
+    x0: player.x, y0: player.y, angle: player.aimAngle,
+    laid: CONFIG.sapperCarpetSpacing * laid,
+    timer: CONFIG.sapperCarpetFirstFuse + laid * CONFIG.sapperCarpetStagger + 0.5,
+  };
+  events.emit({ type: 'SAPPER_CARPET', x: player.x, y: player.y,
+                angle: player.aimAngle, count: laid });
+  return true;
+}
+
 function trySapperBarrage() {
   if (selectedChar !== 'sapper' || !inGame()) return;
   if (sapperBarrageCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
@@ -5242,6 +6379,10 @@ function updateArrows(dt) {
     const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage * (a.dmgMult || 1), 'arrow');
     if (arrowHit === BossHit.DAMAGED) {
       if (a.type === 'fire') spawnFire(a.x, a.y);
+      // A boss hit does not go through spendArrowPierce, so the harpoon needs
+      // its own call here or the one target worth reeling to would be the one
+      // it never pulled him to.
+      harpoonYank(a);
       arrows.splice(i, 1); continue;
     }
     if (arrowHit === BossHit.ABSORBED) { arrows.splice(i, 1); continue; }
@@ -5285,7 +6426,15 @@ function updateArrows(dt) {
         // Spent either way — an arrow stopped by a shield is still stopped —
         // but only a hit that landed sets fire to anything.
         if (landed && a.type === 'fire') spawnFire(a.x, a.y);
-        arrows.splice(i, 1); hit = true; break;
+        // Through the shared spend, like the crow and skeleton loops above it.
+        // This loop used to splice on its own, which meant everything hanging
+        // off spendArrowPierce simply did not happen against the garrison: a
+        // HEADSHOT sold as piercing without limit stopped dead on the first
+        // soldier, and the ranger's HARPOON never reeled him to one. The same
+        // shape as the note at damageEnemiesInRadius -- the soldiers arrived
+        // with the cavern after this loop was written, and were quietly
+        // skipped ever since.
+        if (spendArrowPierce(a, i)) { hit = true; break; }
       }
     }
     if (hit) continue;
@@ -5398,6 +6547,25 @@ function hitKnockOffset(e) {
 const ZERO_KNOCK = { x: 0, y: 0 };
 
 /**
+ * The trail bookkeeping every player-fired arrow carries and none of them
+ * varies.
+ *
+ * Written out at eight call sites, which is five past the point the rule
+ * says to extract it -- and two of those eight were added by the ultimates,
+ * so it was getting worse rather than settling. `seed` is the one part that
+ * ever differs: a fire arrow's flame is offset by it so a volley does not
+ * flicker in lockstep, and the arrows that carry no flame pass 0 rather than
+ * paying for a random number nothing reads.
+ *
+ * Deliberately NOT a whole-arrow factory. The guard and tower arrows a few
+ * hundred lines below share none of this -- they carry `allied`, `damage` and
+ * `pierce` instead -- and folding ten things into one shape when eight agree
+ * would mean a factory that knows which caller it has.
+ */
+const arrowTrail = (seed = Math.random() * Math.PI * 2) =>
+  ({ trailHistory: [], fireSeed: seed, trailTimer: 0 });
+
+/**
  * Spends one body of an arrow's pierce budget, and says whether it is finished.
  *
  * `pierceLeft` was set on every power shot and read by nothing but the
@@ -5409,6 +6577,9 @@ const ZERO_KNOCK = { x: 0, y: 0 };
  * is one shape for both rather than a branch at each hit site.
  */
 function spendArrowPierce(a, i) {
+  // The harpoon reels him in on the body it caught, before the arrow is gone.
+  harpoonYank(a);
+  if (a.headshot && headshotTrail !== null) headshotTrail.hits.push({ x: a.x, y: a.y });
   // Emitted per body, including the last, so a shot that goes through three
   // enemies reads as three hits rather than as one arrow disappearing.
   if (a.power) {
@@ -5942,6 +7113,25 @@ function clearTilesInBlast(x, y, radius) {
   }
 }
 
+/**
+ * The radius this explosive will actually damage at, in pixels.
+ *
+ * One home, because it is asked twice for two different reasons and the two
+ * must agree: `explodeExplosive` damages at it, and `drawDynamites` draws the
+ * ring a player decides where to stand by. They did not agree -- the ring was
+ * drawn at the bare `dynamiteBlastRadius` for every charge, so THE BIG ONE
+ * promised a third of the reach it took, and DEMOLITIONIST's growing chain
+ * under-promised every link of it. A drawing that lies about a danger zone is
+ * worse than no drawing.
+ */
+function blastReachPx(d) {
+  const mult = d.chainMult ?? 1;
+  const link = Math.min(d.chainLink ?? 0, TALENTS.stat('moreLinks'));
+  const grow = TALENTS.capstoneActive('demolitionist')
+    ? 1 + link * CONFIG.sapperDemolitionGrowth : 1;
+  return CONFIG.dynamiteBlastRadius * mult * grow;
+}
+
 function explodeExplosive(d, source, opts = {}) {
   // A bomb carries its own radius multiplier so a chain inherits it. The shift
   // shot detonates one bomb wider than usual, and the point of the ability is
@@ -5961,10 +7151,11 @@ function explodeExplosive(d, source, opts = {}) {
     sapperChainPeak = Math.max(sapperChainPeak, link + 1);
     sapperChainRead = CONFIG.sapperChainReadSecs;
   }
-  const radius = (opts.radius ?? CONFIG.dynamiteBlastRadius * mult) * grow;
+  const radius = opts.radius ?? blastReachPx(d);
   const onWater = tileAt(d.x, d.y) === TILE.WATER;
   // Sound, shake, and the blast burst run in the render/audio handler.
-  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius });
+  events.emit({ type: 'EXPLOSION', x: d.x, y: d.y, onWater, big: mult > 1, radius,
+                ult: d.ult !== undefined });
   const r2 = radius ** 2;
 
   clearTilesInBlast(d.x, d.y, radius);
@@ -6006,7 +7197,7 @@ function explodeExplosive(d, source, opts = {}) {
         vx: Math.cos(a) * CONFIG.arrowSpeed, vy: Math.sin(a) * CONFIG.arrowSpeed,
         life: CONFIG.arrowLifetime, type: 'normal', bounces: 0,
         initSpeed: CONFIG.arrowSpeed,
-        trailHistory: [], fireSeed: 0, trailTimer: 0,
+        ...arrowTrail(0),
         bolt: true,
         hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
         dmgMult: CONFIG.crossbowBoltDamageMult });
@@ -6333,6 +7524,177 @@ function drawHeldMarkers() {
   }
   ctx.globalAlpha = 1;
 }
+
+/**
+ * The archer's mark, while it waits and while it falls.
+ *
+ * The ring is the promise and the delay is the skill, so the ring has to be
+ * legible before anything lands -- a player aiming at where things WILL be
+ * needs to see where that is. It tightens as the beat runs out, which is the
+ * only warning the first arrow gets.
+ */
+function drawArrowRain() {
+  const HH = CONFIG.hudHeight;
+  if (arrowRain !== null) {
+    paintArrowRainMark(ctx, arrowRain.x, arrowRain.y + HH, CONFIG.archerRainRadius,
+                       Math.max(0, arrowRain.delay) / CONFIG.archerRainDelay);
+  }
+  paintArrowRainImpacts(ctx,
+    rainHits.map((h) => ({ x: h.x, y: h.y + HH, age: h.t / RAIN_HIT_SECS })));
+}
+
+/**
+ * The wizard's lance.
+ *
+ * Drawn from his hands to wherever the aim currently reaches, every frame,
+ * because it is swept live -- this is the one effect on the roster whose angle
+ * is read as it is drawn rather than committed at the press.
+ */
+/** The lance's three passes, widest and darkest first. Hoisted: drawBeam runs
+ *  every frame the beam burns and the table never changes. */
+const BEAM_PASSES = [
+  { colour: '#4B3B9E', width: 1.0, glow: 0 },
+  { colour: '#A08CFF', width: 0.55, glow: 14 },
+  { colour: '#FFFFFF', width: 0.22, glow: 10 },
+];
+
+function drawBeam() {
+  if (!beam) return;
+  const HH = CONFIG.hudHeight;
+  // Under the lance and over the ground: what has already been swept.
+  paintBeamScorch(ctx, player.x, player.y + HH, beam.swept, CONFIG.wizBeamRange);
+  paintBeamRoots(ctx, player.x, player.y + HH, loopT);
+  // The reach the tick just resolved damage at, not a second probe of the same
+  // terrain: what is drawn is then exactly what was hit.
+  const end = beam.end ?? beamEnd();
+  const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
+  const x0 = player.x, y0 = player.y + HH;
+  const x1 = player.x + nx * end.moved, y1 = player.y + ny * end.moved;
+  ctx.save();
+  ctx.lineCap = 'round';
+  // Three passes, widest and darkest first: the core reads as hot because
+  // there is something cooler either side of it, not because it is bright.
+  for (const pass of BEAM_PASSES) {
+    ctx.strokeStyle = pass.colour;
+    ctx.lineWidth = Math.max(1, CONFIG.wizBeamWidth * pass.width);
+    ctx.shadowColor = '#A08CFF';
+    ctx.shadowBlur = pass.glow;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  }
+  // Where it stops, which is either its reach or the wall that took it.
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.shadowBlur = 18;
+  ctx.beginPath();
+  ctx.arc(x1, y1, CONFIG.wizBeamWidth * 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Where THE LEAP came down, while the floor is still showing it, or null.
+ *
+ * Its own state rather than a tail on `knightLeap`, because the landing
+ * outlives the jump: the fracture star is the ability's mark and it is drawn
+ * after he is standing again.
+ */
+let leapLanding = null;
+
+/**
+ * The arc THE LEAP is on, and the mark it left where it came down.
+ *
+ * A function of its own in the ground pass rather than a step inside
+ * `drawKnight`: the arc has to be under him and the landing outlives him
+ * being in the air at all, and the body's own painter runs inside a transform
+ * that has already been lifted off the floor.
+ */
+function drawLeapFx() {
+  const HH = CONFIG.hudHeight;
+  if (leapLanding !== null) {
+    paintLeapLanding(ctx, leapLanding.x, leapLanding.y + HH, CONFIG.knightLeapRadius,
+                     1 - leapLanding.timer / CONFIG.knightLeapMarkSecs);
+  }
+  const l = knightLeap;
+  if (l === null) return;
+  // Where he is going, dotted, for as long as he is in the air. A jump that
+  // crosses walls has to be aimable, and nothing showed where it came down.
+  paintLeapArc(ctx, l.x0, l.y0 + HH, l.x1, l.y1 + HH,
+               CONFIG.knightLeapArcPx, CONFIG.knightLeapRadius, loopT);
+}
+
+/** How far off the ground the leap has carried him, in pixels, for the body. */
+function leapLiftPx() {
+  return knightLeap ? Math.sin(knightLeap.t * Math.PI) * CONFIG.knightLeapArcPx : 0;
+}
+
+/**
+ * The singularity: a dark core, a bright rim, and matter falling in.
+ *
+ * The infalling streaks are drawn from the rim toward the centre with their
+ * angle advanced by the elapsed hold, so the whole thing rotates as it eats.
+ * The core grows as the timer runs down, which is the only warning the
+ * collapse gets.
+ */
+function drawVortex() {
+  const v = vortex;
+  if (!v) return;
+  paintVortex(ctx, {
+    x: v.x, y: v.y + CONFIG.hudHeight, radius: CONFIG.wizVortexRadius,
+    done: 1 - v.timer / CONFIG.wizVortexDuration, t: loopT,
+  });
+}
+
+/**
+ * The crack, drawn as the ragged split it is rather than a beam.
+ *
+ * The zigzag is derived from the run, not stored: the same distance always
+ * gives the same kink, so the split does not shimmer as the head advances.
+ * It widens with the same figure the damage uses, so what you see is the
+ * reach that actually resolved.
+ */
+function drawEarthshatter() {
+  const e = earthshatter;
+  if (!e) return;
+  const HH = CONFIG.hudHeight;
+  const nx = Math.cos(e.angle), ny = Math.sin(e.angle);
+  const px = -ny, py = nx;               // across the crack
+
+  // One split, drawn as a filled wedge rather than a stroked line: a stroke
+  // has one width and this thing widens the whole way out. Out along one
+  // ragged edge and back along the other closes the shape in a single fill.
+  // The kink is derived from the distance run, so a given point of the crack
+  // always breaks the same way and the split does not shimmer as it advances.
+  const edge = (side) => {
+    const pts = [];
+    for (let d = 0; d <= e.travelled; d += 12) {
+      const w = earthshatterRadius(d);
+      const off = side * w * (0.55 + 0.45 * Math.sin(d * 0.23 + side));
+      pts.push([e.x0 + nx * d + px * off, e.y0 + ny * d + py * off + HH]);
+    }
+    return pts;
+  };
+
+  ctx.save();
+  ctx.beginPath();
+  const outline = edge(1).concat(edge(-1).reverse());
+  outline.forEach(([x, y], i) => { if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+  ctx.closePath();
+  ctx.fillStyle = '#2A1206'; ctx.fill();                       // the ground, opened
+  ctx.strokeStyle = '#FF7A1F'; ctx.lineWidth = 2;
+  ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 12; ctx.stroke();  // the heat in it
+
+  ctx.restore();
+
+  // And what comes out of it. The wedge above says the ground is open; this
+  // says something happened to it.
+  paintEarthshatterDebris(ctx, {
+    x0: e.x0, y0: e.y0 + HH, angle: e.angle, travelled: e.travelled,
+    widthAt: earthshatterRadius, t: loopT,
+  });
+}
+
 
 function drawShockRings() {
   for (const r of shockRings) {
@@ -9206,9 +10568,11 @@ const TALENTS = (() => {
   const LS_KEY = 'crow_archer_talents_v1';
 
   let _bank = talentBankFrom(null);
-  // The run layer. Never saved: a draft and a sealed capstone are this run's
-  // only, which is the whole reason ownership grows options rather than power.
-  let _drafted = [];
+  // The run layer, now one thing rather than two: the sealed capstone. The
+  // draft used to sit beside it, so a bought talent did nothing until a run
+  // dealt it back to you at random -- a second decision made by dice over a
+  // pool you had already chosen with feathers. Buying is the decision now, and
+  // what you own is live.
   let _capstone = null;
   // The shop screen's cursor, and the note it prints under the rows. The note
   // is a purchase result rather than a string, so the screen decides its own
@@ -9294,15 +10658,32 @@ const TALENTS = (() => {
   function buy(id) {
     const result = purchaseTalent(tree(), state(), id);
     if (result.kind !== 'bought') return result;
-    _bank[selectedChar] = result.state;
+    _own(result.state);
     _save();
     return result;
+  }
+
+  /**
+   * The one write to this character's row, and the one place a purchase
+   * reaches the run.
+   *
+   * Most talents are read live -- `stat` is called at the moment the net is
+   * thrown -- but FOCUS DEPTH is not: the resource pool holds a ceiling that
+   * is set rather than asked for. While ownership was inert until a run
+   * drafted it, `resetRun` was a fine moment to set that ceiling, because
+   * nothing between two runs could change it. Buying is what makes a talent
+   * live now, so a wizard who buys FOCUS DEPTH mid-run and casts on the base
+   * pool for the rest of it is what a lone assignment here would ship.
+   */
+  function _own(next) {
+    _bank[selectedChar] = next;
+    applyToRun();
   }
 
   /** Test-only ladder bypass — this module's healHero. */
   function grant(id, level) {
     const s = state();
-    _bank[selectedChar] = { mastery: s.mastery, spent: s.spent, levels: { ...s.levels, [id]: level } };
+    _own({ mastery: s.mastery, spent: s.spent, levels: { ...s.levels, [id]: level } });
   }
 
   /** The same bypass for mastery, so a screen can be staged without playing
@@ -9314,13 +10695,10 @@ const TALENTS = (() => {
     // spend at it, and clamping `spent` to the new total is what the save
     // loader would do anyway.
     const mastery = Math.max(0, Math.trunc(points));
-    _bank[selectedChar] = { mastery, spent: Math.min(s.spent, mastery), levels: s.levels };
+    _own({ mastery, spent: Math.min(s.spent, mastery), levels: s.levels });
   }
 
-  function resetRun() { _drafted = []; _capstone = null; applyToRun(); }
-  function draft(id) { if (!_drafted.includes(id)) _drafted.push(id); applyToRun(); }
-  function drafted() { return _drafted.slice(); }
-  function offers(count) { return draftOffers(ownedIds(tree(), state()), Math.random, count, _drafted); }
+  function resetRun() { _capstone = null; applyToRun(); }
   function sealCapstone(id) { _capstone = id; }
   function capstoneActive(id) { return _capstone === id; }
 
@@ -9367,31 +10745,45 @@ const TALENTS = (() => {
     moreLinks:   { key: 'sapperChainMaxLinks' },
   };
 
-  /** A talent's effective figure: its CONFIG base, plus the levels this run
-   *  drafted. Undrafted and unowned both come back as the base. */
+/**
+ * Is this talent in the tree of the character being played?
+ *
+ * STATS spans the whole roster and `stat` is called by name from code that has
+ * no idea whose talent it is -- the archer's brace asks for `setFeet` while the
+ * wizard is out. `talentValue` THROWS on an id from another tree; the draft
+ * rule used to absorb that by accident, returning the base before it ever did
+ * the lookup, and removing the draft turned 172 tests into "no talent
+ * 'focusDepth' in this tree". The guard is explicit now rather than a
+ * side-effect of a rule that no longer exists.
+ */
+  function inThisTree(id) { return tree().talents.some((t) => t.id === id); }
+
+  /** A talent's effective figure: its CONFIG base, plus the levels owned.
+   *  Unowned, or another character's, comes back as the base. */
   function stat(id) {
     const row = STATS[id];
-    const value = draftedValue(tree(), state(), _drafted, id, CONFIG[row.key]);
+    const base = CONFIG[row.key];
+    const value = inThisTree(id) ? talentValue(tree(), state(), id, base) : base;
     return row.min === undefined ? value : Math.max(row.min, value);
   }
 
   assertTalentStatsWired(STATS);
 
-  /** An unlock talent, held only if this run drafted it. */
-  function held(id) { return draftedHeld(tree(), state(), _drafted, id); }
+  /** An unlock talent, held as soon as it is owned. */
+  function held(id) { return inThisTree(id) && talentHeld(tree(), state(), id); }
 
   function stormCooldown() { return capstoneActive('stormcaller') ? CONFIG.stormCooldown / 2 : CONFIG.stormCooldown; }
 
   function applyToRun() {
     // The one CONFIG field talents move, moved the way FEATHERS.applyToGame
-    // moves arrow capacity: effective = base + drafted, re-derived in full so
+    // moves arrow capacity: effective = base + owned, re-derived in full so
     // runs never compound onto each other.
     CONFIG.resources.focus.max = stat('focusDepth');
   }
 
   return {
     init, state, award, awardBoss, purse, buy, grant, grantMastery,
-    resetRun, draft, drafted, offers, sealCapstone, capstoneActive,
+    resetRun, sealCapstone, capstoneActive,
     stat, held, stormCooldown, applyToRun,
     cursor, moveCursor, setCursor, buyCurrent, lastBuy,
   };
@@ -9674,6 +11066,127 @@ function drawPlayerFrozenOverlay() {
 // of the pixel-art overhaul (the Archer only) — see docs/design-patterns.md
 // for why later phases add a table entry per character/tile kind here
 // instead of a growing if/else chain.
+
+/**
+ * What a ready ultimate looks like on the body, per hero.
+ *
+ * A table for the same reason CHIP is one, and painted here rather than
+ * inside each of the five draw functions: the aura belongs to a state every
+ * hero shares, and five copies of it would drift the moment one was tuned.
+ * It goes down before the sprite so it reads as something around him rather
+ * than something stuck on him -- the ground shadow lands on top of it.
+ *
+ * Each is deliberately a different idea, not a recolour: the player learns
+ * one hero at a time and should recognise the state without reading a HUD.
+ */
+const ULTIMATE_AURA = {
+  // HEADSHOT: four sight ticks closing on him, once a second. Everything
+  // narrowing to one point is the shot itself.
+  archer: (t) => {
+    const close = 1 - (t % 1);
+    const r = 10 + close * 16;
+    ctx.strokeStyle = '#EAFF6A'; ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 8;
+    ctx.lineWidth = 2; ctx.globalAlpha = 0.35 + 0.5 * (1 - close);
+    for (let k = 0; k < 4; k++) {
+      const a = k * Math.PI / 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * (r + 7), Math.sin(a) * (r + 7) - 6);
+      ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r - 6);
+      ctx.stroke();
+    }
+  },
+  // EARTHSHATTER: the ground under him already split, breathing light. His is
+  // the only aura on the floor rather than around the body, because his is
+  // the only ultimate that comes out of the floor.
+  knight: (t) => {
+    const beat = 0.55 + 0.45 * Math.sin(t * 3);
+    ctx.strokeStyle = '#FF7A1F'; ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 10 * beat;
+    ctx.globalAlpha = 0.30 + 0.45 * beat; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (let k = 0; k < 5; k++) {
+      const a = k * (Math.PI * 2 / 5) + 0.4;
+      const r0 = 7, r1 = 13 + 7 * beat;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0 * 0.5 + 11);
+      ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1 * 0.5 + 11);
+      ctx.stroke();
+    }
+  },
+  // CARPET BOMB: a fuse already burning around him. Sparks running a circle,
+  // not a glow -- the thing that is ready is a line of lit charges, and a
+  // fuse is the one image in his kit that means 'about to'.
+  sapper: (t) => {
+    ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 8;
+    for (let k = 0; k < 7; k++) {
+      // Each spark runs the ring on its own offset, so they chase rather
+      // than rotate as one rigid wheel.
+      const a = t * 2.4 + k * (Math.PI * 2 / 7);
+      const flare = 0.5 + 0.5 * Math.sin(t * 9 + k * 1.7);
+      ctx.globalAlpha = 0.35 + 0.55 * flare;
+      ctx.fillStyle = flare > 0.75 ? '#FFE9A0' : '#FF7A1A';
+      const r = 17 + 2 * Math.sin(t * 5 + k);
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.62 - 5, 1 + 1.6 * flare, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+  // Motes falling inward. Drawn for the wizard rather than for one of his
+  // two ultimates: it says the ultimate is UP, and both of his are worth
+  // pointing somewhere. Per-ability art is owed -- see the note on the table.
+  wizard: (t) => {
+    ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 8;
+    for (let k = 0; k < 9; k++) {
+      // Each mote runs its own fall, staggered, so they arrive one after
+      // another rather than as a closing ring.
+      const fall = ((t * 0.55) + k / 9) % 1;
+      const a = k * 2.2 + t * 0.8;
+      const r = 4 + (1 - fall) * 22;
+      ctx.globalAlpha = 0.15 + 0.6 * fall;
+      ctx.fillStyle = fall > 0.8 ? '#FFFFFF' : '#A08CFF';
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.8 - 6, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+  // A line coiled and loaded, in the yellow his momentum meter uses. HARPOON
+  // is gated on that meter so the colours agree there; FULL AUTO is not gated
+  // on it, and reads as "keep running" instead, which the same yellow serves.
+  ranger: (t) => {
+    ctx.strokeStyle = '#FFCC00'; ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 9;
+    ctx.lineWidth = 2; ctx.lineCap = 'round';
+    // Counted rather than iterated over a fresh array: this aura runs from the
+    // moment the ultimate comes up until the player spends it, which can be
+    // minutes -- an allocation here is 60 a second indefinitely.
+    for (let dir = 1; dir >= -1; dir -= 2) {
+      const a = t * 3.4 * dir;
+      ctx.globalAlpha = 0.30 + 0.45 * (0.5 + 0.5 * Math.sin(t * 4 + dir));
+      ctx.beginPath();
+      ctx.ellipse(0, -5, 19, 11, 0, a, a + 1.1);
+      ctx.stroke();
+    }
+  },
+};
+
+/** Paints the ready aura, if the hero out has an ultimate and it is up. */
+/**
+ * The aura for whatever is equipped.
+ *
+ * Keyed on the HERO while `ULTIMATE` is keyed on the ability, which is a grain
+ * mismatch and a deliberate one for now: a hero's two ultimates share one
+ * "it is ready" tell, and five second-slot paintings do not exist yet. The
+ * ability's record is where a per-slot `aura` belongs the day one is drawn --
+ * `equippedUltimate()` is already in hand here for exactly that. What was NOT
+ * acceptable was leaving the comments in the table describing the first slot
+ * as though it were the only one; two of them made claims the second slot
+ * contradicts, and they are corrected above.
+ */
+function drawUltimateAura() {
+  const paint = ULTIMATE_AURA[selectedChar];
+  if (!paint || !ultimateReady()) return;
+  ctx.save();
+  ctx.translate(player.x, player.y + CONFIG.hudHeight);
+  paint(loopT);
+  ctx.restore();
+}
 
 function drawPlayer() {
   if (selectedChar === 'wizard') { drawWizard(); return; }
@@ -10142,7 +11655,12 @@ function drawKnightChargeTravel(g, tele, facing) {
 
 function drawKnight() {
   const px = player.x, py = player.y + CONFIG.hudHeight, f = player.facing;
-  ctx.save(); ctx.translate(px, py); ctx.scale(f, 1);
+  // Off the ground while THE LEAP carries him. The ground shadow below has
+  // already shrunk to say so, and a shadow that pulls away from
+  // a body still pinned to the floor reads as a drawing mistake rather than as
+  // a jump. Applied to the whole transform so the spear and the bloodlust
+  // drops rise with him.
+  ctx.save(); ctx.translate(px, py - leapLiftPx()); ctx.scale(f, 1);
 
   // ── Whirlwind visual (behind player) ────────────────────────────────────
   if (knightWhirlwindTimer > 0) {
@@ -10200,9 +11718,16 @@ function drawKnight() {
     ctx.restore();
   }
 
-  // Ground shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.38)';
-  ctx.beginPath(); ctx.ellipse(0, 14, 13, 4, 0, 0, Math.PI*2); ctx.fill();
+  // Ground shadow. Drawn at the ground rather than at the body: the leap
+  // lifts the whole transform, and a shadow that rises with him is the exact
+  // drawing mistake the lift exists to avoid. It shrinks with the lift instead,
+  // which is what says he is off the floor.
+  const lift = leapLiftPx();
+  ctx.fillStyle = `rgba(0,0,0,${(0.38 - 0.18 * (lift / CONFIG.knightLeapArcPx)).toFixed(3)})`;
+  ctx.beginPath();
+  ctx.ellipse(0, 14 + lift, 13 - 5 * (lift / CONFIG.knightLeapArcPx),
+              4 - 1.6 * (lift / CONFIG.knightLeapArcPx), 0, 0, Math.PI * 2);
+  ctx.fill();
 
   const bob      = Math.sin(player.walkPhase || 0) * 1.2;
   const fsActive = inv.knightFireSwordTimer > 0;
@@ -10319,8 +11844,36 @@ function drawKnight() {
   if (knightCharge.on) drawChargeBar(px, py, knightChargeFrac());
 }
 
+/**
+ * HEADSHOT's corridor and HARPOON's chain: the two arrows that are not arrows.
+ *
+ * Drawn from `arrows` rather than from state of their own wherever the arrow
+ * itself is the authority -- the chain has to end exactly where the head is,
+ * and a second copy of that position would lag it by a frame.
+ */
+function drawUltimateArrows() {
+  const HH = CONFIG.hudHeight;
+  const shot = arrows.find((a) => a.headshot);
+  if (headshotTrail !== null) {
+    // While it is in the air the corridor grows behind it; once it is gone the
+    // far end stays where it stopped and the whole line fades.
+    if (shot) {
+      headshotTrail.x1 = shot.x; headshotTrail.y1 = shot.y;
+      headshotTrail.timer = CONFIG.archerHeadshotTrailSecs;
+    }
+    const fade = shot ? 1 : headshotTrail.timer / CONFIG.archerHeadshotTrailSecs;
+    paintGoldCorridor(ctx, headshotTrail.x0, headshotTrail.y0 + HH,
+                      headshotTrail.x1, headshotTrail.y1 + HH, fade, 1);
+    for (const h of headshotTrail.hits) paintPiercePip(ctx, h.x, h.y + HH, 10, fade);
+  }
+  for (const a of arrows) {
+    if (a.harpoon) paintHarpoonChain(ctx, player.x, player.y + HH, a.x, a.y + HH);
+  }
+}
+
 function drawArrows() {
   const HH = CONFIG.hudHeight;
+  drawUltimateArrows();
   for (const a of arrows) {
     const angle = Math.atan2(a.vy, a.vx);
 
@@ -10342,11 +11895,30 @@ function drawArrows() {
     // A drawn shot has to read as heavier than a loosed one, whichever ammo
     // it spent: a bright streak behind the shaft, as long as the number of
     // bodies it can still pass through.
+    // The harpoon is a line, and a line has to be visibly attached to him or
+    // being yanked down it comes out of nowhere. Drawn back to his hands
+    // rather than as a streak behind the head.
+    if (a.harpoon) {
+      ctx.save();
+      ctx.rotate(-angle);                       // back into world space
+      ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1.5;
+      ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 6; ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(player.x - a.x, player.y - a.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     if (a.power) {
-      const pips = a.pierceLeft || 1;
+      // A headshot pierces effectively without limit, so pierceLeft cannot
+      // size its streak -- 99 would draw a wall. It takes a fixed, heavier
+      // one in white instead, so it never reads as a big power shot.
+      const pips = a.headshot ? CONFIG.archerHeadshotPips : (a.pierceLeft || 1);
       ctx.globalAlpha = 0.5;
-      ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 10;
-      ctx.strokeStyle = '#EAFF6A'; ctx.lineWidth = 2 + pips;
+      const streak = a.headshot ? '#FFFFFF' : '#EAFF6A';
+      ctx.shadowColor = streak; ctx.shadowBlur = a.headshot ? 18 : 10;
+      ctx.strokeStyle = streak; ctx.lineWidth = 2 + pips;
       ctx.beginPath(); ctx.moveTo(-16 - 4 * pips, 0); ctx.lineTo(12, 0); ctx.stroke();
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
@@ -10499,6 +12071,13 @@ function drawFires() {
 function drawDynamites() {
   for (const d of dynamites) {
     const dx = d.x, dy = d.y + CONFIG.hudHeight;
+    if (d.ult !== undefined) {
+      paintUltimateCharge(ctx, {
+        x: dx, y: dy, left: d.life / (d.fuseTotal || CONFIG.dynamiteLifetime),
+        reach: blastReachPx(d), big: d.ult === 'theBigOne', t: loopT,
+      });
+      continue;
+    }
     const fuseT     = d.life;
     const fuseTotal = d.fuseTotal || CONFIG.dynamiteLifetime;
     const burntFrac = Math.min(0.8, 1 - fuseT / fuseTotal);
@@ -10509,7 +12088,7 @@ function drawDynamites() {
 
     // Blast radius ring
     ctx.globalAlpha = 0.15; ctx.strokeStyle = '#ff6600'; ctx.lineWidth = 1;
-    ctx.setLineDash([4,4]); ctx.beginPath(); ctx.arc(0, 0, CONFIG.dynamiteBlastRadius, 0, Math.PI*2); ctx.stroke();
+    ctx.setLineDash([4,4]); ctx.beginPath(); ctx.arc(0, 0, blastReachPx(d), 0, Math.PI*2); ctx.stroke();
     ctx.setLineDash([]); ctx.globalAlpha = 1;
 
     ctx.rotate(d.angle);
@@ -12272,6 +13851,15 @@ function drawCellTrack(x, y, cells, pitch, body, h, cur, max, colOn, colDim) {
  * share #FF7A1F and differ only in outline.
  */
 const GLYPH = {
+  // The ultimate: an eight-pointed burst. The one glyph here that is neither
+  // a weapon nor a resource, because the ultimate is neither -- it is a
+  // moment, and a star is how this vocabulary can say so.
+  ultimate: (s) => { const m = s / 2; ctx.lineWidth = 2;
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4, len = k % 2 === 0 ? 0.46 : 0.30;
+      ctx.beginPath(); ctx.moveTo(m, m);
+      ctx.lineTo(m + Math.cos(a) * s * len, m + Math.sin(a) * s * len); ctx.stroke();
+    } },
   // Momentum: three speed lines, which is the one idiom in this table that is
   // about the hero rather than about what he throws.
   momentum: (s) => { ctx.lineWidth = 2;
@@ -12407,11 +13995,11 @@ const LANE_B = {
  * laser streams and fire bolts are pools, and pools live in lane B.
  */
 const LANE_D = {
-  archer: ['brace', 'power', 'shield'],
-  ranger: ['momentum', 'net', 'shield'],
-  knight: ['whirlwind', 'block', 'fireSword', 'shield'],
-  wizard: ['bolt', 'storm', 'blink', 'shield'],
-  sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'shield'],
+  archer: ['brace', 'power', 'ult', 'shield'],
+  ranger: ['momentum', 'net', 'ult', 'shield'],
+  knight: ['whirlwind', 'block', 'fireSword', 'ult', 'shield'],
+  wizard: ['bolt', 'storm', 'blink', 'ult', 'shield'],
+  sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'ult', 'shield'],
 };
 
 /** Reads one chip's live state. A table rather than a switch, so a new
@@ -12463,12 +14051,19 @@ const CHIP = {
   chain:      () => ({
     glyph: 'bomb', color: '#FF7A1A', lit: sapperChainPeak > 1,
     label: sapperChainPeak > 1 ? 'x' + sapperChainPeak : '',
-    frac: sapperChainPeak > 1
-      ? Math.min(1, sapperChainPeak / (TALENTS.stat('moreLinks') + 1)) : null,
+    frac: sapperChainPeak > 1 ? sapperChainFrac() : null,
   }),
   // Reuses the snipe crosshair glyph — it is a precision shot, same read as
   // everyone else's aim-down-it key, just cooldown-gated instead of held.
   sapperShot: () => cooldownChip('snipe', sapperShotCD, CONFIG.sapperShotCooldown, 0),
+  // Not a cooldownChip, though it is a cooldown. Deliberately the one chip in
+  // the lane that is not the shared green: it is the one the player must not
+  // miss, and a fifth green READY among four is exactly what gets missed.
+  ult: () => ({
+    glyph: 'ultimate', color: '#FF3EC8', lit: ultimateReady(),
+    label: ultimateReady() ? 'ULT' : Math.ceil(ultimateCD) + 's',
+    frac: ultimateReady() ? null : 1 - ultimateCD / CONFIG.ultimateCooldown,
+  }),
 };
 
 /** Shared shape for anything that recharges: ready, counting down, or live. */
@@ -13371,7 +14966,24 @@ const TALENT_KINDS = {
  * look would draw a blank panel, which is the sapper's old missing-portrait
  * gap wearing new clothes.
  */
+/** Which offers are drawn as painted icons rather than as stroked sigils. */
+const ULTIMATE_ICON_IDS = new Set(Object.keys(ULTIMATE_ICON_ROWS));
+
 const TALENT_LOOK = {
+  // The ten ultimates. Here rather than in a table of their own: the chooser
+  // panel reads exactly this for its colour and its one-line hook, and a
+  // second lookup beside it would be two homes for one question.
+  headshot:     { kind: 'direct',   hook: 'One arrow, and it does not stop' },
+  arrowRain:    { kind: 'direct',   hook: 'The circle you marked is not survivable' },
+  vortex:       { kind: 'mechanic', hook: 'Everything in reach arrives at one point' },
+  theBeam:      { kind: 'direct',   hook: 'He plants his feet and keeps burning' },
+  earthshatter: { kind: 'direct',   hook: 'The ground opens away from him' },
+  theLeap:      { kind: 'mechanic', hook: 'He arrives where he could not have walked' },
+  harpoon:      { kind: 'mechanic', hook: 'The line brings him to it' },
+  fullAuto:     { kind: 'direct',   hook: 'Fires for as long as he keeps running' },
+  carpetBomb:   { kind: 'direct',   hook: 'The line goes up outward from his feet' },
+  theBigOne:    { kind: 'direct',   hook: 'One crater, three times over' },
+
   // Wizard.
   focusDepth:    { kind: 'indirect', hook: 'A full pool casts four bolts' },
   blinkReach:    { kind: 'mechanic', hook: 'The wall you could not reach is now cover' },
@@ -13443,6 +15055,13 @@ const TIER_ROMAN  = { 1: 'I', 2: 'II', 3: 'III' };
 
 /** The spec behind a chooser offer — a talent row or a capstone row. */
 function chooserSpec(id) {
+  // An ultimate is not in the tree: it is not bought, drafted or ranked into.
+  // Its label and description ride on the ability record itself, which is
+  // already the one home for everything else about it.
+  const pair = ULTIMATE[selectedChar];
+  if (pair) {
+    for (const slot of [pair.first, pair.second]) if (slot.id === id) return slot;
+  }
   const tree = CHAR_TREES[selectedChar];
   const spec = tree.talents.find((t) => t.id === id) || tree.capstones.find((c) => c.id === id);
   if (!spec) throw new Error(`chooser offer '${id}' is not in ${selectedChar}'s tree`);
@@ -13530,17 +15149,26 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
   // type sizes are deliberately NOT fractions: shrinking the box must not
   // shrink the reading, and the sigil holds its stroke weight for the same
   // reason.
-  paintTalentSigil(ctx, id, {
-    // Centred on the fraction, with no baseline fudge: the painter centres on
-    // the point it is given, where fillText hung a glyph off a baseline.
-    // Larger than the glyphs were, too — a 46 px letter fills its em box and a
-    // stroked drawing on a 24 grid does not, so matching the old number gave
-    // a sigil that read as an afterthought in the middle of the panel.
-    x: cx, y: y + h * (sel ? 0.32 : 0.44),
-    size: sel ? 74 : 58,
-    color: sel ? kind.color : kind.dim,
-    glow: sel ? 12 : 0,
-  });
+  // An ultimate brings its own painted icon -- a 48px drawing in a gold bezel,
+  // already lit and grounded -- where a talent brings a stroked sigil the panel
+  // colours itself. Sized in whole multiples of 48 so the art stays on whole
+  // pixels; a fractional scale is how pixel art turns to soup.
+  const iconY = y + h * (sel ? 0.32 : 0.44);
+  if (ULTIMATE_ICON_IDS.has(id)) {
+    paintUltimateIcon(ctx, id, { x: cx, y: iconY, size: sel ? 96 : 48 });
+  } else {
+    paintTalentSigil(ctx, id, {
+      // Centred on the fraction, with no baseline fudge: the painter centres on
+      // the point it is given, where fillText hung a glyph off a baseline.
+      // Larger than the glyphs were, too — a 46 px letter fills its em box and a
+      // stroked drawing on a 24 grid does not, so matching the old number gave
+      // a sigil that read as an afterthought in the middle of the panel.
+      x: cx, y: iconY,
+      size: sel ? 74 : 58,
+      color: sel ? kind.color : kind.dim,
+      glow: sel ? 12 : 0,
+    });
+  }
 
   ctx.font = '10.5px "Courier New",monospace';
   ctx.fillStyle = '#93a08f';
@@ -13551,7 +15179,8 @@ function _drawChooserPanel(slot, id, index, sel, isRite) {
     ry = _drawChooserRow(x + pad, ry, innerW, 'EFFECT', spec.desc, '#C8D0C4');
     _drawChooserRow(x + pad, ry, innerW,
       isRite ? 'LASTS' : 'DRAFT',
-      isRite ? 'This run only, once the rite is sealed'
+      ULTIMATE_ICON_IDS.has(id) ? 'Yours for this run, once you take it'
+      : isRite ? 'This run only, once the rite is sealed'
              : 'Live this run only; the next wakes at each boss',
       '#C8D0C4');
   }
@@ -13622,20 +15251,23 @@ function chooserLayout() {
  * rather than on one.
  */
 function drawChooser() {
+  const isUlt = chooser.kind === 'ultimate';
   const isRite = chooser.kind === 'rite';
   const rank = rankOf(TALENTS.state().mastery);
   _selectionScreenBackdrop(
-    isRite ? '── THE RITE ──' : '── THE DRAFT ──',
-    isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
-           : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
+    isUlt ? '── THE ULTIMATE ──' : isRite ? '── THE RITE ──' : '── THE DRAFT ──',
+    isUlt ? `${selectedChar.toUpperCase()} · IT IS CHARGED · ONE OF THE TWO, THIS RUN ONLY`
+    : isRite ? `THE BOSS IS DOWN · MASTERY RANK ${TIER_ROMAN[rank] || rank} · ONE CAPSTONE, THIS RUN ONLY`
+    : `${selectedChar.toUpperCase()} · OWNED TALENTS WAKE BY BEING PICKED`);
 
   const { slots, selected, hintY } = chooserLayout();
-  chooser.offers.forEach((id, i) => _drawChooserPanel(slots[i], id, i, i === selected, isRite));
+  chooser.offers.forEach((id, i) => _drawChooserPanel(slots[i], id, i, i === selected, isRite || isUlt));
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
   const digits = chooser.offers.map((_, i) => `[${i + 1}]`).join(' ');
-  ctx.fillText(`CLICK OR ← →  /  ${digits}  SWITCH    ENTER  ${isRite ? 'SEAL THE RITE' : 'WAKE IT'}`,
+  const verb = isUlt ? 'TAKE IT' : isRite ? 'SEAL THE RITE' : 'WAKE IT';
+  ctx.fillText(`CLICK OR ← →  /  ${digits}  SWITCH    ENTER  ${verb}`,
     CONFIG.canvasW / 2, hintY);
 }
 
@@ -14332,7 +15964,9 @@ function render(t) {
     // anything that walks over it. Blasts go over the bodies instead -- they
     // are in the air and half of what sells one is that it hides what it hit.
     drawTiles(); FORESHADOW.drawSkyTint(); drawMazeObjective(); drawNetMats();
-    drawPickups(); drawFires(); drawParticles(); drawShockRings();
+    drawUltimateCast(); drawDetCord(); drawLeapFx(); drawFullAutoTrail();
+    drawPickups(); drawFires(); drawEarthshatter(); drawVortex(); drawArrowRain();
+    drawParticles(); drawShockRings();
     // Anything alive is drawn only where the player can see it right now.
     // litAt is unconditionally true off the maze, so this is the same list of
     // draws it has always been on forest and castle.
@@ -14345,14 +15979,14 @@ function render(t) {
     for (const s of soldiers) if (litAt(s.x, s.y)) { drawSoldier(s); drawFrozenOverlay(s); }
     for (const gd of guards) if (litAt(gd.x, gd.y)) drawGuard(gd);
     drawArrows(); drawDynamites(); drawBarrageBombs(); drawSapperShots(); drawSatchels(); drawHostileBolts(); drawNets(); drawHeldMarkers();
-    drawChargeArc(); drawPlayer();
+    drawChargeArc(); drawUltimateAura(); drawPlayer();
     if (playerPoison.timer > 0) drawPlayerPoisonOverlay();
     if (playerFrozenTimer > 0) drawPlayerFrozenOverlay();
     if (!boss || litAt(boss.x, boss.y)) drawBoss();
     // Over every body, because half of what sells a blast is that it briefly
     // hides what it went off on. Under the floaters, so the damage numbers
     // still read through it.
-    drawBlasts(); drawAbilityFx();
+    drawBeam(); drawBlasts(); drawAbilityFx();
     drawFloaters(); drawPickupMarks();
     // Last thing inside the shake, so the dark moves with the world instead of
     // sliding across it.
@@ -14623,6 +16257,10 @@ function stepGame(dt) {
       if (keys['ArrowUp'])   { FEATHERS.moveCursor(-1); keys['ArrowUp']   = false; }
       if (keys['ArrowDown']) { FEATHERS.moveCursor( 1); keys['ArrowDown'] = false; }
       if (keys['Enter'])     { FEATHERS.buyCurrent();   keys['Enter']     = false; }
+      // Half of a two-way shortcut between the two shops -- `talents` has the
+      // matching U. Not a third door into the talent screen: inventory itself
+      // is only reachable from pause, so this crosses between shops rather
+      // than opening one. Deleting it left the crossing one-way.
       if (keys['t']||keys['T']) { transitionTo('talents'); keys['t']=keys['T']=false; }
       if (keys['b']||keys['B']) { transitionTo('paused'); keys['b']=keys['B']=false; }
       break;
@@ -14791,6 +16429,35 @@ export const devHooks = {
   // input path a real keyboard does instead of a parallel one.
   keys: () => keys,
   shoot() { shootPressed = true; },
+  // The special, down the same path a keyboard or a mouse takes. Takes the
+  // source by name -- 'key' fires the ultimate when it is up, 'button' never
+  // does -- so a test reads as the press it is making.
+  special(source) { startCharge(source); releaseCharge(); },
+  SPECIAL_SOURCE,
+  ultimate: () => ({ cd: ultimateCD, ready: ultimateReady(),
+                     charge: ULTIMATE_CHARGE[selectedChar]?.() || 0,
+                     // The gold beat all ten open on. Exposed as a boolean
+                     // rather than the object: what a test has any business
+                     // asserting is that the tell fired and then let go.
+                     cast: ultimateCast !== null }),
+  setUltimateCD(secs) { ultimateCD = secs; },
+  /** The crack in flight, or null once it has run its length. */
+  earthshatter: () => earthshatter,
+  /** Which of the hero's two ultimates is equipped, and a way to swap it.
+   *  The pick SCREEN is not built; this is the seam it will write to. */
+  ultimateSlot: () => ultimateSlot,
+  // Choosing a slot IS the pick, so this seals it: a test that equips an
+  // ultimate and then finds it unfireable because nobody answered a screen is
+  // testing the ceremony, not the ability.
+  setUltimateSlot(slot) { ultimateSlot = slot; ultimatePicked = true; },
+  ultimatePicked: () => ultimatePicked,
+  ULTIMATE_SLOT,
+  arrowRain: () => arrowRain,
+  beam: () => beam,
+  knightLeap: () => knightLeap,
+  fullAuto: () => fullAuto,
+  /** The singularity while it holds, or null once it has collapsed. */
+  vortex: () => vortex,
   killCount: () => killCount,
   hp: () => playerHP,
   // One frame with a raw millisecond gap, to test accumulator multi-stepping.
@@ -14883,7 +16550,7 @@ export const devHooks = {
   }),
   // The same two lines the click handler runs, so a harness advances the
   // stage hand-off through the real path rather than assigning appState.
-  dismissIntro() { if (appState !== 'stage_intro') return false; pendingIntro = null; appState = 'playing'; return true; },
+  dismissIntro() { if (appState !== 'stage_intro') return false; beginNewLevel(); return true; },
   maze: () => (mazeRun ? {
     silver: mazeRun.held.silver, golden: mazeRun.held.golden,
     chestOpened: mazeRun.locks.chest.opened, doorOpened: mazeRun.locks.door.opened,
@@ -14973,7 +16640,9 @@ export const devHooks = {
   // whirlwind, the ranger's satchel, the sapper's barrage, the archer's
   // dynamite charge -- and a test that called one of those directly would not
   // be exercising the routing that picks it.
-  secondary() { startCharge(); },
+  // The plain special, which is the BUTTON's meaning: a secondary press in a
+  // test is not somebody reaching for their ultimate.
+  secondary() { startCharge(SPECIAL_SOURCE.BUTTON); },
   secondaryUp() { releaseCharge(); },
   // The whole sniper-key path, so a test exercises the same routing the
   // keyboard does rather than calling one ability directly.
@@ -14994,6 +16663,10 @@ export const devHooks = {
     lit: !!d.chainLit, link: d.chainLink ?? 0,
   })),
   /** Momentum's meter and what it multiplies a bolt by. */
+  // Test-only. The meter is filled by ground covered, which is fine to drive
+  // in an open arena and painful inside a boss fight -- and a test of the
+  // harpoon should not also be a test of whether he can find 375 px to run.
+  setMomentum(level) { rangerMomentum = level; },
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: TALENTS.stat('fullTilt') }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress
@@ -15021,6 +16694,7 @@ export const devHooks = {
   upgradeLevels: () => FEATHERS.levels(),
   /** The mid-run chooser, and a pick that goes through the real confirm. */
   chooser: () => chooser,
+  chooserQueue: () => chooserQueue,
   /** How each talent is presented: its kind, sigil and hook. Exposed so the
    *  colour code can be held to a test — a scheme that drifts talent by
    *  talent is worse than no scheme, because it teaches the wrong thing. */
@@ -15360,18 +17034,12 @@ export function boot() {
   // is unreachable any more. Both still sit at the end of a grind: the draft
   // deals only from talents already owned, and the rite wants rank III on top
   // of that. One word each is the short way in.
-  window.draft = (char = selectedChar) => {
-    devHooks.pick(char);
-    for (const t of CHAR_TREES[char].talents) TALENTS.grant(t.id, 1);
-    transitionTo('playing');   // initGame queues the run's opening draft itself
-    return chooser ? chooser.offers : `${char} owns no talents to draft`;
-  };
   window.rite = (char = selectedChar) => {
     devHooks.pick(char);
     TALENTS.grantMastery(RANK_THRESHOLDS[CAPSTONE_RANK - 1]);
     transitionTo('playing');
-    // The run just started, so an opening draft may be queued in front of the
-    // rite; this verb is for looking at the rite, so it goes first.
+    // The rite belongs to the start of a level, which a run in progress is
+    // not; opened here rather than queued so the verb shows it at once.
     chooser = null; chooserQueue = []; riteOffered = false;
     queueRite('playing');
     openNextChooser();
@@ -15379,7 +17047,7 @@ export function boot() {
   };
   // Printed once so the verbs are discoverable from the console itself rather
   // than only from a document the player would have to already be reading.
-  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue() draft(char) rite(char)');
+  log.info('boot', 'console: siege(n) hurt(n) crack(hp) retinue() rite(char)');
 
   FEATHERS.init();
   TALENTS.init();

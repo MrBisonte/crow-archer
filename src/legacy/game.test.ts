@@ -5467,3 +5467,841 @@ describe('projectile flight, as it behaves today', () => {
   });
 });
 
+
+describe('the ultimate', () => {
+  /** A hero standing in a cleared arena, aiming due east, ultimate charging. */
+  function readyRun(hero: string): { x: number; y: number; aimAngle: number } {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    return p;
+  }
+
+  it('starts a run charging rather than in hand', () => {
+    readyRun('archer');
+    expect(g.ultimate().ready).toBe(false);
+    // Close, not exact: the helper settles two frames of aim before returning.
+    expect(g.ultimate().cd).toBeCloseTo(g.config().ultimateCooldown, 0);
+  });
+
+  // The whole of the per-hero part of the timer. An archer who is braced is
+  // playing his kit, and the timer is meant to notice: revert the boost term
+  // in tickUltimate and the two numbers below are equal.
+  it('charges faster for a hero filling his own meter', () => {
+    readyRun('archer');
+    // Standing still is what fills the brace, so the sim does it for us.
+    stepPast(2 * ONE_SECOND);
+    expect(g.brace().level).toBe(1);
+    const before = g.ultimate().cd;
+    stepPast(ONE_SECOND);
+    const bracedSpend = before - g.ultimate().cd;
+
+    // The same second with the meter empty. Walking is what empties the
+    // brace, and standing still is what fills it, so the comparison only
+    // means anything if this hero actually moves.
+    readyRun('archer');
+    (g.keys() as Record<string, boolean>)['ArrowRight'] = true;
+    stepPast(ONE_SECOND);
+    expect(g.brace().level).toBe(0);
+    const idleFrom = g.ultimate().cd;
+    stepPast(ONE_SECOND);
+    const idleSpend = idleFrom - g.ultimate().cd;
+    (g.keys() as Record<string, boolean>)['ArrowRight'] = false;
+
+    expect(g.config().ultimateChargeBoost).toBeGreaterThan(0);
+    // A full meter is worth the whole boost: one second of standing still
+    // spends two of the timer's.
+    expect(idleSpend).toBeCloseTo(1, 1);
+    expect(bracedSpend).toBeCloseTo(1 + g.config().ultimateChargeBoost, 1);
+  });
+
+  // The trigger, and the reason it needs no new key: the special is bound to
+  // both F and the right button, so one of the two can carry the ultimate.
+  it('fires on the special KEY and never on the right button', () => {
+    readyRun('archer');
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    expect(g.ultimate().ready).toBe(true);
+
+    // The button: the plain special, and the ultimate is untouched.
+    const dynamitesBefore = g.dynamites().length;
+    g.special('button');
+    expect(g.ultimate().ready).toBe(true);
+    expect(g.dynamites().length).toBeGreaterThan(dynamitesBefore);
+
+    // The key: the ultimate, and it costs the whole timer.
+    const arrowsBefore = g.arrows().length;
+    g.special('key');
+    expect(g.arrows().length).toBe(arrowsBefore + 1);
+    expect(g.ultimate().cd).toBe(g.config().ultimateCooldown);
+  });
+
+  // A miss costs the minute: the cooldown is spent on firing, not on hitting.
+  // The arena is empty, so this shot hits nothing at all.
+  it('costs the full timer even when the shot hits nothing', () => {
+    readyRun('archer');
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    g.special('key');
+    stepPast(ONE_SECOND);
+    expect(g.ultimate().ready).toBe(false);
+    expect(g.ultimate().cd).toBeGreaterThan(g.config().ultimateCooldown * 0.9);
+  });
+
+  it('spends nothing when the archer has no shaft to fire', () => {
+    readyRun('archer');
+    const inv = g.inv() as { arrows: number; fireArrows: number; ricochetArrows: number };
+    inv.arrows = 0; inv.fireArrows = 0; inv.ricochetArrows = 0;
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    g.special('key');
+    expect(g.ultimate().ready).toBe(true);
+  });
+});
+
+describe('HEADSHOT, the archer ultimate', () => {
+  /**
+   * Fires a headshot, braced or not.
+   *
+   * "Not braced" has to be made true rather than assumed: standing still is
+   * what fills the meter, and every helper here stands still. Walking a moment
+   * empties it, which is the only way to get a genuinely cold shot.
+   */
+  function firedFrom(braced: boolean): Record<string, number> {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * g.config().tileSize;
+    p.y = 6.5 * g.config().tileSize;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    if (braced) {
+      stepPast(2 * ONE_SECOND);
+      expect(g.brace().level).toBe(1);
+    } else {
+      (g.keys() as Record<string, boolean>)['ArrowDown'] = true;
+      stepPast(20);
+      (g.keys() as Record<string, boolean>)['ArrowDown'] = false;
+      expect(g.brace().level).toBe(0);
+    }
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    g.special('key');
+    const shot = g.arrows()[g.arrows().length - 1] as Record<string, number>;
+    return shot;
+  }
+
+  it('always lands critical, on top of the brace rather than instead of it', () => {
+    const cold = firedFrom(false);
+    expect(cold.dmgMult).toBe(g.config().archerHeadshotCrit);
+
+    const braced = firedFrom(true);
+    // The stance still pays. Flatten the multipliers into one and this is the
+    // test that says so.
+    expect(braced.dmgMult).toBeCloseTo(
+      g.config().archerHeadshotCrit * g.config().braceBossMult, 5);
+  });
+
+  it('outruns a power shot and pierces far past one', () => {
+    const shot = firedFrom(false);
+    const c = g.config();
+    expect(shot.initSpeed).toBe(c.arrowSpeed * c.archerHeadshotSpeedMult);
+    expect(shot.pierceLeft).toBeGreaterThan(c.archerPowerBounces);
+    expect(shot.pierceLeft).toBe(c.archerHeadshotPierce);
+  });
+});
+
+describe('EARTHSHATTER, the knight ultimate', () => {
+  /** A knight in a cleared arena at a known tile, aiming due east. */
+  function knightAt(col = 6, row = 6): { x: number; y: number; aimAngle: number } {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  // Read on the terrain rather than on crows. A crow is spawned by the wave,
+  // walks toward the hero, and can be replaced by another that looks the same
+  // to an assertion; terrain is where it is put and stays there. The crack
+  // breaks ground and kills through one call, so the ground is the honest
+  // witness for how far it reached and how narrow it stayed.
+  it('breaks the ground down its line, far past a spear length, and not beside it', () => {
+    const p = knightAt();
+    const c = g.config();
+    const tiles = g.tiles() as { get(r: number, col: number): TileId;
+                                 set(r: number, col: number, t: TileId): void };
+    const row = Math.floor(p.y / c.tileSize);
+    // Six tiles out: two and a half spear lengths, well past anything he can
+    // reach by swinging.
+    const col = Math.floor(p.x / c.tileSize) + 6;
+    tiles.set(row, col, TILE.TREE);          // on the line
+    tiles.set(row + 4, col, TILE.TREE);      // four tiles to the side of it
+
+    g.special('key');
+    stepPast(ONE_SECOND);
+    expect(tiles.get(row, col)).not.toBe(TILE.TREE);
+    expect(tiles.get(row + 4, col)).toBe(TILE.TREE);
+  });
+  // The angle is committed at the press, which is what makes it a shot. Steer
+  // it after the fact and it would be a spell you point.
+  //
+  // Aimed through the MOUSE, not by assigning player.aimAngle: updatePlayer
+  // rewrites that field from the input command every frame, so an assignment
+  // is gone before the next step and this test passed against a crack that
+  // steered perfectly.
+  it('cannot be steered once it is away', () => {
+    const p = knightAt();
+    aimAt(p.x + 400, p.y);              // due east
+    stepPast(2);
+    g.special('key');
+    const committed = (g.earthshatter() as { angle: number }).angle;
+    expect(committed).toBeCloseTo(0, 3);
+
+    aimAt(p.x, p.y + 400);              // swing the mouse due south
+    stepPast(6);
+    expect(p.aimAngle).toBeCloseTo(Math.PI / 2, 3);   // the hero did turn
+    const still = g.earthshatter() as { angle: number; x: number; y: number } | null;
+    expect(still).not.toBeNull();
+    expect(still!.angle).toBe(committed);             // the crack did not
+    expect(still!.x).toBeGreaterThan(p.x);
+    expect(still!.y).toBeCloseTo(p.y, 3);
+  });
+  it('stops after its own range rather than running forever', () => {
+    knightAt();
+    g.special('key');
+    stepPast(3 * ONE_SECOND);
+    expect(g.earthshatter()).toBeNull();
+  });
+});
+
+describe('CARPET BOMB, the sapper ultimate', () => {
+  function sapperAt(col = 6, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick('sapper');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    // Aim through the MOUSE and settle a frame: updatePlayer rewrites
+    // player.aimAngle from the pointer every step, so assigning the field
+    // leaves the aim wherever the previous test's mouse was. That is exactly
+    // how this passed alone and failed in the full suite.
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  it('lays a line down the aim line, on fuses that run outward from his feet', () => {
+    const p = sapperAt();
+    const c = g.config();
+    (g.dynamites() as unknown[]).length = 0;
+    g.special('key');
+
+    const laid = g.dynamites() as Array<Record<string, number>>;
+    expect(laid).toHaveLength(c.sapperCarpetCount);
+    laid.forEach((bomb, i) => {
+      expect(bomb.x).toBeCloseTo(p.x + c.sapperCarpetSpacing * (i + 1), 4);
+      expect(bomb.y).toBeCloseTo(p.y, 4);
+      // Each further out than the last, and each on a longer fuse: that pair
+      // is the whole of "outward from his feet".
+      if (i > 0) {
+        expect(bomb.x).toBeGreaterThan(laid[i - 1]!.x!);
+        expect(bomb.life).toBeGreaterThan(laid[i - 1]!.life!);
+      }
+    });
+  });
+
+  // The ability, in one assertion. Every charge carries the chain's ceiling
+  // rather than climbing to it, so the first blast already reports full depth.
+  it('detonates at the chain ceiling instead of climbing to it', () => {
+    sapperAt();
+    (g.dynamites() as unknown[]).length = 0;
+    g.special('key');
+    const ceiling = (g.dynamites() as Array<Record<string, number>>)[0]!.chainLink!;
+    expect(ceiling).toBeGreaterThan(1);
+
+    stepPast(ONE_SECOND);
+    expect(g.sapperChain().peak).toBe(ceiling + 1);
+  });
+
+  it('costs the pouch nothing, so he is not left empty after using it', () => {
+    sapperAt();
+    const inv = g.inv() as { bombs: number };
+    const before = inv.bombs;
+    expect(before).toBeGreaterThan(0);
+    g.special('key');
+    expect(inv.bombs).toBe(before);
+  });
+});
+
+
+describe('VORTEX, the wizard ultimate', () => {
+  function wizardAt(col = 6, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick('wizard');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  it('is placed where he points, never further than its own range', () => {
+    const p = wizardAt();
+    const c = g.config();
+    // Pointed far past the range, which is the case the clamp exists for.
+    aimAt(p.x + 4 * c.wizVortexRange, p.y);
+    stepPast(2);
+    g.special('key');
+    const v = g.vortex() as { x: number; y: number };
+    expect(v).not.toBeNull();
+    expect(Math.hypot(v.x - p.x, v.y - p.y)).toBeCloseTo(c.wizVortexRange, 0);
+  });
+
+  // The whole ability. Nothing in this game pulled before it.
+  it('drags a body to its centre while it holds', () => {
+    wizardAt();
+    const c = g.config();
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    const crow = crows[0]!;
+    g.special('key');
+    const v = g.vortex() as { x: number; y: number };
+
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
+    crow.heldTimer = 5;
+
+    crow.x = v.x + c.wizVortexRadius * 0.8; crow.y = v.y;
+    expect(Math.hypot(crow.x - v.x, crow.y - v.y)).toBeGreaterThan(100);
+    // Stopped short of the collapse, which would kill it and take it out of
+    // the array before it could be measured.
+    stepPast(Math.floor(c.wizVortexDuration * ONE_SECOND) - 10);
+    expect(Math.hypot(crow.x - v.x, crow.y - v.y)).toBeLessThan(15);
+  });
+  it('collapses on its own timer and breaks the ground under it', () => {
+    const p = wizardAt();
+    const c = g.config();
+    const tiles = g.tiles() as { get(r: number, col: number): TileId;
+                                 set(r: number, col: number, t: TileId): void };
+    g.special('key');
+    const v = g.vortex() as { x: number; y: number };
+    const row = Math.floor(v.y / c.tileSize), col = Math.floor(v.x / c.tileSize);
+    tiles.set(row, col, TILE.TREE);
+    expect(g.vortex()).not.toBeNull();
+    stepPast(Math.ceil(c.wizVortexDuration * ONE_SECOND) + 4);
+    expect(g.vortex()).toBeNull();
+    expect(tiles.get(row, col)).not.toBe(TILE.TREE);
+  });
+
+  it('empties the Focus pool, so the broom is what comes next', () => {
+    wizardAt();
+    const inv = g.inv() as { focus: number };
+    expect(inv.focus).toBeGreaterThan(0);
+    g.special('key');
+    expect(inv.focus).toBe(0);
+  });
+});
+
+describe('HARPOON, the ranger ultimate', () => {
+  function rangerAt(col = 6, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  // The gate, and the fact that failing it costs nothing. A ranger who
+  // presses a stride too early has to be able to press again.
+  it('refuses below the momentum cap and keeps the charge', () => {
+    rangerAt();
+    expect(g.momentum().level).toBeLessThan(1);
+    const arrows = g.arrows() as unknown[];
+    arrows.length = 0;
+    g.special('key');
+    expect(arrows).toHaveLength(0);
+    expect(g.ultimate().ready).toBe(true);
+  });
+
+  it('reels him to what it catches, in one movement he could not walk', () => {
+    const p = rangerAt();
+    const c = g.config();
+    const keys = g.keys() as Record<string, boolean>;
+
+    // Fired while still running. Momentum decays the instant he stops, so
+    // the cap is a state he passes through rather than one he stands in --
+    // which is the ranger's whole point and not a wrinkle of the test.
+    keys['ArrowRight'] = true;
+    stepPast(3 * ONE_SECOND);
+    expect(g.momentum().level).toBe(1);
+
+    // Aim, then one more running frame so the aim is actually read. Setting
+    // the mouse does not move player.aimAngle -- updatePlayer copies it from
+    // the pointer on the next step -- and he has just run three seconds past
+    // where the pointer used to be, so firing without that frame sends the
+    // line back the way he came. The key stays held through it: stopping for
+    // even one frame drops him off the cap and the ultimate refuses.
+    aimAt(p.x + 400, p.y);
+    stepPast(1);
+    expect(g.momentum().level).toBe(1);
+
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
+    crows[0]!.x = p.x + 220; crows[0]!.y = p.y; crows[0]!.heldTimer = 5;
+
+    const lineX = p.x, lineY = p.y;
+    const arrows = g.arrows() as Array<Record<string, number>>;
+    arrows.length = 0;
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+    g.special('key');
+    expect(arrows).toHaveLength(1);          // the line went out
+    expect(arrows[0]!.vx).toBeGreaterThan(0);  // and went where he was pointing
+    keys['ArrowRight'] = false;
+
+    // The reel is one movement, not a walk: the largest single frame of it
+    // has to be far beyond anything his legs can do in a frame. Compared
+    // against his own speed rather than a bare number, so a balance change
+    // to how fast he runs cannot quietly turn this green.
+    let biggest = 0, last = p.x;
+    // Close, and over a handful of frames. The bolt travels 1100 px/s, so
+    // ninety pixels is about five frames -- short enough that the boss's own
+    // state machine cannot turn over under the shot. Stretched across three
+    // hundred pixels this failed two runs in five, because a shield coming
+    // back mid-flight absorbs the bolt, and absorbing is not yanking.
+    for (let i = 0; i < 12; i++) {
+      stepPast(1);
+      biggest = Math.max(biggest, Math.abs(p.x - last));
+      last = p.x;
+    }
+    const perFrameOnFoot = CHARACTER_STATS.ranger.speed / ONE_SECOND;
+    expect(biggest).toBeGreaterThan(perFrameOnFoot * 10);
+    // Down the line he fired, and still on it.
+    expect(p.x).toBeGreaterThan(lineX + 150);
+    expect(Math.abs(p.y - lineY)).toBeLessThan(c.tileSize);
+  });
+
+  // The bolt is the fastest thing a player fires and hits are tested after
+  // it has moved, so it samples the world every 18 px. Nothing enforces that
+  // an arrow's catch is wider than its own step, and a fast enough one would
+  // fly straight through a body sitting between two samples. This is the
+  // arithmetic that keeps it from happening, stated where a speed change
+  // will trip over it.
+  it('cannot step over a body between two of its own samples', () => {
+    const c = g.config();
+    const step = c.rangerHarpoonSpeed / ONE_SECOND;
+    expect(c.arrowHitRadius).toBeGreaterThan(step / 2);
+  });
+});
+
+
+describe('aiming, and why assigning the angle is not it', () => {
+  // A characterisation test, not a demand. A dozen tests in this repo set
+  // player.aimAngle directly and are fine: they never step afterwards, or
+  // they do not care where the shot went. The ones that DO step are the
+  // hazard -- updatePlayer copies the angle from the pointer every frame, so
+  // the aim silently becomes whatever the previous test left the mouse at,
+  // which is how four ultimate tests passed alone and failed in the full
+  // suite. Pinned here so the trap is discoverable by name rather than by
+  // losing an hour to it. See LESSONS.jsonl, green-alone-red-in-suite.
+  function archerAtCentre(): { x: number; y: number; aimAngle: number } {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 10 * g.config().tileSize;
+    p.y = 10 * g.config().tileSize;
+    return p;
+  }
+
+  it('takes the angle from the pointer, discarding whatever was assigned', () => {
+    const p = archerAtCentre();
+    aimAt(p.x + 400, p.y);            // pointer due east
+    p.aimAngle = Math.PI;             // and the field says due west
+    expect(p.aimAngle).toBe(Math.PI); // until a single frame passes
+
+    stepPast(1);
+    expect(p.aimAngle).toBeCloseTo(0, 3);
+  });
+
+  it('is what aimAt exists for, so a test aims the way a player does', () => {
+    const p = archerAtCentre();
+    aimAt(p.x, p.y + 400);            // due south
+    stepPast(1);
+    expect(p.aimAngle).toBeCloseTo(Math.PI / 2, 3);
+  });
+});
+
+describe('HARPOON against a boss', () => {
+  // The boss is the one target worth reeling to, and it does NOT go through
+  // spendArrowPierce -- a boss hit has its own resolution, so harpoonYank is
+  // called from a second site there. That second call had no test: every
+  // harpoon test above catches a crow, which takes the other path entirely.
+  it('reels him to the boss, not only to bodies', () => {
+    g.pick('ranger');
+    // A run first: entering the boss fight without one leaves the player at
+    // NaN, and every assertion below then passes or fails for the wrong reason.
+    g.go('playing');
+    enterBossFight();
+    g.healHero();
+    const p = g.player() as { x: number; y: number };
+    const boss = g.boss() as { x: number; y: number; shield: number } | null;
+    expect(boss).not.toBeNull();
+    // A shielded boss absorbs the bolt and is rightly not reeled to, so the
+    // shield is cleared to test the path that does yank.
+    boss!.shield = 0;
+    boss!.x = p.x + 90;
+    boss!.y = p.y;
+
+    aimAt(boss!.x, boss!.y);
+    stepPast(1);
+    g.setMomentum(1);
+    g.setUltimateSlot('first');
+    g.setUltimateCD(0);
+
+    const arrows = g.arrows() as unknown[];
+    arrows.length = 0;
+    g.special('key');
+    expect(arrows).toHaveLength(1);
+
+    let biggest = 0, last = p.x;
+    for (let i = 0; i < 20; i++) {
+      // Pinned each frame: a boss that drifts while the bolt is in flight
+      // would make this a test of its movement rather than of the yank. The
+      // SHIELD is pinned for the same reason and it is the one that bit --
+      // it comes back mid-flight, the bolt is absorbed rather than landing,
+      // and the yank never runs. That made this pass in the file and fail on
+      // its own, which is the usual order-dependence upside down.
+      boss!.x = last + 90; boss!.y = p.y; boss!.shield = 0;
+      g.healHero();
+      stepPast(1);
+      biggest = Math.max(biggest, Math.abs(p.x - last));
+      last = p.x;
+    }
+    const perFrameOnFoot = CHARACTER_STATS.ranger.speed / ONE_SECOND;
+    expect(biggest).toBeGreaterThan(perFrameOnFoot * 10);
+  });
+});
+
+describe('the second ultimate of each hero', () => {
+  /** A hero in a cleared arena with his SECOND ultimate equipped and ready. */
+  function withSecond(hero: string, col = 8, row = 8): { x: number; y: number; aimAngle: number } {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = (col + 0.5) * g.config().tileSize;
+    p.y = (row + 0.5) * g.config().tileSize;
+    g.setUltimateSlot('second');
+    aimAt(p.x + 300, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+    return p;
+  }
+
+  /** A crow parked where it is put. Held, so its own flight is not the thing
+   *  being measured -- see LESSONS.jsonl, green-alone-red-in-suite. */
+  function crowAt(x: number, y: number): Record<string, number> {
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    const c = crows[0]!;
+    c.x = x; c.y = y; c.heldTimer = 9;
+    return c;
+  }
+
+  it('ARROW RAIN waits its beat, then falls over the circle it marked', () => {
+    const p = withSecond('archer');
+    const c = g.config();
+    const target = crowAt(p.x + 260, p.y);
+    const crows = g.crows() as unknown[];
+
+    g.special('key');
+    const rain = g.arrowRain() as { x: number; y: number } | null;
+    expect(rain).not.toBeNull();
+    // Marked where he pointed, not on him: this is the one archer ultimate
+    // aimed at a place.
+    expect(Math.hypot(rain!.x - p.x, rain!.y - p.y)).toBeGreaterThan(100);
+
+    // Nothing falls during the delay. That pause is the whole skill of it --
+    // you are aiming at where things will be.
+    stepPast(Math.floor(c.archerRainDelay * ONE_SECOND) - 4);
+    expect(crows).toContain(target);
+
+    stepPast(Math.ceil((c.archerRainDelay + c.archerRainDuration) * ONE_SECOND) + 10);
+    expect(crows).not.toContain(target);
+    expect(g.arrowRain()).toBeNull();
+  });
+
+  it('THE BEAM roots him for as long as it burns, and lets go after', () => {
+    const p = withSecond('wizard');
+    const c = g.config();
+    const keys = g.keys() as Record<string, boolean>;
+
+    g.special('key');
+    expect(g.beam()).not.toBeNull();
+    const planted = p.x;
+    keys['ArrowRight'] = true;
+    stepPast(20);
+    // He is holding a movement key and has not moved a pixel. That is the
+    // price of the ability, and the only one it charges.
+    expect(p.x).toBe(planted);
+
+    stepPast(Math.ceil(c.wizBeamDuration * ONE_SECOND) + 4);
+    expect(g.beam()).toBeNull();
+    stepPast(10);
+    expect(p.x).toBeGreaterThan(planted);
+    keys['ArrowRight'] = false;
+  });
+
+  it('THE BEAM empties the Focus pool, as its sibling does', () => {
+    withSecond('wizard');
+    const inv = g.inv() as { focus: number };
+    expect(inv.focus).toBeGreaterThan(0);
+    g.special('key');
+    expect(inv.focus).toBe(0);
+  });
+
+  it('THE LEAP carries him over a wall he could not have walked through', () => {
+    const p = withSecond('knight');
+    const c = g.config();
+    const tiles = g.tiles() as { set(r: number, col: number, t: TileId): void };
+    const row = Math.floor(p.y / c.tileSize);
+    const col = Math.floor(p.x / c.tileSize);
+    // A solid wall three tiles thick, right across his path.
+    for (let dc = 2; dc <= 4; dc++) {
+      for (let dr = -2; dr <= 2; dr++) tiles.set(row + dr, col + dc, TILE.ROCK);
+    }
+    const from = p.x;
+
+    g.special('key');
+    expect(g.knightLeap()).not.toBeNull();
+    stepPast(Math.ceil(c.knightLeapSecs * ONE_SECOND) + 4);
+    expect(g.knightLeap()).toBeNull();
+    // Past the far side of the wall: walking could not have done this, which
+    // is the whole difference from the wizard's blink.
+    expect(p.x).toBeGreaterThan((col + 5) * c.tileSize);
+    expect(Math.abs(p.y - (row + 0.5) * c.tileSize)).toBeLessThan(c.tileSize);
+  });
+
+  it('FULL AUTO fires while he runs and stops dead when he stops', () => {
+    const p = withSecond('ranger');
+    const keys = g.keys() as Record<string, boolean>;
+    const arrows = g.arrows() as unknown[];
+
+    g.special('key');
+    expect(g.fullAuto()).not.toBeNull();
+
+    // Standing still: the burst is running and nothing leaves the crossbow.
+    arrows.length = 0;
+    stepPast(20);
+    expect(arrows).toHaveLength(0);
+
+    // Moving: it fires. Same burst, same second, only his feet changed.
+    keys['ArrowRight'] = true;
+    stepPast(20);
+    keys['ArrowRight'] = false;
+    expect(arrows.length).toBeGreaterThan(0);
+    expect(p.x).toBeGreaterThan(0);
+  });
+
+  it('THE BIG ONE goes off wider than any charge he can throw', () => {
+    const p = withSecond('sapper');
+    const c = g.config();
+    (g.dynamites() as unknown[]).length = 0;
+
+    g.special('key');
+    const laid = (g.dynamites() as Array<Record<string, number>>)[0]!;
+    expect(laid.chainMult).toBe(c.sapperBigOneRadiusMult);
+    expect(laid.life).toBeCloseTo(c.sapperBigOneFuse, 3);
+
+    // A crow outside an ordinary blast and inside this one. Half way between
+    // the two radii, so the assertion cannot pass on either alone.
+    const ordinary = c.dynamiteBlastRadius;
+    const target = crowAt(laid.x! + ordinary * 1.6, laid.y!);
+    const crows = g.crows() as unknown[];
+    stepPast(Math.ceil(c.sapperBigOneFuse * ONE_SECOND) + 6);
+    expect(crows).not.toContain(target);
+  });
+});
+
+describe('ARROW RAIN covers the circle it marks', () => {
+  // The reason the impacts sit on a spiral instead of falling at random.
+  // Scattered, a body in the middle of the mark had about an even chance of
+  // being missed entirely, which is not what a once-a-minute ultimate does.
+  // Eight crows spread across the disc, and one just outside it.
+  it('kills everything inside it, and nothing outside it', () => {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const c = g.config();
+    const p = g.player() as { x: number; y: number };
+    p.x = 14 * c.tileSize;
+    p.y = 10 * c.tileSize;
+    g.setUltimateSlot('second');
+    aimAt(p.x + 300, p.y);
+    stepPast(2);
+    g.setUltimateCD(0);
+
+    g.special('key');
+    const rain = g.arrowRain() as { x: number; y: number };
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+
+    const inside: Array<Record<string, number>> = [];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      // At 70% of the radius: well inside the mark, and far enough out that a
+      // rain that only hit its own centre would leave every one of them alive.
+      g.spawnCrow();
+      const crow = crows[crows.length - 1]!;
+      crow.x = rain.x + Math.cos(a) * c.archerRainRadius * 0.7;
+      crow.y = rain.y + Math.sin(a) * c.archerRainRadius * 0.7;
+      crow.heldTimer = 9;
+      inside.push(crow);
+    }
+    g.spawnCrow();
+    const outside = crows[crows.length - 1]!;
+    outside.x = rain.x + c.archerRainRadius * 2.2;
+    outside.y = rain.y;
+    outside.heldTimer = 9;
+
+    stepPast(Math.ceil((c.archerRainDelay + c.archerRainDuration) * ONE_SECOND) + 12);
+    expect(inside.filter((crow) => crows.includes(crow))).toEqual([]);
+    expect(crows).toContain(outside);
+  });
+});
+
+describe('choosing which ultimate the run carries', () => {
+  /** An archer mid-run whose ultimate has just finished charging. */
+  function charged(): { x: number; y: number } {
+    g.pick('archer');
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 20 * g.config().tileSize;
+    p.y = 10 * g.config().tileSize;
+    // Deliberately NOT setUltimateSlot: the whole point is that nobody has
+    // chosen yet, and the timer coming up is what asks.
+    g.setUltimateCD(0.001);
+    return p;
+  }
+
+  it('asks the first time it comes up, and not before', () => {
+    charged();
+    expect(g.ultimatePicked()).toBe(false);
+    expect(g.chooser()).toBeNull();
+    stepPast(4);
+    // Queued by the timer reaching zero, whether or not it has opened yet.
+    expect(g.ultimatePicked()).toBe('offered');
+  });
+
+  it('waits for a lull rather than stopping the field mid-fight', () => {
+    const p = charged();
+    const crows = g.crows() as Array<Record<string, number>>;
+    crows.length = 0;
+    g.spawnCrow();
+    // Right on top of him: a screen opening now stops a fight in progress.
+    crows[0]!.x = p.x + 40; crows[0]!.y = p.y; crows[0]!.heldTimer = 9;
+    stepPast(20);
+    expect(g.ultimatePicked()).toBe('offered');
+    expect(g.chooser()).toBeNull();
+    // ONE offer, not one per frame. The timer stays at zero while the pick is
+    // pending, so the tick asks again every single frame and only the guard in
+    // queueUltimatePick stops the queue growing without bound.
+    expect((g.chooserQueue() as unknown[]).length).toBe(1);
+
+    // The field clears, and the ceremony takes its moment.
+    crows.length = 0;
+    stepPast(4);
+    const open = g.chooser() as { kind: string; offers: string[] } | null;
+    expect(open).not.toBeNull();
+    expect(open!.kind).toBe('ultimate');
+    expect(open!.offers).toEqual(['headshot', 'arrowRain']);
+  });
+
+  it('is not ready until it has been answered, however long it has been charged', () => {
+    charged();
+    (g.crows() as unknown[]).length = 0;
+    stepPast(4);
+    // Charged for a while now, and still not fireable: nobody has said which.
+    stepPast(60);
+    expect(g.ultimate().cd).toBe(0);
+    expect(g.ultimate().ready).toBe(false);
+  });
+
+  it('equips what was taken, and only then is it ready', () => {
+    charged();
+    (g.crows() as unknown[]).length = 0;
+    stepPast(4);
+    expect(g.chooser()).not.toBeNull();
+
+    g.chooserPick(1);                       // the second of the two
+    expect(g.chooser()).toBeNull();
+    expect(g.ultimateSlot()).toBe('second');
+    expect(g.ultimatePicked()).toBe(true);
+    expect(g.ultimate().ready).toBe(true);
+  });
+
+  it('seals for the run: a second charge does not ask again', () => {
+    charged();
+    (g.crows() as unknown[]).length = 0;
+    stepPast(4);
+    g.chooserPick(0);
+    expect(g.ultimateSlot()).toBe('first');
+
+    // Spend it, charge it again, and no screen returns.
+    g.setUltimateCD(0.001);
+    stepPast(10);
+    expect(g.chooser()).toBeNull();
+    expect(g.ultimate().ready).toBe(true);
+  });
+});

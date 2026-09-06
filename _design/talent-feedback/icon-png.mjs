@@ -16,7 +16,16 @@ import { deflateSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 
 import { ICONS } from './icons32.js';
-import { N, composite } from './compose.mjs';
+import { composite } from './compose.mjs';
+
+// The ultimates are a second set, drawn at 48 in a gold frame. Loaded lazily
+// and tolerantly: they are generated, so a checkout that has never run
+// draw-ultimates.py has no file to import and should still be able to look at
+// the talents.
+let ULTS = [];
+try {
+  ({ ULTIMATES: ULTS } = await import('./ultimates48.js'));
+} catch { /* not built yet */ }
 
 const CRC = (() => {
   const t = new Int32Array(256);
@@ -73,7 +82,7 @@ const COLS = Number(process.env.ICON_COLS ?? 1);
 const GAP = 10;
 const BG = [0x0d, 0x0f, 0x0c];
 
-const by = new Map(ICONS.map((i) => [i.id, i]));
+const by = new Map([...ICONS, ...ULTS].map((i) => [i.id, i]));
 const missing = ids.filter((id) => !by.has(id));
 if (missing.length) {
   // Silence here would be a black rectangle and a wasted look.
@@ -92,11 +101,16 @@ for (let i = 0; i < W * H; i++) {
 }
 
 ids.forEach((id, i) => {
-  const cells = composite(by.get(id));
+  const icon = by.get(id);
+  const cells = composite(icon);
+  // The icon's own grid, not a shared constant: a 48 px ultimate scaled as if
+  // it were 32 would be cropped to its top-left two thirds, which looks like a
+  // drawing mistake rather than a rendering one.
+  const n = icon.size ?? 32;
   const row = Math.floor(i / COLS);
   let x0 = GAP + (i % COLS) * CELL;
   for (const size of SIZES) {
-    const scale = size / N;
+    const scale = size / n;
     const y0 = GAP + row * ROW + (SIZES[0] - size);   // sat on one baseline
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
