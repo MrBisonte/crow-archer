@@ -107,6 +107,10 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Fixed a bug?** Revert the fix and watch the test fail before you
   commit. If it still passes, the test is not covering the fix. Prefer
   reverting the *specific line*: a test can cover half a function.
+- **Timing the suite?** Stop the dev preview first. A game open in the
+  browser pane drives rAF on the same cores vitest is using and turned a 19 s
+  run into 1280 s, which reads exactly like a performance regression in
+  whatever you just changed (`preview-tab-skews-the-suite`).
 - **Driving a long run?** `devHooks.healHero()`. Nobody is holding the
   keys, so an idle hero dies and the test measures that instead.
 - **A siege test that reads ranks?** `g.setSiegeRng(mulberry32(seed))`
