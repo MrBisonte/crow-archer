@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAP_COLS, MAP_ROWS } from './arena-map';
-import { CavernTerrain, MazeTerrain, NoiseTerrain, openTilesConnected } from './map-generators';
+import { MAP_COLS, MAP_GEN, MAP_ROWS } from './arena-map';
+import {
+  CavernTerrain, MazeTerrain, NoiseTerrain, mazeLayoutFor, openTilesConnected,
+} from './map-generators';
 import { isArenaBorder, isCrowCorridor, isSpawnZone } from './mapgen';
 import { mulberry32 } from './rng';
 import { TILE, tilePassable, type TileGrid } from './tilemap';
@@ -108,6 +110,73 @@ describe('MazeTerrain', () => {
   it('degrades to solid rock rather than throwing on a grid too small to hold a cell', () => {
     const tiny = new MazeTerrain({ braid: 0.15 }).generate(2, 2, mulberry32(1), null);
     expect(tiny.flat().every((t) => t === TILE.ROCK)).toBe(true);
+  });
+
+  /**
+   * The guard whose absence let the 55x33 resize triple the level in silence.
+   *
+   * A maze's difficulty is its cell count, and with a fixed pitch that count is
+   * whatever the grid divides into -- so a resize retunes the level without
+   * editing it, and every test here stays green because they all assert
+   * structure rather than size.
+   */
+  describe('a named cell count', () => {
+    /** Cells across and down, read back off the layout the generator derived. */
+    const cellsFor = (rows: number, cols: number, target: number): number => {
+      const lay = mazeLayoutFor(rows, cols, target);
+      const pitch = lay.corridor + lay.wall;
+      return Math.floor((cols - lay.wall) / pitch) * Math.floor((rows - lay.wall) / pitch);
+    };
+
+    it('holds the shipped maze at the shape it has today', () => {
+      expect(cellsFor(MAP_ROWS, MAP_COLS, 180)).toBe(180);
+    });
+
+    // The point of naming it. Every one of these grids is a resize that would
+    // have moved the cell count with a fixed pitch; at 71x37 a 2/1 pitch gives
+    // 23x12 = 276 cells, better than half again the level.
+    it.each([
+      [21, 33], [27, 45], [33, 55], [37, 71], [45, 91],
+    ])('stays near the target on a %ix%i grid', (rows, cols) => {
+      const cells = cellsFor(rows, cols, 180);
+      expect(cells, `${cols}x${rows} drifted to ${cells} cells`).toBeGreaterThan(90);
+      expect(cells, `${cols}x${rows} drifted to ${cells} cells`).toBeLessThan(270);
+    });
+
+    it('keeps walls one tile, so a maze never reads as rooms', () => {
+      for (const [rows, cols] of [[21, 33], [33, 55], [45, 91]] as const)
+        expect(mazeLayoutFor(rows, cols, 180).wall).toBe(1);
+    });
+
+    it('never derives a corridor too thin to walk', () => {
+      for (const [rows, cols] of [[9, 11], [21, 33], [33, 55], [45, 91]] as const)
+        expect(mazeLayoutFor(rows, cols, 180).corridor).toBeGreaterThanOrEqual(1);
+    });
+
+    // Belt and braces: the derived layout has to produce a maze that is
+    // actually a maze, not just arithmetic that lands on a number.
+    it('still carves a fully connected maze at the derived layout', () => {
+      const grid = new MazeTerrain({ braid: 0.15, cells: 180 })
+        .generate(MAP_ROWS, MAP_COLS, mulberry32(12345), null);
+      expect(openTilesConnected(grid)).toBe(true);
+    });
+
+    /**
+     * That the *shipped* generator is the derived one, which the tests above
+     * cannot see: they exercise `mazeLayoutFor` directly, so putting a fixed
+     * pitch back into MAP_GEN would leave every one of them green.
+     *
+     * Asserted off the shipped grid on purpose. At 55x33 the derivation lands
+     * back on the 2/1 pitch, so a fixed 2/1 and the real thing agree there and
+     * only a different grid can tell them apart.
+     */
+    it('is what MAP_GEN actually generates, at a grid size that can tell', () => {
+      const rows = 37, cols = 71;
+      const lay = mazeLayoutFor(rows, cols, 180);
+      const derived = new MazeTerrain({ braid: 0.15, corridor: lay.corridor, wall: lay.wall });
+      expect(MAP_GEN.maze.generate(rows, cols, mulberry32(7), null))
+        .toEqual(derived.generate(rows, cols, mulberry32(7), null));
+    });
   });
 });
 

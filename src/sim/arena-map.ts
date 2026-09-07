@@ -72,7 +72,11 @@ export type EveryMapKindIsListed = Exhaustive<Exclude<MapKind, (typeof MAP_KINDS
 export const MAP_GEN: Record<MapKind, MapGenerator> = {
   forest: new NoiseTerrain({ density: 0.45 }),
   castle: new NoiseTerrain({ density: 0.5 }),
-  maze: new MazeTerrain({ braid: 0.15 }),
+  // The cell count is named, not the tile geometry. A fixed pitch made the
+  // count a side effect of the grid, and the 55x33 resize tripled the level
+  // silently. 180 is the shape the map has today, so this changes no tile on
+  // the shipped grid and holds that shape through the next resize.
+  maze: new MazeTerrain({ braid: 0.15, cells: 180 }),
   cavern: new CavernTerrain({ fill: 0.44, smoothing: 4, pools: 0.1, fungus: 0.1 }),
   // Sparse on purpose. The fortification is the map; scatter is only enough
   // cover that crossing the open ground is a choice rather than a walk.
