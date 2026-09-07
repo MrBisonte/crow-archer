@@ -530,6 +530,12 @@ const CONFIG = {
   netRadiusBonus: 0,   // WIDE NET adds to both ends; see TALENTS.STATS
   rangerHoldfastMult: 2,   // HOLDFAST: what a held target is worth
   netHoldMin: 0.8, netHoldMax: 2.0,
+  // What a net's mat leaves of the speed of anything standing in it. The
+  // landing catch stops a body outright; this is for everything that arrives
+  // afterwards, which before now crossed the mesh at a walk it never paid for.
+  // Harder than the rat's poison (0.65) on purpose: that is a bite in passing
+  // and this is a ten-second cooldown aimed at a place.
+  netSlowMult: 0.4,
   netDamage: 0.9,
   // Fast enough that nothing can step out of it between the throw and the
   // landing. The net is aimed at a POINT, not at a target, so its whole flight
@@ -2084,6 +2090,35 @@ function terrainDestructible() {
  */
 function mapEnemySpeed() {
   return MAP_RULES[mapKind].enemySpeed;
+}
+
+/**
+ * What a net's mat leaves of the speed of a body standing in it, or 1.
+ *
+ * Answers a POSITION rather than an entity's state, so it is off the moment
+ * the body steps out of the mesh -- a body dragged by a net it is no longer
+ * standing in would be a hold, and the hold is `heldTimer`'s job. Cheap to ask
+ * every frame: a ten-second cooldown and a two-second mat mean the list is
+ * almost always empty and never long.
+ */
+function enemyDrag(e) {
+  for (const m of netMats)
+    if (dist2(e.x, e.y, m.x, m.y) < m.radius * m.radius) return CONFIG.netSlowMult;
+  return 1;
+}
+
+/**
+ * How fast this enemy may move right now: the map's own modifier and whatever
+ * the field is doing to it.
+ *
+ * One function rather than a second multiplier bolted on at each site. Every
+ * movement site already reached for `mapEnemySpeed`, and a site that reached
+ * for it and forgot the drag would be an enemy walking through nets -- which
+ * is the exact bug the mat exists to answer, and exactly the kind that hides
+ * because nothing fails. Anything that moves under its own power asks this.
+ */
+function enemySpeedMult(e) {
+  return mapEnemySpeed() * enemyDrag(e);
 }
 
 /** Does this map hide what the player cannot see? One home for that rule too. */
@@ -6807,7 +6842,7 @@ function updateSkeletons(dt) {
       if (s.kind === 'rat') poisonPlayer();
       continue;
     }
-    if (chaseAlongPath(s, SKELETON_SPEED[s.kind]() * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, SKELETON_SPEED[s.kind]() * enemySpeedMult(s), dt)) s.walkPhase += dt * 8;
 
     if (s.kind === 'ice') {
       s.shotCD -= dt;
@@ -6960,8 +6995,8 @@ function updateSoldiers(dt) {
       // than sliding along the wall, so a charge broken on rock is a real
       // opening rather than a soldier grinding into stone.
       s.charge -= dt;
-      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * mapEnemySpeed() * dt;
-      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * mapEnemySpeed() * dt;
+      const nx = s.x + Math.cos(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * enemySpeedMult(s) * dt;
+      const ny = s.y + Math.sin(s.chargeAngle) * CONFIG.soldierSpearChargeSpeed * enemySpeedMult(s) * dt;
       if (tilePassable(tileAt(nx, ny))) { s.x = nx; s.y = ny; s.walkPhase += dt * 14; }
       else s.charge = 0;
       continue;
@@ -6970,7 +7005,7 @@ function updateSoldiers(dt) {
     if (s.kind === 'archer') {
       s.shotCD -= dt;
       if (dist > stats.reach) {
-        if (chaseAlongPath(s, stats.speed * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
+        if (chaseAlongPath(s, stats.speed * enemySpeedMult(s), dt)) s.walkPhase += dt * 8;
       } else if (s.shotCD <= 0) {
         s.shotCD = CONFIG.soldierArcherShotInterval;
         fireSoldierArrow(s);
@@ -6986,7 +7021,7 @@ function updateSoldiers(dt) {
       continue;
     }
 
-    if (chaseAlongPath(s, stats.speed * mapEnemySpeed(), dt)) s.walkPhase += dt * 8;
+    if (chaseAlongPath(s, stats.speed * enemySpeedMult(s), dt)) s.walkPhase += dt * 8;
   }
 }
 
@@ -7429,7 +7464,7 @@ function updateCrows(dt) {
     if (c.heldTimer > 0) { c.heldTimer = Math.max(0, c.heldTimer - dt); continue; }
     c.wingPhase += dt * (c.white ? 14 : 12);
     if (c.state === 'passive') {
-      const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod() * mapEnemySpeed();
+      const spd = (c.white ? CONFIG.whiteCrowPassiveSpeed : CONFIG.crowPassiveSpeed) * HANDICAP.crowSpeedMod() * enemySpeedMult(c);
       c.x -= spd * dt;
       c.y  = c.baseY + Math.sin(gameTime / 3 + c.phaseOff) * 40;
       c.y  = Math.max(CONFIG.tileSize, Math.min((CONFIG.rows-1)*CONFIG.tileSize, c.y));
@@ -7442,7 +7477,7 @@ function updateCrows(dt) {
       c.aggroTimer -= dt;
       const dx = player.x - c.x, dy = player.y - c.y, dist = Math.hypot(dx, dy);
       if (dist < 14) { damagePlayer(1, i); if (i < crows.length) { c.state = 'passive'; c.baseY = c.y; c.path = null; } continue; }
-      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult() * mapEnemySpeed();
+      const spd = (c.white ? CONFIG.whiteCrowAggroSpeed : CONFIG.crowAggroSpeed) * HANDICAP.crowSpeedMod() * waveCrowAggroMult() * enemySpeedMult(c);
       chaseAlongPath(c, spd, dt);
       if (c.aggroTimer <= 0) { c.state = 'passive'; c.baseY = c.y; c.path = null; }
     }
@@ -16743,6 +16778,9 @@ export const devHooks = {
   nets: () => nets,
   /** Nets lying on the ground, which is what a player actually sees. */
   netMats: () => netMats,
+  /** The mat's drag at a point, so a test can ask the rule rather than infer
+   *  it from two crows and a stopwatch. */
+  enemyDrag: (e) => enemyDrag(e),
   /** Blasts still being drawn. An explosion is one frame in the sim and half a
    *  second on screen, so this is the only place the picture is observable. */
   blasts: () => blasts,

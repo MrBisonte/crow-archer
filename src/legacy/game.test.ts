@@ -2952,6 +2952,55 @@ describe('the ranger net', () => {
     expect(gap(c.netThrowMin)).toBeLessThan(c.netRadiusMin);
   });
 
+  it('drags what walks into the mat after it has landed', () => {
+    const c = g.config();
+    const p = rangerAt(3, 6);
+    // Nothing under it when it lands: the point is the enemy that arrives
+    // afterwards. Before this the mat was a picture -- its own comment said
+    // "a mat expiring frees nothing" -- so a crow crossed it at full speed.
+    g.crows().length = 0;
+    const open = throwNet(c.netDrawMaxSecs);
+
+    // One crow inside the mat, one well clear of it, both aggroed and
+    // starting the same distance from the player so they are asked to cover
+    // the same ground.
+    const inMat = loneCrowAt(open.x, open.y);
+    g.spawnCrow();
+    const clear = g.crows()[1] as { x: number; y: number; baseY: number;
+      heldTimer: number; state: string; aggroTimer: number; frozen: boolean };
+    clear.x = open.x; clear.y = open.y + c.netRadiusMax * 4;
+    clear.baseY = clear.y; clear.frozen = false;
+    for (const crow of [inMat, clear]) {
+      crow.frozen = false; crow.heldTimer = 0;
+      crow.state = 'aggro'; crow.aggroTimer = 9999;
+    }
+
+    const fromIn = inMat.x, fromClear = clear.x;
+    g.stepSim(12);          // well inside the mat's own life
+    const movedIn = Math.abs(inMat.x - fromIn);
+    const movedClear = Math.abs(clear.x - fromClear);
+
+    expect(movedClear).toBeGreaterThan(0);
+    expect(movedIn).toBeLessThan(movedClear);
+  });
+
+  it('drags at the figure the net is tuned to, and lets go outside it', () => {
+    const c = g.config();
+    expect(c.netSlowMult).toBeGreaterThan(0);
+    expect(c.netSlowMult).toBeLessThan(1);
+
+    const p = rangerAt(3, 6);
+    g.crows().length = 0;
+    const open = throwNet(c.netDrawMaxSecs);
+    const mats = g.netMats() as { x: number; y: number; radius: number }[];
+    expect(mats.length).toBe(1);
+
+    // The drag is the mat's, not the ability's: it answers a position, so it
+    // is off the moment the body steps outside the mesh.
+    expect(g.enemyDrag({ x: open.x, y: open.y })).toBeCloseTo(c.netSlowMult, 4);
+    expect(g.enemyDrag({ x: open.x + mats[0]!.radius * 2, y: open.y })).toBe(1);
+  });
+
   it('refuses a second net until the cooldown has run', () => {
     const c = g.config();
     rangerAt(4, 6);

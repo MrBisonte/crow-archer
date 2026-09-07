@@ -234,6 +234,30 @@ costs nothing but never stopping and takes the ranger from 6.0 to 4.6. The
 smaller prize is deliberate. He is already the fastest body in the game, so the
 thing he is being paid to do is the thing he was going to do anyway.
 
+#### The net, which is not about damage at all
+
+It never kills what it catches, on purpose. What it is worth is the time it
+takes off the field, and that comes in two parts with different rules.
+
+| The net does | Constant | Figure | To what |
+|---|---|---|---|
+| Catch, on landing, at a tap | `netHoldMin` | 0.8 s | everything under the mesh |
+| Catch, at a full draw | `netHoldMax` | 2 s | everything under the mesh |
+| Drag, afterwards | `netSlowMult` | 0.4 | anything standing in the mat |
+| Damage, either way | `netDamage` | 0.9 | under one hit point, so it never kills |
+| Flight | `netSpeed` | 2000 px/s | see below |
+| Widest mesh | `netRadiusMax` | 70 px | at a full draw |
+
+The catch stops a body outright and the drag only slows one, which is why
+HOLDFAST doubles damage against the first and not the second: the rite is about
+what the net HELD.
+
+The flight speed is a correctness figure rather than a feel one. The net is
+aimed at a point, so its flight is a gap the target walks out of: at the 420 it
+shipped with, a full-draw throw was in the air 0.76 s while an aggro crow --
+`crowAggroSpeed` 200, doubled by the wave escalation -- covered 305 px against
+the 70 px mesh, and landed behind everything that was coming at you.
+
 ### The knight stays in contact
 
 Bloodlust does not reduce to one multiplier, because the swing that lands is
