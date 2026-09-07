@@ -192,12 +192,12 @@ MINOTAUR'S LAIR.
 
 The third and last level. You do not clear it, you leave it.
 
-It is dark. You see four tiles, about one junction ahead. Corridors you have
+It is dark. You see seven tiles, about one junction ahead. Corridors you have
 walked stay dimly on screen; everything else is black, and enemies only draw
 where you can see them right now, so memory shows you walls and never what is
 moving between them. Four torches are hidden in the level. Press **E** on one
-and it lights permanently, tripling sight to twelve tiles. The first torch is
-the whole upgrade, so the others are for reading the map, not for stacking.
+and it lights permanently, tripling sight to twenty-one tiles. The first torch
+is the whole upgrade, so the others are for reading the map, not for stacking.
 
 The **Minotaur** cannot be killed *in the maze*. Hitting him stuns him, which
 buys you distance and never progress. The bastion is the exception: there he is

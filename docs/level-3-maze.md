@@ -256,6 +256,54 @@ corridor-like mazes with many short branches, which suits a maze you look at
 more than one you run through. Recursive division is fastest but yields long
 straight walls and obvious rooms, which undercuts the whole point of the level.
 
+### Update: the cell count is the design decision, not the pitch
+
+The paragraph above reasons from a 33 by 21 arena, which is what the grid was
+when this was written. `feat/playfield-55x33` changed it to 55 by 33 and shipped
+in v0.2.0. Nothing in this level was edited, and nothing failed.
+
+The maze went from 10x6 cells to 18x10. Three times the level, with the same
+four-tile sightline, the same two-key chain and the same warden. Every test here
+stayed green, because they all assert *structure* — connectivity, braid rate,
+border solidity — and none of them asserted *size*. Players reported the level
+as impossible before anyone noticed the number had moved.
+
+The bug was not the pitch. It was that the cell count was never stated
+anywhere: with a fixed `corridor`/`wall`, the count is whatever the grid happens
+to divide into, so a resize retunes the level as a side effect.
+
+`MazeTerrain` now takes `cells`, a target count, and derives the layout per
+grid in `generate` — the grid size is not known at construction:
+
+```ts
+maze: new MazeTerrain({ braid: 0.15, cells: 180 })
+```
+
+Cell count is area over pitch squared, so the pitch is the root of the ratio:
+
+```ts
+const pitch = Math.max(2, Math.round(Math.sqrt((rows * cols) / cells)));
+return { corridor: pitch - 1, wall: 1 };
+```
+
+Walls stay one tile and the pitch carries the change. Wall thickness is what
+reads as maze-versus-rooms; corridor width is what decides whether you can step
+around a body. `floor` inside `fit` means the count lands *near* the target
+rather than on it, which is all this needs — the guard tests allow 90 to 270.
+
+180 is the shape the map has today, so this changed no tile on the shipped grid:
+200 seeds generate byte-identical mazes before and after. It is a guard against
+the next resize, not a retune. What actually made the level playable again was
+the sightline (below).
+
+**Reusing this.** Any generator whose difficulty is a count rather than a
+density has the same hole — the bastion's tower count had it too, and was fixed
+the same week by scaling with grid height. The test that matters is the last
+one in `map-generators.test.ts`: it asserts at 71x37, *not* at the shipped
+size, because at 55x33 the derivation lands back on the old 2/1 pitch and a
+fixed pitch would agree with it. A guard that only checks the current grid
+cannot see the bug it exists to catch.
+
 ### What this costs the rest of the engine
 
 Flagged, not solved. These are consequences to measure once it runs, not
@@ -300,7 +348,7 @@ for the same reason it grew `destructibleTerrain`: forest and castle are arenas
 you read at a glance, and a corridor level is about not knowing what is round
 the corner.
 
-Sight on the maze is four tiles, against fourteen everywhere else. Three states
+Sight on the maze is seven tiles, against fourteen everywhere else. Three states
 per tile, painted over the world as one pass after everything else:
 
 | State | Looks like | Why |
@@ -315,12 +363,23 @@ draw call rather than by the overlay, because the overlay would let a rat show
 through the dim of a remembered corridor. A rat you cannot see is a rat you do
 not get to plan around, and that is the whole point of the level.
 
-The cost is measurable and small: the fog pass is 693 fill calls and one hypot
-per tile, and a full frame with it costs 0.3 ms.
+The cost is measurable and small: the fog pass is one fill call and one hypot
+per tile — 693 of each on the 33x21 grid this was measured on, 1815 on today's
+55x33 — and a full frame with it cost 0.3 ms at the smaller size.
+
+Seven, not the four this shipped with, and this is the change that made the
+level playable again rather than merely correct. Sight is counted in tiles and
+the maze is counted in cells, so when the grid grew the lit circle stayed put
+while the level tripled around it: the same four tiles that lit a tenth of the
+old maze lit a twentieth of the new one. Four tiles was "the corridor you are
+in" at 33x21 and "part of one corridor" at 55x33, which is the difference
+between tense and lost. Seven restores the fraction of a corridor leg you could
+read before. The torch multiplier is untouched, so lighting one still triples
+it.
 
 **It broke the one shortcut in the file.** `minotaurSeesPlayer` answered "does
 the warden see you" by reading the player's FOV cache, which was correct only
-because both had the same sight range and shadowcasting is symmetric. At four
+because both had the same sight range and shadowcasting is symmetric. At seven
 tiles against his sixteen, that shortcut becomes "he may only charge from inside
 your torchlight", which deletes the reason he exists. He now walks his own line
 of sight, from his own tile, over the same passability callback FOV and A* use.

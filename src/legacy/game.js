@@ -325,10 +325,16 @@ const CONFIG = {
 
   // Sight, in tiles. The open maps keep the radius they have always had, which
   // is larger than the screen and so reads as "no fog at all". The maze runs
-  // dark: four tiles is a little over two body lengths, enough to see the
-  // corridor you are in and nothing of the one you are about to enter.
+  // dark: far enough to read the corridor you are in, not far enough to see
+  // into the one you are about to enter.
+  //
+  // Seven, not the four this shipped with. Sight is in tiles and the maze is in
+  // cells, so the resize left this covering a third of the level it used to:
+  // eighteen cells across lit by the same four tiles that lit ten. Four was
+  // "the corridor you are in" on the old grid and "part of one corridor" on
+  // this one, which is the difference between tense and lost.
   sightRadiusTiles: 14,
-  mazeSightRadiusTiles: 4,
+  mazeSightRadiusTiles: 7,
   torchSightMult: 3,             // what a lit torch buys, permanently
   fogMemorySlope: 0.75,          // how fast a lit tile dims toward the edge of sight
   fogMemoryAlpha: 0.74,          // black over terrain you remember but cannot see
