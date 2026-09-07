@@ -2789,20 +2789,22 @@ describe('the ranger net', () => {
 
   /** One crow at a point, with the rest cleared away. */
   function loneCrowAt(x: number, y: number):
-      { x: number; y: number; hp: number; heldTimer: number; frozen: boolean } {
+      { x: number; y: number; hp: number; heldTimer: number; frozen: boolean;
+        state: string; aggroTimer: number } {
     const crows = g.crows();
     crows.length = 0;
     g.spawnCrow();
     const crow = crows[0] as
       { x: number; y: number; baseY: number; hp: number; heldTimer: number;
-        state: string; frozen: boolean };
+        state: string; aggroTimer: number; frozen: boolean };
     crow.x = x;
     crow.y = y;
     crow.baseY = y;
     crow.state = 'passive';
-    // Held still for the flight. A net is in the air for up to three quarters
-    // of a second and a passive crow drifts most of a radius in that time, so
-    // an unfrozen target turns every catch into a question about the drift.
+    // Held still so a catch is a question about the net rather than about
+    // where the crow wandered off to. It no longer has to be -- a full-draw
+    // throw is 0.16 s in the air -- but a frozen target keeps each figure
+    // below exact. The moving case has a test of its own now.
     crow.frozen = true;
     return crow;
   }
@@ -2919,6 +2921,35 @@ describe('the ranger net', () => {
     const open = throwNet(c.netDrawMaxSecs);
     expect(open.x).toBeLessThan(wallCol * c.tileSize);
     expect(open.x - p.x).toBeLessThan(c.netThrowMax);
+  });
+
+  it('lands on a crow that is running at him, not on where it was', () => {
+    const c = g.config();
+    const p = rangerAt(3, 6);
+    // Everything above this parks its target: loneCrowAt freezes it, and says
+    // why. That workaround is what hid this. A net is thrown at a POINT and
+    // takes the whole flight to get there, so the only honest question is
+    // whether it still lands on something that is moving the way the game
+    // makes things move -- which is at the player, at aggro speed.
+    const crow = loneCrowAt(p.x + c.netThrowMax, p.y);
+    crow.frozen = false;
+    crow.state = 'aggro';
+    crow.aggroTimer = 9999;
+
+    throwNet(c.netDrawMaxSecs);
+    expect(crow.heldTimer).toBeGreaterThan(0);
+  });
+
+  it('flies fast enough that the fastest thing on the field cannot leave it', () => {
+    const c = g.config();
+    // The figure, checked rather than assumed. A crow's aggro speed doubles
+    // with the wave (waveCrowAggroMult caps at 2), so the worst case is twice
+    // the constant; the net has to arrive before that covers its own radius,
+    // at both ends of the draw.
+    const worstSpeed = c.crowAggroSpeed * 2;
+    const gap = (throw_: number) => worstSpeed * (throw_ / c.netSpeed);
+    expect(gap(c.netThrowMax)).toBeLessThan(c.netRadiusMax);
+    expect(gap(c.netThrowMin)).toBeLessThan(c.netRadiusMin);
   });
 
   it('refuses a second net until the cooldown has run', () => {
@@ -5890,11 +5921,11 @@ describe('HARPOON, the ranger ultimate', () => {
     const crows = g.crows() as Array<Record<string, number>>;
     crows.length = 0;
     g.spawnCrow();
-    // Held, the way the ranger's net holds one: a held enemy stops moving
-    // and deciding entirely. Without it the crow's own flight is the same
-    // size as what is being measured, and it gets faster as the run's
-    // escalation clock advances -- which is why this passed alone and failed
-    // in the full suite, where earlier tests had run the clock on.
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
     crows[0]!.x = p.x + 220; crows[0]!.y = p.y; crows[0]!.heldTimer = 5;
 
     const lineX = p.x, lineY = p.y;

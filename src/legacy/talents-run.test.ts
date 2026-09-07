@@ -360,10 +360,11 @@ describe('the third rite of the four heroes who had two', () => {
       g.shift();
       g.holdNet(0);                     // a tapped net: it only has to land
       g.shiftUp();
-      // Pinned to the landing point for the whole flight: a tapped net lands
-      // at netThrowMin and takes a third of a second to fly there, and an
-      // aggroed spearman covers 30 px in that time.
-      for (let i = 0; i < 60; i++) {
+      // Pinned to the landing point for the flight, and only for the flight.
+      // Stopping on the catch rather than after a fixed count is what makes
+      // this independent of netSpeed: the hold is 0.8 s at a tap, so a loop
+      // long enough to outlast it reports a caught body as a free one.
+      for (let i = 0; i < 60 && (sold[0]?.heldTimer ?? 0) <= 0; i++) {
         for (const s of sold) { s.x = p.x + reach; s.y = p.y; s.hp = 40; }
         stepPast(1);
       }

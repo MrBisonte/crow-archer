@@ -119,6 +119,14 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Asserting a table's shape?** Compare the exact key set, not
   `toHaveLength(n)`. A length check catches a deletion and misses an
   addition.
+- **Writing a helper that freezes, parks or pins its target?** Write the
+  unfrozen case too, in the same file. The workaround marks the spot where the
+  ability meets a moving world, and its justification is a defect report: nine
+  net tests passed against a net that could not catch anything that was
+  running at you (`a-workaround-in-a-test-is-a-bug-report`).
+- **Waiting a fixed number of frames for something to happen?** Stop on the
+  event instead. A count that passes only because some other figure happens to
+  be slow measures that figure, and it flips the day someone tunes it.
 - **Measuring a base off the field?** Own nothing first, and say so in the
   test. Grants persist across tests in a file by design, so a baseline that
   relies on a rule elsewhere to make an earlier test's leftovers harmless is

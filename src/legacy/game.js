@@ -531,7 +531,19 @@ const CONFIG = {
   rangerHoldfastMult: 2,   // HOLDFAST: what a held target is worth
   netHoldMin: 0.8, netHoldMax: 2.0,
   netDamage: 0.9,
-  netSpeed: 420,
+  // Fast enough that nothing can step out of it between the throw and the
+  // landing. The net is aimed at a POINT, not at a target, so its whole flight
+  // is a gap the catch has to survive: at 420 a full-draw throw was in the air
+  // 0.76 s, and an aggro crow -- 200 px/s, doubled by waveCrowAggroMult at the
+  // late waves -- covered 305 px of it against a 70 px radius. It landed
+  // behind everything that was actually coming at you, which is everything
+  // worth netting. The tests above did not see it because each one froze its
+  // target for the flight, and said so in a comment.
+  //
+  // 2000 clears both ends of the draw at the escalation cap with room to
+  // spare; a full-draw throw is 0.16 s in the air, still a throw to watch
+  // rather than a hitscan. Tune it here: the two tests read this figure.
+  netSpeed: 2000,
 
   pitchforkRange: 52, pitchforkCooldown: 1.5, pitchforkBossDamage: 2, pitchforkSwingDuration: 0.38,
   // The broom is the wizard's pitchfork: the same swing on a cooldown half
