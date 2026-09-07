@@ -7774,6 +7774,12 @@ const MAZE_KEYS = {
 const MAZE_LOCKS = {
   chest: {
     needs: 'silver',
+    // Drawn through the fog while it is still shut, which no other object in
+    // the maze is. A level you navigate by landmark needs a landmark, and
+    // without one the dark plus a 180-cell grid is a search rather than a
+    // route. Stated on both rows rather than defaulted, so a third lockable
+    // thing has to say which it is.
+    beacon: true,
     open: (x, y) => {
       mazeRun.held.golden = true;
       events.emit({ type: 'CHEST_OPENED', x, y });
@@ -7781,6 +7787,10 @@ const MAZE_LOCKS = {
   },
   door: {
     needs: 'golden',
+    // Not a beacon. The chest is the first objective and the door is the
+    // second, and showing both from the start turns two legs of a route into
+    // one glance at a map.
+    beacon: false,
     open: (x, y) => {
       events.emit({ type: 'DOOR_OPENED', x, y });
       // The door is the way out of the maze, and out of the maze is the
@@ -7793,6 +7803,24 @@ const MAZE_LOCKS = {
     },
   },
 };
+
+/**
+ * An open tile next to `at`, for standing one thing beside another.
+ *
+ * nearestOpenTile answers with `at`'s own tile when that tile is open, which
+ * it always is for anything already placed — so the offset is what asks for a
+ * neighbour, and the loop is for the case where the first direction is wall.
+ * Falls back to `at` itself, which overlaps rather than throws: on a grid with
+ * no neighbouring open tile there is nowhere else to stand.
+ */
+function tileBeside(at) {
+  const ts = CONFIG.tileSize;
+  for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, -1]]) {
+    const t = nearestOpenTile(at.x + dx * ts, at.y + dy * ts);
+    if (t.x !== at.x || t.y !== at.y) return t;
+  }
+  return at;
+}
 
 /**
  * Places the chest and the door, once, on the grid that was just carved.
@@ -7811,11 +7839,15 @@ function newMazeRun() {
   for (let tries = 0; tries < 12 && dist2(chest.x, chest.y, door.x, door.y) < apart; tries++) {
     chest = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeChestMinDistance) ?? chest;
   }
-  // Few, and scattered rather than placed: finding one has to feel like luck.
-  const torches = [];
-  for (let i = 0; i < CONFIG.mazeTorchCount; i++) {
+  const torch = (at) => ({ x: at.x, y: at.y, lit: false, flamePhase: Math.random() * Math.PI * 2 });
+  // One stands with the chest, so the landmark the player steers by is also
+  // where the sight upgrade is: arriving pays twice, and a run can no longer
+  // reach the chest with no way to light it. The rest stay scattered, and
+  // finding those still has to feel like luck.
+  const torches = [torch(tileBeside(chest))];
+  for (let i = 1; i < CONFIG.mazeTorchCount; i++) {
     const at = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeTorchMinDistance);
-    if (at) torches.push({ x: at.x, y: at.y, lit: false, flamePhase: Math.random() * Math.PI * 2 });
+    if (at) torches.push(torch(at));
   }
   return {
     locks: {
@@ -12868,7 +12900,8 @@ function drawTorch(t) {
 function drawMazeObjective() {
   if (!mazeRun) return;
   for (const [name, at] of Object.entries(mazeRun.locks))
-    if (litAt(at.x, at.y)) MAZE_LOCK_PAINTERS[name](at);
+    if ((MAZE_LOCKS[name].beacon && !at.opened) || litAt(at.x, at.y))
+      MAZE_LOCK_PAINTERS[name](at);
   for (const k of mazeRun.drops) if (litAt(k.x, k.y)) drawMazeKey(k);
   for (const t of mazeRun.torches) if (t.lit || litAt(t.x, t.y)) drawTorch(t);
 }

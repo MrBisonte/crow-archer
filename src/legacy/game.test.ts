@@ -4467,6 +4467,63 @@ describe('the priest in the field', () => {
 
 // ── THE CAMPAIGN'S LAST STAGE ─────────────────────────────────────────────────
 //
+/**
+ * The maze is navigated by landmark now: the chest draws through the fog while
+ * it is shut, and a torch stands with it.
+ *
+ * Placement is the half that unit-tests: the beacon itself is a draw-time
+ * condition and this suite has no canvas. Run over regenerated maps rather than
+ * one, because the placement walks outward from whatever tile the chest landed
+ * on and a single seed proves nothing about the ones where it landed in a
+ * corner.
+ */
+describe('the maze gives the player something to steer by', () => {
+  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+
+  /** Ten freshly carved mazes, as the objective sees them. */
+  const mazes = (): { chest: { x: number; y: number };
+                      torches: { x: number; y: number; lit: boolean }[] }[] => {
+    g.setMode('brawl');
+    g.go('playing');
+    return Array.from({ length: 10 }, () => {
+      g.generateMap('maze');
+      const run = g.maze();
+      expect(run, 'the maze should have an objective').not.toBeNull();
+      return run as never;
+    });
+  };
+
+  it('stands a torch with the chest, on every map it carves', () => {
+    const reach = 2 * 32; // a neighbouring tile, diagonal included
+    for (const run of mazes()) {
+      const nearest = Math.min(...run.torches.map(
+        (t) => Math.hypot(t.x - run.chest.x, t.y - run.chest.y)));
+      expect(nearest, `nearest torch was ${Math.round(nearest)}px from the chest`)
+        .toBeLessThanOrEqual(reach);
+    }
+  });
+
+  // Beside it, not on it: two sprites on one tile read as one broken sprite.
+  it('does not stand the torch inside the chest', () => {
+    for (const run of mazes())
+      expect(run.torches.some((t) => t.x === run.chest.x && t.y === run.chest.y)).toBe(false);
+  });
+
+  /**
+   * The chest torch is one of the map's torches, not an extra one. Lighting the
+   * first is the whole sight upgrade, so quietly adding a fourth would hand out
+   * a spare rather than a landmark.
+   */
+  it('spends one of the map\'s torches on the chest rather than adding one', () => {
+    const want = (g.config() as { mazeTorchCount: number }).mazeTorchCount;
+    for (const run of mazes()) expect(run.torches).toHaveLength(want);
+  });
+
+  it('leaves it unlit, so arriving is what pays', () => {
+    for (const run of mazes()) expect(run.torches.every((t) => !t.lit)).toBe(true);
+  });
+});
+
 // The brawl chain used to end at the maze door. It ends at the bastion now, so
 // the door is a hand-off rather than a curtain, and the siege has to run there
 // without the mode having changed — a brawl that reaches the bastion is still a
@@ -5890,11 +5947,11 @@ describe('HARPOON, the ranger ultimate', () => {
     const crows = g.crows() as Array<Record<string, number>>;
     crows.length = 0;
     g.spawnCrow();
-    // Held, the way the ranger's net holds one: a held enemy stops moving
-    // and deciding entirely. Without it the crow's own flight is the same
-    // size as what is being measured, and it gets faster as the run's
-    // escalation clock advances -- which is why this passed alone and failed
-    // in the full suite, where earlier tests had run the clock on.
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
     crows[0]!.x = p.x + 220; crows[0]!.y = p.y; crows[0]!.heldTimer = 5;
 
     const lineX = p.x, lineY = p.y;

@@ -357,11 +357,31 @@ per tile, painted over the world as one pass after everything else:
 | Remembered | 74% black | You know the shape of a corridor you have walked |
 | Never seen | Black | |
 
-Terrain remembers. Nothing alive does. Enemies, pickups, keys, the chest and the
-door are drawn only where the player can see them right now, gated at each
-draw call rather than by the overlay, because the overlay would let a rat show
-through the dim of a remembered corridor. A rat you cannot see is a rat you do
-not get to plan around, and that is the whole point of the level.
+Terrain remembers. Nothing alive does. Enemies, pickups, keys and the door are
+drawn only where the player can see them right now, gated at each draw call
+rather than by the overlay, because the overlay would let a rat show through the
+dim of a remembered corridor. A rat you cannot see is a rat you do not get to
+plan around, and that is the whole point of the level.
+
+**The chest is the one exception, and it is deliberate.** It draws through the
+fog while it is shut, which makes it a landmark to steer by rather than
+something to search for: at 18x10 cells in the dark, a hidden objective is a
+sweep of the whole grid, and sweeping is not the same activity as navigating.
+The door is not a beacon — showing both from the start turns two legs of a
+route into one glance at a map — and the chest stops drawing once opened, when
+it has nothing left to point at.
+
+`beacon` is a row on `MAZE_LOCKS` rather than a check on the lock's name,
+stated on both rows. That table's own note says a third lockable thing should
+be a row and not an edit, and `name === 'chest'` at the draw site would have
+been exactly the edit it warns about.
+
+One of the map's torches now stands beside the chest — one of them, not an
+extra, since lighting the first is the whole sight upgrade and a fourth would
+be a spare rather than a landmark. It starts unlit, so arriving is still what
+pays. The side effect is that a run can no longer reach the chest with no way
+to light it, and that finding your *first* torch is no longer luck: it is
+wherever the chest is. The other two are still scattered.
 
 The cost is measurable and small: the fog pass is one fill call and one hypot
 per tile — 693 of each on the 33x21 grid this was measured on, 1815 on today's
