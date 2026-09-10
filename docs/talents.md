@@ -374,11 +374,19 @@ prices it cannot meet, so a character with nothing to spend plays straight on.
 The rite is offered once per run whether or not it is liked.
 
 The rite waits for the level to start rather than opening on the field the
-moment the rank lands: `beginNewLevel` queues it and `openChooserWhenClear`
-shows it once nothing hostile is within reach. One step of the campaign has no
-level of its own — the dark archer hands straight to the dark knight on the
-same map, with no intro between them — so a rite earned there waits for the
-maze. That is a gap in the stage chain rather than in this rule.
+moment the rank lands: `beginNewLevel` offers it when a stage intro is
+dismissed. That moment is a lull by construction — the stage behind the title
+is built and nothing has had a frame to move — so it opens there rather than
+waiting on `openChooserWhenClear`, which refuses while a boss is in play and
+refuses again on a siege. Left to that check, a rite earned after the castle
+would never be offered at all: the maze has a boss hunting from its first frame
+and the bastion is a siege.
+
+Every hand-off in the campaign has a title of its own, the dark archer's to the
+dark knight included — one castle, two bosses, and a screen between them. So a
+rite earned at any death that hands the run on is spent at the level that death
+opened. The dark archer used to hand straight to the entrance with no screen
+between, and a rank earned there was carried to the end of the run unspent.
 
 Both ceremonies sit over whatever screen the hand-off staged and give it back
 when you pick, so neither interrupts a stage transition it landed in the middle

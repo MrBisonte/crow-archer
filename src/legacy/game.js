@@ -1118,15 +1118,36 @@ applyPace(CONFIG.pace);
  *
  * The stage is already fully built behind the screen when it appears. The
  * intro only decides what to say and where to go, never what to set up.
+ *
+ * `next` is where dismissing it hands the run. Three of the four open a field
+ * the player walks into; the dark knight's opens an entrance cinematic, because
+ * his hand-off is to another boss standing in the same room rather than to
+ * another map. Carried as a row rather than inferred at the hand-off, so a
+ * fifth intro has to answer the question instead of inheriting an answer.
  */
 const STAGE_INTROS = {
   castle: {
     text: "You've entered the cursed Castle!",
+    next: 'playing',
     accent: '#B040E0', dim: '#8A40A8', frame: '#4a1a5c',
     sweep: 'rgba(176,64,224,0.045)',
   },
+  darkKnight: {
+    text: 'THE DARK KNIGHT STEPS OVER HIM',
+    // The one intro that hands to a cinematic rather than to a field: the
+    // castle is already loaded and the next thing to happen in it is an
+    // entrance. beginNewLevel stages that when the title is dismissed.
+    next: 'boss_entrance',
+    // Steel, where the castle's own title is the curse's purple. The room has
+    // not changed and the thing standing in it has, so the palette is what
+    // carries the difference -- a second purple title would read as the same
+    // screen shown twice.
+    accent: '#9FB0CE', dim: '#67748d', frame: '#2e3849',
+    sweep: 'rgba(159,176,206,0.05)',
+  },
   bastion: {
     text: 'HOLD THE BASTION',
+    next: 'playing',
     // Limestone and gold rather than the maze's torchlight: the run comes up
     // out of the dark into daylight for its last stand, and the title is the
     // first thing that should say so.
@@ -1135,6 +1156,7 @@ const STAGE_INTROS = {
   },
   maze: {
     text: "YOU HAVE ENTERED THE MINOTAUR'S LAIR",
+    next: 'playing',
     // Torchlight amber rather than the castle's purple: the maze is lit by
     // fire and the title should be the last warm thing before the dark.
     accent: '#FFA030', dim: '#B4702A', frame: '#5c3a12',
@@ -1157,21 +1179,34 @@ let pendingIntro = null;
  *
  * Here rather than on the boss death that led here, so a stage begins with the
  * choice that shapes it instead of the previous fight ending with a third
- * screen. Queued, not opened: `openChooserWhenClear` shows it once the intro
- * has been dismissed and the new field is quiet, which at the start of a level
- * is immediately.
+ * screen.
  *
- * One step has no beat of its own -- the dark archer hands straight to the dark
- * knight on the same map with no intro -- so a rite earned there waits for the
- * maze. That is a gap in the stage chain rather than in this rule.
+ * Every hand-off in the chain has an intro now, which is what makes that rule
+ * hold everywhere instead of nearly everywhere. The dark archer used to give
+ * the dark knight straight to `boss_entrance` with no screen between them, so
+ * a rite earned at that death had nowhere to be spent.
  */
 function beginNewLevel() {
+  // The fallback drawStageIntro takes, for the same reason: a run put on this
+  // screen without naming an intro is on the castle's.
+  const next = (STAGE_INTROS[pendingIntro] || STAGE_INTROS.castle).next;
   pendingIntro = null;
-  appState = 'playing';
+  // 'playing' is assigned directly for the reason showStageIntro gives above --
+  // transitionTo would call initGame() and wipe the run that just cleared the
+  // stage. An entrance is the opposite case: it has a banner to stage, and
+  // transitionTo is the only thing that stages one.
+  if (next === 'playing') appState = 'playing'; else transitionTo(next);
   if (siegeRun) return;
-  // Queued, not opened: openChooserWhenClear shows it once the new field is
-  // quiet, which at the start of a level is the next frame.
-  queueRite('playing');
+  queueRite(next);
+  // Opened here rather than left to openChooserWhenClear, which cannot see
+  // that a stage intro IS the lull: the stage behind it is built and nothing
+  // has had a frame to move yet. Left to that check the rite could be lost
+  // outright -- it refuses while a boss is in play, and the maze has one
+  // hunting from its first frame, and the stage after the maze is a siege,
+  // which it refuses for its own reason. The rank would be carried to the end
+  // of the run unspent, which is the same fault as the missing screen below
+  // and one step further down the same path.
+  openNextChooser();
 }
 
 function showStageIntro(kind) {
@@ -9454,7 +9489,14 @@ function updateBossDeath(dt) {
       skeletons = [];
       TALENTS.award('stage_cleared');
       bossStage = 3;
-      transitionTo('boss_entrance');
+      // Held behind a title like every other hand-off in this chain, rather
+      // than cutting straight to the entrance. This death pays mastery and can
+      // be the one that earns the rite, and the title is where a rite is spent
+      // -- see beginNewLevel. Without a screen of its own the rank went
+      // unspent, and the two stages that follow cannot offer it either: the
+      // maze always has a boss in play and the bastion is a siege. The
+      // entrance is staged when the title is dismissed, not here.
+      showStageIntro('darkKnight');
     } else if (deadKind === 'dark_knight') {
       // Stage 3 done, and the run is not over: the castle's floor gives out
       // into the labyrinth under it. Built exactly the way the castle
@@ -17034,6 +17076,9 @@ export const devHooks = {
   boss: () => boss,
   bossStage: () => bossStage,
   setBossStage(n) { bossStage = n; },
+  // The stage order itself, so a test can walk every boss the game has rather
+  // than a list of the ones whoever wrote it happened to remember.
+  BOSS_STAGES,
   hostileBolts: () => hostileBolts,
   castleWave: () => castleWave,
   startCastleWave(n) { startCastleWave(n); },

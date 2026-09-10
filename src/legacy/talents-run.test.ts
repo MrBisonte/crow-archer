@@ -825,13 +825,13 @@ function killABoss(): void {
  * Starts the next level, which is where the rite is offered now.
  *
  * A stage intro is a screen the run stops on, and dismissing it is the moment
- * `beginNewLevel` queues the rite. The state is set through `go` rather than
- * by walking the campaign to a real intro: the dark archer hands straight to
- * the dark knight with no intro at all, so the first real one is three stages
- * further on than any of these tests want to drive.
+ * `beginNewLevel` offers the rite. The run is only put on that screen by `go`
+ * where it is not already standing on one: the callers that kill a boss first
+ * are on the real title that death produced, since the dark archer has one of
+ * its own now, and the callers that kill nothing have no title to stand on.
  */
 function startNewLevel(): void {
-  g.go('stage_intro');
+  if (g.state() !== 'stage_intro') g.go('stage_intro');
   expect(g.dismissIntro(), 'the intro refused to be dismissed').toBe(true);
   clearArena();
   g.stepSim(1);
@@ -875,10 +875,14 @@ describe('the choosers', () => {
 
     press('b');
 
-    // The dark archer's death leads into the dark knight's entrance, and the
+    // The dark archer's death leads into the dark knight's title, and the
     // ceremony has to give that hand-off back rather than strand the player.
-    expect(g.state(), 'the tree kept the run').toBe('boss_entrance');
+    expect(g.state(), 'the tree kept the run').toBe('stage_intro');
     expect(g.chooser()).toBeNull();
+    // And the title hands on to the entrance, so the chain is whole: nothing
+    // is left sitting on a screen with no way forward.
+    expect(g.dismissIntro()).toBe(true);
+    expect(g.state(), 'the title stranded the run').toBe('boss_entrance');
   });
 
   it('lets the boss hand straight on when the purse can buy nothing', () => {
@@ -891,6 +895,8 @@ describe('the choosers', () => {
     killABoss();
 
     expect(g.chooser(), 'a boss with nothing to sell stopped the run').toBeNull();
+    expect(g.state()).toBe('stage_intro');
+    expect(g.dismissIntro()).toBe(true);
     expect(g.state()).toBe('boss_entrance');
   });
 
@@ -916,7 +922,10 @@ describe('the choosers', () => {
     g.chooserPick(1);   // stormcaller, whose halved cooldown this asserts below
 
     expect(talents().stormCooldown()).toBe(g.config().stormCooldown / 2);
-    expect(g.state(), 'the rite kept the run it interrupted').toBe('playing');
+    // The dark archer's title hands to the dark knight's entrance, and the
+    // rite sat over that hand-off without disturbing it -- the same
+    // direct-assignment reasoning every ceremony in this chain relies on.
+    expect(g.state(), 'the rite kept the run it interrupted').toBe('boss_entrance');
   });
 
   it('offers the rite once a run, taken or not', () => {
@@ -2129,4 +2138,75 @@ describe('talents are bought with mastery, never with feathers', () => {
     expect(talents().buy(tier2.id).kind, 'an empty purse shut a tier the rank opened')
       .toBe('tooPoor');
   });
+});
+
+
+/**
+ * Every boss death that hands the run on must hand it through a screen the
+ * rite can be spent at.
+ *
+ * A death pays mastery, so any of them can be the one that earns the rank; the
+ * rite is offered at `beginNewLevel`, which only runs when a stage intro is
+ * dismissed. A hand-off with no intro therefore earns a rank with nowhere to
+ * spend it -- and the two stages after the castle cannot take it either, since
+ * `openChooserWhenClear` refuses while a boss is in play and the maze always
+ * has one, and refuses again on a siege. The rank was carried to the end of
+ * the run unspent. That was the dark archer, whose death handed straight to
+ * the dark knight's entrance.
+ *
+ * Driven over `BOSS_STAGES` rather than over the one death that was wrong: the
+ * next stage added is the one nobody will remember to check by hand.
+ */
+describe('every rite-earning death reaches a screen that shows the rite', () => {
+  const stages = g.BOSS_STAGES as unknown as string[];
+
+  /**
+   * The map each boss is fought on.
+   *
+   * Written out rather than read back off the game, which derives it the other
+   * way round -- the death tail LOADS the next map. A test that asked the game
+   * would be agreeing with whatever it did instead of checking it.
+   */
+  const MAP_OF_STAGE: Record<string, string> = {
+    crowking: 'forest', dark_archer: 'castle', dark_knight: 'castle',
+    minotaur: 'maze', commander: 'cavern',
+  };
+
+  it('knows every stage the game has', () => {
+    // The exact key set, not a count: a length check catches a stage deleted
+    // and misses one added, which is the case this whole block is about.
+    expect(new Set(Object.keys(MAP_OF_STAGE))).toEqual(new Set(stages));
+  });
+
+  for (const [i, kind] of stages.entries()) {
+    it(`${kind}`, () => {
+      // A fresh run: riteOffered is once per run, and initGame clears it.
+      g.go('menu');
+      g.go('playing');
+      // Rank 3, so a rite is owed. Every ladder topped, so the tree has
+      // nothing to sell and cannot be mistaken for the rite by the assertion
+      // below -- the two ceremonies travel through the same queue.
+      for (let n = 0; n < 6; n++) talents().award('siege_cleared');
+      for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+
+      g.generateMap(MAP_OF_STAGE[kind]);
+      expect(g.spawnBossNow(i + 1), `stage ${i + 1} is not ${kind}`).toBe(kind);
+      g.go('boss_fight');
+      g.killBoss();
+      // 3 s: the death tail pays out at 1.2 s and hands off after it.
+      stepPast(Math.ceil(3 * ONE_SECOND));
+
+      // A death that ends the run owes nothing: there is no next stage for a
+      // capstone to shape. Everything else must hand through a title.
+      if (g.state() === 'win' || g.state() === 'gameover') return;
+
+      expect(g.state(), `${kind} handed the run on with no screen to spend at`)
+        .toBe('stage_intro');
+      expect(g.dismissIntro()).toBe(true);
+      const rite = g.chooser() as unknown as Chooser | null;
+      expect(rite, `${kind}'s title opened without the rite it had earned`)
+        .not.toBeNull();
+      expect(rite!.kind).toBe('rite');
+    });
+  }
 });
