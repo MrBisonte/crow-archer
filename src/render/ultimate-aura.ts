@@ -213,9 +213,10 @@ const VORTEX_STEPS: Steps<number> = [9, 7, 5, 3];
 /** The four angles THE BEAM's one lance is swept through. */
 const BEAM_ANGLES: Steps<number> = [-1.05, -0.35, 0.35, 1.05];
 
-/** THE LEAP's four rungs: the row a chevron sits on and its half-width. They
- *  narrow as they climb, so three read as one thing leaving rather than as
- *  three marks stacked up the body. */
+/** THE LEAP's four rungs: the row a chevron sits on and its half-width. Two
+ *  of the four are up at any moment, two rungs apart, and they narrow as they
+ *  climb -- so the pair reads as one thing leaving rather than as marks
+ *  stacked up the body. */
 const LEAP_STEPS: Steps<readonly [number, number]> = [[17, 8], [12, 7], [6, 6], [1, 5]];
 
 /** How far each of CARPET BOMB's seven sparks advances per frame. Seven
@@ -309,18 +310,18 @@ const AURA_ART: Readonly<Record<string, AuraArt>> = {
     },
   },
 
-  // EARTHSHATTER: cracks on the FLOOR, widening a step per frame. The only
-  // aura on the ground, because his is the only ultimate that comes out of it.
+  // EARTHSHATTER: cracks on the FLOOR, running a step further every frame.
+  // The only aura on the ground, because his is the only ultimate that comes
+  // out of it.
   earthshatter: {
     fps: 4,
     draw: (g, f) => {
-      // Four cracks on the diagonals and one running forward, from three
-      // cells out. Neither figure is arbitrary and both were arrived at by
-      // looking: a ground plane this squashed puts every shallow ray in the
-      // same two rows, so rays near the horizontal merge into a slab and a
-      // slab under his boots reads as a puddle rather than as a floor coming
-      // apart. Diagonals separate, and an empty middle is what makes the rest
-      // read as radiating from under him.
+      // Every crack starts clear of his boots and runs further each frame.
+      // The gap in the middle is the part that was arrived at by looking: a
+      // ground plane this squashed puts every shallow ray in the same two
+      // rows, so rays that all reach a common centre merge there, and a solid
+      // patch under his boots reads as a puddle rather than as a floor coming
+      // apart.
       for (const [a, from, span] of QUAKE_CRACKS)
         ray(g, CX, FLOOR, a, from, from + span + f, 0.42, QUAKE);
     },
