@@ -2759,6 +2759,123 @@ describe('area effects reach the cavern garrison', () => {
   });
 });
 
+describe('the ranger crossbow', () => {
+  /**
+   * A ranger on open ground at a given pace, owning exactly the bolt talent
+   * asked for.
+   *
+   * The grant is set both ways rather than only up. Grants persist across
+   * tests in this file by design, so a baseline that does not clear FOURTH
+   * BOLT measures an earlier test's leftovers instead of a plain crossbow
+   * (`inert-leftovers-go-live-with-the-rule`).
+   */
+  function rangerOnPace(pace: string, fourthBolt: number): void {
+    g.setPace(pace);
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    (g.talents() as { grant: (id: string, n: number) => void }).grant('fourthBolt', fourthBolt);
+  }
+
+  /** Ammo the quiver never runs out of -- this is measuring cadence, not supply. */
+  function topUp(): void {
+    (g.inv() as { arrows: number }).arrows = 99;
+  }
+
+  /** Presses fire every frame for `frames` and counts the volleys that left. */
+  function fireFor(frames: number): number {
+    let volleys = 0;
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'crossbow') volleys++;
+    });
+    for (let i = 0; i < frames; i++) { topUp(); g.shoot(); g.stepSim(1); }
+    return volleys;
+  }
+
+  /** Spends a whole magazine, holding the meter where the caller put it. */
+  function emptyMagazine(momentum: number): void {
+    const mag = (g.config() as { crossbowMagazine: number }).crossbowMagazine;
+    for (let i = 0; i < mag; i++) {
+      g.setMomentum(momentum);
+      topUp();
+      g.shoot();
+      g.stepSim(1);
+    }
+    g.setMomentum(momentum);
+  }
+
+  function reloadLeft(): number {
+    return (g.crossbow() as { reload: number }).reload;
+  }
+
+  for (const pace of ['calm', 'fast', 'nightmare']) {
+    // The regression. maxArrowsInFlight is 3 on `calm` and FOURTH BOLT asks
+    // for a volley of 4, so the old gate refused every press for the whole
+    // run -- a talent you pay for taking the primary weapon away.
+    it('fires on ' + pace + ', with the fourth bolt and without', () => {
+      rangerOnPace(pace, 0);
+      expect(fireFor(180)).toBeGreaterThan(0);
+      rangerOnPace(pace, 1);
+      expect(fireFor(180)).toBeGreaterThan(0);
+    });
+
+    // The other half of the same bug: on `fast` the cap did not refuse the
+    // volley outright, it just refused it more often, and the talent bought a
+    // third less output than not taking it.
+    it('the fourth bolt never lowers his output on ' + pace, () => {
+      const stat = () => (g.talents() as { stat: (id: string) => number }).stat('fourthBolt');
+      rangerOnPace(pace, 0);
+      const plain = fireFor(180) * stat();
+      rangerOnPace(pace, 1);
+      const upgraded = fireFor(180) * stat();
+      expect(upgraded).toBeGreaterThanOrEqual(plain);
+    });
+  }
+
+  it('stops for a beat once the magazine is out, and starts again after it', () => {
+    rangerOnPace('fast', 0);
+    expect(reloadLeft()).toBe(0);
+    emptyMagazine(0);
+    expect(reloadLeft()).toBeGreaterThan(0);
+
+    // Mid-beat the press does nothing at all -- that is the pacing.
+    expect(fireFor(1)).toBe(0);
+
+    const secs = (g.config() as { crossbowReloadSecs: number }).crossbowReloadSecs;
+    stepPast(Math.ceil(secs * ONE_SECOND) + 2);
+    expect(reloadLeft()).toBe(0);
+    expect(fireFor(1)).toBe(1);
+  });
+
+  it('shortens the beat by the meter, so standing still costs him twice', () => {
+    rangerOnPace('fast', 0);
+    emptyMagazine(0);
+    const cold = reloadLeft();
+
+    rangerOnPace('fast', 0);
+    emptyMagazine(1);
+    const hot = reloadLeft();
+
+    const full = (g.config() as { crossbowReloadFullMult: number }).crossbowReloadFullMult;
+    expect(hot).toBeLessThan(cold);
+    expect(hot / cold).toBeCloseTo(full, 2);
+  });
+
+  it('keeps a ceiling no legal burst can reach, on any pace', () => {
+    // The volley half of the ceiling check lives here rather than in applyPace,
+    // because the widest volley is a talent figure and the game may only read
+    // it through TALENTS -- talent-stats-wired.test.ts refuses the raw read.
+    for (const pace of ['calm', 'fast', 'nightmare']) {
+      rangerOnPace(pace, 1);
+      const c = g.config() as { crossbowCeiling: number; crossbowMagazine: number;
+        maxArrowsInFlight: number };
+      const widest = (g.talents() as { stat: (id: string) => number }).stat('fourthBolt');
+      expect(c.crossbowCeiling).toBeGreaterThan(c.crossbowMagazine * widest);
+      expect(c.crossbowCeiling).toBeGreaterThan(c.maxArrowsInFlight);
+    }
+  });
+});
+
 describe('the ranger net', () => {
   /** A ranger on open ground, aiming due east. */
   function rangerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {

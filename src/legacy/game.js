@@ -799,6 +799,21 @@ const CONFIG = {
   rangerMomentumFullPx: 375,
   rangerMomentumDecaySecs: 3,
   crossbowSpreadRadians: Math.PI / 60,   // 3° between adjacent bolts
+  // The crossbow reloads, which is the whole point of a crossbow and the one
+  // thing it did not do. Before this the arrow cap was its only pacing, and a
+  // cap meant for the archer cannot pace a weapon that spends four bolts a
+  // press: on `calm` it is 3, so FOURTH BOLT's volley of four was refused
+  // outright and the primary was dead for the run.
+  //
+  // Four volleys, then a beat. The beat is what Momentum buys down, so
+  // standing still costs him twice -- no damage bonus and the slow reload --
+  // which is the character stated in one figure.
+  crossbowMagazine: 4,
+  crossbowReloadSecs: 1.1,
+  crossbowReloadFullMult: 0.45,
+  // A ceiling, not a pace. It bounds the array and nothing else: four volleys
+  // of four bolts is 16 in the air at the very most, so play never reaches it.
+  crossbowCeiling: 48,
   // Satchel: no charge to hold, one click is one throw at a fixed speed.
   // Blast radius and boss damage reuse dynamiteBlastRadius/dynamiteBossDamage
   // below — an explosion is an explosion, not a second copy of the same figure.
@@ -1032,6 +1047,20 @@ function applyPace(name) {
   // The ranger's satchel count matches the archer's dynamite count — same
   // tool tier, nothing asked for a different number.
   CONFIG.resources.satchels.max  = preset.baseDynamites;
+  // The ranger's ceiling has to sit above the archer's cap, or it becomes the
+  // tighter of the two and paces him again -- which is the bug the magazine
+  // replaced, arriving from the other side. Checked here because a preset is
+  // the one thing that moves the cap.
+  //
+  // Deliberately not compared against the volley size: that figure is
+  // talent-backed, and reading CONFIG.crossbowBoltCount raw is what
+  // talent-stats-wired.test.ts exists to refuse. The volley bound is asserted
+  // in the suite, where the talent can be asked properly.
+  if (CONFIG.crossbowCeiling <= CONFIG.maxArrowsInFlight) {
+    throw new Error('crossbowCeiling is ' + CONFIG.crossbowCeiling + ', at or below '
+      + 'the ' + CONFIG.maxArrowsInFlight + '-arrow cap on pace ' + CONFIG.pace
+      + '. Raise crossbowCeiling in CONFIG.');
+  }
 }
 
 applyPace(CONFIG.pace);
@@ -1861,6 +1890,11 @@ const ARCHER_LOOSE_SECS = 0.12;
  * worth without touching the fill rate, the decay, or the chip that draws it.
  */
 let rangerMomentum = 0;
+
+/** Volleys left before the beat. Reloading while > 0 is not a thing. */
+let crossbowMag = 0;
+/** Seconds left of the beat. Nothing fires while this is above zero. */
+let crossbowReload = 0;
 
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
@@ -3243,6 +3277,18 @@ function tickMeter(level, filling, fillDelta, drainDelta) {
  */
 function rangerMomentumMult() {
   return 1 + rangerMomentum * TALENTS.stat('fullTilt');
+}
+
+/**
+ * What Momentum leaves of the reload.
+ *
+ * The mirror of rangerMomentumMult: the meter multiplies what a bolt is
+ * worth and divides what the next volley costs him in time. A full meter is
+ * the fastest he reloads and a standing start is the slowest, so the two
+ * halves of the character pull the same way instead of trading off.
+ */
+function crossbowReloadMult() {
+  return 1 - rangerMomentum * (1 - CONFIG.crossbowReloadFullMult);
 }
 
 function knightSpearDamage(fireSword) {
@@ -4862,6 +4908,7 @@ function initGame() {
   ultimateSlot = ULTIMATE_SLOT.FIRST;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
+  crossbowMag = CONFIG.crossbowMagazine; crossbowReload = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -5169,6 +5216,7 @@ function updatePlayer(dt) {
   if (archerPowerCD       > 0) archerPowerCD      = Math.max(0, archerPowerCD      - dt);
   if (archerLoose         > 0) archerLoose        = Math.max(0, archerLoose        - dt);
   if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
+  if (crossbowReload      > 0) crossbowReload     = Math.max(0, crossbowReload     - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
   if (wizBlinkChainTimer  > 0) {
@@ -5406,15 +5454,14 @@ function tryShoot() {
  */
 function tryCrossbowBolt() {
   if (!hasShaft()) { tryPitchfork(); return; }
-  // Reserve room for the whole burst up front — a partial push would let
-  // arrows.length overshoot maxArrowsInFlight and stall the next press.
+  if (crossbowReload > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   // Read once: a volley has to be counted, spread and fired off the same
   // number, and FOURTH BOLT moves it.
   const bolts = TALENTS.stat('fourthBolt');
-  // A fourth bolt costs a little availability as well as buying damage:
-  // bolts share maxArrowsInFlight with arrows, 5 on the default pace, so a
-  // volley of four is refused whenever two are already out.
-  if (arrows.length + bolts > CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // The ceiling, and only the ceiling. maxArrowsInFlight used to decide
+  // whether a volley could fire at all, which cost him a third of his output
+  // on `fast` and every shot on `calm`. The magazine paces him now.
+  if (arrows.length + bolts > CONFIG.crossbowCeiling) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   const type = spendShaft();
   const half = (bolts - 1) / 2;
   for (let i = 0; i < bolts; i++) {
@@ -5430,6 +5477,10 @@ function tryCrossbowBolt() {
       dmgMult: CONFIG.crossbowBoltDamageMult * rangerMomentumMult() });
   }
   events.emit({ type: 'WEAPON_FIRED', kind: 'crossbow' });
+  if (--crossbowMag <= 0) {
+    crossbowMag = CONFIG.crossbowMagazine;
+    crossbowReload = CONFIG.crossbowReloadSecs * crossbowReloadMult();
+  }
 }
 
 function tryWizardBolt() {
@@ -16460,6 +16511,7 @@ export const devHooks = {
   holdFrames(n) { hitstop.trigger(n); },
   hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
+  setPace: (name) => applyPace(name),
   /**
    * The frame tracer, for a headless run that wants the numbers rather than
    * the overlay. `level` takes the same values ?perf does; 'ops' installs the
@@ -16714,6 +16766,8 @@ export const devHooks = {
   // in an open arena and painful inside a boss fight -- and a test of the
   // harpoon should not also be a test of whether he can find 375 px to run.
   setMomentum(level) { rangerMomentum = level; },
+  crossbow: () => ({ mag: crossbowMag, reload: crossbowReload,
+    reloadMult: crossbowReloadMult() }),
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: TALENTS.stat('fullTilt') }),
   /** Bloodlust's stacks, what they multiply, and whether the swing in progress

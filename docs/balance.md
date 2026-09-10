@@ -234,6 +234,28 @@ costs nothing but never stopping and takes the ranger from 6.0 to 4.6. The
 smaller prize is deliberate. He is already the fastest body in the game, so the
 thing he is being paid to do is the thing he was going to do anyway.
 
+#### The magazine, which is the pace he was missing
+
+The crossbow had no cadence of its own. Its only limit was `maxArrowsInFlight`,
+a figure sized for the archer's single arrow, and it does not survive contact
+with a weapon that spends four bolts a press: on `calm` the cap is 3, so FOURTH
+BOLT's volley of four was refused on every press for the whole run and the
+primary weapon was simply gone. On `fast` it refused often enough that the
+talent bought a third LESS output than not taking it.
+
+| The crossbow | Constant | Figure | What it does |
+|---|---|---|---|
+| Volleys before the beat | `crossbowMagazine` | 4 | a magazine, not a per-shot timer |
+| The beat, standing still | `crossbowReloadSecs` | 1.1 s | the slowest he ever reloads |
+| What a full meter leaves | `crossbowReloadFullMult` | 0.45 | a moving ranger reloads in half |
+| Bolts the array will hold | `crossbowCeiling` | 48 | a ceiling, never a pace |
+
+Momentum now buys the reload down as well as the damage up, so standing still
+costs him twice and the two halves of the character pull the same way instead
+of trading against each other. The ceiling replaces the cap in the fire path
+and does nothing else: it bounds the array, sits above the widest legal burst,
+and `applyPace` throws if a preset ever leaves it at or under the arrow cap.
+
 #### The net, which is not about damage at all
 
 It never kills what it catches, on purpose. What it is worth is the time it
