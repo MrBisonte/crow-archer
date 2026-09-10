@@ -83,7 +83,10 @@ export type GameEvent =
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
-  | { type: 'ACTION_BLOCKED' }
+  // `reason` is optional and is shown to the player verbatim when present.
+  // Every ultimate refusal that is not simply 'it is already running' carries
+  // one -- see BLOCKED in game.js, which is the one home for the strings.
+  | { type: 'ACTION_BLOCKED'; reason?: string }
   | { type: 'WHIRLWIND_START'; x: number; y: number }
   | { type: 'WHIRLWIND_TICK'; x: number; y: number }
   | { type: 'WHIRLWIND_END'; x: number; y: number }

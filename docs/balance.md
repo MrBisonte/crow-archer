@@ -477,6 +477,31 @@ button, and that redundancy is what pays for the ultimate: the key fires it
 while it is up, the button always fires the plain special. Nothing is taken
 away from a player who wants the dynamite.
 
+### Being told why it will not fire
+
+Three of the ten audit findings were one defect wearing different clothes: the
+game refused a press and gave no reason. A playtest called it "the ulti is not
+firing", and the ultimate was working exactly as designed the whole time.
+
+| The wait | Constant | Figure | What changed |
+|---|---|---|---|
+| First charge | `ultimateCooldown` | 60 s | no longer paid at the START of a run |
+| Pick waits for a lull | `chooserLullRadius` | 320 px | unchanged |
+| ...but not forever | `chooserLullTimeout` | 12 s | new: the wait is bounded |
+
+A run now begins with the timer already spent, because a cooldown is what a use
+COSTS and not an entry fee; a measured run went 69 s before the pick screen
+found a quiet enough field, and for all of it the key did nothing and nothing
+said why. What still stands between the player and the ability at the start is
+the pick, and the pick announces itself: the chip reads `PICK IT`, or
+`ON A LULL` when one is queued behind a busy field.
+
+Every refusal that is not simply "it is already running" now names a fix that
+exists -- no arrows, a full meter, somewhere to land, room for the line -- and
+the reason is shown on the hero, not only sounded. The strings have one home in
+`BLOCKED`, and a test drives all ten ultimates with nothing in hand and fails
+any refusal that arrives without one.
+
 ### What each one is worth
 
 | Ultimate | The figure that decides it | Key | Value |

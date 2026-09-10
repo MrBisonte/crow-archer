@@ -3123,6 +3123,113 @@ describe('the ranger crossbow', () => {
   });
 });
 
+describe('a refused ultimate says why', () => {
+  type Blocked = { type: string; reason?: string };
+
+  function watch(): Blocked[] {
+    const seen: Blocked[] = [];
+    g.onEvent((e: Blocked) => { if (e.type === 'ACTION_BLOCKED') seen.push(e); });
+    return seen;
+  }
+
+  function onTheField(hero: string): void {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+  }
+
+  it('names the pick when the timer is spent and nothing has been chosen', () => {
+    onTheField('archer');
+    g.setUltimateCD(0);
+    const seen = watch();
+    g.special('key');
+    const reasons = seen.map((e) => e.reason).filter(Boolean);
+    expect(reasons).toContain(g.blockedReasons().UNPICKED);
+  });
+
+  it('says the field has to clear while a pick is queued behind a lull', () => {
+    onTheField('archer');
+    g.setUltimateCD(0);
+    // A pick waiting in the queue is a different answer from never having had
+    // one, and the two used to be the same silence.
+    g.chooserQueue().push({ kind: 'ultimate', offers: ['headshot'], cursor: 0 });
+    const seen = watch();
+    g.special('key');
+    expect(seen.map((e) => e.reason)).toContain(g.blockedReasons().WAITING_LULL);
+  });
+
+  it('stays quiet while it is merely cooling, because the chip is counting', () => {
+    onTheField('archer');
+    g.setUltimateSlot(g.ULTIMATE_SLOT.FIRST);
+    g.setUltimateCD(30);
+    const seen = watch();
+    g.special('key');
+    expect(seen.filter((e) => e.reason).length).toBe(0);
+  });
+
+  it('takes the pick anyway once the lull has been waited out', () => {
+    onTheField('archer');
+    g.chooserQueue().push({ kind: 'ultimate', offers: ['headshot'], cursor: 0 });
+    // Crowded, and it has to STAY crowded. Parked with heldTimer, which is the
+    // one way a crow sits still while the run's escalation clock advances --
+    // and re-parked every frame, because the hold ticks down like everything
+    // else. A first draft just spawned them and stepped, and by the time the
+    // timeout arrived the field had cleared itself: the test passed with the
+    // timeout reverted, which is how I know it was measuring nothing.
+    const p = g.player() as { x: number; y: number };
+    for (let i = 0; i < 6; i++) g.spawnCrow();
+    const crowd = g.crows() as Array<{ x: number; y: number; heldTimer: number }>;
+    const park = (): void => {
+      for (const c of crowd) { c.x = p.x + 20; c.y = p.y + 20; c.heldTimer = 9999; }
+    };
+
+    const timeout = (g.config() as { chooserLullTimeout: number }).chooserLullTimeout;
+    park();
+    expect(g.chooser()).toBeNull();
+
+    // Short of the timeout it must still be waiting -- otherwise this test
+    // would pass on a build with no lull check at all.
+    for (let i = 0; i < Math.floor(timeout * ONE_SECOND) - 10; i++) {
+      park(); g.healHero(); g.stepSim(1);
+    }
+    expect(g.chooser()).toBeNull();
+
+    for (let i = 0; i < 30; i++) { park(); g.healHero(); g.stepSim(1); }
+    expect(g.chooser()).not.toBeNull();
+  });
+
+  // The coverage answer: not HARPOON alone. Every ultimate is driven with
+  // nothing in hand, and any refusal any of them emits has to name a fix.
+  it('gives a reason with every refusal, for all ten', () => {
+    const slots = g.ULTIMATE_SLOT as { FIRST: string; SECOND: string };
+    let refusals = 0;
+    for (const hero of ['archer', 'wizard', 'knight', 'ranger', 'sapper']) {
+      for (const slot of [slots.FIRST, slots.SECOND]) {
+        onTheField(hero);
+        g.setUltimateSlot(slot);
+        g.setUltimateCD(0);
+        // Nothing in hand: no ammo, no focus, no meter.
+        const inv = g.inv() as Record<string, number>;
+        inv.arrows = 0; inv.focus = 0; inv.dynamites = 0; inv.satchels = 0;
+        g.setMomentum(0);
+
+        const seen = watch();
+        g.special('key');
+        for (const e of seen) {
+          refusals++;
+          expect(e.reason, `${hero}/${slot} refused without saying why`)
+            .toBeTruthy();
+        }
+      }
+    }
+    // Not vacuous: at least the two ammo-gated ones and the meter-gated one.
+    expect(refusals).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe('the ranger net', () => {
   /** A ranger on open ground, aiming due east. */
   function rangerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
@@ -5998,11 +6105,17 @@ describe('the ultimate', () => {
     return p;
   }
 
-  it('starts a run charging rather than in hand', () => {
+  // The rule this test used to assert was reversed on purpose. A run began
+  // with the full cooldown already on the clock, so for the first minute the
+  // key did nothing and nothing said why -- which is what a player reads as
+  // the ability not existing. The cooldown is what a USE costs now, not an
+  // entry fee, and what still stands between him and the ability at the start
+  // is the pick, which announces itself.
+  it('starts a run with the timer already spent, and the pick still owed', () => {
     readyRun('archer');
+    expect(g.ultimate().cd).toBe(0);
+    // Charged is not usable: nothing has been chosen yet.
     expect(g.ultimate().ready).toBe(false);
-    // Close, not exact: the helper settles two frames of aim before returning.
-    expect(g.ultimate().cd).toBeCloseTo(g.config().ultimateCooldown, 0);
   });
 
   // The whole of the per-hero part of the timer. An archer who is braced is
@@ -6010,6 +6123,9 @@ describe('the ultimate', () => {
   // in tickUltimate and the two numbers below are equal.
   it('charges faster for a hero filling his own meter', () => {
     readyRun('archer');
+    // A run starts with the timer spent, so put one back to measure it
+    // draining -- this test is about the RATE, not about where it starts.
+    g.setUltimateCD(g.config().ultimateCooldown as number);
     // Standing still is what fills the brace, so the sim does it for us.
     stepPast(2 * ONE_SECOND);
     expect(g.brace().level).toBe(1);
@@ -6021,6 +6137,7 @@ describe('the ultimate', () => {
     // brace, and standing still is what fills it, so the comparison only
     // means anything if this hero actually moves.
     readyRun('archer');
+    g.setUltimateCD(g.config().ultimateCooldown as number);
     (g.keys() as Record<string, boolean>)['ArrowRight'] = true;
     stepPast(ONE_SECOND);
     expect(g.brace().level).toBe(0);

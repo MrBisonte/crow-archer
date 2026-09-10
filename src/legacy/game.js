@@ -909,6 +909,11 @@ const CONFIG = {
   // enough that the screen does not open with something about to reach him,
   // narrow enough that a crow across the map cannot hold the choice hostage.
   chooserLullRadius: 320,
+  // How long the pick screen will wait for a lull before taking it anyway.
+  // Without this the wait is unbounded: a measured run went 69 s before the
+  // field was quiet enough, and for all of it the key did nothing and nothing
+  // said why.
+  chooserLullTimeout: 12,
 
   // EARTHSHATTER. The knight's problem is reach: every swing needs him inside
   // 80 px of something that orbits him. This is the one thing on his sheet
@@ -1250,15 +1255,41 @@ function queueUltimatePick(resume) {
  * Costs nothing on the frames that matter: it returns on the first line unless
  * something is actually waiting to be shown.
  */
-function openChooserWhenClear() {
-  if (chooser !== null || chooserQueue.length === 0) return;
+function openChooserWhenClear(dt) {
+  if (chooser !== null || chooserQueue.length === 0) { chooserWait = 0; return; }
   if (appState !== 'playing' || siegeRun || bossInPlay()) return;
-  const r2 = CONFIG.chooserLullRadius * CONFIG.chooserLullRadius;
-  let crowded = false;
-  forEachHostile((e) => { if (dist2(player.x, player.y, e.x, e.y) < r2) crowded = true; });
-  if (crowded) return;
+  // The wait is bounded now. A lull that never comes used to mean a pick that
+  // never opened, and a player holding an ability he had not been allowed to
+  // choose yet.
+  chooserWait += dt;
+  if (chooserWait < CONFIG.chooserLullTimeout) {
+    const r2 = CONFIG.chooserLullRadius * CONFIG.chooserLullRadius;
+    let crowded = false;
+    forEachHostile((e) => { if (dist2(player.x, player.y, e.x, e.y) < r2) crowded = true; });
+    if (crowded) return;
+  }
+  chooserWait = 0;
   openNextChooser();
 }
+
+/** How long a queued pick has been waiting for a quiet field. */
+let chooserWait = 0;
+
+/**
+ * Why an ultimate would not fire, in the player's words.
+ *
+ * One home, because these strings are the only thing standing between a
+ * refusal and "the key is broken" -- which is what a playtest called it. Each
+ * one names a fix that exists: more arrows, a full meter, somewhere to stand.
+ */
+const BLOCKED = {
+  NO_ARROWS: 'NO ARROWS',
+  NEEDS_METER: 'NEEDS A FULL METER',
+  NO_LANDING: 'NOWHERE TO LAND',
+  NO_ROOM: 'NO ROOM FOR THE LINE',
+  UNPICKED: 'ULTIMATE NOT CHOSEN YET',
+  WAITING_LULL: 'PICK OPENS WHEN THE FIELD CLEARS',
+};
 
 function queueRite(resume) {
   if (riteOffered) return;
@@ -2985,7 +3016,7 @@ function startArcherDraw() {
  * is spent.
  */
 function fireHeadshot() {
-  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ARROWS }); return false; }
   const type = spendShaft();
   const spd = CONFIG.arrowSpeed * CONFIG.archerHeadshotSpeedMult;
   arrows.push({ x: player.x, y: player.y,
@@ -3206,7 +3237,17 @@ function ultimateReady() {
  * and keeps the charge.
  */
 function tryUltimate() {
-  if (!inGame() || !ultimateReady()) return false;
+  if (!inGame() || !equippedUltimate()) return false;
+  // Still cooling: the chip is counting it down in front of him and a floater
+  // repeating the number every press would be noise.
+  if (ultimateCD > 0) return false;
+  // Charged, and still not usable. This is the case that reads as a broken
+  // key, so it is the one case that must always speak.
+  if (ultimatePicked !== true) {
+    events.emit({ type: 'ACTION_BLOCKED',
+      reason: chooserQueue.length > 0 ? BLOCKED.WAITING_LULL : BLOCKED.UNPICKED });
+    return false;
+  }
   if (!equippedUltimate().fire()) return false;
   ultimateCD = CONFIG.ultimateCooldown;
   events.emit({ type: 'ULTIMATE_FIRED', hero: selectedChar, x: player.x, y: player.y });
@@ -4594,6 +4635,13 @@ events.on(e => {
     case 'ACTION_BLOCKED':
       playSound(sndEmpty);
       blockedFlash = CONFIG.blockedFlashSecs;
+      // A refusal with a reason puts the reason where the player is looking.
+      // Without this the whole mechanism is a flash and a buzz, which is what
+      // a playtest read as the key being broken.
+      if (e.reason) {
+        floaters.push({ x: player.x, y: player.y - 26, alpha: 1.0, vy: -30,
+          text: e.reason, color: '#F0C830' });
+      }
       break;
 
     case 'SATCHEL_ARMED':
@@ -5052,7 +5100,11 @@ function initGame() {
   chooser = null; chooserQueue = []; riteOffered = false; ultimatePicked = false;
 
   knightChainTimer = 0;
-  ultimateCD = CONFIG.ultimateCooldown;
+  // Ready from the first frame: the cooldown is what a use COSTS, not an
+  // entry fee. A minute of a dead key at the start of every run taught the
+  // player the ability did not exist.
+  ultimateCD = 0;
+  chooserWait = 0;
   arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
   ultimateCast = null; carpetCord = null; leapLanding = null; headshotTrail = null;
   rainHits = [];
@@ -5362,7 +5414,7 @@ function updatePlayer(dt) {
   if (pfCooldown          > 0) pfCooldown         = Math.max(0, pfCooldown         - dt);
   HERO_UPKEEP[selectedChar]?.(dt);
   tickUltimate(dt, movedPx);
-  openChooserWhenClear();
+  openChooserWhenClear(dt);
   if (wizBoltCD           > 0) wizBoltCD          = Math.max(0, wizBoltCD          - dt);
   if (sapperChargeCD      > 0) sapperChargeCD     = Math.max(0, sapperChargeCD     - dt);
   if (sapperBarrageCD     > 0) sapperBarrageCD    = Math.max(0, sapperBarrageCD    - dt);
@@ -5814,7 +5866,7 @@ function tickVortex(dt) {
  * keeps the charge and can press again a stride later.
  */
 function fireHarpoon() {
-  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NEEDS_METER }); return false; }
   const spd = CONFIG.rangerHarpoonSpeed;
   arrows.push({ x: player.x, y: player.y,
     vx: Math.cos(player.aimAngle) * spd,
@@ -5860,7 +5912,7 @@ function harpoonYank(a) {
  */
 function fireArrowRain() {
   if (arrowRain) return false;
-  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return false; }
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ARROWS }); return false; }
   spendShaft();
   const at = aimPointWithin(CONFIG.archerRainRange);
   arrowRain = {
@@ -5970,7 +6022,9 @@ function fireLeap() {
   for (let i = 0; i < 60 && !playerFits(lx, ly); i++) {
     lx += Math.cos(back) * 4; ly += Math.sin(back) * 4;
   }
-  if (!playerFits(lx, ly)) return false;   // nowhere to land, and costs nothing
+  // Nowhere to land, and it costs nothing -- but it used to cost the player
+  // an explanation as well, which is the part that was wrong.
+  if (!playerFits(lx, ly)) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_LANDING }); return false; }
   knightLeap = { x0: player.x, y0: player.y, x1: lx, y1: ly, t: 0 };
   leapLanding = null;
   events.emit({ type: 'KNIGHT_LEAP', x: player.x, y: player.y, toX: lx, toY: ly });
@@ -6312,7 +6366,7 @@ function fireCarpetBomb() {
     });
     laid++;
   }
-  if (laid === 0) return false;
+  if (laid === 0) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ROOM }); return false; }
   // The cord is one object the seven charges sit on, which is the difference
   // between an ability and the sapper throwing quickly. It outlives the last
   // fuse by a beat so the line is still readable as the far end goes up.
@@ -14390,9 +14444,15 @@ const CHIP = {
   // the lane that is not the shared green: it is the one the player must not
   // miss, and a fifth green READY among four is exactly what gets missed.
   ult: () => ({
-    glyph: 'ultimate', color: '#FF3EC8', lit: ultimateReady(),
-    label: ultimateReady() ? 'ULT' : Math.ceil(ultimateCD) + 's',
-    frac: ultimateReady() ? null : 1 - ultimateCD / CONFIG.ultimateCooldown,
+    glyph: 'ultimate',
+    // Three states, not two. Charged-but-unchosen is its own colour, because
+    // it is neither cooling nor usable and showing it as either is a lie.
+    color: ultimateReady() ? '#FF3EC8' : ultimateCD <= 0 ? '#F0C830' : '#FF3EC8',
+    lit: ultimateReady(),
+    label: ultimateReady() ? 'ULT'
+      : ultimateCD > 0 ? Math.ceil(ultimateCD) + 's'
+      : chooserQueue.length > 0 ? 'ON A LULL' : 'PICK IT',
+    frac: ultimateCD <= 0 ? null : 1 - ultimateCD / CONFIG.ultimateCooldown,
   }),
 };
 
@@ -16793,6 +16853,8 @@ export const devHooks = {
   // does -- so a test reads as the press it is making.
   special(source) { startCharge(source); releaseCharge(); },
   SPECIAL_SOURCE,
+  chooserWait: () => chooserWait,
+  blockedReasons: () => ({ ...BLOCKED }),
   ultimate: () => ({ cd: ultimateCD, ready: ultimateReady(),
                      charge: ULTIMATE_CHARGE[selectedChar]?.() || 0,
                      // The gold beat all ten open on. Exposed as a boolean
