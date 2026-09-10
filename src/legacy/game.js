@@ -11477,9 +11477,12 @@ const ULTIMATE_AURA = {
       // Each shaft falls on its own stagger, so they arrive as rain rather
       // than as one volley dropping in step.
       const fall = ((t * 0.9) + k / 6) % 1;
-      const x = Math.cos(k * 2.4) * 17;
+      // Spread onto the ring rather than over the body: the aura goes down
+      // before the sprite, so a shaft falling through the chest is a shaft
+      // with its middle painted out.
+      const x = Math.cos(k * 2.4) * 21;
       const y = -30 + fall * 38;
-      ctx.globalAlpha = 0.15 + 0.6 * fall;
+      ctx.globalAlpha = 0.25 + 0.65 * fall;
       ctx.beginPath();
       ctx.moveTo(x, y - 6); ctx.lineTo(x, y);
       ctx.stroke();
@@ -11515,13 +11518,17 @@ const ULTIMATE_AURA = {
     ctx.lineCap = 'round'; ctx.lineWidth = 2;
     for (let k = 0; k < 3; k++) {
       const rise = ((t * 1.3) + k / 3) % 1;
-      const y = 11 - rise * 30;
+      // Starts below the boots and climbs past the helm. Wider than the body
+      // at every step, because the aura is painted BEFORE the sprite -- a
+      // chevron narrow enough to sit on the torso is a chevron drawn under
+      // the torso, which is a chevron nobody sees.
+      const y = 14 - rise * 44;
       // Narrowing as it climbs, so the three read as one thing leaving rather
       // than as three separate marks stacked up the body.
-      const w = 9 - rise * 4;
+      const w = 20 - rise * 6;
       ctx.globalAlpha = 0.70 * (1 - rise);
       ctx.beginPath();
-      ctx.moveTo(-w, y + 4); ctx.lineTo(0, y); ctx.lineTo(w, y + 4);
+      ctx.moveTo(-w, y + 6); ctx.lineTo(0, y); ctx.lineTo(w, y + 6);
       ctx.stroke();
     }
   },
