@@ -810,6 +810,17 @@ const CONFIG = {
   // the moment HARPOON stops being pressable, and a player who never sees
   // that happen cannot learn the rule.
   momentumStingSecs: 0.16,
+  // The mark, on the key the net used to hold. A full meter is what arms it
+  // and marking is what SPENDS it, so Momentum finally has somewhere to go
+  // besides multiplying -- and he has to choose between the mark and HARPOON,
+  // which is gated on the same cap.
+  //
+  // Boss damage and not damage generally, because an ordinary body has one
+  // hit point and dies to any bolt: a crit on a crow is a number nobody can
+  // see. The mark is his answer to the thing 0.7 a bolt cannot dent.
+  rangerMarkSecs: 8,
+  rangerMarkCritMult: 2.5,
+  rangerMarkRadius: 420,
   crossbowSpreadRadians: Math.PI / 60,   // 3° between adjacent bolts
   // The crossbow reloads, which is the whole point of a crossbow and the one
   // thing it did not do. Before this the arrow cap was its only pacing, and a
@@ -996,6 +1007,10 @@ const CONFIG = {
     up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
     shoot: ' ', pause: 'Escape',
     menuControls: 'c', back: 'b', restart: 'r', menu: 'm', snipe: 'Shift',
+    // The ranger's net. It was on `snipe` with everyone else's hold, which
+    // left him no key for a mark and left `q` -- documented in the manual
+    // for years -- bound to nothing at all.
+    net: 'q',
     // Striking a torch is a decision, so it gets a button. Keys, the chest and
     // the door do not: your inventory has already decided those, and a prompt
     // in front of a foregone conclusion is a button press, not a choice.
@@ -1913,6 +1928,8 @@ let rangerGhosts = [];
 let momentumSting = 0;
 /** Counts down to the next dust puff. */
 let rangerDust = 0;
+/** What he has marked, and for how long. `ref` is the body itself. */
+let rangerMark = null;
 
 /** Volleys left before the beat. Reloading while > 0 is not a thing. */
 let crossbowMag = 0;
@@ -3713,6 +3730,55 @@ function tryKnightChainCharge() {
 }
 
 /**
+ * What the mark settles on.
+ *
+ * The boss wins outright when one is in play, because a boss is the only thing
+ * the mark is worth spending a full meter on -- everything else on the field
+ * dies to one bolt whether it is marked or not. Nearest otherwise, so the key
+ * still does something visible on an ordinary wave.
+ */
+function markTarget() {
+  if (boss && bossInPlay()) return boss;
+  let best = null, bestD = CONFIG.rangerMarkRadius * CONFIG.rangerMarkRadius;
+  forEachHostile((e) => {
+    const d = dist2(player.x, player.y, e.x, e.y);
+    if (d < bestD) { bestD = d; best = e; }
+  });
+  return best;
+}
+
+/** Ranger-only, on the key the net gave up. Costs the whole meter. */
+function startRangerMark() {
+  if (selectedChar !== 'ranger' || !inGame()) return;
+  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  const target = markTarget();
+  if (!target) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  rangerMark = { ref: target, timer: CONFIG.rangerMarkSecs };
+  // Spent, and the meter says so with the same flash it uses for any other
+  // loss of the cap.
+  rangerMomentum = 0;
+  momentumSting = CONFIG.momentumStingSecs;
+  events.emit({ type: 'RANGER_MARK', x: target.x, y: target.y });
+}
+
+/** What the mark is worth against `victim` right now. 1 when nothing is marked. */
+function markMult(victim) {
+  return rangerMark && rangerMark.ref === victim ? CONFIG.rangerMarkCritMult : 1;
+}
+
+/**
+ * A remappable LETTER key, matched whichever case the browser reports.
+ *
+ * Holding shift while pressing `q` delivers 'Q'. The modifier keys can use an
+ * exact match because they have no other case; a letter cannot, and the `f`
+ * binding above already spells both out by hand rather than admitting it.
+ */
+function isKeyFor(eKey, bound) {
+  return typeof eKey === 'string' && typeof bound === 'string'
+    && eKey.toLowerCase() === bound.toLowerCase();
+}
+
+/**
  * What the sniper key does on the way down. One function so the headless tests
  * drive the same path a real keyboard does, rather than a parallel one.
  */
@@ -3720,7 +3786,7 @@ function pressShift() {
   if (!tryKnightChainCharge()) startKnightCharge();
   tryWizardBlink();
   startArcherDraw();
-  startRangerNet();
+  startRangerMark();
   trySapperShot();
 }
 
@@ -3730,7 +3796,6 @@ function pressShift() {
 function releaseShift() {
   releaseKnightCharge();
   releaseArcherDraw();
-  releaseRangerNet();
 }
 
 /** Knight-only, bound to the key that means sniper mode for everyone else.
@@ -3957,6 +4022,7 @@ function installInput() {
     if (!keys[e.key] && e.key === CONFIG.keys.shoot) shootPressed = true;
     if (!keys[e.key] && (e.key === 'f' || e.key === 'F')) startCharge(SPECIAL_SOURCE.KEY);
     if (!keys[e.key] && e.key === CONFIG.keys.snipe) pressShift();
+    if (!keys[e.key] && isKeyFor(e.key, CONFIG.keys.net)) startRangerNet();
     if (!keys[e.key] && e.key === CONFIG.keys.unstick) forceUnstick();
     // The name bookkeeping — including the held key that starts repeating
     // under a new name once shift comes down mid-hold — lives in
@@ -3969,6 +4035,7 @@ function installInput() {
     const wentDownAs = noteKeyUp(keys, keyDownAs, e.code, e.key);
     if (e.key === 'f' || e.key === 'F' || wentDownAs === 'f' || wentDownAs === 'F') releaseCharge();
     if (e.key === CONFIG.keys.snipe || wentDownAs === CONFIG.keys.snipe) releaseShift();
+    if (isKeyFor(e.key, CONFIG.keys.net) || isKeyFor(wentDownAs, CONFIG.keys.net)) releaseRangerNet();
   });
   // Focus can vanish without ever delivering the matching keyup (alt-tab, a
   // notification stealing the window) — see cancelHeldActions().
@@ -4634,6 +4701,12 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'RANGER_MARK':
+      // Louder than either momentum edge: this one cost him the whole meter
+      // and he needs to know it landed on something.
+      playSound(sndArm);
+      burst(e.x, e.y, { count: 6, colors: ['#FFCC00', '#FFFFFF'], speed: 40, life: 0.3, size: 1 });
+      break;
     case 'RANGER_MOMENTUM_LOST':
       // Quieter than the gain and lower, so the pair reads as a rise and a
       // fall rather than as the same noise twice.
@@ -4968,7 +5041,7 @@ function initGame() {
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   crossbowMag = CONFIG.crossbowMagazine; crossbowReload = 0;
-  rangerGhosts = []; momentumSting = 0; rangerDust = 0;
+  rangerGhosts = []; momentumSting = 0; rangerDust = 0; rangerMark = null;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -5278,6 +5351,12 @@ function updatePlayer(dt) {
   if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   if (crossbowReload      > 0) crossbowReload     = Math.max(0, crossbowReload     - dt);
   if (momentumSting       > 0) momentumSting      = Math.max(0, momentumSting      - dt);
+  if (rangerMark) {
+    // Dropped when it runs out, and when the body it named is gone: a mark
+    // held on a corpse would follow the next thing to reuse the slot.
+    rangerMark.timer -= dt;
+    if (rangerMark.timer <= 0 || rangerMark.ref.hp <= 0 || rangerMark.ref.bstate === 'dead') rangerMark = null;
+  }
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
   if (wizBlinkChainTimer  > 0) {
@@ -6538,7 +6617,7 @@ function updateArrows(dt) {
     // including on the shield, so no arrow passes through him. Crossbow bolts
     // carry their own reduced damage; every other arrow's dmgMult is unset,
     // which the ||1 reads as full strength.
-    const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage * (a.dmgMult || 1), 'arrow');
+    const arrowHit = resolveBossHit(a, CONFIG.arrowBossDamage * (a.dmgMult || 1) * markMult(boss), 'arrow');
     if (arrowHit === BossHit.DAMAGED) {
       if (a.type === 'fire') spawnFire(a.x, a.y);
       // A boss hit does not go through spendArrowPierce, so the harpoon needs
@@ -15798,6 +15877,7 @@ const CTRL_ACTIONS = [
   { label: 'MOVE RIGHT', key: 'right' },
   { label: 'SHOOT',      key: 'shoot' },
   { label: 'SNIPE/CHARGE', key: 'snipe' },
+  { label: 'NET',        key: 'net'   },
   { label: 'LIGHT TORCH', key: 'use'   },
   { label: 'GET UNSTUCK', key: 'unstick' },
   { label: 'PAUSE',      key: 'pause' }
@@ -16843,6 +16923,15 @@ export const devHooks = {
   // The whole sniper-key path, so a test exercises the same routing the
   // keyboard does rather than calling one ability directly.
   shift() { pressShift(); },
+  // The net's own key now, not the sniper hold. A test that still drives it
+  // through shift() is testing a binding that no longer exists.
+  pressNet() { startRangerNet(); },
+  mark() { startRangerMark(); },
+  rangerMark: () => (rangerMark
+    ? { timer: rangerMark.timer, x: rangerMark.ref.x, y: rangerMark.ref.y }
+    : null),
+  markMult: (victim) => markMult(victim),
+  releaseNet() { releaseRangerNet(); },
   shiftUp() { releaseShift(); },
   archerDraw: () => ({ drawing: archerDraw.on, frac: archerDrawFrac(), cooldown: archerPowerCD }),
   brace: () => ({ level: braceLevel, bossMult: braceBossMult() }),

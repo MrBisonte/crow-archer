@@ -2717,9 +2717,9 @@ describe('area effects reach the cavern garrison', () => {
     p.aimAngle = 0;
     const soldiers = spearmenAt(p.x + 60, p.y);
 
-    g.shift();
+    g.pressNet();
     g.holdNet(g.config().netDrawMaxSecs);
-    g.shiftUp();
+    g.releaseNet();
 
     // The net flies to a point rather than stopping on contact, so the
     // garrison has to be standing where it lands for this to mean anything.
@@ -2756,6 +2756,80 @@ describe('area effects reach the cavern garrison', () => {
       expect(s.x, `soldier ${i} x`).toBeCloseTo(from[i]!.x, 5);
       expect(s.y, `soldier ${i} y`).toBeCloseTo(from[i]!.y, 5);
     });
+  });
+});
+
+describe('the net key and the mark', () => {
+  function ranger(): void {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+  }
+
+  it('answers the net on its own key, and no longer on the sniper hold', () => {
+    ranger();
+    g.pressNet();
+    expect(g.rangerNet().drawing).toBe(true);
+    g.releaseNet();
+
+    // Shift is the mark now. It must not start a net, whatever else it does.
+    ranger();
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(false);
+  });
+
+  it('refuses the mark under a full meter, and empties the meter when it lands', () => {
+    ranger();
+    g.spawnCrow();
+    const crows = g.crows() as Array<{ x: number; y: number }>;
+    const crow = crows[0];
+    if (crow === undefined) throw new Error('no crow to mark');
+    const p = g.player() as { x: number; y: number };
+    crow.x = p.x + 40; crow.y = p.y;
+
+    g.setMomentum(0.99);
+    g.mark();
+    expect(g.rangerMark()).toBeNull();
+
+    g.setMomentum(1);
+    g.mark();
+    expect(g.rangerMark()).not.toBeNull();
+    // Spent, not merely required: the meter is what the mark costs.
+    expect((g.momentum() as { level: number }).level).toBe(0);
+  });
+
+  it('multiplies what an arrow is worth to the boss it named', () => {
+    g.pick('ranger');
+    const c = g.config() as { rangerMarkCritMult: number };
+    enterBossFight();
+    const boss = g.boss();
+    expect(boss).toBeTruthy();
+
+    expect(g.markMult(boss)).toBe(1);
+    g.setMomentum(1);
+    g.mark();
+    expect(g.rangerMark()).not.toBeNull();
+    expect(g.markMult(boss)).toBe(c.rangerMarkCritMult);
+  });
+
+  it('lets the mark go when it runs out', () => {
+    ranger();
+    g.spawnCrow();
+    const crows = g.crows() as Array<{ x: number; y: number; heldTimer: number }>;
+    const crow = crows[0];
+    if (crow === undefined) throw new Error('no crow to mark');
+    const p = g.player() as { x: number; y: number };
+    crow.x = p.x + 40; crow.y = p.y;
+    // Parked, so the crow does not reach him and die mid-measurement.
+    crow.heldTimer = 999;
+
+    g.setMomentum(1);
+    g.mark();
+    expect(g.rangerMark()).not.toBeNull();
+
+    const secs = (g.config() as { rangerMarkSecs: number }).rangerMarkSecs;
+    stepPast(Math.ceil(secs * ONE_SECOND) + 2);
+    expect(g.rangerMark()).toBeNull();
   });
 });
 
@@ -2985,9 +3059,9 @@ describe('the ranger net', () => {
     g.onEvent((e: { type: string }) => {
       if (e.type === 'RANGER_NET_OPEN') seen = e as NetOpen;
     });
-    g.shift();
+    g.pressNet();
     g.holdNet(secs);
-    g.shiftUp();
+    g.releaseNet();
     for (let i = 0; i < 120 && seen === null; i++) g.stepSim(1);
     if (seen === null) throw new Error('the net never opened');
     return seen;
@@ -3018,7 +3092,7 @@ describe('the ranger net', () => {
   it('leaves the skirmisher free to move while he draws', () => {
     const p = rangerAt(6, 6);
     const keys = g.keys() as Record<string, boolean>;
-    g.shift();
+    g.pressNet();
     expect(g.rangerNet().drawing).toBe(true);
 
     const from = p.x;
@@ -3214,12 +3288,12 @@ describe('the ranger net', () => {
     expect(g.rangerNet().cooldown).toBeGreaterThan(c.netCooldown - 1);
     expect(g.rangerNet().cooldown).toBeLessThanOrEqual(c.netCooldown);
 
-    g.shift();
+    g.pressNet();
     expect(g.rangerNet().drawing).toBe(false);
 
     g.stepSim(Math.ceil(c.netCooldown * ONE_SECOND) + 1);
     expect(g.rangerNet().cooldown).toBe(0);
-    g.shift();
+    g.pressNet();
     expect(g.rangerNet().drawing).toBe(true);
   });
 

@@ -279,6 +279,29 @@ happen cannot learn the rule.
 A bolt carries the meter it was fired at rather than the live one, so the
 streak behind it is the bonus that bolt will actually apply.
 
+#### The mark, which is what the meter is finally spent on
+
+Momentum multiplied and shortened and gated, and it was never SPENT. The mark
+is the sink: a full meter names one body, and naming it empties the meter, so
+the ranger chooses between the mark and HARPOON rather than getting both off
+the same cap.
+
+| The mark | Constant | Figure | Note |
+|---|---|---|---|
+| Lasts | `rangerMarkSecs` | 8 s | or until the body it named is gone |
+| Worth, to a boss | `rangerMarkCritMult` | 2.5 | on top of everything else the arrow carries |
+| Reaches | `rangerMarkRadius` | 420 px | ignored while a boss is in play: the boss wins |
+
+Boss damage and not damage generally, which is the honest limitation. An
+ordinary body has one hit point and dies to any bolt, so a crit on a crow is a
+number nobody can see. That is why the target rule prefers the boss outright:
+the mark is the ranger's answer to the thing 0.7 a bolt cannot dent, and on an
+ordinary wave the key is doing very little.
+
+The net moved to its own key to make room for it. `Q` had been in the manual
+for years bound to nothing, which is now a test rather than a promise -- see
+`src/legacy/key-doc.test.ts`.
+
 #### The net, which is not about damage at all
 
 It never kills what it catches, on purpose. What it is worth is the time it

@@ -357,9 +357,9 @@ describe('the third rite of the four heroes who had two', () => {
       const p = g.player() as { x: number; y: number };
       const reach = g.config().netThrowMin as number;
       aimAt(p.x + reach * 3, p.y);
-      g.shift();
+      g.pressNet();
       g.holdNet(0);                     // a tapped net: it only has to land
-      g.shiftUp();
+      g.releaseNet();
       // Pinned to the landing point for the flight, and only for the flight.
       // Stopping on the catch rather than after a fixed count is what makes
       // this independent of netSpeed: the hold is 0.8 s at a tap, so a loop
@@ -506,9 +506,9 @@ describe('the four trees levelled up to the wizard\'s shape', () => {
     /** A tapped net, thrown down the sniper key the way the keyboard does. */
     function netRadius(): number {
       (g.nets() as unknown[]).length = 0;
-      g.shift();
+      g.pressNet();
       g.holdNet(0);
-      g.shiftUp();
+      g.releaseNet();
       const net = (g.nets() as { radius: number }[])[0];
       if (net === undefined) throw new Error('no net was thrown');
       return net.radius;

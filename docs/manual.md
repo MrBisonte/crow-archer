@@ -114,7 +114,8 @@ Skirmisher with a rapid-fire crossbow.
 - **Against a boss:** the only hero who lands for less than a plain weapon's worth, bolt for bolt. The volley is his unit of damage rather than the bolt, and six volleys take the Crow King down
 - **Primary:** Crossbow, same quiver as the archer's. One press fires 3 independent bolts in a narrow spread, each 30% smaller and 30% weaker than an arrow
 - **Momentum:** The exact inverse of the archer's brace. 375 px of ground covered — a second and a half at his speed — builds a damage bonus to its cap of **+30%**; the moment he stops it decays at 10 percentage points a second, so three seconds standing still loses all of it. It is measured off the ground he actually covers, so a speed upgrade fills it faster, a poison slow fills it slower, and shoving into a wall fills it not at all. It multiplies with pickups and other buffs rather than replacing them. The archer is paid for setting his feet and the ranger for never setting his, which is the whole difference between the two kits that share a quiver. [Balance](balance.md#the-ranger-never-does) carries the volley arithmetic
-- **Net (hold Shift):** Draws and throws a weighted net. Drawing longer throws it further (120 to 320 px), opens it wider (34 to 70 px radius) and holds longer (0.8 to 2 s), all off the one draw, so a full one is a committed choice. He is not rooted while he draws it. 10 s cooldown
+- **Net (hold Q):** Draws and throws a weighted net. Drawing longer throws it further (120 to 320 px), opens it wider (34 to 70 px radius) and holds longer (0.8 to 2 s), all off the one draw, so a full one is a committed choice. He is not rooted while he draws it. 10 s cooldown
+- **Mark (tap Shift):** Names one body, for 8 s. Arrows that land on it hit a boss for 2.5x. It costs a FULL Momentum meter and empties it, so it competes with HARPOON for the same cap, and it settles on the boss whenever one is in play -- everything else on the field dies to one bolt whether it is marked or not. Refused outright below the cap
   - It deals 0.9 damage, and that number is the point: a fresh crow, skeleton or rat has exactly 1 hit point, so the net never kills what it catches. It leaves them on a sliver and holds them still. Anything already netted dies to the next scratch
   - Everything under it is caught, not just the first thing. A caught enemy stops moving and deciding entirely; it still bleeds and still burns
   - The mesh stays on the ground for as long as the hold lasts, and **anything that walks into it afterwards is dragged to 40% speed** for as long as it stands there. That is a slow, not a catch: a latecomer keeps deciding and keeps attacking, it just crosses the mesh at a crawl. Throwing the net across the path of what is coming is the play, rather than only onto what is already there. It was a picture on the floor before -- everything arriving late crossed it at full speed
@@ -324,7 +325,7 @@ Every fifteen seconds or so a **crow** drifts across. It dies to one hit and dro
 2. One player presses **H** to host, which shows a four-letter code. Everyone else presses **J**, types the code, and hits **Enter**.
 3. The host sets the mode with **D** for deathmatch or **C** for co-op, the map with **G** for forest or **V** for castle, and what the match plays to with **F** (frag target, 10 to 30) or **T** (time limit, 5 to 10 minutes). Pick one win condition, not both. Everyone presses **R**, and it starts once the last player is ready.
 
-Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or Q** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight), **X** (ranger) or **S** (sapper). They play differently.
+Arrow keys move, the mouse aims, **left click or space** attacks, and **right click or F** uses whichever second weapon your character carries. You come back where you started three seconds later. Pick a character with **A** (archer), **W** (wizard), **K** (knight), **X** (ranger) or **S** (sapper). They play differently.
 
 Any team split works: 1v1, 2v1 and 2v2 all start, and seats spawn on opposite sides of whatever map came up.
 
@@ -443,3 +444,26 @@ less. Clear wave ten and you have won; in the campaign, that is the ending.
 
 A fallen tower stops being cover the moment it comes down, for your arrows as
 much as for theirs.
+
+## Keys
+
+The one home for what is bound to what. Every row is checked against
+`CONFIG.keys` by `src/legacy/key-doc.test.ts`, in both directions, so a
+remapped default cannot leave this table saying the old thing -- which is
+exactly what happened to `Q`, documented here for years and bound to nothing.
+
+| Does | Key name | Default |
+|---|---|---|
+| Move | `up` | ArrowUp |
+| Move | `down` | ArrowDown |
+| Move | `left` | ArrowLeft |
+| Move | `right` | ArrowRight |
+| Attack | `shoot` | (space) |
+| Snipe, charge, blink, mark | `snipe` | Shift |
+| The ranger's net | `net` | q |
+| Light a torch | `use` | e |
+| Get unstuck | `unstick` | u |
+| Pause | `pause` | Escape |
+
+The special and the ultimate share **F** and a right click, and that pair is
+hardcoded rather than remappable.
