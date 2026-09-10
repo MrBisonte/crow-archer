@@ -100,6 +100,14 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 
 ## Tests
 
+- **A comment says a feature is disabled because it is unfinished?** Read the
+  code before you believe it. SIEGE shipped hidden behind six lines explaining
+  that nothing drove its spawners, long after everything did, and two tests
+  asserted the comment rather than the behaviour
+  (`a-comment-outlived-the-code-that-made-it-true`).
+- **A feature with a front door and a back door?** At least one test comes in
+  the front. Every siege test opened with `setMode('siege')`, so not one of them
+  could tell whether the menu row a player presses reached anything.
 - **Advancing a siege?** `clearSiegeWave()` *deletes* the field;
   `killSiegeBoss()` *kills* through the real death sequence. Ten waves
   cleared the first way never enters a death sequence at all, which is

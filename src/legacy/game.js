@@ -1416,13 +1416,6 @@ const MENU_ENTRIES = [
     run: () => { gameMode = 'waves'; transitionTo('charselect'); } },
   { key: 'S', label: 'SIEGE', section: 'mode',
     sub: 'hold the bastion  ·  ten waves  ·  a retinue that grows',
-    // Off the screen until the ladder and the retinue are wired into the loop.
-    // MODE_RULES.siege and the bastion map are finished and tested; what is
-    // missing is anything driving the spawners, so a run today lands on the
-    // bastion and stays empty with nothing to fight and no way to end. Its
-    // rules stay here rather than being deleted and rebuilt: delete this one
-    // line to put the mode back.
-    hidden: true,
     run: () => { gameMode = 'siege'; transitionTo('charselect'); } },
   { key: 'M', label: 'MULTIPLAYER', section: 'mode',
     sub: 'up to 4 players  ·  co-op or 2v2  ·  needs a server',

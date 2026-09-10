@@ -3746,32 +3746,38 @@ describe('single player mode rules', () => {
 // on one fixed map, with a retinue that grows. These cover the parts already
 // wired; the ones still to come are the retinue on the field and the ladder
 // driving the spawners.
+/** A menu row as both tables report it. `hidden` is absent on every row today. */
+type MenuRow = { key: string; label: string; section: string; hidden?: boolean };
+
 describe('siege mode', () => {
   afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
 
-  // Was 'is a mode the menu can reach'. It is deliberately not reachable yet:
-  // the rules and the map are finished, but nothing drives the spawners, so a
-  // run lands on the bastion and stays empty. The entry keeps its row and
-  // carries `hidden` instead, so putting the mode back is one line rather than
-  // a rebuild — and so this test says which it is rather than going quiet.
-  it('keeps its menu row, held back until the ladder is wired', () => {
-    const siege = g.menuEntries()
-      .find((e: { label: string; section: string; hidden?: boolean }) => e.label === 'SIEGE');
-    expect(siege, 'the SIEGE row should still exist, just hidden').toBeDefined();
+  // This test used to assert the opposite, and its comment said why: nothing
+  // drove the spawners, so a run landed on the bastion and stayed empty. That
+  // stopped being true at some point and nobody noticed, because the comment
+  // was the only thing anybody read. See the sibling describe that plays a run
+  // to a win through this very row.
+  it('is a mode row the menu shows', () => {
+    const all = g.menuEntries() as MenuRow[];
+    const siege = all.find((e) => e.label === 'SIEGE');
+    expect(siege).toBeDefined();
     expect(siege?.section).toBe('mode');
-    expect(siege?.hidden, 'unhide this once the retinue and ladder are wired').toBe(true);
+    expect(siege?.hidden, 'the ladder and the retinue are wired; nothing hides this').toBeFalsy();
   });
 
-  // The half that actually protects the player: off the screen has to mean out
-  // of reach. A hidden row still walked by the arrow keys or still answering
-  // its hotkey would be a mode nobody can see and anybody can start.
-  it('is not reachable while it is hidden', () => {
-    const shown = g.menuShown() as Array<{ label: string; key: string }>;
-    expect(shown.map((e) => e.label)).not.toContain('SIEGE');
-    // And no hidden row's hotkey survives in the list the input reads.
-    const hiddenKeys = (g.menuEntries() as Array<{ key: string; hidden?: boolean }>)
-      .filter((e) => e.hidden).map((e) => e.key);
-    for (const key of hiddenKeys) expect(shown.map((e) => e.key)).not.toContain(key);
+  // Off the screen has to mean out of reach: a hidden row still walked by the
+  // arrow keys or still answering its hotkey would be a mode nobody can see
+  // and anybody can start.
+  //
+  // Stated as an equality rather than as a loop over what is hidden. Nothing
+  // is hidden today -- SIEGE was the last one -- and a loop over an empty set
+  // is a test that reports green without asking anything, which is exactly the
+  // failure that let SIEGE ship hidden in the first place. This compares the
+  // two lists outright, so it has something to say either way.
+  it('shows exactly the rows that are not hidden, and no others', () => {
+    const shown = (g.menuShown() as MenuRow[]).map((e) => e.label);
+    const want = (g.menuEntries() as MenuRow[]).filter((e) => !e.hidden).map((e) => e.label);
+    expect(shown).toEqual(want);
   });
 
   it('always starts on the bastion, whatever the map screen last held', () => {
@@ -4343,6 +4349,53 @@ const priestBody = (): GuardBody => {
   expect(found, `expected one priest on the field, found ${found.length}`).toHaveLength(1);
   return found[0]!;
 };
+
+describe('a siege reached the way a player reaches it', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  /**
+   * The SIEGE row as the MENU sees it.
+   *
+   * `menuShown()` is the filtered table -- the one the draw, the arrow walk and
+   * the hotkeys all read -- so an entry missing from it is an entry no player
+   * can press, whatever the unfiltered table still contains. Every other siege
+   * test in this file starts with setMode('siege'), which is the internal door
+   * and cannot tell the difference.
+   */
+  function siegeRow(): { label: string; run: () => void } | undefined {
+    return (g.menuShown() as Array<{ label: string; run: () => void }>)
+      .find((e) => e.label === 'SIEGE');
+  }
+
+  it('is on the menu a player can actually press', () => {
+    expect(siegeRow(), 'no SIEGE row in the menu a player sees').toBeDefined();
+  });
+
+  it('plays to a win from that menu row, ten waves, without the internal door', () => {
+    const row = siegeRow();
+    if (row === undefined) throw new Error('no SIEGE row in the menu a player sees');
+
+    // The menu entry is the ONLY thing that sets the mode here.
+    row.run();
+    expect(g.state()).toBe('charselect');
+
+    g.pick('knight');
+    g.go('playing');
+    g.stepSim(1);
+
+    const state = () => g.siege() as { wave: number; outcome: string };
+    expect(state(), 'the menu row did not start a siege run').toBeTruthy();
+    expect(state().wave).toBe(1);
+
+    for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
+      g.healHero();
+      g.clearSiegeWave();
+      g.stepSim(2);
+    }
+    expect(state().outcome).toBe('won');
+  });
+});
 
 describe('the siege loop', () => {
   // Pinned, so which kinds open the retinue is a fact rather than the weather.
