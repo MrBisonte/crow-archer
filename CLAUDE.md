@@ -127,6 +127,13 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Waiting a fixed number of frames for something to happen?** Stop on the
   event instead. A count that passes only because some other figure happens to
   be slow measures that figure, and it flips the day someone tunes it.
+- **Setting a piece of state, then driving the system?** Check whether what
+  you are driving is what WRITES that state. Running is what fills Momentum, so
+  three tests that set a level and then ran were measuring a full meter by
+  frame two. Pin the value every frame, and say so
+  (`setting-a-level-then-driving-what-changes-it`).
+- **Asserting something that lasts a fraction of a second?** Assert it on the
+  frame it fires. A flash of 0.16 s is gone before a ten-frame loop ends.
 - **Measuring a base off the field?** Own nothing first, and say so in the
   test. Grants persist across tests in a file by design, so a baseline that
   relies on a rule elsewhere to make an earlier test's leftovers harmless is
