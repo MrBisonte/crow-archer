@@ -70,6 +70,12 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   and thrown away every frame. See `docs/design-patterns.md`.
 - **Painting structure in `C.edge`?** Don't. That is the outline seam
   and a source-text test fails by name.
+- **Painting an aura on a hero?** Draw it OUTSIDE the silhouette.
+  `drawUltimateAura` goes down before the body, on purpose, so anything
+  inside the outline is painted over a moment later. Correct code, green
+  tests, nothing on screen. Check a new one against the same hero with
+  the ability on cooldown: the only difference is what you drew
+  (`an-aura-under-the-sprite-is-invisible`).
 - **Changing a stride?** Four separate legs on every frame. Pairs two
   columns apart fuse under the outline pass for exactly one frame.
 - **Rebuilding a character?** Read `docs/character-rebuild-playbook.md`
