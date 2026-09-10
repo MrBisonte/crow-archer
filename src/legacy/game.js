@@ -1134,17 +1134,24 @@ const STAGE_INTROS = {
     sweep: 'rgba(176,64,224,0.045)',
   },
   darkKnight: {
-    text: 'THE DARK KNIGHT STEPS OVER HIM',
+    text: 'THE DARK KNIGHT RISES TO MEET YOU',
     // The one intro that hands to a cinematic rather than to a field: the
     // castle is already loaded and the next thing to happen in it is an
     // entrance. beginNewLevel stages that when the title is dismissed.
     next: 'boss_entrance',
-    // Steel, where the castle's own title is the curse's purple. The room has
-    // not changed and the thing standing in it has, so the palette is what
-    // carries the difference -- a second purple title would read as the same
-    // screen shown twice.
-    accent: '#9FB0CE', dim: '#67748d', frame: '#2e3849',
-    sweep: 'rgba(159,176,206,0.05)',
+    // His own fire-sword red (`SP_TRIM.knightFireSword`), where the castle's
+    // own title is the curse's purple. The room has not changed and the thing
+    // standing in it has, so the palette is what carries the difference -- a
+    // second purple title would read as the same screen shown twice. Steel was
+    // the first answer and it read as the room rather than as him; the red is
+    // the one colour on screen that is only ever his.
+    //
+    // `dim` and `frame` are the accent walked down the way the other three
+    // rows walk theirs -- about seven tenths and about a third, with the dark
+    // channels lifted so neither goes flat black -- and `sweep` is the accent
+    // itself at the alpha they all use.
+    accent: '#CC3300', dim: '#8F280A', frame: '#4A1308',
+    sweep: 'rgba(204,51,0,0.05)',
   },
   bastion: {
     text: 'HOLD THE BASTION',
