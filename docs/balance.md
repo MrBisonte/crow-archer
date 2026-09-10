@@ -256,6 +256,29 @@ of trading against each other. The ceiling replaces the cap in the fire path
 and does nothing else: it bounds the array, sits above the widest legal burst,
 and `applyPace` throws if a preset ever leaves it at or under the arrow cap.
 
+#### What Momentum looks like, as opposed to what it is worth
+
+The meter gates an ultimate, multiplies every bolt and buys the reload down,
+and for three rounds it existed only as a chip in the strip. None of those
+three are decisions a player can make from a number in the corner while he is
+running, so the meter now reads off the field as well.
+
+| The meter shows | Constant | Figure | Where |
+|---|---|---|---|
+| Dust, from the first step | `rangerDustEvery` | 0.14 s | at his heels, any meter above zero |
+| Afterimage, from | `rangerAfterimageFrom` | 0.5 | his own silhouette, not a glow |
+| Ghosts at a full meter | `rangerGhostMax` | 3 | spaced by distance, not by frames |
+| A flash at each edge | `momentumStingSecs` | 0.16 s | white on the chip, gaining AND losing |
+
+Two of those choices are worth their reasons. The afterimage is his own sprite
+rather than a glow, because a glow is what the fire-arrow pickups mean and the
+two must not be confused. And the sting fires at BOTH edges: losing the cap is
+the moment HARPOON stops being pressable, and a player who never sees that
+happen cannot learn the rule.
+
+A bolt carries the meter it was fired at rather than the live one, so the
+streak behind it is the bonus that bolt will actually apply.
+
 #### The net, which is not about damage at all
 
 It never kills what it catches, on purpose. What it is worth is the time it

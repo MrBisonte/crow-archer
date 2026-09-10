@@ -798,6 +798,18 @@ const CONFIG = {
   rangerMomentumMax: 0.30,
   rangerMomentumFullPx: 375,
   rangerMomentumDecaySecs: 3,
+  // Momentum has to be readable off the FIELD, not only off the chip. Below
+  // this he only kicks dust; above it his own silhouette trails him, more
+  // ghosts the fuller the meter. Half, because he spends most of a run under
+  // it and a tell he sees constantly stops being information.
+  rangerAfterimageFrom: 0.5,
+  rangerGhostMax: 3,
+  rangerGhostSpacing: 10,        // px between ghosts, so speed does not bunch them
+  rangerDustEvery: 0.14,         // seconds between puffs while he is moving
+  // One flash of white on the meter, at BOTH edges of the cap. Losing it is
+  // the moment HARPOON stops being pressable, and a player who never sees
+  // that happen cannot learn the rule.
+  momentumStingSecs: 0.16,
   crossbowSpreadRadians: Math.PI / 60,   // 3° between adjacent bolts
   // The crossbow reloads, which is the whole point of a crossbow and the one
   // thing it did not do. Before this the arrow cap was its only pacing, and a
@@ -1890,6 +1902,17 @@ const ARCHER_LOOSE_SECS = 0.12;
  * worth without touching the fill rate, the decay, or the chip that draws it.
  */
 let rangerMomentum = 0;
+
+/**
+ * Where he was, for the afterimage. His own silhouette rather than a glow: it
+ * says "moving fast" and not "on fire", which the fire-arrow pickups need kept
+ * apart. Emptied the moment the meter drops under the threshold.
+ */
+let rangerGhosts = [];
+/** Seconds left of the white flash on the meter. Set at both edges of the cap. */
+let momentumSting = 0;
+/** Counts down to the next dust puff. */
+let rangerDust = 0;
 
 /** Volleys left before the beat. Reloading while > 0 is not a thing. */
 let crossbowMag = 0;
@@ -3249,8 +3272,39 @@ const MOVEMENT_METERS = {
       // one.
       if (TALENTS.capstoneActive('slipstream')) rangerSlip = CONFIG.rangerSlipstreamSecs;
     }
+    // Both edges sting, not only the good one.
+    if (was >= 1 && rangerMomentum < 1) {
+      events.emit({ type: 'RANGER_MOMENTUM_LOST', x: player.x, y: player.y });
+    }
+    if ((was < 1 && rangerMomentum >= 1) || (was >= 1 && rangerMomentum < 1)) {
+      momentumSting = CONFIG.momentumStingSecs;
+    }
     if (rangerMomentum >= 1) rangerSlip = Math.max(0, rangerSlip - dt);
     else rangerSlip = 0;
+
+    // Dust at any meter, so the read starts the moment he does; the
+    // afterimage joins it past the threshold.
+    if (movedPx > MOVED_EPSILON && rangerMomentum > 0) {
+      rangerDust -= dt;
+      if (rangerDust <= 0) {
+        rangerDust = CONFIG.rangerDustEvery;
+        burst(player.x, player.y + 8, { count: 1, colors: ['#7A6200'], speed: 18, life: 0.22, size: 1 });
+      }
+    }
+
+    // Spaced by DISTANCE rather than by frames, so a slow ranger does not get
+    // three ghosts stacked on his own boots.
+    if (rangerMomentum >= CONFIG.rangerAfterimageFrom && movedPx > MOVED_EPSILON) {
+      const last = rangerGhosts[rangerGhosts.length - 1];
+      const gap = CONFIG.rangerGhostSpacing * CONFIG.rangerGhostSpacing;
+      if (!last || dist2(last.x, last.y, player.x, player.y) > gap) {
+        rangerGhosts.push({ x: player.x, y: player.y });
+      }
+      const want = Math.round(rangerMomentum * CONFIG.rangerGhostMax);
+      while (rangerGhosts.length > want) rangerGhosts.shift();
+    } else if (rangerGhosts.length) {
+      rangerGhosts.length = 0;
+    }
   },
 };
 
@@ -4580,6 +4634,11 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'RANGER_MOMENTUM_LOST':
+      // Quieter than the gain and lower, so the pair reads as a rise and a
+      // fall rather than as the same noise twice.
+      playSound(sndArm);
+      break;
     case 'ARCHER_RAIN':
       // Quiet: the mark is a promise, and the noise belongs to what lands.
       playSound(sndArm);
@@ -4909,6 +4968,7 @@ function initGame() {
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   crossbowMag = CONFIG.crossbowMagazine; crossbowReload = 0;
+  rangerGhosts = []; momentumSting = 0; rangerDust = 0;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
   castleWave = 0; playerFrozenTimer = 0; pendingIntro = null; playerPoison = { timer: 0, tickIn: 0 };
@@ -5217,6 +5277,7 @@ function updatePlayer(dt) {
   if (archerLoose         > 0) archerLoose        = Math.max(0, archerLoose        - dt);
   if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   if (crossbowReload      > 0) crossbowReload     = Math.max(0, crossbowReload     - dt);
+  if (momentumSting       > 0) momentumSting      = Math.max(0, momentumSting      - dt);
   // The hops die with the window rather than waiting for the next blink to
   // notice, so a chain can never be resumed after a pause in the middle of it.
   if (wizBlinkChainTimer  > 0) {
@@ -5474,6 +5535,9 @@ function tryCrossbowBolt() {
       ...arrowTrail(),
       bolt: true,
       hitRadius: CONFIG.arrowHitRadius * CONFIG.crossbowBoltRadiusMult,
+      // The meter at the moment it left, so the streak the player sees is
+      // the bonus this bolt is actually carrying and not the one he has now.
+      mo: rangerMomentum,
       dmgMult: CONFIG.crossbowBoltDamageMult * rangerMomentumMult() });
   }
   events.emit({ type: 'WEAPON_FIRED', kind: 'crossbow' });
@@ -11549,6 +11613,20 @@ function drawRanger() {
   const rCanvas = flashOn
     ? spriteFlashCanvas(`ranger|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h, '#ffffff')
     : spriteCanvas(`ranger|${SP_TRIM.ranger}|${rFrame}`, rGrid, RANGER_SPRITE.w, RANGER_SPRITE.h);
+  // Momentum's afterimage, under the body. The SAME cached canvas the body
+  // uses, so a ghost costs one drawImage and no grid build at all -- which is
+  // what keeps a per-frame effect off the profile.
+  if (rangerGhosts.length) {
+    const bodyAlpha = ctx.globalAlpha;
+    for (let gi = 0; gi < rangerGhosts.length; gi++) {
+      const gh = rangerGhosts[gi];
+      // Oldest faintest, and all of them faint: this reads at the edge of
+      // vision while he runs and must never compete with the body.
+      ctx.globalAlpha = 0.08 + 0.10 * ((gi + 1) / rangerGhosts.length);
+      ctx.drawImage(rCanvas, (gh.x - px) * f + rDx, (gh.y + CONFIG.hudHeight - py) + rDy);
+    }
+    ctx.globalAlpha = bodyAlpha;
+  }
   ctx.drawImage(rCanvas, rDx, rDy);
 
   // Shield halo
@@ -11983,6 +12061,22 @@ function drawArrows() {
         ctx.globalAlpha = Math.max(0, 0.45 - ti * 0.08);
         ctx.translate(th.x, th.y + HH); ctx.rotate(th.angle);
         ctx.fillStyle = '#39E0FF'; ctx.fillRect(-10, -0.5, 21, 1);
+        ctx.restore();
+      }
+    }
+
+    // A bolt carries the bonus it is about to apply: the streak lengthens and
+    // brightens with the meter, continuously rather than in tiers. Blocks on
+    // the 4px grid the rest of the art uses, not a tapered line.
+    if (a.bolt && a.mo > 0 && a.trailHistory && a.trailHistory.length > 0) {
+      const blocks = Math.min(a.trailHistory.length, 1 + Math.round(a.mo * 4));
+      for (let ti = 0; ti < blocks; ti++) {
+        const th = a.trailHistory[a.trailHistory.length - 1 - ti];
+        ctx.save();
+        ctx.translate(th.x, th.y + HH); ctx.rotate(th.angle);
+        ctx.fillStyle = ti < blocks / 2 ? '#FFCC00' : '#7A6200';
+        ctx.globalAlpha = Math.max(0, 0.55 - ti * 0.09);
+        ctx.fillRect(-4, -1, 4, 2);
         ctx.restore();
       }
     }
@@ -14120,7 +14214,10 @@ const CHIP = {
   // is gated and nothing is spent. It reports a bonus that is building, full,
   // or falling away, and the label is the figure the bolts are multiplied by.
   momentum:  () => ({
-    glyph: 'momentum', color: '#FFCC00', lit: rangerMomentum >= 1,
+    glyph: 'momentum',
+    // White for a beat at both edges of the cap -- see momentumStingSecs.
+    color: momentumSting > 0 ? '#FFFFFF' : '#FFCC00',
+    lit: rangerMomentum >= 1 || momentumSting > 0,
     // The talent's ceiling, not the base one. FULL TILT raises what a full
     // meter is worth and this label is the only place the player is told
     // the figure, so reading CONFIG here printed +30% at a bonus of +45%.
@@ -16766,6 +16863,9 @@ export const devHooks = {
   // in an open arena and painful inside a boss fight -- and a test of the
   // harpoon should not also be a test of whether he can find 375 px to run.
   setMomentum(level) { rangerMomentum = level; },
+  // What Momentum is putting on the FIELD right now, as opposed to what it is
+  // worth: the afterimage's ghost count and the sting left on the meter.
+  rangerReads: () => ({ ghosts: rangerGhosts.length, sting: momentumSting }),
   crossbow: () => ({ mag: crossbowMag, reload: crossbowReload,
     reloadMult: crossbowReloadMult() }),
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),

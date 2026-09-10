@@ -2759,6 +2759,95 @@ describe('area effects reach the cavern garrison', () => {
   });
 });
 
+describe('Momentum on the field', () => {
+  type Reads = { ghosts: number; sting: number };
+  const reads = () => g.rangerReads() as Reads;
+  const keys = () => g.keys() as Record<string, boolean>;
+
+  function rangerRunning(): void {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    for (const k of Object.keys(keys())) keys()[k] = false;
+  }
+
+  /**
+   * Holds right for `frames`, which is the only way the meter ever fills.
+   *
+   * `hold` pins the meter at a level every frame. Running FILLS it, so a test
+   * that sets a level and then runs is measuring a full meter by frame two --
+   * which is exactly how the first draft of these tests lied to me.
+   */
+  function run(frames: number, hold?: number): void {
+    const right = (g.config() as { keys: { right: string } }).keys.right;
+    keys()[right] = true;
+    for (let i = 0; i < frames; i++) {
+      if (hold !== undefined) g.setMomentum(hold);
+      g.healHero();
+      g.stepSim(1);
+    }
+    keys()[right] = false;
+  }
+
+  it('leaves no afterimage under the threshold, and trails one over it', () => {
+    rangerRunning();
+    const from = (g.config() as { rangerAfterimageFrom: number }).rangerAfterimageFrom;
+
+    run(20, from - 0.2);
+    expect(reads().ghosts).toBe(0);
+
+    run(30, 1);
+    expect(reads().ghosts).toBeGreaterThan(0);
+  });
+
+  it('thins the afterimage out as the meter falls', () => {
+    rangerRunning();
+    run(30, 1);
+    const full = reads().ghosts;
+
+    rangerRunning();
+    run(30, 0.6);
+    expect(reads().ghosts).toBeLessThan(full);
+  });
+
+  it('stings the meter at both edges of the cap', () => {
+    rangerRunning();
+    let lost = 0;
+    g.onEvent((e: { type: string }) => { if (e.type === 'RANGER_MOMENTUM_LOST') lost++; });
+
+    // Up over the cap. Checked at once: the sting is a flash, not a state,
+    // and it is gone again within a fifth of a second.
+    g.setMomentum(0.98);
+    run(2);
+    expect(reads().sting).toBeGreaterThan(0);
+    expect(lost).toBe(0);
+
+    // And back off it. Standing still is what drops the meter.
+    g.healHero(); g.stepSim(1);
+    expect(lost).toBe(1);
+    expect(reads().sting).toBeGreaterThan(0);
+  });
+
+  it('sends a bolt out carrying the meter it was fired at, not the later one', () => {
+    rangerRunning();
+    g.setMomentum(1);
+    (g.inv() as { arrows: number }).arrows = 99;
+    g.shoot();
+    g.stepSim(1);
+
+    const bolt = (g.arrows() as Array<{ bolt?: boolean; mo?: number }>).find((a) => a.bolt);
+    expect(bolt).toBeDefined();
+    const fired = bolt?.mo ?? 0;
+    expect(fired).toBeGreaterThan(0.9);
+
+    // The meter drains behind it; the bolt already in the air keeps its own,
+    // so the streak the player watches is the bonus that bolt will apply.
+    g.setMomentum(0);
+    for (let i = 0; i < 3; i++) g.stepSim(1);
+    expect(bolt?.mo).toBe(fired);
+  });
+});
+
 describe('the ranger crossbow', () => {
   /**
    * A ranger on open ground at a given pace, owning exactly the bolt talent
