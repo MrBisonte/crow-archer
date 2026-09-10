@@ -2955,15 +2955,27 @@ describe('the ranger crossbow', () => {
     return volleys;
   }
 
-  /** Spends a whole magazine, holding the meter where the caller put it. */
+  /**
+   * Spends a whole magazine, holding the meter where the caller put it.
+   *
+   * Waits for each volley to actually leave rather than pressing once per
+   * frame. The crossbow has a rate now, so a press-per-frame loop lands ONE
+   * volley and returns with the magazine still nearly full -- which is how
+   * this helper started reporting that the reload never fired.
+   */
   function emptyMagazine(momentum: number): void {
     const mag = (g.config() as { crossbowMagazine: number }).crossbowMagazine;
-    for (let i = 0; i < mag; i++) {
+    let fired = 0;
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'crossbow') fired++;
+    });
+    for (let f = 0; f < 90 && fired < mag; f++) {
       g.setMomentum(momentum);
       topUp();
       g.shoot();
       g.stepSim(1);
     }
+    expect(fired, 'the magazine never emptied').toBe(mag);
     g.setMomentum(momentum);
   }
 
@@ -2994,6 +3006,34 @@ describe('the ranger crossbow', () => {
       expect(upgraded).toBeGreaterThanOrEqual(plain);
     });
   }
+
+  // The defect this test exists for: a magazine with no RATE. Every volley in
+  // it left on a consecutive frame -- four volleys in 67 ms -- so the clip read
+  // as one shot and the reload that followed read as the weapon jamming. The
+  // count was right and the feel was nonsense, and no test noticed because
+  // every one of them only asked whether volleys came out at all.
+  it('spaces the volleys inside a magazine, instead of dumping them in four frames', () => {
+    rangerOnPace('fast', 0);
+    const c = g.config() as { crossbowMagazine: number; crossbowShotSecs: number };
+    const frames: number[] = [];
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'crossbow') frames.push(seen);
+    });
+    let seen = 0;
+    for (; seen < 90 && frames.length < c.crossbowMagazine; seen++) {
+      topUp(); g.shoot(); g.stepSim(1);
+    }
+    expect(frames).toHaveLength(c.crossbowMagazine);
+
+    // Consecutive frames would be a gap of 1. The gap has to be the weapon's
+    // own rate, in frames, give or take the frame it is sampled on.
+    const wanted = Math.floor(c.crossbowShotSecs * ONE_SECOND);
+    for (let i = 1; i < frames.length; i++) {
+      const gap = (frames[i] ?? 0) - (frames[i - 1] ?? 0);
+      expect(gap, `volley ${i} came ${gap} frames after ${i - 1}`)
+        .toBeGreaterThanOrEqual(wanted);
+    }
+  });
 
   it('stops for a beat once the magazine is out, and starts again after it', () => {
     rangerOnPace('fast', 0);

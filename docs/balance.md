@@ -246,12 +246,21 @@ talent bought a third LESS output than not taking it.
 | The crossbow | Constant | Figure | What it does |
 |---|---|---|---|
 | Volleys before the beat | `crossbowMagazine` | 4 | a magazine, not a per-shot timer |
+| Between volleys in it | `crossbowShotSecs` | 0.22 s | the weapon's own rate |
 | The beat, standing still | `crossbowReloadSecs` | 1.1 s | the slowest he ever reloads |
 | What a full meter leaves | `crossbowReloadFullMult` | 0.45 | a moving ranger reloads in half |
 | Bolts the array will hold | `crossbowCeiling` | 48 | a ceiling, never a pace |
 
-Momentum now buys the reload down as well as the damage up, so standing still
-costs him twice and the two halves of the character pull the same way instead
+The magazine needs BOTH figures, and the first version of it shipped with only
+one. Four volleys with no rate between them left in four frames -- 67 ms, which
+no eye separates -- so a full clip read as a single shot followed by a second of
+silence that looked like the weapon jamming. The count was right and the feel
+was nonsense. At 0.22 s the four are countable: 0.23 s apart, then the reload,
+then four more.
+
+Momentum buys the RELOAD down and not the rate. Shortening both would compound
+into roughly double his output at the cap, and the reload is the figure his
+answer named. So standing still costs him twice and the two halves of the character pull the same way instead
 of trading against each other. The ceiling replaces the cap in the fire path
 and does nothing else: it bounds the array, sits above the widest legal burst,
 and `applyPace` throws if a preset ever leaves it at or under the arrow cap.

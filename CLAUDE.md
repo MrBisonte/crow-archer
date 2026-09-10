@@ -149,6 +149,16 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   suite. Counting survivors is the wrong assertion while waves spawn:
   compare by identity.
 
+## Feel
+
+- **Giving something a capacity — a magazine, a clip, a charge count?** Give it
+  a RATE too, and measure the frames the burst occupies. Four volleys with no
+  rate left in four frames, so the clip read as one shot and the reload after
+  it read as a jam (`a-magazine-with-no-rate-reads-as-one-shot`).
+- **A report describes a FEEL rather than a number?** Instrument the timing.
+  "It reads as one shot" was exactly right about the feel and said nothing
+  about the count, which was correct throughout.
+
 ## Deleting a rule
 
 - **Deleting a gameplay rule?** Look at what its short-circuit SKIPS, not only

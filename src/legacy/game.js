@@ -832,6 +832,13 @@ const CONFIG = {
   // standing still costs him twice -- no damage bonus and the slow reload --
   // which is the character stated in one figure.
   crossbowMagazine: 4,
+  // The rate WITHIN a magazine. Without it the four volleys leave in four
+  // frames -- 67 ms, which no eye separates -- so the clip reads as one shot
+  // followed by a second of silence nobody asked for. Measured that way before
+  // this existed. Momentum deliberately does NOT shorten this: it buys the
+  // reload down, and buying the rate down as well would compound into roughly
+  // double output at the cap.
+  crossbowShotSecs: 0.22,
   crossbowReloadSecs: 1.1,
   crossbowReloadFullMult: 0.45,
   // A ceiling, not a pace. It bounds the array and nothing else: four volleys
@@ -1935,6 +1942,8 @@ let rangerMark = null;
 let crossbowMag = 0;
 /** Seconds left of the beat. Nothing fires while this is above zero. */
 let crossbowReload = 0;
+/** Seconds until the next volley in the magazine. The weapon's own rate. */
+let crossbowShotCD = 0;
 
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
@@ -5040,7 +5049,7 @@ function initGame() {
   ultimateSlot = ULTIMATE_SLOT.FIRST;
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
-  crossbowMag = CONFIG.crossbowMagazine; crossbowReload = 0;
+  crossbowMag = CONFIG.crossbowMagazine; crossbowReload = 0; crossbowShotCD = 0;
   rangerGhosts = []; momentumSting = 0; rangerDust = 0; rangerMark = null;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
@@ -5350,6 +5359,7 @@ function updatePlayer(dt) {
   if (archerLoose         > 0) archerLoose        = Math.max(0, archerLoose        - dt);
   if (rangerNetCD         > 0) rangerNetCD        = Math.max(0, rangerNetCD        - dt);
   if (crossbowReload      > 0) crossbowReload     = Math.max(0, crossbowReload     - dt);
+  if (crossbowShotCD      > 0) crossbowShotCD     = Math.max(0, crossbowShotCD     - dt);
   if (momentumSting       > 0) momentumSting      = Math.max(0, momentumSting      - dt);
   if (rangerMark) {
     // Dropped when it runs out, and when the body it named is gone: a mark
@@ -5595,6 +5605,11 @@ function tryShoot() {
 function tryCrossbowBolt() {
   if (!hasShaft()) { tryPitchfork(); return; }
   if (crossbowReload > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // Silent, unlike the reload. A reload is a state the player is waiting out
+  // and worth a sound; out-clicking a weapon's own rate of fire is not a
+  // refusal, it is the weapon, and buzzing at every fast tap would say the
+  // press was wrong when it was merely early.
+  if (crossbowShotCD > 0) return;
   // Read once: a volley has to be counted, spread and fired off the same
   // number, and FOURTH BOLT moves it.
   const bolts = TALENTS.stat('fourthBolt');
@@ -5620,6 +5635,7 @@ function tryCrossbowBolt() {
       dmgMult: CONFIG.crossbowBoltDamageMult * rangerMomentumMult() });
   }
   events.emit({ type: 'WEAPON_FIRED', kind: 'crossbow' });
+  crossbowShotCD = CONFIG.crossbowShotSecs;
   if (--crossbowMag <= 0) {
     crossbowMag = CONFIG.crossbowMagazine;
     crossbowReload = CONFIG.crossbowReloadSecs * crossbowReloadMult();
@@ -16955,7 +16971,7 @@ export const devHooks = {
   // What Momentum is putting on the FIELD right now, as opposed to what it is
   // worth: the afterimage's ghost count and the sting left on the meter.
   rangerReads: () => ({ ghosts: rangerGhosts.length, sting: momentumSting }),
-  crossbow: () => ({ mag: crossbowMag, reload: crossbowReload,
+  crossbow: () => ({ mag: crossbowMag, reload: crossbowReload, shot: crossbowShotCD,
     reloadMult: crossbowReloadMult() }),
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: TALENTS.stat('fullTilt') }),
