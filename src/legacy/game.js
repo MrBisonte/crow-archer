@@ -64,6 +64,7 @@ import { glowDotStamp, glowRectStamp } from '../render/stamps';
 import { paintTalentSigil } from '../render/talent-sigil-paint';
 import { SIGILS } from '../render/talent-sigils';
 import { paintUltimateIcon } from '../render/ultimate-icon-paint';
+import { paintUltimateAura } from '../render/ultimate-aura';
 import {
   paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
   paintEarthshatterDebris, paintFullAutoTrail, paintGoldCorridor,
@@ -11445,209 +11446,27 @@ function drawPlayerFrozenOverlay() {
  * them: a player who took the second slot was shown the first slot's aura and
  * told nothing about the ability actually in hand.
  *
+ * The drawings are in `src/render/ultimate-aura.ts`, which is where the pixel
+ * art and its cache live. What stays here is the table: which abilities have a
+ * tell at all, which is what `ultimateAuraId`'s fallback reads and what
+ * `ultimate-tables.test.ts` holds to the ability set.
+ *
  * Each is deliberately a different idea, not a recolour: the player learns one
  * ability at a time and should recognise the state without reading a HUD. A
  * hero's two share his COLOUR and must not share a SHAPE -- the colour says
  * who is ready and the shape says with what.
  */
 const ULTIMATE_AURA = {
-  // HEADSHOT: four sight ticks closing on him, once a second. Everything
-  // narrowing to one point is the shot itself.
-  headshot: (t) => {
-    const close = 1 - (t % 1);
-    const r = 10 + close * 16;
-    ctx.strokeStyle = '#EAFF6A'; ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 8;
-    ctx.lineWidth = 2; ctx.globalAlpha = 0.35 + 0.5 * (1 - close);
-    for (let k = 0; k < 4; k++) {
-      const a = k * Math.PI / 2 + Math.PI / 4;
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(a) * (r + 7), Math.sin(a) * (r + 7) - 6);
-      ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r - 6);
-      ctx.stroke();
-    }
-  },
-  // ARROW RAIN: shafts already falling into the circle he will mark. Straight
-  // down and landing, where HEADSHOT's ticks close inward onto one point --
-  // the two share his yellow, so the fall is the whole difference between a
-  // shot that picks one target and a shot that fills a floor.
-  arrowRain: (t) => {
-    ctx.strokeStyle = '#EAFF6A'; ctx.shadowColor = '#EAFF6A'; ctx.shadowBlur = 7;
-    ctx.lineWidth = 2; ctx.lineCap = 'butt';
-    for (let k = 0; k < 6; k++) {
-      // Each shaft falls on its own stagger, so they arrive as rain rather
-      // than as one volley dropping in step.
-      const fall = ((t * 0.9) + k / 6) % 1;
-      // Spread onto the ring rather than over the body: the aura goes down
-      // before the sprite, so a shaft falling through the chest is a shaft
-      // with its middle painted out.
-      const x = Math.cos(k * 2.4) * 21;
-      const y = -30 + fall * 38;
-      ctx.globalAlpha = 0.25 + 0.65 * fall;
-      ctx.beginPath();
-      ctx.moveTo(x, y - 6); ctx.lineTo(x, y);
-      ctx.stroke();
-    }
-    // The ground they are falling into. Faint, and on the floor rather than
-    // around the body: what the ability marks is a circle, not him.
-    ctx.globalAlpha = 0.20 + 0.14 * Math.sin(t * 3);
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.ellipse(0, 10, 18, 5, 0, 0, Math.PI * 2); ctx.stroke();
-  },
-  // EARTHSHATTER: the ground under him already split, breathing light. His is
-  // the only aura on the floor rather than around the body, because his is
-  // the only ultimate that comes out of the floor.
-  earthshatter: (t) => {
-    const beat = 0.55 + 0.45 * Math.sin(t * 3);
-    ctx.strokeStyle = '#FF7A1F'; ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 10 * beat;
-    ctx.globalAlpha = 0.30 + 0.45 * beat; ctx.lineWidth = 2; ctx.lineCap = 'round';
-    for (let k = 0; k < 5; k++) {
-      const a = k * (Math.PI * 2 / 5) + 0.4;
-      const r0 = 7, r1 = 13 + 7 * beat;
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0 * 0.5 + 11);
-      ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1 * 0.5 + 11);
-      ctx.stroke();
-    }
-  },
-  // THE LEAP: he is already going up. Chevrons lifting off the boots and
-  // fading out, against EARTHSHATTER's cracks running out along the floor.
-  // One of his ultimates leaves the ground and the other opens it, and that
-  // is the read the two shapes have to carry.
-  theLeap: (t) => {
-    ctx.strokeStyle = '#FF7A1F'; ctx.shadowColor = '#FF7A1F'; ctx.shadowBlur = 9;
-    ctx.lineCap = 'round'; ctx.lineWidth = 2;
-    for (let k = 0; k < 3; k++) {
-      const rise = ((t * 1.3) + k / 3) % 1;
-      // Starts below the boots and climbs past the helm. Wider than the body
-      // at every step, because the aura is painted BEFORE the sprite -- a
-      // chevron narrow enough to sit on the torso is a chevron drawn under
-      // the torso, which is a chevron nobody sees.
-      const y = 14 - rise * 44;
-      // Narrowing as it climbs, so the three read as one thing leaving rather
-      // than as three separate marks stacked up the body.
-      const w = 20 - rise * 6;
-      ctx.globalAlpha = 0.70 * (1 - rise);
-      ctx.beginPath();
-      ctx.moveTo(-w, y + 6); ctx.lineTo(0, y); ctx.lineTo(w, y + 6);
-      ctx.stroke();
-    }
-  },
-  // CARPET BOMB: a fuse already burning around him. Sparks running a circle,
-  // not a glow -- the thing that is ready is a line of lit charges, and a
-  // fuse is the one image in his kit that means 'about to'.
-  carpetBomb: (t) => {
-    ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 8;
-    for (let k = 0; k < 7; k++) {
-      // Each spark runs the ring on its own offset, so they chase rather
-      // than rotate as one rigid wheel.
-      const a = t * 2.4 + k * (Math.PI * 2 / 7);
-      const flare = 0.5 + 0.5 * Math.sin(t * 9 + k * 1.7);
-      ctx.globalAlpha = 0.35 + 0.55 * flare;
-      ctx.fillStyle = flare > 0.75 ? '#FFE9A0' : '#FF7A1A';
-      const r = 17 + 2 * Math.sin(t * 5 + k);
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.62 - 5, 1 + 1.6 * flare, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  },
-  // THE BIG ONE: one long fuse, one spark. CARPET BOMB's seven chase each
-  // other because it is a line of charges; this is a single charge, and the
-  // aura counts the same way -- one light going round slowly, dragging its
-  // own burn behind it.
-  theBigOne: (t) => {
-    ctx.shadowColor = '#FF7A1A'; ctx.shadowBlur = 9;
-    const head = t * 0.9;
-    for (let k = 0; k < 6; k++) {
-      // A trail behind one head rather than six sparks: they share a position
-      // and differ only by lag, which is what reads as a burning cord instead
-      // of a ring of lamps.
-      const a = head - k * 0.16;
-      ctx.globalAlpha = 0.85 - k * 0.13;
-      ctx.fillStyle = k === 0 ? '#FFE9A0' : '#FF7A1A';
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * 18, Math.sin(a) * 18 * 0.62 - 5,
-              k === 0 ? 2.6 : 1.6 - k * 0.15, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  },
-  // VORTEX: motes falling inward. Everything on screen going to one point is
-  // what the ability does to the field, and the aura is that read at body
-  // scale before a single crow has been dragged anywhere.
-  vortex: (t) => {
-    ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 8;
-    for (let k = 0; k < 9; k++) {
-      // Each mote runs its own fall, staggered, so they arrive one after
-      // another rather than as a closing ring.
-      const fall = ((t * 0.55) + k / 9) % 1;
-      const a = k * 2.2 + t * 0.8;
-      const r = 4 + (1 - fall) * 22;
-      ctx.globalAlpha = 0.15 + 0.6 * fall;
-      ctx.fillStyle = fall > 0.8 ? '#FFFFFF' : '#A08CFF';
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * r, Math.sin(a) * r * 0.8 - 6, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  },
-  // THE BEAM: one lance, already sweeping. VORTEX pulls inward and this cuts
-  // outward, which is the difference worth drawing -- in his violet either
-  // way, because the colour is the hero and the direction is the ability.
-  theBeam: (t) => {
-    const head = t * 1.1;
-    ctx.shadowColor = '#A08CFF'; ctx.shadowBlur = 10;
-    ctx.strokeStyle = '#A08CFF'; ctx.lineCap = 'round';
-    for (let k = 0; k < 3; k++) {
-      // Two dimmer lances lagging the first: a sweep with no trail behind it
-      // reads as a spoke that happens to be turning.
-      const a = head - k * 0.22;
-      ctx.globalAlpha = (0.55 - k * 0.16) * (0.7 + 0.3 * Math.sin(t * 5));
-      ctx.lineWidth = 3 - k;
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(a) * 5, Math.sin(a) * 4 - 6);
-      ctx.lineTo(Math.cos(a) * 22, Math.sin(a) * 16 - 6);
-      ctx.stroke();
-    }
-  },
-  // HARPOON: a line coiled and loaded, in the yellow his momentum meter uses.
-  // The ability is gated on that meter, so the colour is already the one the
-  // player is watching when it comes up. A closed loop, because what the line
-  // does is come back with something on the end of it.
-  harpoon: (t) => {
-    ctx.strokeStyle = '#FFCC00'; ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 9;
-    ctx.lineWidth = 2; ctx.lineCap = 'round';
-    // Counted rather than iterated over a fresh array: this aura runs from the
-    // moment the ultimate comes up until the player spends it, which can be
-    // minutes -- an allocation here is 60 a second indefinitely.
-    for (let dir = 1; dir >= -1; dir -= 2) {
-      const a = t * 3.4 * dir;
-      ctx.globalAlpha = 0.30 + 0.45 * (0.5 + 0.5 * Math.sin(t * 4 + dir));
-      ctx.beginPath();
-      ctx.ellipse(0, -5, 19, 11, 0, a, a + 1.1);
-      ctx.stroke();
-    }
-  },
-  // FULL AUTO: the volley, streaming off him and away. HARPOON's line closes
-  // on itself and this one never does -- one thing reeled in against
-  // everything thrown out -- and the same yellow serves both, because it is
-  // the meter he runs on that pays for either.
-  fullAuto: (t) => {
-    ctx.strokeStyle = '#FFCC00'; ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 8;
-    ctx.lineWidth = 2; ctx.lineCap = 'round';
-    // Counted rather than iterated over a fresh array, for the reason HARPOON
-    // gives above: this runs every frame from the moment the ultimate is up
-    // until the player spends it, which can be minutes.
-    for (let k = 0; k < 5; k++) {
-      const out = ((t * 1.6) + k / 5) % 1;
-      // The fan turns slowly as well as firing, so it reads as a man spraying
-      // rather than as five fixed barrels.
-      const a = k * 1.27 + t * 0.35;
-      const r = 6 + out * 18;
-      ctx.globalAlpha = 0.70 * (1 - out);
-      ctx.beginPath();
-      ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r * 0.7 - 5);
-      ctx.lineTo(Math.cos(a) * (r + 5), Math.sin(a) * (r + 5) * 0.7 - 5);
-      ctx.stroke();
-    }
-  },
+  headshot: (t) => paintUltimateAura(ctx, 'headshot', t),
+  arrowRain: (t) => paintUltimateAura(ctx, 'arrowRain', t),
+  earthshatter: (t) => paintUltimateAura(ctx, 'earthshatter', t),
+  theLeap: (t) => paintUltimateAura(ctx, 'theLeap', t),
+  carpetBomb: (t) => paintUltimateAura(ctx, 'carpetBomb', t),
+  theBigOne: (t) => paintUltimateAura(ctx, 'theBigOne', t),
+  vortex: (t) => paintUltimateAura(ctx, 'vortex', t),
+  theBeam: (t) => paintUltimateAura(ctx, 'theBeam', t),
+  harpoon: (t) => paintUltimateAura(ctx, 'harpoon', t),
+  fullAuto: (t) => paintUltimateAura(ctx, 'fullAuto', t),
 };
 
 /**
@@ -11673,6 +11492,10 @@ function drawUltimateAura() {
   if (!paint || !ultimateReady()) return;
   ctx.save();
   ctx.translate(player.x, player.y + CONFIG.hudHeight);
+  // Mirrored with the body, the way every sprite in this game is. Nine of the
+  // ten drawings are symmetric and do not notice; FULL AUTO's stutter is
+  // BEHIND him and would be in front of him half the time without this.
+  ctx.scale(player.facing || 1, 1);
   paint(loopT);
   ctx.restore();
 }

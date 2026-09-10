@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
+import { AURA_IDS } from '../render/ultimate-aura';
 import { ULTIMATE_ICON_ROWS, ULTIMATE_ICON_SIZE } from '../render/ultimate-icons';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -201,6 +202,14 @@ describe('the icons the renderer holds and the abilities they draw', () => {
     // and misses an addition, and here the two would cancel out.
     expect(new Set(Object.keys(ULTIMATE_ICON_ROWS)))
       .toEqual(new Set(abilityIds().map((a) => a.id)));
+  });
+
+  it('holds ready-aura art for every ability, and none for anything else', () => {
+    // The same join one file over. `ULTIMATE_AURA` in game.js decides which
+    // abilities have a tell; `src/render/ultimate-aura.ts` holds the drawing.
+    // An id in one and not the other is an aura that dispatches into nothing,
+    // which paints an empty frame and reports no error.
+    expect(new Set(AURA_IDS)).toEqual(new Set(abilityIds().map((a) => a.id)));
   });
 
   it('holds a square grid of the size the painter lays out', () => {
