@@ -5142,10 +5142,12 @@ function initGame() {
   chooser = null; chooserQueue = []; riteOffered = false; ultimatePicked = false;
 
   knightChainTimer = 0;
-  // Ready from the first frame: the cooldown is what a use COSTS, not an
-  // entry fee. A minute of a dead key at the start of every run taught the
-  // player the ability did not exist.
-  ultimateCD = 0;
+  // A use costs the timer, so a run opens on cooldown, not free from frame one.
+  // The pick is offered when the ultimate first charges, and the HUD chip counts
+  // the timer down until then, so the key reads as charging rather than dead.
+  // Opening the run at zero stranded the pick behind a timer crossing that never
+  // came, so the ultimate stayed UNPICKED for the whole run. A QA run caught it.
+  ultimateCD = CONFIG.ultimateCooldown;
   chooserWait = 0;
   arrowRain = null; beam = null; knightLeap = null; fullAuto = null;
   ultimateCast = null; carpetCord = null; leapLanding = null; headshotTrail = null;

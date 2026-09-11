@@ -6229,16 +6229,16 @@ describe('the ultimate', () => {
     return p;
   }
 
-  // The rule this test used to assert was reversed on purpose. A run began
-  // with the full cooldown already on the clock, so for the first minute the
-  // key did nothing and nothing said why -- which is what a player reads as
-  // the ability not existing. The cooldown is what a USE costs now, not an
-  // entry fee, and what still stands between him and the ability at the start
-  // is the pick, which announces itself.
-  it('starts a run with the timer already spent, and the pick still owed', () => {
+  // A run opens with the ultimate on cooldown, not spent from frame one. Opening
+  // it at zero read as "no dead key", but the pick is queued only as the timer
+  // crosses zero, and a run that begins at zero never crosses it: the pick was
+  // never offered and the ultimate stayed UNPICKED the whole game, which a QA run
+  // caught. The HUD chip counts the timer down, so the wait reads as charging.
+  // Revert the reset to zero and this goes red.
+  it('starts a run with the ultimate on cooldown, and the pick still owed', () => {
     readyRun('archer');
-    expect(g.ultimate().cd).toBe(0);
-    // Charged is not usable: nothing has been chosen yet.
+    expect(g.ultimate().cd).toBeGreaterThan(0);
+    // Not usable at the start for two reasons: still cooling, and nothing chosen.
     expect(g.ultimate().ready).toBe(false);
   });
 
