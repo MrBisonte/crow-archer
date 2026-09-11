@@ -14,6 +14,12 @@ import { join } from 'node:path';
 const POLL_MS = 500;
 /** Beats come every second; this much silence mid-run is a hang. */
 const HANG_AFTER_MS = 3500;
+/** A gap wider than this is a stale log replayed on attach, not a live stall:
+ * beats are seconds old at most while a page runs, so an old trailing gap is
+ * history and must not raise HANG. This is the fix for the overnight false
+ * alarm — a dev server left running writes a log whose last beat is hours old,
+ * and following it from the start once looked exactly like a fresh hang. */
+const STALE_MS = 30000;
 const RUNNING_STATES = ['playing', 'boss_fight'];
 
 const dir = process.argv[2] ?? '_flightlogs';
@@ -21,7 +27,8 @@ const dir = process.argv[2] ?? '_flightlogs';
 let file = null;
 let offset = 0;
 let partial = '';
-let lastBeatAt = 0;      // wall clock when the last beat ARRIVED here
+let lastBeatSrv = 0;     // the last beat's OWN server timestamp, not read time
+let lastBeatVis = null;  // 'visible' | 'hidden' — a hidden tab beats ~1/min
 let lastState = null;    // pulse.state of the last beat
 let hangSaid = false;
 
@@ -50,7 +57,8 @@ function newestLog() {
 function handle(rec) {
   const k = rec.kind;
   if (k === 'beat') {
-    lastBeatAt = Date.now();
+    lastBeatSrv = rec.srv ?? Date.now();
+    lastBeatVis = rec.vis ?? 'visible';
     if (rec.pulse) lastState = rec.pulse.state;
     if (hangSaid) { say('beats resumed'); hangSaid = false; }
     for (const e of rec.events ?? []) {
@@ -95,15 +103,56 @@ function readNew() {
   }
 }
 
-function checkHang() {
-  if (hangSaid || lastBeatAt === 0) return;
-  if (lastState === null || !RUNNING_STATES.includes(lastState)) return;
-  const quiet = Date.now() - lastBeatAt;
-  if (quiet > HANG_AFTER_MS) {
-    hangSaid = true;
-    say(`HANG? no beat for ${(quiet / 1000).toFixed(1)}s mid-run — main thread likely hung; last state=${lastState}`);
-  }
+/**
+ * Should a HANG line fire now? Pure, so the freshness gate has a test.
+ *
+ * A hang is a LIVE stream going quiet, so the gap is measured from the last
+ * beat's own server timestamp (`srv`), never from when this process read the
+ * line. Two guards keep it honest: the last beat must be `visible` (a hidden
+ * tab is throttled to roughly one beat a minute and its long gaps are not a
+ * hang), and the gap must sit under STALE_MS (an old trailing gap is a log
+ * replayed on attach, not a stall happening now).
+ */
+function hangDue({ now, lastBeatSrv, lastBeatVis, lastState, hangSaid }) {
+  if (hangSaid || lastBeatSrv === 0) return false;
+  if (lastBeatVis !== 'visible') return false;
+  if (!RUNNING_STATES.includes(lastState)) return false;
+  const gap = now - lastBeatSrv;
+  // ponytail: a gap window, not visibilitychange tracking. A tab that goes
+  // hidden between two visible beats can still trip one HANG?/beats-resumed
+  // pair inside the ~60s before its first hidden beat lands; wire the log's
+  // 'tab hidden' event in to disarm sooner if that noise ever matters.
+  return gap > HANG_AFTER_MS && gap < STALE_MS;
 }
+
+function checkHang() {
+  if (!hangDue({ now: Date.now(), lastBeatSrv, lastBeatVis, lastState, hangSaid })) return;
+  hangSaid = true;
+  const quiet = (Date.now() - lastBeatSrv) / 1000;
+  say(`HANG? no beat for ${quiet.toFixed(1)}s mid-run — main thread likely hung; last state=${lastState}`);
+}
+
+/** One runnable check for the freshness gate: `node flight-watch.mjs --selftest`. */
+function selfTest() {
+  const R = 'boss_fight', now = 1_000_000;
+  const cases = [
+    ['fires on a fresh visible gap', { lastBeatSrv: now - 4000, lastBeatVis: 'visible', lastState: R, hangSaid: false }, true],
+    ['silent on a stale replayed tail', { lastBeatSrv: now - 7 * 3600 * 1000, lastBeatVis: 'visible', lastState: R, hangSaid: false }, false],
+    ['silent on a throttled hidden tab', { lastBeatSrv: now - 4000, lastBeatVis: 'hidden', lastState: R, hangSaid: false }, false],
+    ['silent under the threshold', { lastBeatSrv: now - 1000, lastBeatVis: 'visible', lastState: R, hangSaid: false }, false],
+    ['silent off a run', { lastBeatSrv: now - 4000, lastBeatVis: 'visible', lastState: 'menu', hangSaid: false }, false],
+    ['no repeat once said', { lastBeatSrv: now - 4000, lastBeatVis: 'visible', lastState: R, hangSaid: true }, false],
+  ];
+  let bad = 0;
+  for (const [name, arg, want] of cases) {
+    const got = hangDue({ now, ...arg });
+    if (got === want) { console.log(`ok   ${name}`); }
+    else { console.error(`FAIL ${name}: want ${want}, got ${got}`); bad++; }
+  }
+  process.exit(bad === 0 ? 0 : 1);
+}
+
+if (process.argv.includes('--selftest')) selfTest();
 
 say(`watching ${dir} for flight logs`);
 setInterval(() => { readNew(); checkHang(); }, POLL_MS);
