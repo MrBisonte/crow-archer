@@ -68,6 +68,11 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   `_skeletonGrids` and `_guardGrids` do. `stamps.get` returns a cached
   canvas *without calling the painter*, so an unmemoized grid is built
   and thrown away every frame. See `docs/design-patterns.md`.
+- **Drawing a mark one cell wide?** It will not reach the screen. The canvas
+  only ever scales DOWN, and a fractional factor deletes whole pixel rows, so a
+  hairline arrives as dashes or as nothing. `dot` throws below `THIN` for that
+  reason; four such marks shipped in the 1px aura redraw, each with a comment
+  defending it (`a-hairline-mark-is-deleted-not-thinned`).
 - **Painting structure in `C.edge`?** Don't. That is the outline seam
   and a source-text test fails by name.
 - **Painting an aura on a hero?** Draw it OUTSIDE the silhouette.

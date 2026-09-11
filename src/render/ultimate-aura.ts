@@ -81,7 +81,11 @@ export const AURA_FRAMES = 4;
 const STROKE = 3;
 
 /** The same mark where something else is already carrying the read: a trail,
- *  a sheath, a crack past its first run. */
+ *  a sheath, a crack past its first run.
+ *
+ *  Also the FLOOR. {@link dot} refuses anything thinner, because a one-cell
+ *  mark does not survive the trip to the screen and four of them shipped in
+ *  the first cut of these drawings. */
 const THIN = 2;
 
 /**
@@ -172,6 +176,13 @@ function bar(g: PixelGrid, c: number, r: number, len: number, colour: string): v
  * anti-aliasing this whole file exists without.
  */
 function dot(g: PixelGrid, c: number, r: number, d: number, colour: string): void {
+  // A one-cell mark is not a finer version of a mark, it is a mark that is
+  // gone. The canvas is scaled DOWN to fit a small viewport and never up, so
+  // a fractional factor deletes whole pixel rows, and the scanline overlay
+  // darkens one row in four on top of that: a hairline comes out as dashes or
+  // as nothing at all, in places that differ per viewport. Refused here
+  // rather than reviewed, the way `blk` refuses to paint into the body.
+  if (d < THIN) throw new Error('aura mark ' + d + ' cells wide; THIN (' + THIN + ') is the floor');
   const c0 = Math.round(c) - (d >> 1), r0 = Math.round(r) - (d >> 1);
   for (let i = 0; i < d; i++) bar(g, c0, r0 + i, d, colour);
 }
@@ -425,7 +436,7 @@ const AURA_ART: Readonly<Record<string, AuraArt>> = {
         // reaching one point is what says INWARD; eight dots without them say
         // ring, which is what this was and what CARPET BOMB already is.
         const [ox, oy] = at(VORTEX_STEPS[0]), [ix, iy] = at(VORTEX_STEPS[3]);
-        seg(g, ox, oy, ix, iy, 1, WIZARD_TRACK);
+        seg(g, ox, oy, ix, iy, THIN, WIZARD_TRACK);
         const inward = (f + k) % AURA_FRAMES;
         // The one that has arrived flashes, and is a beat bigger for it: it is
         // the only frame in the cycle where the ability has done its thing.
@@ -538,9 +549,9 @@ const AURA_ART: Readonly<Record<string, AuraArt>> = {
     draw: (g, f) => {
       // The line the charges are laid along. Seven dots on an ellipse read as
       // seven dots; on a drawn fuse they read as a fuse, which is the image
-      // the ability is made of -- and a ring one pixel wide is the thing the
-      // 4px grid had no way to draw at all.
-      arc(g, CX, FLOOR, CARPET_RX, CARPET_RY, 0, TAU, 1, SAPPER_TAIL);
+      // the ability is made of -- and a ring this thin is the thing the 4px
+      // grid had no way to draw at all.
+      arc(g, CX, FLOOR, CARPET_RX, CARPET_RY, 0, TAU, THIN, SAPPER_TAIL);
       for (const [k, own] of CARPET_STEPS.entries()) {
         const a = k * (TAU / 7) + f * own;
         const lit = (k + f) % 3 === 0;
@@ -548,9 +559,9 @@ const AURA_ART: Readonly<Record<string, AuraArt>> = {
         dot(g, c, r, lit ? 7 : 5, lit ? SAPPER_FLARE : SAPPER);
         if (!lit) continue;
         // A lit charge throws a cross, which is a spark and not just a bigger
-        // dot. One pixel wide on purpose: the dot under it carries the read.
-        seg(g, c - 5, r, c + 5, r, 1, SAPPER_FLARE);
-        seg(g, c, r - 5, c, r + 5, 1, SAPPER_FLARE);
+        // dot. THIN and not STROKE: the dot under it carries the read.
+        seg(g, c - 5, r, c + 5, r, THIN, SAPPER_FLARE);
+        seg(g, c, r - 5, c, r + 5, THIN, SAPPER_FLARE);
       }
     },
   },
