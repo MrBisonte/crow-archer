@@ -149,6 +149,12 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   suite. Counting survivors is the wrong assertion while waves spawn:
   compare by identity.
 
+- **A flake you cannot reproduce?** Enumerate what could produce that exact
+  failure and pin each one, so the next occurrence names its reason rather than
+  restarting the hunt. Sweep the seed to exonerate the map, own nothing to
+  exonerate a grant, and revert each new guard to check it can fail at all
+  (`a-flake-you-cannot-reproduce-still-has-named-causes`).
+
 ## Feel
 
 - **Giving something a capacity — a magazine, a clip, a charge count?** Give it

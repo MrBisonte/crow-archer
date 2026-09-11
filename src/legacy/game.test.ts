@@ -3133,7 +3133,20 @@ describe('the ranger net', () => {
     const p = g.player() as { x: number; y: number; aimAngle: number };
     p.x = (col + 0.5) * ts;
     p.y = (row + 0.5) * ts;
+    // Aimed through the MOUSE, not by assigning the field. updatePlayer
+    // recomputes aimAngle from the pointer on every step, so `p.aimAngle = 0`
+    // survives only until the first one and is then replaced by wherever the
+    // previous test left the mouse -- the exact shape of green-alone-red-in-suite.
+    aimAt(p.x + 400, p.y);
     p.aimAngle = 0;
+    // Own nothing: WIDE NET adds to the net's radius and LONG THROW to its
+    // reach, and grants persist across tests in a file by design. Every
+    // assertion below compares against the raw CONFIG figure, so a leftover
+    // grant from anywhere in this file measures the talent instead of the net.
+    const talents = g.talents() as { grant: (id: string, n: number) => void };
+    talents.grant('wideNet', 0);
+    talents.grant('longThrow', 0);
+    talents.grant('holdfast', 0);
     return p;
   }
 
@@ -3201,6 +3214,61 @@ describe('the ranger net', () => {
 
     expect(full.x - fullFrom).toBeGreaterThan(tap.x - tapFrom);
     expect(full.radius).toBeGreaterThan(tap.radius);
+  });
+
+  // Three guards on the staging of the test above, not on the net.
+  //
+  // It failed once in a full suite run and passed alone, and passed in eleven
+  // full runs after -- so the cause was never caught in the act. These are the
+  // three things that could produce that exact failure, each pinned so that if
+  // it ever happens again the reason is named instead of guessed at.
+
+  it('throws the same distance whatever map came up', () => {
+    // A 200-seed sweep found zero bad maps, so terrain is NOT the cause. Kept
+    // small and permanent: it is the cheap half of that sweep, and it is what
+    // would catch a future map change putting terrain in the lane.
+    const c = g.config();
+    for (const seed of [1, 7, 23, 91, 404, 1337]) {
+      const orig = Math.random;
+      try {
+        Math.random = mulberry32(seed);
+        g.pickMap('forest');
+        const from = rangerAt(4, 6).x;
+        const open = throwNet(c.netDrawMaxSecs);
+        expect(open.x - from, `map seed ${seed}`).toBeCloseTo(c.netThrowMax, -1);
+      } finally {
+        Math.random = orig;
+      }
+    }
+  });
+
+  it('throws where he is aiming, not where the last test left the mouse', () => {
+    // updatePlayer rewrites aimAngle from the pointer on every step, so
+    // `p.aimAngle = 0` survives exactly until the first one.
+    //
+    // The step below is what makes this test real. throwNet releases before
+    // the sim has run once, so the staged angle is still intact at release and
+    // the hazard cannot bite -- which is why the first draft of this test
+    // passed with the fix removed. A player does not throw on frame zero, and
+    // any future change that steps before releasing would walk straight into
+    // it. One frame here is the difference between a guard and a green tick.
+    const c = g.config();
+    const p0 = g.player() as { x: number; y: number };
+    aimAt(p0.x - 400, p0.y - 400);   // the previous test's mouse, up and left
+
+    const from = rangerAt(4, 6).x;
+    g.stepSim(1);
+    const open = throwNet(c.netDrawMaxSecs);
+    expect(open.x - from).toBeCloseTo(c.netThrowMax, -1);
+  });
+
+  it('measures the net the character owns, not one an earlier test bought', () => {
+    // WIDE NET adds to the radius and grants persist across tests in a file,
+    // so a leftover would make the plain net measure as the upgraded one.
+    const c = g.config();
+    (g.talents() as { grant: (id: string, n: number) => void }).grant('wideNet', 2);
+    const open = (rangerAt(4, 6), throwNet(c.netDrawMaxSecs));
+    expect(open.radius).toBeCloseTo(c.netRadiusMax, 1);
   });
 
   it('holds for 0.8s at a tap and 2s at a full draw', () => {
