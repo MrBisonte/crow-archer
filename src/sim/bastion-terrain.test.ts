@@ -503,7 +503,78 @@ describe('towerSites', () => {
       expect(site.row).toBeLessThan(4);
     }
   });
+
+  /** Tower rows on a grid this tall, sorted, which is the whole observable shape. */
+  const rowsAt = (rows: number, cols = MAP_COLS): number[] =>
+    towerSites(rows, cols)
+      .map((site) => site.row)
+      .sort((a, b) => a - b);
+
+  /** Heights worth checking: the shipped small grid, the shipped one, and past it. */
+  const GRIDS = [21, 27, 33, 37, 45];
+
+  // The point of the change. Two towers held a 21-row grid; the 33-row grid
+  // shipped with the same two and twelve more rows of wall between them, which
+  // is what "thinly held" meant. Exact rows rather than a length, so this
+  // catches a tower moving as well as one going missing.
+  it('stands more towers as the grid gets taller, and leaves the small one alone', () => {
+    expect(rowsAt(21), 'the shipped 21-row layout moved').toEqual([5, 15]);
+    expect(rowsAt(33).length).toBeGreaterThan(2);
+  });
+
+  // Rows, not area. The keep is a fixed-size structure on the west edge and
+  // extra columns are open ground for the siege to cross -- BARRIER_REACH_COLS
+  // is the same decision seen from the barrier's side. A wider grid of the same
+  // height is the same fortress, so it gets the same towers.
+  it('counts by height alone, so a wider grid stands no more towers', () => {
+    expect(rowsAt(33, 91)).toEqual(rowsAt(33, 55));
+  });
+
+  it('keeps every tower clear of the spawn block', () => {
+    for (const rows of GRIDS)
+      for (const site of towerSites(rows, MAP_COLS))
+        for (const tile of towerTiles(site))
+          expect(
+            isSpawnZone(tile.row, tile.col, rows),
+            `tower tile ${tile.row},${tile.col} on a ${rows}-row grid is in the spawn block`,
+          ).toBe(false);
+  });
+
+  it('stands every tower whole and inside the arena', () => {
+    for (const rows of GRIDS)
+      for (const site of towerSites(rows, MAP_COLS))
+        for (const tile of towerTiles(site)) {
+          expect(tile.row, `tower tile off the top on a ${rows}-row grid`).toBeGreaterThan(0);
+          expect(tile.row, `tower tile off the bottom on a ${rows}-row grid`).toBeLessThan(rows - 1);
+        }
+  });
+
+  it('never stands two towers in each other', () => {
+    for (const rows of GRIDS) {
+      const rowList = rowsAt(rows);
+      expect(new Set(rowList).size, `a repeated tower row on a ${rows}-row grid`).toBe(
+        rowList.length,
+      );
+      for (let i = 1; i < rowList.length; i++)
+        expect(
+          (rowList[i] ?? 0) - (rowList[i - 1] ?? 0),
+          `towers overlap on a ${rows}-row grid`,
+        ).toBeGreaterThanOrEqual(TOWER_SPAN);
+    }
+  });
+
+  // The hero spawns on the centre line, so an uneven wall would leave one
+  // flank quietly softer than the other for the whole siege.
+  it('mirrors north and south about the centre line', () => {
+    for (const rows of GRIDS) {
+      const mid = Math.floor(rows / 2);
+      const offsets = rowsAt(rows).map((row) => row - mid);
+      const mirrored = [...offsets].reverse().map((d) => -d);
+      expect(offsets, `the wall is lopsided on a ${rows}-row grid`).toEqual(mirrored);
+    }
+  });
 });
+
 
 describe('barrierCols', () => {
   it('names three sections, each two adjacent columns wide', () => {

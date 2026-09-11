@@ -18,7 +18,7 @@ import {
   type GuardKind,
 } from '../sim/guards';
 import { TOWER_DAMAGE, TOWER_MAX_HP, TOWER_SPAN, towerCentre, type Tower } from '../sim/towers';
-import { barrierGates } from '../sim/bastion-terrain';
+import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
@@ -32,6 +32,19 @@ import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
 } from '../render/grid-testkit';
+
+/**
+ * How many towers the bastion stands on the grid the game is currently on.
+ *
+ * Derived, never written down. The count follows the grid's height, so a
+ * literal here would pin the map size the way a literal `2` did before the
+ * towers learned to scale -- and the way a literal `1` did before a tower grew
+ * from one tile to a TOWER_SPAN block.
+ */
+const towerCount = (): number => {
+  const c = g.config();
+  return towerSites(c.rows, c.cols).length;
+};
 
 
 /**
@@ -3828,7 +3841,7 @@ describe('siege mode', () => {
     }
   });
 
-  it('generates two towers behind a barrier that can be walked around', () => {
+  it('generates its towers behind a barrier that can be walked around', () => {
     g.setMode('siege');
     g.go('playing');
     const tiles = g.tiles();
@@ -3837,10 +3850,11 @@ describe('siege mode', () => {
     for (let row = 0; row < c.rows; row++) {
       for (let col = 0; col < c.cols; col++) if (tiles.get(row, col) === TILE.HUT) huts++;
     }
-    // Two towers, each a TOWER_SPAN square block, so the count is derived
-    // rather than written down: a literal 2 here was what the map said back
-    // when a tower was a single tile.
-    expect(huts).toBe(2 * TOWER_SPAN * TOWER_SPAN);
+    // Each tower is a TOWER_SPAN square block and how many there are follows
+    // the grid height, so both halves are derived rather than written down.
+    // A literal here was what the map said when a tower was a single tile,
+    // and again when there were always exactly two of them.
+    expect(huts).toBe(towerCount() * TOWER_SPAN * TOWER_SPAN);
   });
 
   it('knows the run is ten waves, and reads it from the table', () => {
@@ -4406,11 +4420,11 @@ describe('the siege loop', () => {
 
   const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
 
-  it('opens with the whole retinue on the field and two towers', () => {
+  it('opens with the whole retinue on the field and every tower standing', () => {
     openSiege();
     expect(siegeState().guards).toHaveLength(OPENING_RETINUE);
     expect(g.guards()).toHaveLength(OPENING_RETINUE);
-    expect(g.towers()).toHaveLength(2);
+    expect(g.towers()).toHaveLength(towerCount());
     expect(g.towers().every((t: { hp: number }) => t.hp === TOWER_MAX_HP)).toBe(true);
   });
 
@@ -5230,7 +5244,7 @@ describe('the bastion as the end of the brawl chain', () => {
     expect(g.mode()).toBe('brawl');
     expect(g.siege()).not.toBeNull();
     expect(g.guards().length).toBeGreaterThan(0);
-    expect(g.towers()).toHaveLength(2);
+    expect(g.towers()).toHaveLength(towerCount());
   });
 
   it('holds the new stage behind a title, without wiping the run', () => {
@@ -5631,7 +5645,7 @@ describe("the bastion's terrain rules", () => {
       if (tiles.get(t.row, t.col) !== TILE.HUT) break;
     }
     expect(tiles.get(t.row, t.col), 'a tower could no longer be brought down').toBe(TILE.EMPTY);
-    expect(standing).toBe(2);
+    expect(standing).toBe(towerCount());
   });
 
   it('slows everything hostile to 80%, and only here', () => {
