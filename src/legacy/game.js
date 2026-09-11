@@ -16329,29 +16329,84 @@ function fixedStep() {
   if (hitstop.step() === 'run') stepGame(FIXED_DT);
 }
 
+// One thrown frame must not unhook the loop. Before this, any exception in
+// fixedStep() or render() escaped before the reschedule below and the whole
+// game froze silent (the brawl bug was one such throw). The fuse catches it,
+// ships the stack, and reschedules; a run of thrown frames is a deterministic
+// fault, so the breaker halts loud instead of spinning. The limit is frames:
+// ~0.5s of grace at 60fps before a repeating throw stops the game.
+const LOOP_ERROR_LIMIT = 30;
+let frameErrors = 0;
+
+/**
+ * The breaker decision, pure so it has a test without driving real frames.
+ * A clean frame resets the count; a thrown one increments it and, at the
+ * limit, says to halt.
+ */
+export function loopFuse(consecutive, threw, limit) {
+  if (!threw) return { consecutive: 0, halt: false };
+  const next = consecutive + 1;
+  return { consecutive: next, halt: next >= limit };
+}
+
+/** Last-ditch visible notice when the breaker halts the loop. DOM, not canvas:
+ * render() is the likely culprit, so the message must not depend on it. */
+function showLoopFatal(message) {
+  try {
+    let el = document.getElementById('loop-fatal');
+    if (el === null) {
+      el = document.createElement('div');
+      el.id = 'loop-fatal';
+      el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;'
+        + 'align-items:center;justify-content:center;padding:2rem;text-align:center;'
+        + 'background:rgba(0,0,0,0.85);color:#fff;font:14px system-ui,sans-serif';
+      document.body.appendChild(el);
+    }
+    el.textContent = message;
+  } catch (_) { /* telemetry already carries the fatal; the banner is a bonus */ }
+}
+
 function loop(ts) {
-  let frameTime = (ts - lastTs) / 1000;
-  lastTs = ts; loopT = ts / 1000;
-  if (frameTime > 0.25) frameTime = 0.25;   // drop a huge gap (e.g. backgrounded tab)
+  let threw = false;
+  try {
+    let frameTime = (ts - lastTs) / 1000;
+    lastTs = ts; loopT = ts / 1000;
+    if (frameTime > 0.25) frameTime = 0.25;   // drop a huge gap (e.g. backgrounded tab)
 
-  if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
+    if (ts - waterLastTs >= CONFIG.waterShimmerMs) { waterLastTs = ts; waterPhase = !waterPhase; }
 
-  // The frame's own boundaries. render() marks the rest: its first mark closes
-  // `sim`, so the accumulator below needs no closing call of its own.
-  trace.beginFrame();
-  trace.mark('sim');
-  accumulator += frameTime;
-  let steps = 0;
-  while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
-    fixedStep();
-    accumulator -= FIXED_DT;
-    steps++;
+    // The frame's own boundaries. render() marks the rest: its first mark closes
+    // `sim`, so the accumulator below needs no closing call of its own.
+    trace.beginFrame();
+    trace.mark('sim');
+    accumulator += frameTime;
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
+      fixedStep();
+      accumulator -= FIXED_DT;
+      steps++;
+    }
+    if (steps === MAX_STEPS) accumulator = 0;   // discard backlog after the cap
+
+    render(loopT);
+    trace.endFrame();
+    if (trace.level() !== 'off') { drawTraceOverlay(); logTraceSummary(ts); }
+  } catch (e) {
+    threw = true;
+    // Ship the stack once per streak; a per-frame throw would otherwise repeat
+    // the same trace every frame until the breaker trips.
+    if (frameErrors === 0) {
+      log.error('loop', e instanceof Error ? e.message : String(e), 'frame-threw',
+        { stack: e instanceof Error ? e.stack : undefined });
+    }
   }
-  if (steps === MAX_STEPS) accumulator = 0;   // discard backlog after the cap
-
-  render(loopT);
-  trace.endFrame();
-  if (trace.level() !== 'off') { drawTraceOverlay(); logTraceSummary(ts); }
+  const fuse = loopFuse(frameErrors, threw, LOOP_ERROR_LIMIT);
+  frameErrors = fuse.consecutive;
+  if (fuse.halt) {
+    liveLoop = false;
+    log.error('loop', `halted after ${frameErrors} consecutive thrown frames`, 'loop-halted');
+    showLoopFatal('The game hit a repeated error and stopped. Reload to try again; the error was logged.');
+  }
   if (liveLoop) requestAnimationFrame(loop);
 }
 
