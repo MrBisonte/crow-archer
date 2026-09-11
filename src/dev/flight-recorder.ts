@@ -55,7 +55,9 @@ export interface Pulse {
 /** The stops the page can diagnose from inside. */
 export type AlarmClass = 'loop-dead' | 'logic-freeze' | 'no-frames';
 
-/** The states in which sim time owes progress (`gameTime += dt` branches). */
+/** The states in which the game owes motion: sim time advances (the
+ * `gameTime += dt` branches) and frames must render. Gates both `logic-freeze`
+ * and `no-frames`, so a screen that never animates by design raises neither. */
 const RUNNING_STATES: readonly string[] = ['playing', 'boss_fight'];
 
 /**
@@ -67,8 +69,9 @@ const RUNNING_STATES: readonly string[] = ['playing', 'boss_fight'];
  * animates at all while the tab still claims visible: not the loop's fault,
  * but exactly what a player calls a freeze, so it gets a line rather than
  * silence — an embedded or throttled view (the hidden Browser-pane trap)
- * looks like this. 'logic-freeze' says frames arrive but sim time is stuck during
- * a run with no state change to excuse it. Hitstop looks exactly like that
+ * looks like this, and it raises only in a running state where frames are
+ * owed: a static screen is excused. 'logic-freeze' says frames arrive but sim
+ * time is stuck during a run with no state change to excuse it. Hitstop looks exactly like that
  * for a sample or two, deliberately: the caller's streak threshold outlasts
  * anything the hitstop ladder can owe, so a held world never alarms — and a
  * world held *forever* still does, which an exemption here would hide.
@@ -82,7 +85,14 @@ export function classify(
   visible: boolean,
 ): AlarmClass | null {
   if (prev === null || !visible || !cur.live || !prev.live) return null;
-  if (cur.lastTs === prev.lastTs) return rafTicked ? 'loop-dead' : 'no-frames';
+  if (cur.lastTs === prev.lastTs) {
+    // A dead loop is a fault on any screen: the browser still animates while
+    // the game clock does not, so it is never gated. A page-wide stall is only
+    // a freeze where the game owes frames; on a static screen (menu, gameover,
+    // chooser) no-frames is the screen at rest, so gate it to a running state.
+    if (rafTicked) return 'loop-dead';
+    return RUNNING_STATES.includes(cur.state) ? 'no-frames' : null;
+  }
   if (RUNNING_STATES.includes(cur.state) && cur.state === prev.state && cur.t === prev.t) {
     return 'logic-freeze';
   }
