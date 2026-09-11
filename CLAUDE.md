@@ -149,6 +149,11 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   suite. Counting survivors is the wrong assertion while waves spawn:
   compare by identity.
 
+- **A test failed once and will not reproduce?** Check whether the failure was
+  a TIMEOUT before hunting logic. `Test timed out in 5000ms` is not an
+  AssertionError, so a log grep for one finds nothing and it reads as a
+  mystery. The slowest tests here run ~2 s idle; `testTimeout` is 20 s for that
+  reason (`a-five-second-timeout-is-thin-for-a-sim-suite`).
 - **A flake you cannot reproduce?** Enumerate what could produce that exact
   failure and pin each one, so the next occurrence names its reason rather than
   restarting the hunt. Sweep the seed to exonerate the map, own nothing to
