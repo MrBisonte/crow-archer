@@ -20,8 +20,10 @@ import { describe, expect, it } from 'vitest';
 import { AURA_CELLS, AURA_FRAMES, AURA_IDS, auraFrame, auraGrid } from './ultimate-aura';
 
 /** The sprite's own cells, restated from the module so a box quietly widened
- *  there does not quietly widen what this accepts. */
-const BODY = { c0: 8, c1: 16, r0: 7, r1: 16 } as const;
+ *  there does not quietly widen what this accepts. One canvas pixel per cell,
+ *  so these are the knight's own figures -- x in [-15, 15], y in [-23, 14] --
+ *  plus the origin, with no enclosing cell to round out to. */
+const BODY = { c0: 35, c1: 65, r0: 31, r1: 68 } as const;
 
 /** Every filled cell of one frame, as `col,row` pairs. */
 function filled(id: string, frame: number): Array<readonly [number, number]> {
@@ -48,9 +50,12 @@ describe('the ready auras', () => {
       });
 
       it(`draws something for ${id} frame ${frame}`, () => {
-        // Six blocks is well under the smallest of the ten and well over
-        // nothing, which is the only failure this has to catch.
-        expect(filled(id, frame).length).toBeGreaterThan(6);
+        // Sixty blocks is well under the smallest of the ten -- HARPOON at
+        // its most occluded frame, 121 -- and well over nothing. It was six,
+        // which was the right figure on a 4px grid and is a floor nothing
+        // could fall through on this one: an aura that lost nine tenths of
+        // its ink would still clear it.
+        expect(filled(id, frame).length).toBeGreaterThan(60);
       });
     }
 
