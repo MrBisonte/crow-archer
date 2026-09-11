@@ -121,6 +121,9 @@ export type GameEvent =
   | { type: 'RANGER_MOMENTUM_LOST'; x: number; y: number }
   // He spent a full meter to name one body. Bosses only, in practice.
   | { type: 'RANGER_MARK'; x: number; y: number }
+  // A weapon has gone quiet on purpose. Fires once per magazine, so the
+  // silence that follows has a cause the ear can attach to.
+  | { type: 'WEAPON_RELOADING'; kind: string; secs: number; x: number; y: number }
   | { type: 'ARCHER_BRACED'; x: number; y: number }
   /**
    * A power arrow has gone through a body. `left` is how many more it can pass

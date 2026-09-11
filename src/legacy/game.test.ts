@@ -3035,6 +3035,50 @@ describe('the ranger crossbow', () => {
     }
   });
 
+  // The reload was audible to nobody and visible nowhere: it arrived as a
+  // second of silence with no cause on screen, which is how it was reported.
+  it('announces the reload once per magazine, and says how long it is', () => {
+    rangerOnPace('fast', 0);
+    const said: Array<{ kind?: string; secs?: number }> = [];
+    g.onEvent((e: { type: string; kind?: string; secs?: number }) => {
+      if (e.type === 'WEAPON_RELOADING') said.push(e);
+    });
+    emptyMagazine(0);
+    expect(said).toHaveLength(1);
+    expect(said[0]?.kind).toBe('crossbow');
+    expect(said[0]?.secs).toBeGreaterThan(0);
+  });
+
+  it('carries a crossbow chip in the ranger lane, and it reports both states', () => {
+    rangerOnPace('fast', 0);
+    expect(g.lane()).toContain('crossbow');
+
+    const chip = () => g.chip('crossbow') as
+      { label: string; frac: number | null; color: string };
+    const mag = (g.config() as { crossbowMagazine: number }).crossbowMagazine;
+    // Loaded: it reports what is LEFT, which is a count he spends deliberately.
+    expect(chip().label).toBe(mag + '/' + mag);
+    expect(chip().frac).toBeNull();
+
+    emptyMagazine(0);
+    // Reloading: the beat, filling. A fraction, so the bar has something to do.
+    expect(chip().label).toMatch(/^[0-9.]+s$/);
+    expect(chip().frac).not.toBeNull();
+    expect(chip().frac ?? 1).toBeLessThan(1);
+  });
+
+  it('measures the reload bar against the beat it was given, not the live one', () => {
+    rangerOnPace('fast', 0);
+    emptyMagazine(0);
+    const before = (g.chip('crossbow') as { frac: number | null }).frac ?? 0;
+    // Momentum moves mid-reload. A bar dividing by the LIVE figure would jump
+    // backwards here; one that remembers what it was set to cannot.
+    g.setMomentum(1);
+    g.stepSim(1);
+    const after = (g.chip('crossbow') as { frac: number | null }).frac ?? 0;
+    expect(after).toBeGreaterThanOrEqual(before);
+  });
+
   it('stops for a beat once the magazine is out, and starts again after it', () => {
     rangerOnPace('fast', 0);
     expect(reloadLeft()).toBe(0);

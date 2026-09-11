@@ -258,6 +258,16 @@ silence that looked like the weapon jamming. The count was right and the feel
 was nonsense. At 0.22 s the four are countable: 0.23 s apart, then the reload,
 then four more.
 
+The reload is now audible and visible, which it was not when it shipped. It
+emits `WEAPON_RELOADING` once per magazine, so the silence has a cause the ear
+can attach to; it takes a lane-D chip of its own, which reports what is left in
+the magazine while loaded and the beat filling while it winds; and the reticle
+carries both -- a block per volley left, spent ones dim and in place, replaced
+by a single arc winding the magazine back up. The reticle is where the eye
+already is, which is the same argument the charge arc makes, and the arc runs
+faster the more Momentum he holds -- the only place on screen the meter's hold
+over the reload can be seen at all.
+
 Momentum buys the RELOAD down and not the rate. Shortening both would compound
 into roughly double his output at the cap, and the reload is the figure his
 answer named. So standing still costs him twice and the two halves of the character pull the same way instead

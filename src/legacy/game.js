@@ -1944,6 +1944,14 @@ let crossbowMag = 0;
 let crossbowReload = 0;
 /** Seconds until the next volley in the magazine. The weapon's own rate. */
 let crossbowShotCD = 0;
+/**
+ * What the current beat was set to, for the chip that draws it filling.
+ *
+ * Kept rather than recomputed: Momentum shortens the reload at the moment it
+ * starts, and a bar that divided by the LIVE figure would jump backwards
+ * every time he ran a few more pixels while waiting.
+ */
+let crossbowReloadFull = 0;
 
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
@@ -4710,6 +4718,12 @@ events.on(e => {
       playSound(sndPickup);
       burst(e.x, e.y, { count: 4, colors: ['#FFCC00'], speed: 30, life: 0.28, size: 1 });
       break;
+    case 'WEAPON_RELOADING':
+      // The crank, not a refusal buzz. It fires once per magazine, at the
+      // moment the weapon goes quiet, so the silence that follows has a cause
+      // the ear can attach to.
+      playSound(sndArm);
+      break;
     case 'RANGER_MARK':
       // Louder than either momentum edge: this one cost him the whole meter
       // and he needs to know it landed on something.
@@ -5050,6 +5064,7 @@ function initGame() {
   archerDraw.on = false; archerPowerCD = 0; archerLoose = 0; archerLoosePower = 0; braceLevel = 0;
   rangerMomentum = 0;
   crossbowMag = CONFIG.crossbowMagazine; crossbowReload = 0; crossbowShotCD = 0;
+  crossbowReloadFull = 0;
   rangerGhosts = []; momentumSting = 0; rangerDust = 0; rangerMark = null;
   rangerNet.on = false; rangerNetCD = 0; nets = []; netMats = [];
   boss = null; bossDeathSeq = null; entrance = null; bossStage = 1; hostileBolts = [];
@@ -5639,6 +5654,9 @@ function tryCrossbowBolt() {
   if (--crossbowMag <= 0) {
     crossbowMag = CONFIG.crossbowMagazine;
     crossbowReload = CONFIG.crossbowReloadSecs * crossbowReloadMult();
+    crossbowReloadFull = crossbowReload;
+    events.emit({ type: 'WEAPON_RELOADING', kind: 'crossbow', secs: crossbowReload,
+      x: player.x, y: player.y });
   }
 }
 
@@ -14227,6 +14245,10 @@ const GLYPH = {
       ctx.lineTo(m + s*a, m + s*0.22);
       ctx.stroke();
     }); },
+  crossbow: (s) => { const m = s / 2; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(s*0.26, s*0.2); ctx.lineTo(s*0.26, s*0.8); ctx.stroke();
+    ctx.fillRect(s*0.26, m - s*0.06, s*0.52, s*0.12);
+    ctx.fillRect(s*0.2, m - s*0.16, s*0.1, s*0.32); },
   snipe: (s) => { const m = s/2; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(m, m, s*0.3, 0, Math.PI*2); ctx.stroke();
     [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => { ctx.beginPath();
@@ -14283,7 +14305,7 @@ const LANE_B = {
  */
 const LANE_D = {
   archer: ['brace', 'power', 'ult', 'shield'],
-  ranger: ['momentum', 'net', 'ult', 'shield'],
+  ranger: ['momentum', 'crossbow', 'net', 'ult', 'shield'],
   knight: ['whirlwind', 'block', 'fireSword', 'ult', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'ult', 'shield'],
   sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'ult', 'shield'],
@@ -14325,6 +14347,24 @@ const CHIP = {
     label: braceLevel >= 1 ? 'SET' : braceLevel <= 0 ? '' : Math.round(braceLevel * 100) + '%',
     frac: braceLevel >= 1 ? null : braceLevel,
   }),
+  // Not a cooldownChip: it has two states the shared shape cannot say. Loaded,
+  // it reports what is LEFT in the magazine, which is a count the player spends
+  // deliberately; reloading, it reports the beat filling back up. Before this
+  // the magazine was invisible and the reload arrived as an unexplained second
+  // of silence -- which is exactly how it was reported.
+  crossbow:  () => {
+    const reloading = crossbowReload > 0;
+    return {
+      glyph: 'crossbow',
+      color: reloading ? '#7A6200' : '#FFCC00',
+      lit: !reloading && crossbowMag === CONFIG.crossbowMagazine,
+      label: reloading ? crossbowReload.toFixed(1) + 's'
+        : crossbowMag + '/' + CONFIG.crossbowMagazine,
+      frac: reloading && crossbowReloadFull > 0
+        ? 1 - crossbowReload / crossbowReloadFull
+        : null,
+    };
+  },
   net:       () => cooldownChip('satchel', rangerNetCD, CONFIG.netCooldown,
                                 rangerNet.on ? CONFIG.netDrawMaxSecs : 0),
   fireSword: () => ({ glyph: 'fireSword', color: '#FF7A1F', lit: inv.knightFireSwordTimer > 0,
@@ -16145,15 +16185,42 @@ function drawBlockedFlash() {
 
 /** Ranger: a plain crosshair, the natural read for the crossbow's straight bolts. */
 function drawRangerReticle() {
+  const reloading = crossbowReload > 0;
   const pulse = 0.7 + 0.3 * Math.sin(loopT * 4);
-  ctx.globalAlpha = 0.25 + 0.55 * pulse;
-  ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 1.5;
-  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = 5 + 3 * pulse;
+  // Dark arms while it winds. The tell for "this press will do nothing" has to
+  // be where the eye already is, which is the same argument the charge arc
+  // makes -- the strip is for the deliberate check, not the mid-fight glance.
+  ctx.globalAlpha = reloading ? 0.35 : 0.25 + 0.55 * pulse;
+  ctx.strokeStyle = reloading ? '#5A4A0A' : '#FFCC00'; ctx.lineWidth = 1.5;
+  ctx.shadowColor = '#FFCC00'; ctx.shadowBlur = reloading ? 0 : 5 + 3 * pulse;
   [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
     ctx.beginPath(); ctx.moveTo(dx * 4, dy * 4); ctx.lineTo(dx * 11, dy * 11); ctx.stroke();
   });
-  ctx.shadowBlur = 0; ctx.globalAlpha = 0.9;
-  ctx.fillStyle = '#FFCC00';
+  ctx.shadowBlur = 0;
+
+  if (reloading && crossbowReloadFull > 0) {
+    // One arc winding the magazine back up. It runs faster the more Momentum
+    // he is carrying, which is the only place on screen that the meter's hold
+    // over the reload can actually be seen.
+    const done = 1 - crossbowReload / crossbowReloadFull;
+    ctx.globalAlpha = 0.9; ctx.strokeStyle = '#FFCC00'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 13, -Math.PI / 2, -Math.PI / 2 + done * Math.PI * 2);
+    ctx.stroke();
+  } else {
+    // A block per volley left, spent ones left dim and in place, so the count
+    // reads as a magazine emptying rather than a bar shrinking. Blocks on the
+    // 4px grid the rest of the art uses.
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < CONFIG.crossbowMagazine; i++) {
+      ctx.fillStyle = i < crossbowMag ? '#FFCC00' : '#3A2E00';
+      const w = 3, gap = 2, total = CONFIG.crossbowMagazine * (w + gap) - gap;
+      ctx.fillRect(-total / 2 + i * (w + gap), 15, w, 4);
+    }
+  }
+
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = reloading ? '#5A4A0A' : '#FFCC00';
   ctx.beginPath(); ctx.arc(0, 0, 1.2, 0, Math.PI * 2); ctx.fill();
   ctx.globalAlpha = 1;
 }
@@ -16971,7 +17038,11 @@ export const devHooks = {
   // What Momentum is putting on the FIELD right now, as opposed to what it is
   // worth: the afterimage's ghost count and the sting left on the meter.
   rangerReads: () => ({ ghosts: rangerGhosts.length, sting: momentumSting }),
+  // One lane-D chip as the HUD would draw it, and the lane the hero carries.
+  chip: (kind) => CHIP[kind]?.(),
+  lane: () => LANE_D[selectedChar] || [],
   crossbow: () => ({ mag: crossbowMag, reload: crossbowReload, shot: crossbowShotCD,
+    reloadFull: crossbowReloadFull,
     reloadMult: crossbowReloadMult() }),
   momentum: () => ({ level: rangerMomentum, mult: rangerMomentumMult(),
                      max: TALENTS.stat('fullTilt') }),
