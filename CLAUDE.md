@@ -119,6 +119,13 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **A feature with a front door and a back door?** At least one test comes in
   the front. Every siege test opened with `setMode('siege')`, so not one of them
   could tell whether the menu row a player presses reached anything.
+- **A climb that reads its wait out of `CONFIG`?** That is not independence
+  from the figure. Retuning the pace preset's escalation interval broke three
+  commander tests that never name it: a longer wave gave the garrison time to
+  kill an idle hero, and gave a lull time to open a ceremony -- and a run parked
+  on a ceremony screen never advances a wave. Heal on a cadence, dismiss the
+  ceremony, stop on the event
+  (`retuning-a-shared-figure-breaks-tests-that-never-name-it`).
 - **Advancing a siege?** `clearSiegeWave()` *deletes* the field;
   `killSiegeBoss()` *kills* through the real death sequence. Ten waves
   cleared the first way never enters a death sequence at all, which is

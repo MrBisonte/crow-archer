@@ -145,6 +145,25 @@ Demolition. The only hero whose opening move is thrown at a place rather than at
 
 ## Game loop
 
+### Difficulty
+
+Three rungs -- CALM, FAST, NIGHTMARE -- picked on the character screen with the
+up and down arrows, and remembered between runs. FAST is the default.
+
+A rung moves eleven figures at once: how many crows open the run, how often one
+arrives, how many the field holds, how fast they move and how long they stay
+angry; the arrows, charges and refill you answer them with; and two that are
+about surviving a mistake rather than about the size of the crowd -- HANDICAP's
+strength, and the window after a hit in which nothing else can land.
+`PACE_PRESETS` in `src/legacy/game.js` is the one home for all of them.
+
+NIGHTMARE is not a new difficulty. It is the game as it shipped through round 9,
+figure for figure -- the version the ladder exists because nobody was winning --
+and `src/legacy/pace-ladder.test.ts` fails if a tune moves it. The rungs below it
+keep NIGHTMARE's ammo against a smaller field instead of scaling it down with the
+crows, so the answer-to-density ratio tilts toward the player rather than holding
+constant the way it used to.
+
 ### Single-player
 
 ```mermaid
@@ -266,7 +285,7 @@ flowchart LR
 | **STREAK** | Announcer chain: Double Kill, Multi Kill, Mega Kill, Ultra Kill, Monster Kill |
 | **FEATHERS** | Meta-currency earned from kills, persisted in `localStorage`. Spend on the upgrade tree (`src/sim/upgrades.ts`) in the inventory screen: arrow capacity, HP, pitchfork range, move speed, tool capacity, arrows per pickup, a feather bounty, and a shield on every run |
 | **TALENTS** | Per-character trees bought with mastery, which bosses pay and kills never do. What you own is live; a capstone rite at the top rank is sealed once a run, at the start of a level. See [Talents](talents.md) |
-| **HANDICAP** | `CONFIG.handicap` (0 to 100) rubber-bands crow speed and drop rate for accessibility |
+| **HANDICAP** | Rubber-bands crow speed and drop rate against the player's health. `CONFIG.handicap` (0 to 100) is set by the difficulty rung, and is 0 -- inert -- on NIGHTMARE |
 | **BOUNTIES** | Two active micro-objectives tied to kill streaks, bonus rewards on completion |
 
 ## Map

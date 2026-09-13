@@ -24,7 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
-import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
+import { ONE_SECOND, aimAt, clearArena, press, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -232,15 +232,6 @@ describe('wizard homing bolts', () => {
     expect(angleGap(heading, toDecoy)).toBeGreaterThan(0.5);
   });
 });
-
-/** Presses a hotkey the way a real key-up/key-down pair would, then runs one
- * step so the handler that reads `keys` sees and consumes it. `devHooks.key`
- * dispatches a DOM KeyboardEvent, which needs a browser; this drives the same
- * `keys` map directly, which is what the vitest `node` environment allows. */
-function press(key: string): void {
-  (g.keys() as Record<string, boolean>)[key] = true;
-  g.stepSim(1);
-}
 
 /** Reaches mapselect the real way: the menu hotkey is what sets `gameMode`,
  * so a shortcut through `g.go('mapselect')` would leave a stale gameMode
@@ -549,6 +540,26 @@ describe('the cavern garrison', () => {
 
 describe('the commander', () => {
   /** Runs a cavern waves run forward until its wave counter reaches `wave`. */
+  /**
+   * Takes whatever ceremony has opened, the way a player would: ENTER confirms
+   * a chooser, B hands the talent screen back.
+   *
+   * Emptying the garrison is exactly the lull `openChooserWhenClear` waits for,
+   * so the climb below opens any pick the run has queued -- and a run parked on
+   * a ceremony screen does not advance a wave, so without this the commander
+   * never arrives and `go('boss_fight')` throws on an illegal transition out of
+   * 'chooser'. It surfaced when the pace preset's interval was retuned, which
+   * is the tell that this climb was passing on how long the field stayed busy
+   * rather than on anything it asserts.
+   */
+  function dismissCeremony(): void {
+    for (let i = 0; i < 4; i++) {
+      if (g.state() === 'chooser') press('Enter');
+      else if (g.state() === 'talents') press('b');
+      else return;
+    }
+  }
+
   function runToWave(wave: number): void {
     g.go('menu');
     press('w');
@@ -560,8 +571,22 @@ describe('the commander', () => {
     // run is not decided by a spearman while the clock advances.
     for (let i = 0; i < wave; i++) {
       g.soldiers().length = 0;
-      g.stepSim(g.config().crowEscalationInterval * ONE_SECOND + 2);
+      // Healed every half second rather than once a wave: nobody is holding the
+      // keys, and the garrison that spawns at the end of an interval has the
+      // whole of the next one to work on an idle hero -- see devHooks.healHero.
+      const frames = Math.ceil(g.config().crowEscalationInterval * ONE_SECOND) + 2;
+      for (let f = 0; f < frames; f += 30) {
+        g.healHero();
+        g.stepSim(Math.min(30, frames - f));
+      }
+      dismissCeremony();
     }
+  }
+
+  /** Rides the commander's entrance out. Bounded, and stops on the boss rather
+   *  than on a frame count. */
+  function waitForCommander(): void {
+    for (let i = 0; i < 20 && !g.boss(); i++) { dismissCeremony(); g.healHero(); g.stepSim(30); }
   }
 
   it('does not ride out while the garrison is still holding', () => {
@@ -574,7 +599,7 @@ describe('the commander', () => {
     runToWave(COMMANDER_WAVE);
     // The entrance is a state of its own; walk it the way the brawl tests do.
     expect(['boss_entrance', 'boss_fight']).toContain(g.state());
-    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    waitForCommander();
     expect(g.boss().kind).toBe('commander');
   });
 
@@ -587,7 +612,7 @@ describe('the commander', () => {
 
   it('holds his charge for at least the minimum gap, however the roll lands', () => {
     runToWave(COMMANDER_WAVE);
-    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    waitForCommander();
     g.go('boss_fight');
     const boss = g.boss();
 
@@ -602,7 +627,7 @@ describe('the commander', () => {
 
   it('commits a charge to the heading it picked, not to where the player went', () => {
     runToWave(COMMANDER_WAVE);
-    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    waitForCommander();
     g.go('boss_fight');
     const boss = g.boss();
     const player = g.player() as { x: number; y: number };

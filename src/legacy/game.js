@@ -214,6 +214,8 @@ const CONFIG = {
   // in CHARACTER_STATS (src/sim/arena.ts), and FEATHERS stacks purchased
   // levels on the selected row. A shared figure kept here would be a second
   // home for a number nobody reads, free to be tuned to no effect.
+  // playerHitFlashSecs is the i-frame window after a hit and the flash drawn
+  // during it, and the pace preset owns it now - edit PACE_PRESETS, not this.
   playerRadius: 8, playerHitFlashSecs: 0.3,
   // Enemy hit feedback. The sprite goes flat white for hitFlashWhiteSecs and
   // the knock offset decays across the whole hitFlashSecs, so the recoil
@@ -1054,15 +1056,33 @@ const CONFIG = {
  * Nightmare needed its own. Drop rates are untouched, since more crows already
  * means more drops.
  *
- * Nightmare's baseArrows and arrowRestore are both 25% over their prior values
- * (24->30, 5->6): Nightmare was staying unwinnable because ammo ran out before
- * the crow density did, and this is the small, direct answer rather than a
- * full re-derivation of the density-to-ammo ratio the other two presets use.
+ * The three rows are a difficulty ladder, and `nightmare` is its top rung: it
+ * holds, figure for figure, the game that shipped as the default through round
+ * 9. Nothing was invented above it, because nothing needed to be - that version
+ * was already the one nobody was winning. The rungs below it are what tuning it
+ * down means, and they pull in three directions at once:
+ *
+ *   - fewer crows, arriving further apart, moving slower
+ *   - the same ammo against a smaller field, so the density-to-answer ratio
+ *     tilts toward the player instead of holding constant the way it used to
+ *   - handicap and playerHitFlashSecs, which are about surviving a mistake
+ *     rather than about the size of the crowd
+ *
+ * `handicap` is what HANDICAP reads: below full health crows slow by up to 30%
+ * and drops get likelier, and at full health they speed up 12%. It was 0
+ * everywhere, so the whole module was inert. It stays 0 on nightmare, and has
+ * to: the 12% is a speed-up, so any other value makes the top rung harder than
+ * the version it exists to preserve.
+ *
+ * `playerHitFlashSecs` is the window after a hit in which nothing can land
+ * another one. It is also the flash drawn during it, which is the point rather
+ * than a coupling to unpick: the tell that you are briefly safe lasts exactly
+ * as long as being briefly safe.
  */
 const PACE_PRESETS = {
-  calm:      { crowStartCount:  5, crowEscalationInterval: 12, crowMax: 12, crowAggroTimeout:  4, crowPassiveSpeed:  60, maxArrowsInFlight: 3, baseArrows: 10, baseDynamites: 3, arrowRestore: 5 },
-  fast:      { crowStartCount:  9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5 },
-  nightmare: { crowStartCount: 12, crowEscalationInterval:  2.5, crowMax: 22, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 30, baseDynamites: 5, arrowRestore: 6 },
+  calm:      { crowStartCount: 4, crowEscalationInterval: 14,  crowMax: 10, crowAggroTimeout: 3, crowPassiveSpeed: 55, maxArrowsInFlight: 5, baseArrows: 18, baseDynamites: 5, arrowRestore: 6, handicap: 60, playerHitFlashSecs: 0.5 },
+  fast:      { crowStartCount: 6, crowEscalationInterval:  8,  crowMax: 14, crowAggroTimeout: 5, crowPassiveSpeed: 70, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5, handicap: 30, playerHitFlashSecs: 0.4 },
+  nightmare: { crowStartCount: 9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout: 7, crowPassiveSpeed: 85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5, handicap:  0, playerHitFlashSecs: 0.3 },
 };
 
 /**
@@ -1093,6 +1113,12 @@ function applyPace(name) {
   // The ranger's satchel count matches the archer's dynamite count — same
   // tool tier, nothing asked for a different number.
   CONFIG.resources.satchels.max  = preset.baseDynamites;
+  // The two that are about the player rather than the field. Both were fixed
+  // figures until the ladder needed somewhere to put forgiveness that is not
+  // "fewer crows": HANDICAP was written, tested and then left switched off at
+  // 0, and the i-frame window had never been a dial at all.
+  CONFIG.handicap              = preset.handicap;
+  CONFIG.playerHitFlashSecs    = preset.playerHitFlashSecs;
   // The ranger's ceiling has to sit above the archer's cap, or it becomes the
   // tighter of the two and paces him again -- which is the bug the magazine
   // replaced, arriving from the other side. Checked here because a preset is
@@ -1110,6 +1136,33 @@ function applyPace(name) {
 }
 
 applyPace(CONFIG.pace);
+
+/** The rungs, easiest first. The ladder's order is the object's own, so adding
+ *  a rung is adding a row and nothing else. */
+const PACE_ORDER = Object.keys(PACE_PRESETS);
+
+const PACE_LS_KEY = 'crow_archer_pace_v1';
+
+/** Restores the rung the player last chose, the way TALENTS restores its bank.
+ *  Called from boot, before the ?pace= override, so the query string still
+ *  wins over the save. */
+function loadPace() {
+  try {
+    const saved = localStorage.getItem(PACE_LS_KEY);
+    if (saved && PACE_PRESETS[saved]) applyPace(saved);
+  } catch (_) { /* a hostile save reads as no save */ }
+}
+
+/** Steps one rung and remembers where it stopped. Clamped rather than wrapped:
+ *  a held key that rolls off NIGHTMARE into CALM is how a player starts a run
+ *  on a difficulty they did not pick. */
+function cyclePace(dir) {
+  const i = PACE_ORDER.indexOf(CONFIG.pace);
+  const next = PACE_ORDER[Math.max(0, Math.min(PACE_ORDER.length - 1, i + dir))];
+  if (next === CONFIG.pace) return;
+  applyPace(next);
+  try { localStorage.setItem(PACE_LS_KEY, next); } catch (_) {}
+}
 
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
@@ -15901,7 +15954,8 @@ function _clickTalentTree(e) {
 }
 
 function drawCharSelect(t) {
-  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
+  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──',
+    `MODE: ${modeRule(gameMode).label}  ·  ${CONFIG.pace.toUpperCase()}`);
   const { slots, selected, stripTop, hintY } = charSelectLayout();
 
   CHAR_PANELS.forEach((p, i) => _drawCharPanel(slots[i], p, i === selected, t));
@@ -15912,7 +15966,7 @@ function drawCharSelect(t) {
   // says so, which made this screen the inconsistent one.
   ctx.textAlign = 'center';
   ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
-  ctx.fillText('CLICK OR ← →  SWITCH    ENTER  CONFIRM    ESC  BACK',
+  ctx.fillText('CLICK OR ← →  HERO    ↑ ↓  DIFFICULTY    ENTER  CONFIRM    ESC  BACK',
     CONFIG.canvasW / 2, hintY);
 }
 
@@ -16624,6 +16678,11 @@ function stepGame(dt) {
       // Reads CHAR_PANELS rather than its own list, so a character exists on
       // screen and here at once — see the comment on CHAR_PANELS.
       selectedChar = cyclePanelSelection(CHAR_PANELS, selectedChar, 'char');
+      // Two axes on one screen: left and right pick the hero, up and down pick
+      // the rung. A three-valued choice did not earn a screen of its own, and
+      // the pair of arrows this screen never read was already free.
+      if (keys['ArrowUp'])   { cyclePace(+1); keys['ArrowUp']   = false; }
+      if (keys['ArrowDown']) { cyclePace(-1); keys['ArrowDown'] = false; }
       // Waves lets the player pick the ground; brawl's map is fixed, so it
       // skips straight to the run the way it always has.
       if (keys['Enter']) { transitionTo(picksItsMap(gameMode) ? 'mapselect' : 'playing'); keys['Enter']=false; }
@@ -16918,6 +16977,10 @@ export const devHooks = {
   hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
   setPace: (name) => applyPace(name),
+
+  // The ladder itself, so a test asks the game what the rungs are rather than
+  // keeping a second copy of the list it is checking.
+  paceOrder: () => PACE_ORDER,
   /**
    * The frame tracer, for a headless run that wants the numbers rather than
    * the overlay. `level` takes the same values ?perf does; 'ops' installs the
@@ -17487,8 +17550,10 @@ export function boot() {
 
   const query = new URLSearchParams(location.search);
 
-  // The pace preset is already applied at import; this only layers the ?pace=
-  // override on top, and applyPace is plain assignment so re-running is safe.
+  // The pace preset is already applied at import; this layers the saved rung
+  // and then the ?pace= override on top, in that order, so a query string still
+  // beats a save. applyPace is plain assignment, so re-running is safe.
+  loadPace();
   applyPace(query.get('pace') ?? CONFIG.pace);
 
   canvas = document.getElementById('game');
