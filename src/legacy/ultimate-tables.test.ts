@@ -4,8 +4,10 @@
  * An ultimate is one idea written in several places: what it DOES and what it
  * leaves running (`ULTIMATE`), which meter charges it (`ULTIMATE_CHARGE`), what
  * it looks like when it is ready (`ULTIMATE_AURA`), and the lane-D chip that
- * says so (`LANE_D`). The first three are keyed on the hero and must carry the
- * same set of heroes; the fourth is opted into per hero by listing `'ult'`.
+ * says so (`LANE_D`). `ULTIMATE` and `ULTIMATE_CHARGE` are keyed on the hero
+ * and must carry the same set of heroes; `LANE_D` is opted into per hero by
+ * listing `'ult'`. `ULTIMATE_AURA` is keyed one grain finer, on the ABILITY,
+ * because a hero carries two of those and they are not the same tell.
  *
  * Nothing bound them together when they were written. They agreed, which is not
  * the same as being kept in agreement: a sixth hero, or a hero whose ultimate
@@ -32,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { CHARACTERS } from '../net/protocol';
+import { AURA_IDS } from '../render/ultimate-aura';
 import { ULTIMATE_ICON_ROWS, ULTIMATE_ICON_SIZE } from '../render/ultimate-icons';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -105,10 +108,17 @@ describe('the tables an ultimate is spread across', () => {
     expect(new Set(keysAtDepth(tableBody('ULTIMATE_CHARGE'), 2))).toEqual(new Set(withUltimate));
   });
 
-  it('gives every hero with an ultimate a ready aura', () => {
+  it('gives every ABILITY its own ready aura, not one shared per hero', () => {
     // The aura is the only thing on screen that says the ultimate is up before
-    // the player looks at the HUD. A hero without one has a silent ability.
-    expect(new Set(keysAtDepth(tableBody('ULTIMATE_AURA'), 2))).toEqual(new Set(withUltimate));
+    // the player looks at the HUD. An ability without one is silent; an
+    // ability wearing its sibling's is worse, because it says something and
+    // the thing it says is wrong. That was the state this replaced: the table
+    // was keyed on the hero, so both slots showed the first slot's painting.
+    //
+    // The exact key set, not a count: a length check catches a deletion and
+    // misses an addition, and here the two would cancel out.
+    expect(new Set(keysAtDepth(tableBody('ULTIMATE_AURA'), 2)))
+      .toEqual(new Set(abilityIds().map((a) => a.id)));
   });
 
   it('gives every hero with an ultimate a lane-D chip', () => {
@@ -192,6 +202,14 @@ describe('the icons the renderer holds and the abilities they draw', () => {
     // and misses an addition, and here the two would cancel out.
     expect(new Set(Object.keys(ULTIMATE_ICON_ROWS)))
       .toEqual(new Set(abilityIds().map((a) => a.id)));
+  });
+
+  it('holds ready-aura art for every ability, and none for anything else', () => {
+    // The same join one file over. `ULTIMATE_AURA` in game.js decides which
+    // abilities have a tell; `src/render/ultimate-aura.ts` holds the drawing.
+    // An id in one and not the other is an aura that dispatches into nothing,
+    // which paints an empty frame and reports no error.
+    expect(new Set(AURA_IDS)).toEqual(new Set(abilityIds().map((a) => a.id)));
   });
 
   it('holds a square grid of the size the painter lays out', () => {

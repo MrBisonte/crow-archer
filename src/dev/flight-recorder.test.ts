@@ -34,6 +34,20 @@ describe('classify', () => {
     expect(classify(pulse(), pulse(), false, true)).toBe('no-frames');
   });
 
+  it('is quiet on no-frames outside a running state: a static screen owes no frames', () => {
+    // Menu, gameover and the talent chooser do not animate by design, so a
+    // stalled frame clock there is the screen at rest, not a freeze. Before
+    // this gate, static-screen no-frames was 11 of the 17 alarms on record,
+    // every one of them noise.
+    const menu = pulse({ state: 'menu' });
+    expect(classify(menu, menu, false, true)).toBeNull();
+  });
+
+  it('still names no-frames in the boss fight, where the game owes frames', () => {
+    const bf = pulse({ state: 'boss_fight' });
+    expect(classify(bf, bf, false, true)).toBe('no-frames');
+  });
+
   it('is quiet while the tab is hidden', () => {
     expect(classify(pulse(), pulse(), true, false)).toBeNull();
   });

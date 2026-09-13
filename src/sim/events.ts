@@ -83,7 +83,10 @@ export type GameEvent =
   | { type: 'SPLASH'; x: number; y: number }
   // Player actions
   | { type: 'WEAPON_FIRED'; kind: WeaponKind }
-  | { type: 'ACTION_BLOCKED' }
+  // `reason` is optional and is shown to the player verbatim when present.
+  // Every ultimate refusal that is not simply 'it is already running' carries
+  // one -- see BLOCKED in game.js, which is the one home for the strings.
+  | { type: 'ACTION_BLOCKED'; reason?: string }
   | { type: 'WHIRLWIND_START'; x: number; y: number }
   | { type: 'WHIRLWIND_TICK'; x: number; y: number }
   | { type: 'WHIRLWIND_END'; x: number; y: number }
@@ -116,6 +119,14 @@ export type GameEvent =
   // is the same event for the opposite condition, and both exist for the same
   // reason: the useful moment is the threshold, not the meter.
   | { type: 'RANGER_MOMENTUM'; x: number; y: number }
+  // The other edge. Losing the cap is the moment HARPOON stops being
+  // pressable, so it is worth as much of a tell as gaining it.
+  | { type: 'RANGER_MOMENTUM_LOST'; x: number; y: number }
+  // He spent a full meter to name one body. Bosses only, in practice.
+  | { type: 'RANGER_MARK'; x: number; y: number }
+  // A weapon has gone quiet on purpose. Fires once per magazine, so the
+  // silence that follows has a cause the ear can attach to.
+  | { type: 'WEAPON_RELOADING'; kind: string; secs: number; x: number; y: number }
   | { type: 'ARCHER_BRACED'; x: number; y: number }
   /**
    * A power arrow has gone through a body. `left` is how many more it can pass

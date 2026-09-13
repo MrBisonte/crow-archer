@@ -68,8 +68,19 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   `_skeletonGrids` and `_guardGrids` do. `stamps.get` returns a cached
   canvas *without calling the painter*, so an unmemoized grid is built
   and thrown away every frame. See `docs/design-patterns.md`.
+- **Drawing a mark one cell wide?** It will not reach the screen. The canvas
+  only ever scales DOWN, and a fractional factor deletes whole pixel rows, so a
+  hairline arrives as dashes or as nothing. `dot` throws below `THIN` for that
+  reason; four such marks shipped in the 1px aura redraw, each with a comment
+  defending it (`a-hairline-mark-is-deleted-not-thinned`).
 - **Painting structure in `C.edge`?** Don't. That is the outline seam
   and a source-text test fails by name.
+- **Painting an aura on a hero?** Draw it OUTSIDE the silhouette.
+  `drawUltimateAura` goes down before the body, on purpose, so anything
+  inside the outline is painted over a moment later. Correct code, green
+  tests, nothing on screen. Check a new one against the same hero with
+  the ability on cooldown: the only difference is what you drew
+  (`an-aura-under-the-sprite-is-invisible`).
 - **Changing a stride?** Four separate legs on every frame. Pairs two
   columns apart fuse under the outline pass for exactly one frame.
 - **Rebuilding a character?** Read `docs/character-rebuild-playbook.md`
@@ -100,6 +111,14 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 
 ## Tests
 
+- **A comment says a feature is disabled because it is unfinished?** Read the
+  code before you believe it. SIEGE shipped hidden behind six lines explaining
+  that nothing drove its spawners, long after everything did, and two tests
+  asserted the comment rather than the behaviour
+  (`a-comment-outlived-the-code-that-made-it-true`).
+- **A feature with a front door and a back door?** At least one test comes in
+  the front. Every siege test opened with `setMode('siege')`, so not one of them
+  could tell whether the menu row a player presses reached anything.
 - **Advancing a siege?** `clearSiegeWave()` *deletes* the field;
   `killSiegeBoss()` *kills* through the real death sequence. Ten waves
   cleared the first way never enters a death sequence at all, which is
@@ -119,6 +138,21 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Asserting a table's shape?** Compare the exact key set, not
   `toHaveLength(n)`. A length check catches a deletion and misses an
   addition.
+- **Writing a helper that freezes, parks or pins its target?** Write the
+  unfrozen case too, in the same file. The workaround marks the spot where the
+  ability meets a moving world, and its justification is a defect report: nine
+  net tests passed against a net that could not catch anything that was
+  running at you (`a-workaround-in-a-test-is-a-bug-report`).
+- **Waiting a fixed number of frames for something to happen?** Stop on the
+  event instead. A count that passes only because some other figure happens to
+  be slow measures that figure, and it flips the day someone tunes it.
+- **Setting a piece of state, then driving the system?** Check whether what
+  you are driving is what WRITES that state. Running is what fills Momentum, so
+  three tests that set a level and then ran were measuring a full meter by
+  frame two. Pin the value every frame, and say so
+  (`setting-a-level-then-driving-what-changes-it`).
+- **Asserting something that lasts a fraction of a second?** Assert it on the
+  frame it fires. A flash of 0.16 s is gone before a ten-frame loop ends.
 - **Measuring a base off the field?** Own nothing first, and say so in the
   test. Grants persist across tests in a file by design, so a baseline that
   relies on a rule elsewhere to make an earlier test's leftovers harmless is
@@ -133,6 +167,27 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   advanced, so a crow that sits still alone outruns your measurement in a
   suite. Counting survivors is the wrong assertion while waves spawn:
   compare by identity.
+
+- **A test failed once and will not reproduce?** Check whether the failure was
+  a TIMEOUT before hunting logic. `Test timed out in 5000ms` is not an
+  AssertionError, so a log grep for one finds nothing and it reads as a
+  mystery. The slowest tests here run ~2 s idle; `testTimeout` is 20 s for that
+  reason (`a-five-second-timeout-is-thin-for-a-sim-suite`).
+- **A flake you cannot reproduce?** Enumerate what could produce that exact
+  failure and pin each one, so the next occurrence names its reason rather than
+  restarting the hunt. Sweep the seed to exonerate the map, own nothing to
+  exonerate a grant, and revert each new guard to check it can fail at all
+  (`a-flake-you-cannot-reproduce-still-has-named-causes`).
+
+## Feel
+
+- **Giving something a capacity — a magazine, a clip, a charge count?** Give it
+  a RATE too, and measure the frames the burst occupies. Four volleys with no
+  rate left in four frames, so the clip read as one shot and the reload after
+  it read as a jam (`a-magazine-with-no-rate-reads-as-one-shot`).
+- **A report describes a FEEL rather than a number?** Instrument the timing.
+  "It reads as one shot" was exactly right about the feel and said nothing
+  about the count, which was correct throughout.
 
 ## Deleting a rule
 

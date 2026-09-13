@@ -234,6 +234,117 @@ costs nothing but never stopping and takes the ranger from 6.0 to 4.6. The
 smaller prize is deliberate. He is already the fastest body in the game, so the
 thing he is being paid to do is the thing he was going to do anyway.
 
+#### The magazine, which is the pace he was missing
+
+The crossbow had no cadence of its own. Its only limit was `maxArrowsInFlight`,
+a figure sized for the archer's single arrow, and it does not survive contact
+with a weapon that spends four bolts a press: on `calm` the cap is 3, so FOURTH
+BOLT's volley of four was refused on every press for the whole run and the
+primary weapon was simply gone. On `fast` it refused often enough that the
+talent bought a third LESS output than not taking it.
+
+| The crossbow | Constant | Figure | What it does |
+|---|---|---|---|
+| Volleys before the beat | `crossbowMagazine` | 4 | a magazine, not a per-shot timer |
+| Between volleys in it | `crossbowShotSecs` | 0.22 s | the weapon's own rate |
+| The beat, standing still | `crossbowReloadSecs` | 1.1 s | the slowest he ever reloads |
+| What a full meter leaves | `crossbowReloadFullMult` | 0.45 | a moving ranger reloads in half |
+| Bolts the array will hold | `crossbowCeiling` | 48 | a ceiling, never a pace |
+
+The magazine needs BOTH figures, and the first version of it shipped with only
+one. Four volleys with no rate between them left in four frames -- 67 ms, which
+no eye separates -- so a full clip read as a single shot followed by a second of
+silence that looked like the weapon jamming. The count was right and the feel
+was nonsense. At 0.22 s the four are countable: 0.23 s apart, then the reload,
+then four more.
+
+The reload is now audible and visible, which it was not when it shipped. It
+emits `WEAPON_RELOADING` once per magazine, so the silence has a cause the ear
+can attach to; it takes a lane-D chip of its own, which reports what is left in
+the magazine while loaded and the beat filling while it winds; and the reticle
+carries both -- a block per volley left, spent ones dim and in place, replaced
+by a single arc winding the magazine back up. The reticle is where the eye
+already is, which is the same argument the charge arc makes, and the arc runs
+faster the more Momentum he holds -- the only place on screen the meter's hold
+over the reload can be seen at all.
+
+Momentum buys the RELOAD down and not the rate. Shortening both would compound
+into roughly double his output at the cap, and the reload is the figure his
+answer named. So standing still costs him twice and the two halves of the character pull the same way instead
+of trading against each other. The ceiling replaces the cap in the fire path
+and does nothing else: it bounds the array, sits above the widest legal burst,
+and `applyPace` throws if a preset ever leaves it at or under the arrow cap.
+
+#### What Momentum looks like, as opposed to what it is worth
+
+The meter gates an ultimate, multiplies every bolt and buys the reload down,
+and for three rounds it existed only as a chip in the strip. None of those
+three are decisions a player can make from a number in the corner while he is
+running, so the meter now reads off the field as well.
+
+| The meter shows | Constant | Figure | Where |
+|---|---|---|---|
+| Dust, from the first step | `rangerDustEvery` | 0.14 s | at his heels, any meter above zero |
+| Afterimage, from | `rangerAfterimageFrom` | 0.5 | his own silhouette, not a glow |
+| Ghosts at a full meter | `rangerGhostMax` | 3 | spaced by distance, not by frames |
+| A flash at each edge | `momentumStingSecs` | 0.16 s | white on the chip, gaining AND losing |
+
+Two of those choices are worth their reasons. The afterimage is his own sprite
+rather than a glow, because a glow is what the fire-arrow pickups mean and the
+two must not be confused. And the sting fires at BOTH edges: losing the cap is
+the moment HARPOON stops being pressable, and a player who never sees that
+happen cannot learn the rule.
+
+A bolt carries the meter it was fired at rather than the live one, so the
+streak behind it is the bonus that bolt will actually apply.
+
+#### The mark, which is what the meter is finally spent on
+
+Momentum multiplied and shortened and gated, and it was never SPENT. The mark
+is the sink: a full meter names one body, and naming it empties the meter, so
+the ranger chooses between the mark and HARPOON rather than getting both off
+the same cap.
+
+| The mark | Constant | Figure | Note |
+|---|---|---|---|
+| Lasts | `rangerMarkSecs` | 8 s | or until the body it named is gone |
+| Worth, to a boss | `rangerMarkCritMult` | 2.5 | on top of everything else the arrow carries |
+| Reaches | `rangerMarkRadius` | 420 px | ignored while a boss is in play: the boss wins |
+
+Boss damage and not damage generally, which is the honest limitation. An
+ordinary body has one hit point and dies to any bolt, so a crit on a crow is a
+number nobody can see. That is why the target rule prefers the boss outright:
+the mark is the ranger's answer to the thing 0.7 a bolt cannot dent, and on an
+ordinary wave the key is doing very little.
+
+The net moved to its own key to make room for it. `Q` had been in the manual
+for years bound to nothing, which is now a test rather than a promise -- see
+`src/legacy/key-doc.test.ts`.
+
+#### The net, which is not about damage at all
+
+It never kills what it catches, on purpose. What it is worth is the time it
+takes off the field, and that comes in two parts with different rules.
+
+| The net does | Constant | Figure | To what |
+|---|---|---|---|
+| Catch, on landing, at a tap | `netHoldMin` | 0.8 s | everything under the mesh |
+| Catch, at a full draw | `netHoldMax` | 2 s | everything under the mesh |
+| Drag, afterwards | `netSlowMult` | 0.4 | anything standing in the mat |
+| Damage, either way | `netDamage` | 0.9 | under one hit point, so it never kills |
+| Flight | `netSpeed` | 2000 px/s | see below |
+| Widest mesh | `netRadiusMax` | 70 px | at a full draw |
+
+The catch stops a body outright and the drag only slows one, which is why
+HOLDFAST doubles damage against the first and not the second: the rite is about
+what the net HELD.
+
+The flight speed is a correctness figure rather than a feel one. The net is
+aimed at a point, so its flight is a gap the target walks out of: at the 420 it
+shipped with, a full-draw throw was in the air 0.76 s while an aggro crow --
+`crowAggroSpeed` 200, doubled by the wave escalation -- covered 305 px against
+the 70 px mesh, and landed behind everything that was coming at you.
+
 ### The knight stays in contact
 
 Bloodlust does not reduce to one multiplier, because the swing that lands is
@@ -365,6 +476,31 @@ the charge and can press again.
 button, and that redundancy is what pays for the ultimate: the key fires it
 while it is up, the button always fires the plain special. Nothing is taken
 away from a player who wants the dynamite.
+
+### Being told why it will not fire
+
+Three of the ten audit findings were one defect wearing different clothes: the
+game refused a press and gave no reason. A playtest called it "the ulti is not
+firing", and the ultimate was working exactly as designed the whole time.
+
+| The wait | Constant | Figure | What changed |
+|---|---|---|---|
+| First charge | `ultimateCooldown` | 60 s | no longer paid at the START of a run |
+| Pick waits for a lull | `chooserLullRadius` | 320 px | unchanged |
+| ...but not forever | `chooserLullTimeout` | 12 s | new: the wait is bounded |
+
+A run now begins with the timer already spent, because a cooldown is what a use
+COSTS and not an entry fee; a measured run went 69 s before the pick screen
+found a quiet enough field, and for all of it the key did nothing and nothing
+said why. What still stands between the player and the ability at the start is
+the pick, and the pick announces itself: the chip reads `PICK IT`, or
+`ON A LULL` when one is queued behind a busy field.
+
+Every refusal that is not simply "it is already running" now names a fix that
+exists -- no arrows, a full meter, somewhere to land, room for the line -- and
+the reason is shown on the hero, not only sounded. The strings have one home in
+`BLOCKED`, and a test drives all ten ultimates with nothing in hand and fails
+any refusal that arrives without one.
 
 ### What each one is worth
 

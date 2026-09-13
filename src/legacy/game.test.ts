@@ -18,7 +18,7 @@ import {
   type GuardKind,
 } from '../sim/guards';
 import { TOWER_DAMAGE, TOWER_MAX_HP, TOWER_SPAN, towerCentre, type Tower } from '../sim/towers';
-import { barrierGates } from '../sim/bastion-terrain';
+import { barrierGates, towerSites } from '../sim/bastion-terrain';
 import { mulberry32 } from '../sim/rng';
 import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
@@ -32,6 +32,19 @@ import { spriteCanvas, spriteFlashCanvas } from '../render/pixel-sprite';
 import {
   filledRuns, gridColours, gridSize, installStubCanvas, invalidColours, raggedRows,
 } from '../render/grid-testkit';
+
+/**
+ * How many towers the bastion stands on the grid the game is currently on.
+ *
+ * Derived, never written down. The count follows the grid's height, so a
+ * literal here would pin the map size the way a literal `2` did before the
+ * towers learned to scale -- and the way a literal `1` did before a tower grew
+ * from one tile to a TOWER_SPAN block.
+ */
+const towerCount = (): number => {
+  const c = g.config();
+  return towerSites(c.rows, c.cols).length;
+};
 
 
 /**
@@ -2717,9 +2730,9 @@ describe('area effects reach the cavern garrison', () => {
     p.aimAngle = 0;
     const soldiers = spearmenAt(p.x + 60, p.y);
 
-    g.shift();
+    g.pressNet();
     g.holdNet(g.config().netDrawMaxSecs);
-    g.shiftUp();
+    g.releaseNet();
 
     // The net flies to a point rather than stopping on contact, so the
     // garrison has to be standing where it lands for this to mean anything.
@@ -2759,6 +2772,477 @@ describe('area effects reach the cavern garrison', () => {
   });
 });
 
+describe('the net key and the mark', () => {
+  function ranger(): void {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+  }
+
+  it('answers the net on its own key, and no longer on the sniper hold', () => {
+    ranger();
+    g.pressNet();
+    expect(g.rangerNet().drawing).toBe(true);
+    g.releaseNet();
+
+    // Shift is the mark now. It must not start a net, whatever else it does.
+    ranger();
+    g.shift();
+    expect(g.rangerNet().drawing).toBe(false);
+  });
+
+  it('refuses the mark under a full meter, and empties the meter when it lands', () => {
+    ranger();
+    g.spawnCrow();
+    const crows = g.crows() as Array<{ x: number; y: number }>;
+    const crow = crows[0];
+    if (crow === undefined) throw new Error('no crow to mark');
+    const p = g.player() as { x: number; y: number };
+    crow.x = p.x + 40; crow.y = p.y;
+
+    g.setMomentum(0.99);
+    g.mark();
+    expect(g.rangerMark()).toBeNull();
+
+    g.setMomentum(1);
+    g.mark();
+    expect(g.rangerMark()).not.toBeNull();
+    // Spent, not merely required: the meter is what the mark costs.
+    expect((g.momentum() as { level: number }).level).toBe(0);
+  });
+
+  it('multiplies what an arrow is worth to the boss it named', () => {
+    g.pick('ranger');
+    const c = g.config() as { rangerMarkCritMult: number };
+    enterBossFight();
+    const boss = g.boss();
+    expect(boss).toBeTruthy();
+
+    expect(g.markMult(boss)).toBe(1);
+    g.setMomentum(1);
+    g.mark();
+    expect(g.rangerMark()).not.toBeNull();
+    expect(g.markMult(boss)).toBe(c.rangerMarkCritMult);
+  });
+
+  it('lets the mark go when it runs out', () => {
+    ranger();
+    g.spawnCrow();
+    const crows = g.crows() as Array<{ x: number; y: number; heldTimer: number }>;
+    const crow = crows[0];
+    if (crow === undefined) throw new Error('no crow to mark');
+    const p = g.player() as { x: number; y: number };
+    crow.x = p.x + 40; crow.y = p.y;
+    // Parked, so the crow does not reach him and die mid-measurement.
+    crow.heldTimer = 999;
+
+    g.setMomentum(1);
+    g.mark();
+    expect(g.rangerMark()).not.toBeNull();
+
+    const secs = (g.config() as { rangerMarkSecs: number }).rangerMarkSecs;
+    stepPast(Math.ceil(secs * ONE_SECOND) + 2);
+    expect(g.rangerMark()).toBeNull();
+  });
+});
+
+describe('Momentum on the field', () => {
+  type Reads = { ghosts: number; sting: number };
+  const reads = () => g.rangerReads() as Reads;
+  const keys = () => g.keys() as Record<string, boolean>;
+
+  function rangerRunning(): void {
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    for (const k of Object.keys(keys())) keys()[k] = false;
+  }
+
+  /**
+   * Holds right for `frames`, which is the only way the meter ever fills.
+   *
+   * `hold` pins the meter at a level every frame. Running FILLS it, so a test
+   * that sets a level and then runs is measuring a full meter by frame two --
+   * which is exactly how the first draft of these tests lied to me.
+   */
+  function run(frames: number, hold?: number): void {
+    const right = (g.config() as { keys: { right: string } }).keys.right;
+    keys()[right] = true;
+    for (let i = 0; i < frames; i++) {
+      if (hold !== undefined) g.setMomentum(hold);
+      g.healHero();
+      g.stepSim(1);
+    }
+    keys()[right] = false;
+  }
+
+  it('leaves no afterimage under the threshold, and trails one over it', () => {
+    rangerRunning();
+    const from = (g.config() as { rangerAfterimageFrom: number }).rangerAfterimageFrom;
+
+    run(20, from - 0.2);
+    expect(reads().ghosts).toBe(0);
+
+    run(30, 1);
+    expect(reads().ghosts).toBeGreaterThan(0);
+  });
+
+  it('thins the afterimage out as the meter falls', () => {
+    rangerRunning();
+    run(30, 1);
+    const full = reads().ghosts;
+
+    rangerRunning();
+    run(30, 0.6);
+    expect(reads().ghosts).toBeLessThan(full);
+  });
+
+  it('stings the meter at both edges of the cap', () => {
+    rangerRunning();
+    let lost = 0;
+    g.onEvent((e: { type: string }) => { if (e.type === 'RANGER_MOMENTUM_LOST') lost++; });
+
+    // Up over the cap. Checked at once: the sting is a flash, not a state,
+    // and it is gone again within a fifth of a second.
+    g.setMomentum(0.98);
+    run(2);
+    expect(reads().sting).toBeGreaterThan(0);
+    expect(lost).toBe(0);
+
+    // And back off it. Standing still is what drops the meter.
+    g.healHero(); g.stepSim(1);
+    expect(lost).toBe(1);
+    expect(reads().sting).toBeGreaterThan(0);
+  });
+
+  it('sends a bolt out carrying the meter it was fired at, not the later one', () => {
+    rangerRunning();
+    g.setMomentum(1);
+    (g.inv() as { arrows: number }).arrows = 99;
+    g.shoot();
+    g.stepSim(1);
+
+    const bolt = (g.arrows() as Array<{ bolt?: boolean; mo?: number }>).find((a) => a.bolt);
+    expect(bolt).toBeDefined();
+    const fired = bolt?.mo ?? 0;
+    expect(fired).toBeGreaterThan(0.9);
+
+    // The meter drains behind it; the bolt already in the air keeps its own,
+    // so the streak the player watches is the bonus that bolt will apply.
+    g.setMomentum(0);
+    for (let i = 0; i < 3; i++) g.stepSim(1);
+    expect(bolt?.mo).toBe(fired);
+  });
+});
+
+describe('the ranger crossbow', () => {
+  /**
+   * A ranger on open ground at a given pace, owning exactly the bolt talent
+   * asked for.
+   *
+   * The grant is set both ways rather than only up. Grants persist across
+   * tests in this file by design, so a baseline that does not clear FOURTH
+   * BOLT measures an earlier test's leftovers instead of a plain crossbow
+   * (`inert-leftovers-go-live-with-the-rule`).
+   */
+  function rangerOnPace(pace: string, fourthBolt: number): void {
+    g.setPace(pace);
+    g.pick('ranger');
+    g.go('playing');
+    clearArena();
+    (g.talents() as { grant: (id: string, n: number) => void }).grant('fourthBolt', fourthBolt);
+  }
+
+  /** Ammo the quiver never runs out of -- this is measuring cadence, not supply. */
+  function topUp(): void {
+    (g.inv() as { arrows: number }).arrows = 99;
+  }
+
+  /** Presses fire every frame for `frames` and counts the volleys that left. */
+  function fireFor(frames: number): number {
+    let volleys = 0;
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'crossbow') volleys++;
+    });
+    for (let i = 0; i < frames; i++) { topUp(); g.shoot(); g.stepSim(1); }
+    return volleys;
+  }
+
+  /**
+   * Spends a whole magazine, holding the meter where the caller put it.
+   *
+   * Waits for each volley to actually leave rather than pressing once per
+   * frame. The crossbow has a rate now, so a press-per-frame loop lands ONE
+   * volley and returns with the magazine still nearly full -- which is how
+   * this helper started reporting that the reload never fired.
+   */
+  function emptyMagazine(momentum: number): void {
+    const mag = (g.config() as { crossbowMagazine: number }).crossbowMagazine;
+    let fired = 0;
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'crossbow') fired++;
+    });
+    for (let f = 0; f < 90 && fired < mag; f++) {
+      g.setMomentum(momentum);
+      topUp();
+      g.shoot();
+      g.stepSim(1);
+    }
+    expect(fired, 'the magazine never emptied').toBe(mag);
+    g.setMomentum(momentum);
+  }
+
+  function reloadLeft(): number {
+    return (g.crossbow() as { reload: number }).reload;
+  }
+
+  for (const pace of ['calm', 'fast', 'nightmare']) {
+    // The regression. maxArrowsInFlight is 3 on `calm` and FOURTH BOLT asks
+    // for a volley of 4, so the old gate refused every press for the whole
+    // run -- a talent you pay for taking the primary weapon away.
+    it('fires on ' + pace + ', with the fourth bolt and without', () => {
+      rangerOnPace(pace, 0);
+      expect(fireFor(180)).toBeGreaterThan(0);
+      rangerOnPace(pace, 1);
+      expect(fireFor(180)).toBeGreaterThan(0);
+    });
+
+    // The other half of the same bug: on `fast` the cap did not refuse the
+    // volley outright, it just refused it more often, and the talent bought a
+    // third less output than not taking it.
+    it('the fourth bolt never lowers his output on ' + pace, () => {
+      const stat = () => (g.talents() as { stat: (id: string) => number }).stat('fourthBolt');
+      rangerOnPace(pace, 0);
+      const plain = fireFor(180) * stat();
+      rangerOnPace(pace, 1);
+      const upgraded = fireFor(180) * stat();
+      expect(upgraded).toBeGreaterThanOrEqual(plain);
+    });
+  }
+
+  // The defect this test exists for: a magazine with no RATE. Every volley in
+  // it left on a consecutive frame -- four volleys in 67 ms -- so the clip read
+  // as one shot and the reload that followed read as the weapon jamming. The
+  // count was right and the feel was nonsense, and no test noticed because
+  // every one of them only asked whether volleys came out at all.
+  it('spaces the volleys inside a magazine, instead of dumping them in four frames', () => {
+    rangerOnPace('fast', 0);
+    const c = g.config() as { crossbowMagazine: number; crossbowShotSecs: number };
+    const frames: number[] = [];
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED' && e.kind === 'crossbow') frames.push(seen);
+    });
+    let seen = 0;
+    for (; seen < 90 && frames.length < c.crossbowMagazine; seen++) {
+      topUp(); g.shoot(); g.stepSim(1);
+    }
+    expect(frames).toHaveLength(c.crossbowMagazine);
+
+    // Consecutive frames would be a gap of 1. The gap has to be the weapon's
+    // own rate, in frames, give or take the frame it is sampled on.
+    const wanted = Math.floor(c.crossbowShotSecs * ONE_SECOND);
+    for (let i = 1; i < frames.length; i++) {
+      const gap = (frames[i] ?? 0) - (frames[i - 1] ?? 0);
+      expect(gap, `volley ${i} came ${gap} frames after ${i - 1}`)
+        .toBeGreaterThanOrEqual(wanted);
+    }
+  });
+
+  // The reload was audible to nobody and visible nowhere: it arrived as a
+  // second of silence with no cause on screen, which is how it was reported.
+  it('announces the reload once per magazine, and says how long it is', () => {
+    rangerOnPace('fast', 0);
+    const said: Array<{ kind?: string; secs?: number }> = [];
+    g.onEvent((e: { type: string; kind?: string; secs?: number }) => {
+      if (e.type === 'WEAPON_RELOADING') said.push(e);
+    });
+    emptyMagazine(0);
+    expect(said).toHaveLength(1);
+    expect(said[0]?.kind).toBe('crossbow');
+    expect(said[0]?.secs).toBeGreaterThan(0);
+  });
+
+  it('carries a crossbow chip in the ranger lane, and it reports both states', () => {
+    rangerOnPace('fast', 0);
+    expect(g.lane()).toContain('crossbow');
+
+    const chip = () => g.chip('crossbow') as
+      { label: string; frac: number | null; color: string };
+    const mag = (g.config() as { crossbowMagazine: number }).crossbowMagazine;
+    // Loaded: it reports what is LEFT, which is a count he spends deliberately.
+    expect(chip().label).toBe(mag + '/' + mag);
+    expect(chip().frac).toBeNull();
+
+    emptyMagazine(0);
+    // Reloading: the beat, filling. A fraction, so the bar has something to do.
+    expect(chip().label).toMatch(/^[0-9.]+s$/);
+    expect(chip().frac).not.toBeNull();
+    expect(chip().frac ?? 1).toBeLessThan(1);
+  });
+
+  it('measures the reload bar against the beat it was given, not the live one', () => {
+    rangerOnPace('fast', 0);
+    emptyMagazine(0);
+    const before = (g.chip('crossbow') as { frac: number | null }).frac ?? 0;
+    // Momentum moves mid-reload. A bar dividing by the LIVE figure would jump
+    // backwards here; one that remembers what it was set to cannot.
+    g.setMomentum(1);
+    g.stepSim(1);
+    const after = (g.chip('crossbow') as { frac: number | null }).frac ?? 0;
+    expect(after).toBeGreaterThanOrEqual(before);
+  });
+
+  it('stops for a beat once the magazine is out, and starts again after it', () => {
+    rangerOnPace('fast', 0);
+    expect(reloadLeft()).toBe(0);
+    emptyMagazine(0);
+    expect(reloadLeft()).toBeGreaterThan(0);
+
+    // Mid-beat the press does nothing at all -- that is the pacing.
+    expect(fireFor(1)).toBe(0);
+
+    const secs = (g.config() as { crossbowReloadSecs: number }).crossbowReloadSecs;
+    stepPast(Math.ceil(secs * ONE_SECOND) + 2);
+    expect(reloadLeft()).toBe(0);
+    expect(fireFor(1)).toBe(1);
+  });
+
+  it('shortens the beat by the meter, so standing still costs him twice', () => {
+    rangerOnPace('fast', 0);
+    emptyMagazine(0);
+    const cold = reloadLeft();
+
+    rangerOnPace('fast', 0);
+    emptyMagazine(1);
+    const hot = reloadLeft();
+
+    const full = (g.config() as { crossbowReloadFullMult: number }).crossbowReloadFullMult;
+    expect(hot).toBeLessThan(cold);
+    expect(hot / cold).toBeCloseTo(full, 2);
+  });
+
+  it('keeps a ceiling no legal burst can reach, on any pace', () => {
+    // The volley half of the ceiling check lives here rather than in applyPace,
+    // because the widest volley is a talent figure and the game may only read
+    // it through TALENTS -- talent-stats-wired.test.ts refuses the raw read.
+    for (const pace of ['calm', 'fast', 'nightmare']) {
+      rangerOnPace(pace, 1);
+      const c = g.config() as { crossbowCeiling: number; crossbowMagazine: number;
+        maxArrowsInFlight: number };
+      const widest = (g.talents() as { stat: (id: string) => number }).stat('fourthBolt');
+      expect(c.crossbowCeiling).toBeGreaterThan(c.crossbowMagazine * widest);
+      expect(c.crossbowCeiling).toBeGreaterThan(c.maxArrowsInFlight);
+    }
+  });
+});
+
+describe('a refused ultimate says why', () => {
+  type Blocked = { type: string; reason?: string };
+
+  function watch(): Blocked[] {
+    const seen: Blocked[] = [];
+    g.onEvent((e: Blocked) => { if (e.type === 'ACTION_BLOCKED') seen.push(e); });
+    return seen;
+  }
+
+  function onTheField(hero: string): void {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+  }
+
+  it('names the pick when the timer is spent and nothing has been chosen', () => {
+    onTheField('archer');
+    g.setUltimateCD(0);
+    const seen = watch();
+    g.special('key');
+    const reasons = seen.map((e) => e.reason).filter(Boolean);
+    expect(reasons).toContain(g.blockedReasons().UNPICKED);
+  });
+
+  it('says the field has to clear while a pick is queued behind a lull', () => {
+    onTheField('archer');
+    g.setUltimateCD(0);
+    // A pick waiting in the queue is a different answer from never having had
+    // one, and the two used to be the same silence.
+    g.chooserQueue().push({ kind: 'ultimate', offers: ['headshot'], cursor: 0 });
+    const seen = watch();
+    g.special('key');
+    expect(seen.map((e) => e.reason)).toContain(g.blockedReasons().WAITING_LULL);
+  });
+
+  it('stays quiet while it is merely cooling, because the chip is counting', () => {
+    onTheField('archer');
+    g.setUltimateSlot(g.ULTIMATE_SLOT.FIRST);
+    g.setUltimateCD(30);
+    const seen = watch();
+    g.special('key');
+    expect(seen.filter((e) => e.reason).length).toBe(0);
+  });
+
+  it('takes the pick anyway once the lull has been waited out', () => {
+    onTheField('archer');
+    g.chooserQueue().push({ kind: 'ultimate', offers: ['headshot'], cursor: 0 });
+    // Crowded, and it has to STAY crowded. Parked with heldTimer, which is the
+    // one way a crow sits still while the run's escalation clock advances --
+    // and re-parked every frame, because the hold ticks down like everything
+    // else. A first draft just spawned them and stepped, and by the time the
+    // timeout arrived the field had cleared itself: the test passed with the
+    // timeout reverted, which is how I know it was measuring nothing.
+    const p = g.player() as { x: number; y: number };
+    for (let i = 0; i < 6; i++) g.spawnCrow();
+    const crowd = g.crows() as Array<{ x: number; y: number; heldTimer: number }>;
+    const park = (): void => {
+      for (const c of crowd) { c.x = p.x + 20; c.y = p.y + 20; c.heldTimer = 9999; }
+    };
+
+    const timeout = (g.config() as { chooserLullTimeout: number }).chooserLullTimeout;
+    park();
+    expect(g.chooser()).toBeNull();
+
+    // Short of the timeout it must still be waiting -- otherwise this test
+    // would pass on a build with no lull check at all.
+    for (let i = 0; i < Math.floor(timeout * ONE_SECOND) - 10; i++) {
+      park(); g.healHero(); g.stepSim(1);
+    }
+    expect(g.chooser()).toBeNull();
+
+    for (let i = 0; i < 30; i++) { park(); g.healHero(); g.stepSim(1); }
+    expect(g.chooser()).not.toBeNull();
+  });
+
+  // The coverage answer: not HARPOON alone. Every ultimate is driven with
+  // nothing in hand, and any refusal any of them emits has to name a fix.
+  it('gives a reason with every refusal, for all ten', () => {
+    const slots = g.ULTIMATE_SLOT as { FIRST: string; SECOND: string };
+    let refusals = 0;
+    for (const hero of ['archer', 'wizard', 'knight', 'ranger', 'sapper']) {
+      for (const slot of [slots.FIRST, slots.SECOND]) {
+        onTheField(hero);
+        g.setUltimateSlot(slot);
+        g.setUltimateCD(0);
+        // Nothing in hand: no ammo, no focus, no meter.
+        const inv = g.inv() as Record<string, number>;
+        inv.arrows = 0; inv.focus = 0; inv.dynamites = 0; inv.satchels = 0;
+        g.setMomentum(0);
+
+        const seen = watch();
+        g.special('key');
+        for (const e of seen) {
+          refusals++;
+          expect(e.reason, `${hero}/${slot} refused without saying why`)
+            .toBeTruthy();
+        }
+      }
+    }
+    // Not vacuous: at least the two ammo-gated ones and the meter-gated one.
+    expect(refusals).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe('the ranger net', () => {
   /** A ranger on open ground, aiming due east. */
   function rangerAt(col: number, row: number): { x: number; y: number; aimAngle: number } {
@@ -2769,7 +3253,20 @@ describe('the ranger net', () => {
     const p = g.player() as { x: number; y: number; aimAngle: number };
     p.x = (col + 0.5) * ts;
     p.y = (row + 0.5) * ts;
+    // Aimed through the MOUSE, not by assigning the field. updatePlayer
+    // recomputes aimAngle from the pointer on every step, so `p.aimAngle = 0`
+    // survives only until the first one and is then replaced by wherever the
+    // previous test left the mouse -- the exact shape of green-alone-red-in-suite.
+    aimAt(p.x + 400, p.y);
     p.aimAngle = 0;
+    // Own nothing: WIDE NET adds to the net's radius and LONG THROW to its
+    // reach, and grants persist across tests in a file by design. Every
+    // assertion below compares against the raw CONFIG figure, so a leftover
+    // grant from anywhere in this file measures the talent instead of the net.
+    const talents = g.talents() as { grant: (id: string, n: number) => void };
+    talents.grant('wideNet', 0);
+    talents.grant('longThrow', 0);
+    talents.grant('holdfast', 0);
     return p;
   }
 
@@ -2779,9 +3276,9 @@ describe('the ranger net', () => {
     g.onEvent((e: { type: string }) => {
       if (e.type === 'RANGER_NET_OPEN') seen = e as NetOpen;
     });
-    g.shift();
+    g.pressNet();
     g.holdNet(secs);
-    g.shiftUp();
+    g.releaseNet();
     for (let i = 0; i < 120 && seen === null; i++) g.stepSim(1);
     if (seen === null) throw new Error('the net never opened');
     return seen;
@@ -2789,20 +3286,22 @@ describe('the ranger net', () => {
 
   /** One crow at a point, with the rest cleared away. */
   function loneCrowAt(x: number, y: number):
-      { x: number; y: number; hp: number; heldTimer: number; frozen: boolean } {
+      { x: number; y: number; hp: number; heldTimer: number; frozen: boolean;
+        state: string; aggroTimer: number } {
     const crows = g.crows();
     crows.length = 0;
     g.spawnCrow();
     const crow = crows[0] as
       { x: number; y: number; baseY: number; hp: number; heldTimer: number;
-        state: string; frozen: boolean };
+        state: string; aggroTimer: number; frozen: boolean };
     crow.x = x;
     crow.y = y;
     crow.baseY = y;
     crow.state = 'passive';
-    // Held still for the flight. A net is in the air for up to three quarters
-    // of a second and a passive crow drifts most of a radius in that time, so
-    // an unfrozen target turns every catch into a question about the drift.
+    // Held still so a catch is a question about the net rather than about
+    // where the crow wandered off to. It no longer has to be -- a full-draw
+    // throw is 0.16 s in the air -- but a frozen target keeps each figure
+    // below exact. The moving case has a test of its own now.
     crow.frozen = true;
     return crow;
   }
@@ -2810,7 +3309,7 @@ describe('the ranger net', () => {
   it('leaves the skirmisher free to move while he draws', () => {
     const p = rangerAt(6, 6);
     const keys = g.keys() as Record<string, boolean>;
-    g.shift();
+    g.pressNet();
     expect(g.rangerNet().drawing).toBe(true);
 
     const from = p.x;
@@ -2835,6 +3334,61 @@ describe('the ranger net', () => {
 
     expect(full.x - fullFrom).toBeGreaterThan(tap.x - tapFrom);
     expect(full.radius).toBeGreaterThan(tap.radius);
+  });
+
+  // Three guards on the staging of the test above, not on the net.
+  //
+  // It failed once in a full suite run and passed alone, and passed in eleven
+  // full runs after -- so the cause was never caught in the act. These are the
+  // three things that could produce that exact failure, each pinned so that if
+  // it ever happens again the reason is named instead of guessed at.
+
+  it('throws the same distance whatever map came up', () => {
+    // A 200-seed sweep found zero bad maps, so terrain is NOT the cause. Kept
+    // small and permanent: it is the cheap half of that sweep, and it is what
+    // would catch a future map change putting terrain in the lane.
+    const c = g.config();
+    for (const seed of [1, 7, 23, 91, 404, 1337]) {
+      const orig = Math.random;
+      try {
+        Math.random = mulberry32(seed);
+        g.pickMap('forest');
+        const from = rangerAt(4, 6).x;
+        const open = throwNet(c.netDrawMaxSecs);
+        expect(open.x - from, `map seed ${seed}`).toBeCloseTo(c.netThrowMax, -1);
+      } finally {
+        Math.random = orig;
+      }
+    }
+  });
+
+  it('throws where he is aiming, not where the last test left the mouse', () => {
+    // updatePlayer rewrites aimAngle from the pointer on every step, so
+    // `p.aimAngle = 0` survives exactly until the first one.
+    //
+    // The step below is what makes this test real. throwNet releases before
+    // the sim has run once, so the staged angle is still intact at release and
+    // the hazard cannot bite -- which is why the first draft of this test
+    // passed with the fix removed. A player does not throw on frame zero, and
+    // any future change that steps before releasing would walk straight into
+    // it. One frame here is the difference between a guard and a green tick.
+    const c = g.config();
+    const p0 = g.player() as { x: number; y: number };
+    aimAt(p0.x - 400, p0.y - 400);   // the previous test's mouse, up and left
+
+    const from = rangerAt(4, 6).x;
+    g.stepSim(1);
+    const open = throwNet(c.netDrawMaxSecs);
+    expect(open.x - from).toBeCloseTo(c.netThrowMax, -1);
+  });
+
+  it('measures the net the character owns, not one an earlier test bought', () => {
+    // WIDE NET adds to the radius and grants persist across tests in a file,
+    // so a leftover would make the plain net measure as the upgraded one.
+    const c = g.config();
+    (g.talents() as { grant: (id: string, n: number) => void }).grant('wideNet', 2);
+    const open = (rangerAt(4, 6), throwNet(c.netDrawMaxSecs));
+    expect(open.radius).toBeCloseTo(c.netRadiusMax, 1);
   });
 
   it('holds for 0.8s at a tap and 2s at a full draw', () => {
@@ -2921,6 +3475,84 @@ describe('the ranger net', () => {
     expect(open.x - p.x).toBeLessThan(c.netThrowMax);
   });
 
+  it('lands on a crow that is running at him, not on where it was', () => {
+    const c = g.config();
+    const p = rangerAt(3, 6);
+    // Everything above this parks its target: loneCrowAt freezes it, and says
+    // why. That workaround is what hid this. A net is thrown at a POINT and
+    // takes the whole flight to get there, so the only honest question is
+    // whether it still lands on something that is moving the way the game
+    // makes things move -- which is at the player, at aggro speed.
+    const crow = loneCrowAt(p.x + c.netThrowMax, p.y);
+    crow.frozen = false;
+    crow.state = 'aggro';
+    crow.aggroTimer = 9999;
+
+    throwNet(c.netDrawMaxSecs);
+    expect(crow.heldTimer).toBeGreaterThan(0);
+  });
+
+  it('flies fast enough that the fastest thing on the field cannot leave it', () => {
+    const c = g.config();
+    // The figure, checked rather than assumed. A crow's aggro speed doubles
+    // with the wave (waveCrowAggroMult caps at 2), so the worst case is twice
+    // the constant; the net has to arrive before that covers its own radius,
+    // at both ends of the draw.
+    const worstSpeed = c.crowAggroSpeed * 2;
+    const gap = (throw_: number) => worstSpeed * (throw_ / c.netSpeed);
+    expect(gap(c.netThrowMax)).toBeLessThan(c.netRadiusMax);
+    expect(gap(c.netThrowMin)).toBeLessThan(c.netRadiusMin);
+  });
+
+  it('drags what walks into the mat after it has landed', () => {
+    const c = g.config();
+    const p = rangerAt(3, 6);
+    // Nothing under it when it lands: the point is the enemy that arrives
+    // afterwards. Before this the mat was a picture -- its own comment said
+    // "a mat expiring frees nothing" -- so a crow crossed it at full speed.
+    g.crows().length = 0;
+    const open = throwNet(c.netDrawMaxSecs);
+
+    // One crow inside the mat, one well clear of it, both aggroed and
+    // starting the same distance from the player so they are asked to cover
+    // the same ground.
+    const inMat = loneCrowAt(open.x, open.y);
+    g.spawnCrow();
+    const clear = g.crows()[1] as { x: number; y: number; baseY: number;
+      heldTimer: number; state: string; aggroTimer: number; frozen: boolean };
+    clear.x = open.x; clear.y = open.y + c.netRadiusMax * 4;
+    clear.baseY = clear.y; clear.frozen = false;
+    for (const crow of [inMat, clear]) {
+      crow.frozen = false; crow.heldTimer = 0;
+      crow.state = 'aggro'; crow.aggroTimer = 9999;
+    }
+
+    const fromIn = inMat.x, fromClear = clear.x;
+    g.stepSim(12);          // well inside the mat's own life
+    const movedIn = Math.abs(inMat.x - fromIn);
+    const movedClear = Math.abs(clear.x - fromClear);
+
+    expect(movedClear).toBeGreaterThan(0);
+    expect(movedIn).toBeLessThan(movedClear);
+  });
+
+  it('drags at the figure the net is tuned to, and lets go outside it', () => {
+    const c = g.config();
+    expect(c.netSlowMult).toBeGreaterThan(0);
+    expect(c.netSlowMult).toBeLessThan(1);
+
+    const p = rangerAt(3, 6);
+    g.crows().length = 0;
+    const open = throwNet(c.netDrawMaxSecs);
+    const mats = g.netMats() as { x: number; y: number; radius: number }[];
+    expect(mats.length).toBe(1);
+
+    // The drag is the mat's, not the ability's: it answers a position, so it
+    // is off the moment the body steps outside the mesh.
+    expect(g.enemyDrag({ x: open.x, y: open.y })).toBeCloseTo(c.netSlowMult, 4);
+    expect(g.enemyDrag({ x: open.x + mats[0]!.radius * 2, y: open.y })).toBe(1);
+  });
+
   it('refuses a second net until the cooldown has run', () => {
     const c = g.config();
     rangerAt(4, 6);
@@ -2928,12 +3560,12 @@ describe('the ranger net', () => {
     expect(g.rangerNet().cooldown).toBeGreaterThan(c.netCooldown - 1);
     expect(g.rangerNet().cooldown).toBeLessThanOrEqual(c.netCooldown);
 
-    g.shift();
+    g.pressNet();
     expect(g.rangerNet().drawing).toBe(false);
 
     g.stepSim(Math.ceil(c.netCooldown * ONE_SECOND) + 1);
     expect(g.rangerNet().cooldown).toBe(0);
-    g.shift();
+    g.pressNet();
     expect(g.rangerNet().drawing).toBe(true);
   });
 
@@ -3127,32 +3759,38 @@ describe('single player mode rules', () => {
 // on one fixed map, with a retinue that grows. These cover the parts already
 // wired; the ones still to come are the retinue on the field and the ladder
 // driving the spawners.
+/** A menu row as both tables report it. `hidden` is absent on every row today. */
+type MenuRow = { key: string; label: string; section: string; hidden?: boolean };
+
 describe('siege mode', () => {
   afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
 
-  // Was 'is a mode the menu can reach'. It is deliberately not reachable yet:
-  // the rules and the map are finished, but nothing drives the spawners, so a
-  // run lands on the bastion and stays empty. The entry keeps its row and
-  // carries `hidden` instead, so putting the mode back is one line rather than
-  // a rebuild — and so this test says which it is rather than going quiet.
-  it('keeps its menu row, held back until the ladder is wired', () => {
-    const siege = g.menuEntries()
-      .find((e: { label: string; section: string; hidden?: boolean }) => e.label === 'SIEGE');
-    expect(siege, 'the SIEGE row should still exist, just hidden').toBeDefined();
+  // This test used to assert the opposite, and its comment said why: nothing
+  // drove the spawners, so a run landed on the bastion and stayed empty. That
+  // stopped being true at some point and nobody noticed, because the comment
+  // was the only thing anybody read. See the sibling describe that plays a run
+  // to a win through this very row.
+  it('is a mode row the menu shows', () => {
+    const all = g.menuEntries() as MenuRow[];
+    const siege = all.find((e) => e.label === 'SIEGE');
+    expect(siege).toBeDefined();
     expect(siege?.section).toBe('mode');
-    expect(siege?.hidden, 'unhide this once the retinue and ladder are wired').toBe(true);
+    expect(siege?.hidden, 'the ladder and the retinue are wired; nothing hides this').toBeFalsy();
   });
 
-  // The half that actually protects the player: off the screen has to mean out
-  // of reach. A hidden row still walked by the arrow keys or still answering
-  // its hotkey would be a mode nobody can see and anybody can start.
-  it('is not reachable while it is hidden', () => {
-    const shown = g.menuShown() as Array<{ label: string; key: string }>;
-    expect(shown.map((e) => e.label)).not.toContain('SIEGE');
-    // And no hidden row's hotkey survives in the list the input reads.
-    const hiddenKeys = (g.menuEntries() as Array<{ key: string; hidden?: boolean }>)
-      .filter((e) => e.hidden).map((e) => e.key);
-    for (const key of hiddenKeys) expect(shown.map((e) => e.key)).not.toContain(key);
+  // Off the screen has to mean out of reach: a hidden row still walked by the
+  // arrow keys or still answering its hotkey would be a mode nobody can see
+  // and anybody can start.
+  //
+  // Stated as an equality rather than as a loop over what is hidden. Nothing
+  // is hidden today -- SIEGE was the last one -- and a loop over an empty set
+  // is a test that reports green without asking anything, which is exactly the
+  // failure that let SIEGE ship hidden in the first place. This compares the
+  // two lists outright, so it has something to say either way.
+  it('shows exactly the rows that are not hidden, and no others', () => {
+    const shown = (g.menuShown() as MenuRow[]).map((e) => e.label);
+    const want = (g.menuEntries() as MenuRow[]).filter((e) => !e.hidden).map((e) => e.label);
+    expect(shown).toEqual(want);
   });
 
   it('always starts on the bastion, whatever the map screen last held', () => {
@@ -3203,7 +3841,7 @@ describe('siege mode', () => {
     }
   });
 
-  it('generates two towers behind a barrier that can be walked around', () => {
+  it('generates its towers behind a barrier that can be walked around', () => {
     g.setMode('siege');
     g.go('playing');
     const tiles = g.tiles();
@@ -3212,10 +3850,11 @@ describe('siege mode', () => {
     for (let row = 0; row < c.rows; row++) {
       for (let col = 0; col < c.cols; col++) if (tiles.get(row, col) === TILE.HUT) huts++;
     }
-    // Two towers, each a TOWER_SPAN square block, so the count is derived
-    // rather than written down: a literal 2 here was what the map said back
-    // when a tower was a single tile.
-    expect(huts).toBe(2 * TOWER_SPAN * TOWER_SPAN);
+    // Each tower is a TOWER_SPAN square block and how many there are follows
+    // the grid height, so both halves are derived rather than written down.
+    // A literal here was what the map said when a tower was a single tile,
+    // and again when there were always exactly two of them.
+    expect(huts).toBe(towerCount() * TOWER_SPAN * TOWER_SPAN);
   });
 
   it('knows the run is ten waves, and reads it from the table', () => {
@@ -3725,6 +4364,53 @@ const priestBody = (): GuardBody => {
   return found[0]!;
 };
 
+describe('a siege reached the way a player reaches it', () => {
+  beforeEach(() => { g.setSiegeRng(mulberry32(20260824)); });
+  afterEach(() => { g.setSiegeRng(null); g.setMode('brawl'); g.pickMap('forest'); });
+
+  /**
+   * The SIEGE row as the MENU sees it.
+   *
+   * `menuShown()` is the filtered table -- the one the draw, the arrow walk and
+   * the hotkeys all read -- so an entry missing from it is an entry no player
+   * can press, whatever the unfiltered table still contains. Every other siege
+   * test in this file starts with setMode('siege'), which is the internal door
+   * and cannot tell the difference.
+   */
+  function siegeRow(): { label: string; run: () => void } | undefined {
+    return (g.menuShown() as Array<{ label: string; run: () => void }>)
+      .find((e) => e.label === 'SIEGE');
+  }
+
+  it('is on the menu a player can actually press', () => {
+    expect(siegeRow(), 'no SIEGE row in the menu a player sees').toBeDefined();
+  });
+
+  it('plays to a win from that menu row, ten waves, without the internal door', () => {
+    const row = siegeRow();
+    if (row === undefined) throw new Error('no SIEGE row in the menu a player sees');
+
+    // The menu entry is the ONLY thing that sets the mode here.
+    row.run();
+    expect(g.state()).toBe('charselect');
+
+    g.pick('knight');
+    g.go('playing');
+    g.stepSim(1);
+
+    const state = () => g.siege() as { wave: number; outcome: string };
+    expect(state(), 'the menu row did not start a siege run').toBeTruthy();
+    expect(state().wave).toBe(1);
+
+    for (let n = 0; n < SIEGE_WAVE_COUNT; n++) {
+      g.healHero();
+      g.clearSiegeWave();
+      g.stepSim(2);
+    }
+    expect(state().outcome).toBe('won');
+  });
+});
+
 describe('the siege loop', () => {
   // Pinned, so which kinds open the retinue is a fact rather than the weather.
   // A knight cannot be promoted, so an unpinned roll makes every rank assertion
@@ -3734,11 +4420,11 @@ describe('the siege loop', () => {
 
   const openSiege = (): void => { g.setMode('siege'); g.go('playing'); g.stepSim(1); };
 
-  it('opens with the whole retinue on the field and two towers', () => {
+  it('opens with the whole retinue on the field and every tower standing', () => {
     openSiege();
     expect(siegeState().guards).toHaveLength(OPENING_RETINUE);
     expect(g.guards()).toHaveLength(OPENING_RETINUE);
-    expect(g.towers()).toHaveLength(2);
+    expect(g.towers()).toHaveLength(towerCount());
     expect(g.towers().every((t: { hp: number }) => t.hp === TOWER_MAX_HP)).toBe(true);
   });
 
@@ -4467,6 +5153,63 @@ describe('the priest in the field', () => {
 
 // ── THE CAMPAIGN'S LAST STAGE ─────────────────────────────────────────────────
 //
+/**
+ * The maze is navigated by landmark now: the chest draws through the fog while
+ * it is shut, and a torch stands with it.
+ *
+ * Placement is the half that unit-tests: the beacon itself is a draw-time
+ * condition and this suite has no canvas. Run over regenerated maps rather than
+ * one, because the placement walks outward from whatever tile the chest landed
+ * on and a single seed proves nothing about the ones where it landed in a
+ * corner.
+ */
+describe('the maze gives the player something to steer by', () => {
+  afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
+
+  /** Ten freshly carved mazes, as the objective sees them. */
+  const mazes = (): { chest: { x: number; y: number };
+                      torches: { x: number; y: number; lit: boolean }[] }[] => {
+    g.setMode('brawl');
+    g.go('playing');
+    return Array.from({ length: 10 }, () => {
+      g.generateMap('maze');
+      const run = g.maze();
+      expect(run, 'the maze should have an objective').not.toBeNull();
+      return run as never;
+    });
+  };
+
+  it('stands a torch with the chest, on every map it carves', () => {
+    const reach = 2 * 32; // a neighbouring tile, diagonal included
+    for (const run of mazes()) {
+      const nearest = Math.min(...run.torches.map(
+        (t) => Math.hypot(t.x - run.chest.x, t.y - run.chest.y)));
+      expect(nearest, `nearest torch was ${Math.round(nearest)}px from the chest`)
+        .toBeLessThanOrEqual(reach);
+    }
+  });
+
+  // Beside it, not on it: two sprites on one tile read as one broken sprite.
+  it('does not stand the torch inside the chest', () => {
+    for (const run of mazes())
+      expect(run.torches.some((t) => t.x === run.chest.x && t.y === run.chest.y)).toBe(false);
+  });
+
+  /**
+   * The chest torch is one of the map's torches, not an extra one. Lighting the
+   * first is the whole sight upgrade, so quietly adding a fourth would hand out
+   * a spare rather than a landmark.
+   */
+  it('spends one of the map\'s torches on the chest rather than adding one', () => {
+    const want = (g.config() as { mazeTorchCount: number }).mazeTorchCount;
+    for (const run of mazes()) expect(run.torches).toHaveLength(want);
+  });
+
+  it('leaves it unlit, so arriving is what pays', () => {
+    for (const run of mazes()) expect(run.torches.every((t) => !t.lit)).toBe(true);
+  });
+});
+
 // The brawl chain used to end at the maze door. It ends at the bastion now, so
 // the door is a hand-off rather than a curtain, and the siege has to run there
 // without the mode having changed — a brawl that reaches the bastion is still a
@@ -4501,7 +5244,7 @@ describe('the bastion as the end of the brawl chain', () => {
     expect(g.mode()).toBe('brawl');
     expect(g.siege()).not.toBeNull();
     expect(g.guards().length).toBeGreaterThan(0);
-    expect(g.towers()).toHaveLength(2);
+    expect(g.towers()).toHaveLength(towerCount());
   });
 
   it('holds the new stage behind a title, without wiping the run', () => {
@@ -4902,7 +5645,7 @@ describe("the bastion's terrain rules", () => {
       if (tiles.get(t.row, t.col) !== TILE.HUT) break;
     }
     expect(tiles.get(t.row, t.col), 'a tower could no longer be brought down').toBe(TILE.EMPTY);
-    expect(standing).toBe(2);
+    expect(standing).toBe(towerCount());
   });
 
   it('slows everything hostile to 80%, and only here', () => {
@@ -5486,11 +6229,17 @@ describe('the ultimate', () => {
     return p;
   }
 
-  it('starts a run charging rather than in hand', () => {
+  // A run opens with the ultimate on cooldown, not spent from frame one. Opening
+  // it at zero read as "no dead key", but the pick is queued only as the timer
+  // crosses zero, and a run that begins at zero never crosses it: the pick was
+  // never offered and the ultimate stayed UNPICKED the whole game, which a QA run
+  // caught. The HUD chip counts the timer down, so the wait reads as charging.
+  // Revert the reset to zero and this goes red.
+  it('starts a run with the ultimate on cooldown, and the pick still owed', () => {
     readyRun('archer');
+    expect(g.ultimate().cd).toBeGreaterThan(0);
+    // Not usable at the start for two reasons: still cooling, and nothing chosen.
     expect(g.ultimate().ready).toBe(false);
-    // Close, not exact: the helper settles two frames of aim before returning.
-    expect(g.ultimate().cd).toBeCloseTo(g.config().ultimateCooldown, 0);
   });
 
   // The whole of the per-hero part of the timer. An archer who is braced is
@@ -5498,6 +6247,9 @@ describe('the ultimate', () => {
   // in tickUltimate and the two numbers below are equal.
   it('charges faster for a hero filling his own meter', () => {
     readyRun('archer');
+    // A run starts with the timer spent, so put one back to measure it
+    // draining -- this test is about the RATE, not about where it starts.
+    g.setUltimateCD(g.config().ultimateCooldown as number);
     // Standing still is what fills the brace, so the sim does it for us.
     stepPast(2 * ONE_SECOND);
     expect(g.brace().level).toBe(1);
@@ -5509,6 +6261,7 @@ describe('the ultimate', () => {
     // brace, and standing still is what fills it, so the comparison only
     // means anything if this hero actually moves.
     readyRun('archer');
+    g.setUltimateCD(g.config().ultimateCooldown as number);
     (g.keys() as Record<string, boolean>)['ArrowRight'] = true;
     stepPast(ONE_SECOND);
     expect(g.brace().level).toBe(0);
@@ -5890,11 +6643,11 @@ describe('HARPOON, the ranger ultimate', () => {
     const crows = g.crows() as Array<Record<string, number>>;
     crows.length = 0;
     g.spawnCrow();
-    // Held, the way the ranger's net holds one: a held enemy stops moving
-    // and deciding entirely. Without it the crow's own flight is the same
-    // size as what is being measured, and it gets faster as the run's
-    // escalation clock advances -- which is why this passed alone and failed
-    // in the full suite, where earlier tests had run the clock on.
+    // Held, the way the ranger's net holds one: a held enemy stops moving
+    // and deciding entirely. Without it the crow's own flight is the same
+    // size as what is being measured, and it gets faster as the run's
+    // escalation clock advances -- which is why this passed alone and failed
+    // in the full suite, where earlier tests had run the clock on.
     crows[0]!.x = p.x + 220; crows[0]!.y = p.y; crows[0]!.heldTimer = 5;
 
     const lineX = p.x, lineY = p.y;

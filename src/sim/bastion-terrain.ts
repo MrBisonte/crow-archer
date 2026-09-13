@@ -55,7 +55,7 @@ export interface BastionShape {
   readonly scatter: number;
 }
 
-/** Where the two towers stand, in grid coordinates. */
+/** Where one tower stands, in grid coordinates. */
 export interface TowerSite {
   readonly row: number;
   readonly col: number;
@@ -128,26 +128,65 @@ const towerSpread = (rows: number): number =>
   Math.max(3 + TOWER_SPAN, Math.floor(rows / 4));
 
 /**
- * Deterministic tower positions for a grid of this size. Exported so the
- * renderer and the guard placement find the same two tiles the generator used.
+ * How far apart towers stand along the wall, in rows.
  *
- * Always returns two sites, even on a grid with no room for a tower, because a
- * caller asking where the towers are cannot do anything useful with "maybe
- * none". On a grid that small the generator declines to stamp them and the
- * sites describe an intent nothing acted on; `towerFits` below is the single
- * place that decides, so the generator and this function cannot disagree about
- * a site that did get built.
+ * The same number as towerSpread's floor, and for the same reason. Three rows
+ * of spawn clearance plus the footprint is the closest a tower can stand to the
+ * block without the spawn pass erasing it, so it is also the closest two towers
+ * should stand to each other: any tighter and the pair reads as one thick
+ * tower, which is the thing towerSpread's own comment set out to avoid.
  */
-export function towerSites(rows: number, cols: number): readonly [TowerSite, TowerSite] {
+const TOWER_STRIDE = 3 + TOWER_SPAN;
+
+/**
+ * Deterministic tower positions for a grid of this size. Exported so the
+ * renderer and the guard placement find the same tiles the generator used.
+ *
+ * The count follows the grid's HEIGHT, not its area. The towers stand in one
+ * column and spread along it, so a taller grid genuinely has more west wall to
+ * hold; a wider one does not, and BARRIER_REACH_COLS above is the same
+ * decision seen from the barrier's side — extra width is open ground for the
+ * siege to cross, not a proportionally larger keep. Scaling this by area would
+ * quietly reverse that.
+ *
+ * Always returns at least two sites, which the type states, because a caller
+ * asking where the towers are cannot do anything useful with "maybe none". On a
+ * grid too small to hold one the generator declines to stamp it and the sites
+ * describe an intent nothing acted on; `towerFits` below is the single place
+ * that decides, so the generator and this function cannot disagree about a site
+ * that did get built.
+ */
+export function towerSites(
+  rows: number,
+  cols: number,
+): readonly [TowerSite, TowerSite, ...TowerSite[]] {
   const mid = Math.floor(rows / 2);
   const spread = towerSpread(rows);
   const col = Math.max(1, Math.min(TOWER_COL, cols - 1 - TOWER_SPAN));
-  const onGrid = (r: number): number =>
-    Math.max(1, Math.min(r, Math.max(1, rows - 1 - TOWER_SPAN)));
-  return [
+  const last = Math.max(1, rows - 1 - TOWER_SPAN);
+  const onGrid = (r: number): number => Math.max(1, Math.min(r, last));
+
+  // The innermost pair, clamped exactly as it was before there were others, so
+  // the layout every shipped grid height already had is the layout it keeps.
+  const sites: [TowerSite, TowerSite, ...TowerSite[]] = [
     { row: onGrid(mid - spread), col },
     { row: onGrid(mid + spread), col },
   ];
+
+  // Then outward towards the corners, a pair at a time, until the wall runs
+  // out. Unclamped on purpose: a row past the edge means the grid has no room
+  // for that pair, and clamping would stack it on the one before instead.
+  //
+  // A pair, never a single tower, even when only the north row fits. The hero
+  // spawns on the centre line and both flanks are walked equally, so an odd
+  // tower would leave one side quietly softer for the whole siege.
+  for (let step = 1; ; step++) {
+    const north = mid - spread - step * TOWER_STRIDE;
+    const south = mid + spread + step * TOWER_STRIDE;
+    if (north < 1 || south > last) break;
+    sites.push({ row: north, col }, { row: south, col });
+  }
+  return sites;
 }
 
 /** Is there room to stand a tower here, or is this grid too small to hold one? */
@@ -438,7 +477,7 @@ function raiseBarrier(grid: TileGrid, rows: number, cols: number): void {
 }
 
 /**
- * Stands the two towers.
+ * Stands the towers.
  *
  * One tile each, of TILE.HUT: cover that does not burn, which is what a stone
  * tower is and what a TREE would not be. A tower is therefore impassable, so

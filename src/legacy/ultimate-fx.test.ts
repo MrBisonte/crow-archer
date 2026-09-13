@@ -128,3 +128,57 @@ describe('the beat every ultimate opens on', () => {
     }
   }
 });
+
+
+/**
+ * Which of the hero's two ultimates the ready aura is talking about.
+ *
+ * `ULTIMATE_AURA` is keyed on the ability, so the two slots carry two
+ * paintings. That the table HAS one per ability is checked as a table in
+ * `ultimate-tables.test.ts`; what is checked here is the lookup that reaches
+ * it -- that the equipped slot gets its own aura, and that a slot with no
+ * painting borrows the hero's first rather than going dark.
+ */
+describe('the aura says which of the two ultimates is up', () => {
+  const HEROES = ['archer', 'wizard', 'knight', 'ranger', 'sapper'] as const;
+  interface Ult { id: string; aura: string }
+
+  for (const hero of HEROES) {
+    for (const slot of ['first', 'second'] as const) {
+      it(`paints the ${hero}'s ${slot} with its own aura`, () => {
+        readyRun(hero);
+        g.setUltimateSlot(slot);
+        const ult = g.ultimate() as unknown as Ult;
+        expect(ult.id, `${hero}.${slot} equipped nothing`).toBeTruthy();
+        expect(ult.aura, `${hero}.${slot} is wearing another ability's tell`)
+          .toBe(ult.id);
+      });
+    }
+  }
+
+  it("borrows the hero's first-slot aura when an ability has none", () => {
+    // The safety net, exercised by cutting the net's own support away: an
+    // eleventh ability will exist before its painting does, and on that day
+    // the aura has to go on saying "it is up". Restored in a finally, because
+    // a table left short here would fail every test above it.
+    readyRun('archer');
+    g.setUltimateSlot('first');
+    const firstId = (g.ultimate() as unknown as Ult).id;
+    g.setUltimateSlot('second');
+    const secondId = (g.ultimate() as unknown as Ult).id;
+    expect(secondId).not.toBe(firstId);
+
+    const auras = g.ULTIMATE_AURA as unknown as Record<string, unknown>;
+    const painting = auras[secondId];
+    expect(painting, 'the second slot had no aura to take away').toBeTypeOf('function');
+    try {
+      delete auras[secondId];
+      expect((g.ultimate() as unknown as Ult).aura, 'the slot went dark')
+        .toBe(firstId);
+    } finally {
+      auras[secondId] = painting;
+    }
+    expect((g.ultimate() as unknown as Ult).aura, 'the table was left short')
+      .toBe(secondId);
+  });
+});

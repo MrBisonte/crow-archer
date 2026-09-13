@@ -22,5 +22,19 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Vitest's default is 5 s, and the slowest tests here run about 2 s on an
+    // idle machine -- a siege test that steps 240 frames, or one that throws
+    // two nets and waits for each to land. Two and a half times headroom is
+    // not enough on a developer's box: this session watched two different
+    // tests go red exactly once each, in a full run, with background work on
+    // the same cores, and neither could be reproduced afterwards. Both were
+    // seed-swept clean (200 maps and 120 maps, zero bad), so the cause was the
+    // clock and not the game.
+    //
+    // The same shape as `preview-tab-skews-the-suite`, which is a browser
+    // preview driving rAF on the cores vitest wants. A false red in the
+    // pre-commit gate teaches people to re-run it, which is how a true red
+    // gets waved through.
+    testTimeout: 20_000,
   },
 });

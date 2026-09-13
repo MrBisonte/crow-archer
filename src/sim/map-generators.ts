@@ -81,24 +81,53 @@ function fit(size: number, lay: MazeLayout): { count: number; offset: number } {
 }
 
 /**
+ * A layout that holds roughly `cells` cells on a grid of this size.
+ *
+ * How big one cell is is a consequence of the grid, never a constant. A fixed
+ * pitch means the cell count is whatever the grid happens to divide into, and
+ * that is how the 55x33 resize took the maze from 10x6 to 18x10 without
+ * touching a line of maze code: three times the level, same sightline, same
+ * objective chain, and nothing failed. Naming the count instead makes it a
+ * design decision that survives the next resize.
+ *
+ * Walls stay one tile and the pitch carries the change, because wall thickness
+ * is what reads as maze-versus-rooms and corridor width is what decides whether
+ * you can step around a body. Cell count is area over pitch squared, so the
+ * pitch is the root of the ratio; `floor` in `fit` means the count lands near
+ * the target rather than on it, which is the accuracy this needs.
+ */
+export function mazeLayoutFor(rows: number, cols: number, cells: number): MazeLayout {
+  const wall = 1;
+  const pitch = Math.max(2, Math.round(Math.sqrt((rows * cols) / Math.max(1, cells))));
+  return { corridor: pitch - wall, wall };
+}
+
+/**
  * A braided maze carved by recursive backtracking.
  *
  * Cells sit on a fixed pitch with walls between them, so the outer border
- * falls out solid without being special cased. At the default two-tile
- * corridor a 33x21 grid holds a 10x6 maze.
+ * falls out solid without being special cased. Pass `cells` to hold a cell
+ * count across grid sizes, or `corridor`/`wall` to pin the tile geometry and
+ * let the count fall where the grid puts it.
  */
 export class MazeTerrain implements MapGenerator {
   readonly #braid: number;
   readonly #layout: MazeLayout;
+  readonly #cells: number | undefined;
 
   /**
    * `braid` is the fraction of dead ends to open back up, 0 for a perfect
    * maze and 1 for none left. A perfect maze plays badly here: every wrong
    * turn is a dead end and a character with an 80 pixel sightline spends the
    * level walking back the way it came. Loops give flanking and escape.
+   *
+   * `cells` is the target cell count, and it wins over `corridor`/`wall` when
+   * both are given: the layout is then derived per grid, since the grid size is
+   * not known until `generate`.
    */
-  constructor(opts: { braid: number; corridor?: number; wall?: number }) {
+  constructor(opts: { braid: number; cells?: number; corridor?: number; wall?: number }) {
     this.#braid = Math.max(0, Math.min(1, opts.braid));
+    this.#cells = opts.cells;
     this.#layout = {
       corridor: Math.max(1, Math.floor(opts.corridor ?? 2)),
       wall: Math.max(1, Math.floor(opts.wall ?? 1)),
@@ -110,12 +139,18 @@ export class MazeTerrain implements MapGenerator {
     const grid: TileGrid = [];
     for (let r = 0; r < rows; r++) grid[r] = new Array<TileId>(cols).fill(TILE.ROCK);
 
-    const down = fit(rows, this.#layout);
-    const across = fit(cols, this.#layout);
+    // Derived here rather than in the constructor: a target cell count cannot
+    // be turned into a pitch until the grid it has to fit is known.
+    const lay = this.#cells === undefined
+      ? this.#layout
+      : mazeLayoutFor(rows, cols, this.#cells);
+
+    const down = fit(rows, lay);
+    const across = fit(cols, lay);
     if (down.count < 1 || across.count < 1) return grid;
 
     const plan: MazePlan = {
-      lay: this.#layout,
+      lay,
       cellRows: down.count,
       cellCols: across.count,
       rowOffset: down.offset,
