@@ -109,6 +109,16 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   before handing off. A siege runs in `'playing'`, so a tail that
   assumes `'boss_fight'` will load the castle mid-wave.
 
+## Feel
+
+- **Tuning a difficulty down?** Instrument what the run actually loses to
+  before picking a knob. Crow density was the obvious one and was never the
+  problem: thinning it made the easy rungs boring, while a white crow at 300
+  against a 250 top speed meant no hero had ever been able to break away from
+  one. Three of the four figures that decide a chase sat under a comment
+  claiming the pace preset owned them, and were in no preset
+  (`the-crowd-was-never-the-difficulty`).
+
 ## Tests
 
 - **A comment says a feature is disabled because it is unfinished?** Read the

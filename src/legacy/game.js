@@ -423,6 +423,9 @@ const CONFIG = {
   crowPassiveSpeed: 60, crowAggroSpeed: 200, crowAggroTimeout: 4,
   crowStartCount: 5, crowMax: 12, crowEscalationInterval: 12,
   whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 300,
+  // How much faster than crowAggroSpeed the escalation clock is allowed to make
+  // a chase -- see waveCrowAggroMult, which used to hold the 2 itself.
+  crowAggroMultCap: 2,
 
   // Which preset to run. Override at runtime with ?pace=nightmare.
   pace: 'fast',
@@ -1059,14 +1062,32 @@ const CONFIG = {
  * The three rows are a difficulty ladder, and `nightmare` is its top rung: it
  * holds, figure for figure, the game that shipped as the default through round
  * 9. Nothing was invented above it, because nothing needed to be - that version
- * was already the one nobody was winning. The rungs below it are what tuning it
- * down means, and they pull in three directions at once:
+ * was already the one nobody was winning.
  *
- *   - fewer crows, arriving further apart, moving slower
- *   - the same ammo against a smaller field, so the density-to-answer ratio
- *     tilts toward the player instead of holding constant the way it used to
- *   - handicap and playerHitFlashSecs, which are about surviving a mistake
- *     rather than about the size of the crowd
+ * THE DENSITY IS NOT THE LADDER. Every rung fields the same crows, arriving on
+ * the same cadence, up to the same cap. A first cut tuned those down and the
+ * easier rungs came out boring rather than kinder, which is the whole lesson:
+ * what was making the game unwinnable was never how many crows there were, it
+ * was what happened when one noticed you. So the rows below differ on four
+ * things and the crowd is not one of them:
+ *
+ *   - how fast a crow that has seen you closes, normal and white
+ *   - how long it stays on you (`crowAggroTimeout`)
+ *   - how much faster than that it gets as the run escalates
+ *     (`crowAggroMultCap`, read by waveCrowAggroMult)
+ *   - `handicap` and `playerHitFlashSecs`, which are about surviving the hit
+ *     rather than about avoiding it
+ *
+ * The white crow is the figure that mattered. At 300 it is faster than every
+ * hero on the roster -- the ranger is quickest at 250 and the knight slowest at
+ * 150 -- and the escalation cap doubles it, so nobody outruns one at any point
+ * in any run. That is preserved exactly on nightmare, because it is what the
+ * top rung is FOR. On calm it is 190 against a cap of 1, which is a white crow
+ * the archer, sapper and ranger can break away from and the wizard and knight
+ * still cannot. Three of the five, and never late-run.
+ *
+ * The ammo is the one thing that still moves with the player rather than
+ * against him: calm carries nightmare's field with more to answer it.
  *
  * `handicap` is what HANDICAP reads: below full health crows slow by up to 30%
  * and drops get likelier, and at full health they speed up 12%. It was 0
@@ -1080,9 +1101,24 @@ const CONFIG = {
  * as long as being briefly safe.
  */
 const PACE_PRESETS = {
-  calm:      { crowStartCount: 4, crowEscalationInterval: 14,  crowMax: 10, crowAggroTimeout: 3, crowPassiveSpeed: 55, maxArrowsInFlight: 5, baseArrows: 18, baseDynamites: 5, arrowRestore: 6, handicap: 60, playerHitFlashSecs: 0.5 },
-  fast:      { crowStartCount: 6, crowEscalationInterval:  8,  crowMax: 14, crowAggroTimeout: 5, crowPassiveSpeed: 70, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5, handicap: 30, playerHitFlashSecs: 0.4 },
-  nightmare: { crowStartCount: 9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout: 7, crowPassiveSpeed: 85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5, handicap:  0, playerHitFlashSecs: 0.3 },
+  // The field, identical on every rung. Kept as preset fields rather than moved
+  // back into CONFIG so that the row a reader opens says what the rung fields,
+  // and so making one rung thinner stays a one-line edit if it is ever wanted.
+  //                crows  every  cap  | the chase: normal, white, how long, how much worse it gets
+  //                                   | the answer: in flight, arrows, charges, refill
+  //                                   | the mistake: rubber band, i-frames
+  calm:      { crowStartCount: 9, crowEscalationInterval: 4.5, crowMax: 18, crowPassiveSpeed: 85,
+               crowAggroSpeed: 150, whiteCrowPassiveSpeed:  90, whiteCrowAggroSpeed: 190, crowAggroTimeout: 3.5, crowAggroMultCap: 1,
+               maxArrowsInFlight: 5, baseArrows: 18, baseDynamites: 5, arrowRestore: 6,
+               handicap: 60, playerHitFlashSecs: 0.5 },
+  fast:      { crowStartCount: 9, crowEscalationInterval: 4.5, crowMax: 18, crowPassiveSpeed: 85,
+               crowAggroSpeed: 175, whiteCrowPassiveSpeed: 105, whiteCrowAggroSpeed: 240, crowAggroTimeout: 5,   crowAggroMultCap: 1.5,
+               maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5,
+               handicap: 30, playerHitFlashSecs: 0.4 },
+  nightmare: { crowStartCount: 9, crowEscalationInterval: 4.5, crowMax: 18, crowPassiveSpeed: 85,
+               crowAggroSpeed: 200, whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 300, crowAggroTimeout: 7,   crowAggroMultCap: 2,
+               maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5,
+               handicap:  0, playerHitFlashSecs: 0.3 },
 };
 
 /**
@@ -1099,6 +1135,14 @@ function applyPace(name) {
   CONFIG.crowMax               = preset.crowMax;
   CONFIG.crowAggroTimeout      = preset.crowAggroTimeout;
   CONFIG.crowPassiveSpeed      = preset.crowPassiveSpeed;
+  // The chase. Three of these four sat under the comment on CONFIG saying the
+  // preset owned them and were never in it, which is how the figure that
+  // decides whether anyone can get away stayed the same on every difficulty
+  // the game had.
+  CONFIG.crowAggroSpeed        = preset.crowAggroSpeed;
+  CONFIG.whiteCrowPassiveSpeed = preset.whiteCrowPassiveSpeed;
+  CONFIG.whiteCrowAggroSpeed   = preset.whiteCrowAggroSpeed;
+  CONFIG.crowAggroMultCap      = preset.crowAggroMultCap;
   CONFIG.maxArrowsInFlight     = preset.maxArrowsInFlight;
   CONFIG.baseArrows            = preset.baseArrows;
   CONFIG.baseDynamites         = preset.baseDynamites;
@@ -5252,13 +5296,18 @@ function waveCrowHpMult() {
 
 /**
  * How much faster an aggro'd crow should close in right now. Same idea as
- * waveCrowHpMult, on a slower every-3-waves cadence, and capped far lower
- * (2x, around wave 22): HP just costs more hits, but a crow fast enough
- * would stop being dodgeable at all, which is a different kind of hard.
+ * waveCrowHpMult, on a slower every-3-waves cadence, and capped far lower: HP
+ * just costs more hits, but a crow fast enough would stop being dodgeable at
+ * all, which is a different kind of hard.
+ *
+ * The cap is `CONFIG.crowAggroMultCap` and the difficulty rung sets it, because
+ * "stops being dodgeable at all" was exactly the complaint. It is 2 on
+ * nightmare -- reached around wave 22, and what the game always ran on -- and 1
+ * on calm, where a chase is as fast at wave 30 as it was at wave 1.
  */
 function waveCrowAggroMult() {
   if (!modeRule(gameMode).waveScaling) return 1;
-  return Math.min(2, Math.pow(1.1, Math.floor((wave - 1) / 3)));
+  return Math.min(CONFIG.crowAggroMultCap, Math.pow(1.1, Math.floor((wave - 1) / 3)));
 }
 
 function spawnCrow() {
@@ -17373,6 +17422,14 @@ export const devHooks = {
   // The wave counter and the banner it raises, so a test can watch escalation
   // happen through the real timer rather than asserting on a draw call.
   wave: () => wave,
+  /** The escalation clock, driven straight rather than waited out. A run has to
+   *  reach wave 22 for the chase multiplier to hit its cap, which is minutes of
+   *  simulation to check one number. */
+  setWave(n) { wave = n; },
+  /** How much faster than its base an aggro'd crow closes right now. The cap on
+   *  this is the rung's, and it is the figure behind "they stop being
+   *  dodgeable" -- see waveCrowAggroMult. */
+  aggroMult: () => waveCrowAggroMult(),
   waveBanner: () => ({ secs: waveAnnounce, text: waveAnnounceText }),
   // The two screens that decide what a player can reach at all. Exposed
   // because a mode or a map whose rules are complete but whose entry is

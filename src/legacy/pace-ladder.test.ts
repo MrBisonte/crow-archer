@@ -12,16 +12,17 @@
  * nobody was winning -- and the figures below are the only place the promise is
  * written down, so tuning nightmare fails here and says why.
  *
- * The second is that the ladder only goes one way. Eleven figures move per
- * rung, and five of them mean an EASIER game when they go up, so "make calm
- * calmer" is an edit that can quietly make it harder on one knob and leave the
- * other ten telling the truth. Direction is per figure, and checked per figure.
+ * The second is that the ladder only goes one way. Fifteen figures move per
+ * rung and five of them mean an EASIER game when they go up, so "make calm
+ * calmer" is an edit that can quietly make it harder on one knob while the
+ * rest tell the truth. Direction is per figure, and checked per figure.
  *
  * What is deliberately not tested here: HANDICAP's own arithmetic. The ladder
  * turns that module on by giving `handicap` a non-zero value, which is all this
  * change did to it; the curve it applies is older code and unchanged.
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { CHARACTER_STATS } from '../sim/arena';
 import { devHooks as g } from './game.js';
 import { press } from './arena-testkit';
 
@@ -51,6 +52,14 @@ const AS_SHIPPED: Record<string, number> = {
   crowMax: 18,
   crowAggroTimeout: 7,
   crowPassiveSpeed: 85,
+  // The chase, which is what the ladder is actually about. 300 is faster than
+  // every hero on the roster (ranger 250, knight 150) and the cap doubles it,
+  // so nobody outruns a white crow at any point in a run. That is the top
+  // rung's defining property and the reason these four are pinned here.
+  crowAggroSpeed: 200,
+  whiteCrowPassiveSpeed: 120,
+  whiteCrowAggroSpeed: 300,
+  crowAggroMultCap: 2,
   maxArrowsInFlight: 5,
   baseArrows: 16,
   baseDynamites: 4,
@@ -70,6 +79,10 @@ const KNOBS: { key: string; harder: 'up' | 'down' }[] = [
   { key: 'crowMax', harder: 'up' },
   { key: 'crowAggroTimeout', harder: 'up' },
   { key: 'crowPassiveSpeed', harder: 'up' },
+  { key: 'crowAggroSpeed', harder: 'up' },
+  { key: 'whiteCrowPassiveSpeed', harder: 'up' },
+  { key: 'whiteCrowAggroSpeed', harder: 'up' },
+  { key: 'crowAggroMultCap', harder: 'up' },
   { key: 'crowEscalationInterval', harder: 'down' },
   { key: 'maxArrowsInFlight', harder: 'down' },
   { key: 'baseArrows', harder: 'down' },
@@ -117,21 +130,71 @@ describe('the difficulty ladder', () => {
     }
   });
 
-  it('the easier rungs are actually easier, not just differently shaped', () => {
+  it('the easier rungs are kinder without being emptier', () => {
     g.setPace('nightmare');
     const hard = { ...cfg() };
     g.setPace('calm');
     const easy = cfg();
-    // One assertion per direction of the change, because "tuned down" is three
-    // separate claims and a preset can satisfy one of them while failing the
-    // other two.
-    expect(figure(easy, 'crowMax'), 'fewer crows on the field')
-      .toBeLessThan(figure(hard, 'crowMax'));
-    expect(figure(easy, 'baseArrows'), 'more to answer them with')
+
+    // The field is the SAME. A first cut thinned it and the easy rungs came out
+    // boring rather than kinder, so this is an assertion about what the ladder
+    // is not allowed to do, not an incidental equality.
+    for (const key of ['crowStartCount', 'crowMax', 'crowEscalationInterval', 'crowPassiveSpeed']) {
+      expect(figure(easy, key), key + ' must not thin out on an easier rung')
+        .toBe(figure(hard, key));
+    }
+
+    // What moves is the chase, and what you have when it reaches you.
+    expect(figure(easy, 'whiteCrowAggroSpeed'), 'the white crow closes slower')
+      .toBeLessThan(figure(hard, 'whiteCrowAggroSpeed'));
+    expect(figure(easy, 'crowAggroTimeout'), 'and gives up sooner')
+      .toBeLessThan(figure(hard, 'crowAggroTimeout'));
+    expect(figure(easy, 'baseArrows'), 'more to answer the same field with')
       .toBeGreaterThan(figure(hard, 'baseArrows'));
     expect(figure(easy, 'playerHitFlashSecs'), 'longer between two hits landing')
       .toBeGreaterThan(figure(hard, 'playerHitFlashSecs'));
     expect(figure(easy, 'handicap'), 'the rubber band is on at all').toBeGreaterThan(0);
+  });
+
+  // The roster is the only yardstick that means anything for a chase: a crow
+  // faster than every hero is one nobody can break away from, whatever the
+  // number is. Read from CHARACTER_STATS rather than restated, so tuning a
+  // hero's speed is checked against the ladder and not only against the panel.
+  it('leaves someone able to outrun a white crow on calm, and nobody on nightmare', () => {
+    const speeds = Object.values(CHARACTER_STATS).map((s) => s.speed);
+    const quickest = Math.max(...speeds);
+
+    g.setPace('nightmare');
+    const top = figure(cfg(), 'whiteCrowAggroSpeed') * figure(cfg(), 'crowAggroMultCap');
+    expect(top, 'nightmare keeps the chase nobody escapes').toBeGreaterThan(quickest);
+
+    g.setPace('calm');
+    const worst = figure(cfg(), 'whiteCrowAggroSpeed') * figure(cfg(), 'crowAggroMultCap');
+    expect(speeds.filter((s) => s > worst).length, 'heroes who can break away on calm, at any wave')
+      .toBeGreaterThanOrEqual(2);
+  });
+
+  it('holds the late-run chase to the rung cap, however far the run goes', () => {
+    // The cap is what stops a chase becoming undodgeable, and reaching it in a
+    // real run is wave 22 and minutes of simulation, so the clock is set
+    // instead. Driven through waveCrowAggroMult itself rather than read off
+    // CONFIG: the figure being in the preset means nothing if the function
+    // still carries the 2 it used to hardcode.
+    // Waves is the mode the escalation clock belongs to; brawl has no wave
+    // scaling at all, so the multiplier is a flat 1 there and this would pass
+    // without ever reading the cap.
+    const was = g.mode();
+    g.setMode('waves');
+    for (const name of g.paceOrder() as string[]) {
+      g.setPace(name);
+      const cap = figure(cfg(), 'crowAggroMultCap');
+      g.setWave(1);
+      expect(g.aggroMult(), name + ' opens at its base speed').toBe(1);
+      g.setWave(400);
+      expect(g.aggroMult(), name + ' never exceeds its cap').toBe(cap);
+    }
+    g.setWave(1);
+    g.setMode(was);
   });
 
   // The screen is the only way a player reaches any of this, so at least one
@@ -172,8 +235,10 @@ describe('the difficulty ladder', () => {
       press('ArrowDown');
       expect(pace()).toBe('calm');
       // The name changing without the figures following is the failure this
-      // catches: cyclePace could set CONFIG.pace and never call applyPace.
-      expect(figure(cfg(), 'crowMax')).toBe(10);
+      // catches: cyclePace could set CONFIG.pace and never call applyPace. Read
+      // off the chase rather than the crowd, because the crowd is the same on
+      // every rung and would pass whether applyPace ran or not.
+      expect(figure(cfg(), 'whiteCrowAggroSpeed')).toBe(190);
       expect(figure(cfg(), 'handicap')).toBe(60);
     });
   });
