@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { toLine } from './flight-sink';
+import { toLine } from './flight-path';
 
 describe('toLine', () => {
   it('wraps a payload object with the server receive time', () => {
