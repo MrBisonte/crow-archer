@@ -39,6 +39,7 @@ import {
 import { PathScheduler, FovMap } from '../sim/pathfinding';
 import { LocalInput, Button, hasButton, noteKeyDown, noteKeyUp, pointerToCanvas } from '../sim/input';
 import { CHARACTER_STATS } from '../sim/arena';
+import * as FIGURES from '../sim/weapon-figures';
 import { Team, canDamage } from '../sim/team';
 import { EventBus } from '../sim/events';
 import { Hitstop } from '../sim/hitstop';
@@ -371,7 +372,10 @@ const CONFIG = {
   soldierSpearChargeSpeed: 265, soldierSpearChargeSecs: 0.55,
   soldierSpearChargeGap: 2.5,
 
-  arrowSpeed: 500, arrowLifetime: 1.5, maxArrowsInFlight: 3,
+  // A figure written as FIGURES.* is shared with the multiplayer build, which
+  // fights with the same weapons: src/sim/weapon-figures.ts is its one home.
+  arrowSpeed: FIGURES.ARROW_SPEED, arrowLifetime: FIGURES.ARROW_LIFE_SECS,
+  maxArrowsInFlight: 3,
 
   // Archer power shot. Sniper mode used to root him for nothing but a longer
   // aim line, which is all cost; drawing the bow is the same root buying
@@ -510,7 +514,8 @@ const CONFIG = {
 
   handicap: 0,          // 0-100: rubber-band difficulty assist
 
-  dynamiteSpeed: 336, dynamiteLifetime: 1.5, dynamiteBlastRadius: 90, dynamiteBossDamage: 2,
+  dynamiteSpeed: FIGURES.DYNAMITE_THROW_SPEED, dynamiteLifetime: FIGURES.DYNAMITE_FUSE_SECS,
+  dynamiteBlastRadius: FIGURES.DYNAMITE_BLAST_RADIUS, dynamiteBossDamage: 2,
   // How far his own stick throws whatever is near it -- him at the centre,
   // and anything that lived through the blast. Falls to nothing at the edge,
   // so where he puts the stick is the whole control.
@@ -568,9 +573,9 @@ const CONFIG = {
   // Sapper. The powder charge is thrown on the primary and costs nothing but
   // time, so this cooldown is the whole of its ammo economy: there is no
   // quiver to run dry and so no pitchfork fallback either. Slower than every
-  // primary but the wizard's bolt, matching SAPPER_CHARGE_COOLDOWN_TICKS in
-  // sim/weapons.ts.
-  sapperChargeCooldown: 1.1,
+  // primary but the wizard's bolt. Shared with SAPPER_CHARGE_COOLDOWN_TICKS
+  // in sim/weapons.ts rather than matched by hand.
+  sapperChargeCooldown: FIGURES.SAPPER_CHARGE_COOLDOWN_SECS,
   // Held fire puts up to three charges down in one go, and the cooldown that
   // follows is the per-bomb one times however many actually left. So the burst
   // buys *placement*, not rate: three bombs in one spot cost exactly what three
@@ -637,12 +642,12 @@ const CONFIG = {
   fireArrowDuration: 3.0, fireArrowDamageInterval: 0.5, specialArrowPickupCount: 3,
 
   // Knight
-  knightSpearRange: 80, knightSpearCooldown: 1.0,
+  knightSpearRange: FIGURES.SPEAR_REACH, knightSpearCooldown: FIGURES.SPEAR_COOLDOWN_SECS,
   // One per hit, landing twice, so a swing is worth 2. It was 2 per hit, and
   // a 4-point swing against a baseline 1-point arrow is four times the
   // roster's unit of damage — which is precisely what the deleted
   // bossHPKnight column existed to absorb.
-  knightSpearBossDamage: 1, knightSpearSwingDuration: 0.35,
+  knightSpearBossDamage: 1, knightSpearSwingDuration: FIGURES.SPEAR_SWING_SECS,
   // Bloodlust: the knight's passive, and the only per-character mechanic on
   // the roster with no key at all. Every swing that connects stacks it and a
   // swing that hits nothing empties it, so what it pays for is staying in
@@ -655,8 +660,10 @@ const CONFIG = {
   // second, and splitting them into two dials would hide that behind
   // arithmetic nobody does at the balance table.
   knightBloodlustMax: 3, knightBloodlustPer: 0.10,
-  knightWhirlwindDuration: 3, knightWhirlwindRadius: 72, knightWhirlwindCooldown: 6,
-  knightWhirlwindTickRate: 0.22,  // damage/tile-break tick every N seconds during whirlwind
+  knightWhirlwindDuration: FIGURES.WHIRLWIND_DURATION_SECS, knightWhirlwindRadius: 72,
+  knightWhirlwindCooldown: FIGURES.WHIRLWIND_COOLDOWN_SECS,
+  // damage/tile-break tick every N seconds during whirlwind
+  knightWhirlwindTickRate: FIGURES.WHIRLWIND_TICK_SECS,
   knightFireSwordDuration: 8, knightFireSwordRangeMult: 2, knightFireSwordDamageMult: 2,
   knightJavelinsPerPickup: 3, knightJavelinSpeed: 580, knightJavelinPierce: 2,
   knightJavelinBossDamage: 1,
@@ -758,7 +765,7 @@ const CONFIG = {
   // anything, and two full seconds of it was most of why the fight was
   // unwinnable. Bolts share maxArrowsInFlight with arrows, 5 on the default
   // pace and 3 on calm, so a calm wizard whose bolts all miss can cap out.
-  wizBoltCooldown: 1.2, wizBoltSpeed: 468, wizBoltLifetime: 3.5,
+  wizBoltCooldown: 1.2, wizBoltSpeed: FIGURES.BOLT_SPEED, wizBoltLifetime: FIGURES.BOLT_LIFE_SECS,
   wizBoltDamage: 1, wizFireBoltDamage: 3,
   // What a bolt is worth to a body, as opposed to a boss.
   //
@@ -776,7 +783,7 @@ const CONFIG = {
   // has to mean somewhere other than a boss fight, and he still kills slower
   // than the click-limited kits because his rate is what he pays for it.
   wizBoltBodyDamage: 2,
-  wizBoltTurnRate: 4.5,           // rad/s homing angular speed
+  wizBoltTurnRate: FIGURES.BOLT_TURN_RATE,   // rad/s homing angular speed
   // Wizard-only pickup batch size (archer/ranger/knight keep their own
   // counts — specialArrowPickupCount/knightJavelinsPerPickup below — so
   // this doesn't change anyone else's ammo economy).
@@ -789,7 +796,8 @@ const CONFIG = {
   // Ranger — crossbow ammo, cooldown and pickups reuse the archer's own
   // arrows/ricochetArrows/fireArrows fields and CONFIG.arrowBossDamage
   // unchanged; only the burst and its per-bolt scale-down live here.
-  crossbowBoltCount: 3, crossbowBoltDamageMult: 0.7, crossbowBoltRadiusMult: 0.7,
+  crossbowBoltCount: FIGURES.CROSSBOW_BOLT_COUNT, crossbowBoltDamageMult: 0.7,
+  crossbowBoltRadiusMult: FIGURES.CROSSBOW_BOLT_RADIUS_MULT,
   // Momentum: the archer's Brace pointed the other way. The archer is paid for
   // standing still and the ranger for never doing it, which is what makes the
   // pair legible -- and it is the right shape for the fastest hero on the
@@ -828,7 +836,7 @@ const CONFIG = {
   rangerMarkSecs: 8,
   rangerMarkCritMult: 2.5,
   rangerMarkRadius: 420,
-  crossbowSpreadRadians: Math.PI / 60,   // 3° between adjacent bolts
+  crossbowSpreadRadians: FIGURES.CROSSBOW_SPREAD_RADIANS,   // 3° between bolts
   // The crossbow reloads, which is the whole point of a crossbow and the one
   // thing it did not do. Before this the arrow cap was its only pacing, and a
   // cap meant for the archer cannot pace a weapon that spends four bolts a
@@ -854,7 +862,8 @@ const CONFIG = {
   // Satchel: no charge to hold, one click is one throw at a fixed speed.
   // Blast radius and boss damage reuse dynamiteBlastRadius/dynamiteBossDamage
   // below — an explosion is an explosion, not a second copy of the same figure.
-  satchelThrowSpeed: 336, satchelArmFuse: 3, satchelIdleLife: 60,
+  satchelThrowSpeed: 336, satchelArmFuse: FIGURES.SATCHEL_ARM_FUSE_SECS,
+  satchelIdleLife: FIGURES.SATCHEL_IDLE_LIFE_SECS,
 
   // Hit detection radii
   arrowHitRadius: 14,             // arrow / javelin vs crow

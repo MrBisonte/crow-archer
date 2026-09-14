@@ -12,6 +12,12 @@
  *
  * ## Where the numbers come from
  *
+ * Anything the single-player game also has -- an arrow's speed, a fuse, a
+ * spear's reach -- is read from `./weapon-figures`, which is the one home for
+ * it and which `CONFIG` reads too. A figure below that differs on purpose
+ * applies a NAMED modifier to that base, so the relationship survives a tune;
+ * `DYNAMITE_SPEED` is the worked example.
+ *
  * The single-player game has no player-versus-player damage at all: crows die
  * to one hit of anything, and every damage constant in CONFIG is boss damage.
  * So PvP damage is designed here rather than copied, using the legacy figures
@@ -25,6 +31,7 @@
 
 import type { CharacterKind, GameMode } from '../net/protocol';
 import { ticks } from './tick';
+import * as FIGURES from './weapon-figures';
 
 /** What using a weapon produced. The world turns these into world state. */
 export type WeaponEffect =
@@ -135,13 +142,13 @@ export const SPEAR_DAMAGE = 2;
 export const DYNAMITE_DAMAGE = 4;
 
 /**
- * Blast radius of a stick of dynamite. Straight from the legacy CONFIG.
+ * Blast radius of a stick of dynamite.
  *
  * Shared with the satchel: the world's `#explode` does not ask a shot's
  * flavour how wide it hits, so this is every explosive's blast radius, not
  * only dynamite's.
  */
-export const DYNAMITE_BLAST_RADIUS = 90;
+export const DYNAMITE_BLAST_RADIUS = FIGURES.DYNAMITE_BLAST_RADIUS;
 
 /**
  * How near a shot has to pass to count as a hit.
@@ -162,20 +169,30 @@ export const BOLT_RADIUS = 12;
  * swinging. A spear that looked shorter than it hit would be unreadable, and
  * two copies of the number is how that happens.
  */
-export const SPEAR_REACH = 80;
+export const SPEAR_REACH = FIGURES.SPEAR_REACH;
 export const SPEAR_THRUST = 22;
 
-/** Fuse, in ticks. `dynamiteLifetime: 1.5` in the legacy CONFIG. */
-export const DYNAMITE_FUSE_TICKS = ticks(1.5);
+/** Fuse, in ticks. */
+export const DYNAMITE_FUSE_TICKS = ticks(FIGURES.DYNAMITE_FUSE_SECS);
+
+/**
+ * What a thrown explosive keeps of its single-player speed.
+ *
+ * At the full speed a stick crossed half the map before anyone could react to
+ * it, and a grenade you cannot see coming is not a decision. This is why the
+ * multiplayer figure is not a copy: it is the shared base with a modifier on
+ * it, named here rather than baked into a slower number, so tuning the throw
+ * in `weapon-figures` still arrives here 30% slower.
+ */
+export const MP_DYNAMITE_SPEED_SCALE = 0.7;
 
 /**
  * Throw speed at no charge, and the multiplier a full charge adds.
  *
- * The legacy figures are 336 and three times that at full charge. Both are 30%
- * slower here: at full speed a stick crossed half the map before anyone could
- * react to it, and a grenade you cannot see coming is not a decision.
+ * The charge multiplier is the legacy one, which winds a throw up to three
+ * times its speed. It is not scaled: the base it multiplies already is.
  */
-export const DYNAMITE_SPEED = Math.round(336 * 0.7);
+export const DYNAMITE_SPEED = Math.round(FIGURES.DYNAMITE_THROW_SPEED * MP_DYNAMITE_SPEED_SCALE);
 export const DYNAMITE_CHARGE_MULTIPLIER = 3;
 
 /** How long a full charge takes to wind up. One second, as in the legacy game. */
@@ -221,7 +238,7 @@ export const DYNAMITE_CARRIED = 4;
  * Bolts are independent shots, each resolving its own hit, not one shot
  * worth three hits.
  */
-export const CROSSBOW_BOLT_COUNT = 3;
+export const CROSSBOW_BOLT_COUNT = FIGURES.CROSSBOW_BOLT_COUNT;
 
 /**
  * Damage of a single bolt, and the discrepancy it comes from.
@@ -239,19 +256,19 @@ export const CROSSBOW_BOLT_COUNT = 3;
  */
 export const CROSSBOW_BOLT_DAMAGE = 0.7;
 
-/** Hit radius of one bolt. 30% smaller than the archer's arrow, matching how
- * the dynamite throw's own "30% slower" was rounded. */
-export const CROSSBOW_BOLT_RADIUS = Math.round(ARROW_RADIUS * 0.7);
+/** Hit radius of one bolt. The arrow's own hit radius here is wider than the
+ * single-player game's, for the reason `ARROW_RADIUS` gives, so what is shared
+ * is the CUT and not the result. */
+export const CROSSBOW_BOLT_RADIUS = Math.round(ARROW_RADIUS * FIGURES.CROSSBOW_BOLT_RADIUS_MULT);
 
 /**
  * Angle between adjacent bolts in a burst.
  *
- * Not specified, so chosen narrow: wide enough that three overlapping bolts
- * read as three rather than one arrow drawn thrice on top of itself, narrow
- * enough that landing all three on one target is the common case at close
- * range, not a coincidence.
+ * Narrow: wide enough that three overlapping bolts read as three rather than
+ * one arrow drawn thrice on top of itself, narrow enough that landing all
+ * three on one target is the common case at close range, not a coincidence.
  */
-export const CROSSBOW_SPREAD_RADIANS = Math.PI / 60; // 3 degrees
+export const CROSSBOW_SPREAD_RADIANS = FIGURES.CROSSBOW_SPREAD_RADIANS;
 
 /**
  * How near the ranger's own bolt must pass to detonate their own satchel.
@@ -275,7 +292,7 @@ export const SATCHEL_DAMAGE = Math.round(DYNAMITE_DAMAGE * 0.7);
 export const SATCHEL_THROW_SPEED = DYNAMITE_SPEED;
 
 /** How long an armed satchel counts down before it goes off on its own. */
-export const SATCHEL_ARM_FUSE_TICKS = ticks(3);
+export const SATCHEL_ARM_FUSE_TICKS = ticks(FIGURES.SATCHEL_ARM_FUSE_SECS);
 
 /**
  * How long a thrown, unarmed satchel sits before it quietly expires.
@@ -284,7 +301,7 @@ export const SATCHEL_ARM_FUSE_TICKS = ticks(3);
  * shot", not "times out". It is a backstop against an abandoned satchel
  * living forever, not a mechanic a player is meant to see.
  */
-export const SATCHEL_IDLE_TICKS = ticks(60);
+export const SATCHEL_IDLE_TICKS = ticks(FIGURES.SATCHEL_IDLE_LIFE_SECS);
 
 /** Satchels a player carries into a match. Matches dynamite's own count;
  * nothing in the request asked for a different number. */
@@ -314,7 +331,7 @@ export const SAPPER_CHARGE_DAMAGE = ARROW_DAMAGE;
  * with splash. It sits just under the staff rather than past it because the
  * staff also hits harder per shot and steers itself onto a target.
  */
-export const SAPPER_CHARGE_COOLDOWN_TICKS = ticks(1.1);
+export const SAPPER_CHARGE_COOLDOWN_TICKS = ticks(FIGURES.SAPPER_CHARGE_COOLDOWN_SECS);
 
 // ---------------------------------------------------------------------------
 // The weapons
@@ -339,9 +356,9 @@ export class Bow implements Weapon {
         kind: 'shot',
         shot: {
           flavour: 'arrow',
-          speed: 500,          // arrowSpeed
+          speed: FIGURES.ARROW_SPEED,
           damage: ARROW_DAMAGE,
-          lifeTicks: ticks(1.5), // arrowLifetime
+          lifeTicks: ticks(FIGURES.ARROW_LIFE_SECS),
           radius: ARROW_RADIUS,
           homingRate: 0,
           onTerrain: 'stop',
@@ -356,10 +373,14 @@ export class Bow implements Weapon {
 /**
  * The wizard's staff. Slow, hard-hitting, and it steers.
  *
- * The legacy cooldown is two full seconds, which is bearable against a boss
- * that cannot dodge and hopeless against a player who can. It comes down to
- * 1.2, and the bolt keeps its homing, so the wizard trades the archer's rate of
- * fire for shots that are hard to simply walk away from.
+ * The legacy cooldown was two full seconds, which is bearable against a boss
+ * that cannot dodge and hopeless against a player who can. It came down to 1.2
+ * here, and the bolt keeps its homing, so the wizard trades the archer's rate
+ * of fire for shots that are hard to simply walk away from.
+ *
+ * The single-player game has since arrived at 1.2 as well, by its own road
+ * (`wizBoltCooldown`). Deliberately still two figures: they agree today, and
+ * nothing has ever said they must. Binding them would decide that quietly.
  */
 export class Staff implements Weapon {
   readonly kind = 'bolt' as const;
@@ -371,11 +392,11 @@ export class Staff implements Weapon {
         kind: 'shot',
         shot: {
           flavour: 'bolt',
-          speed: 468,            // wizBoltSpeed
+          speed: FIGURES.BOLT_SPEED,
           damage: BOLT_DAMAGE,
-          lifeTicks: ticks(3.5), // wizBoltLifetime
+          lifeTicks: ticks(FIGURES.BOLT_LIFE_SECS),
           radius: BOLT_RADIUS,
-          homingRate: 4.5,       // wizBoltTurnRate
+          homingRate: FIGURES.BOLT_TURN_RATE,
           onTerrain: 'stop',
           explodesAtRest: false,
           drownsInWater: false,
@@ -395,7 +416,7 @@ export class Staff implements Weapon {
  */
 export class Spear implements Weapon {
   readonly kind = 'spear' as const;
-  readonly cooldownTicks = ticks(1.0); // knightSpearCooldown
+  readonly cooldownTicks = ticks(FIGURES.SPEAR_COOLDOWN_SECS);
 
   use(): WeaponEffect[] {
     return [
@@ -405,7 +426,7 @@ export class Spear implements Weapon {
           reach: SPEAR_REACH,
           thrust: SPEAR_THRUST,
           radius: 22,              // the probe radius, hardcoded in legacy
-          durationTicks: ticks(0.35), // knightSpearSwingDuration
+          durationTicks: ticks(FIGURES.SPEAR_SWING_SECS),
           damage: SPEAR_DAMAGE,
         },
       },
@@ -431,9 +452,9 @@ export class Crossbow implements Weapon {
       kind: 'shot' as const,
       shot: {
         flavour: 'arrow' as const,
-        speed: 500,
+        speed: FIGURES.ARROW_SPEED,
         damage: CROSSBOW_BOLT_DAMAGE,
-        lifeTicks: ticks(1.5),
+        lifeTicks: ticks(FIGURES.ARROW_LIFE_SECS),
         radius: CROSSBOW_BOLT_RADIUS,
         homingRate: 0,
         onTerrain: 'stop' as const,
@@ -581,9 +602,9 @@ export const STORM_COOLDOWN_TICKS = ticks(6);
  */
 export const WHIRLWIND_BLAST_RADIUS = 70;
 export const WHIRLWIND_TICK_DAMAGE = 1;
-export const WHIRLWIND_TICK_INTERVAL_TICKS = ticks(0.22);
-export const WHIRLWIND_DURATION_TICKS = ticks(3);
-export const WHIRLWIND_COOLDOWN_TICKS = ticks(6);
+export const WHIRLWIND_TICK_INTERVAL_TICKS = ticks(FIGURES.WHIRLWIND_TICK_SECS);
+export const WHIRLWIND_DURATION_TICKS = ticks(FIGURES.WHIRLWIND_DURATION_SECS);
+export const WHIRLWIND_COOLDOWN_TICKS = ticks(FIGURES.WHIRLWIND_COOLDOWN_SECS);
 
 /**
  * The wizard's Lightning Storm. Instant: there is no wind-up and nothing
