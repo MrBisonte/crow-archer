@@ -22,6 +22,7 @@ import { pathToFileURL } from 'node:url';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
+import { TOO_LARGE, readBody } from '../dev/flight-body';
 import { FLIGHT_PATH, MAX_BODY_BYTES, toLine } from '../dev/flight-path';
 import { WS_PATH, type PlayerId, type RoomCode, type Snapshot } from '../net/protocol';
 import { PAGES_ORIGIN, SERVER_ORIGIN } from '../net/server-url';
@@ -187,31 +188,24 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
       return;
     }
     const cors = origin === undefined ? {} : { 'access-control-allow-origin': origin };
-    // Buffers, decoded once at the end: a multi-byte character split across a
-    // chunk boundary decodes to replacement characters if each chunk is
-    // stringified on its own, which corrupts a log nobody would question.
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) { res.writeHead(413, cors).end(); req.destroy(); return; }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (res.writableEnded) return;   // the cap already answered
-      let line: string;
-      try {
-        line = `${toLine(Buffer.concat(chunks).toString('utf8'), Date.now())}\n`;
-      } catch {
-        res.writeHead(400, cors).end();
-        return;
-      }
-      void appendFlight(line)
-        .then(() => { res.writeHead(204, cors).end(); })
-        // A full disk is the server's fault, not the page's, and saying so is
-        // what stops the recorder giving up on a sink that is coming back.
-        .catch(() => { res.writeHead(500, cors).end(); });
-    });
+    void readBody(req, MAX_BODY_BYTES).then(
+      (body) => {
+        let line: string;
+        try {
+          line = `${toLine(body, Date.now())}\n`;
+        } catch {
+          res.writeHead(400, cors).end();
+          return;
+        }
+        return appendFlight(line).then(
+          () => { res.writeHead(204, cors).end(); },
+          // A full disk is the server's fault, not the page's, and saying so
+          // is what stops the recorder giving up on a sink that is coming back.
+          () => { res.writeHead(500, cors).end(); },
+        );
+      },
+      (err: Error) => { res.writeHead(err.message === TOO_LARGE ? 413 : 400, cors).end(); },
+    );
   };
 
   // Four routes, so they are read here rather than routed through a table
