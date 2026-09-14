@@ -10,6 +10,7 @@ import type {
   GameMode,
   MapKind,
   MatchResult,
+  PlayerSlot,
   PlayerStart,
   ServerMessage,
   Snapshot,
@@ -449,20 +450,34 @@ export class LobbyController {
     y += 40;
 
     // Render slots
-    for (const slot of this.#state.roomView.slots) {
-      const marker = slot.id === this.#state.userSlot ? '▶ ' : '  ';
-      const readyMark = slot.ready ? '[✓]' : '[ ]';
-      this.#ctx.fillText(
-        `${marker}${slot.name.padEnd(8)} ${slot.character.padEnd(8)} ${readyMark}`,
-        x,
-        y,
-      );
+    for (const line of describeSlots(this.#state.roomView.slots, this.#state.userSlot)) {
+      this.#ctx.fillText(line, x, y);
       y += 25;
     }
 
     y += 20;
     this.#ctx.fillText('[R] READY  [ESC] LEAVE', x, y);
   }
+}
+
+/**
+ * One line per seat, own seat marked.
+ *
+ * A hero more than one seat holds is named as SHARED on every seat holding it.
+ * The server allows the duplicate, and without a word for it the screen cannot
+ * be told apart from one where everybody picked separately: a seat opens on the
+ * archer, so a room where nobody has chosen yet is already full of them, and
+ * the rows say only what each player is playing.
+ */
+export function describeSlots(slots: readonly PlayerSlot[], userSlot: number | null): string[] {
+  const held = new Map<CharacterKind, number>();
+  for (const slot of slots) held.set(slot.character, (held.get(slot.character) ?? 0) + 1);
+  return slots.map((slot) => {
+    const marker = slot.id === userSlot ? '▶ ' : '  ';
+    const readyMark = slot.ready ? '[✓]' : '[ ]';
+    const shared = (held.get(slot.character) ?? 0) > 1 ? ' SHARED' : '';
+    return `${marker}${slot.name.padEnd(8)} ${slot.character.padEnd(8)} ${readyMark}${shared}`;
+  });
 }
 
 /**
