@@ -152,6 +152,29 @@ describe('RoomStore', () => {
     });
   });
 
+  describe('a match in progress', () => {
+    beforeEach(() => {
+      ok(store.create(10, 'alex'));
+      ok(store.join(11, 'AAAA', 'sam'));
+      store.beginMatch('AAAA');
+    });
+
+    it('refuses a character pick and leaves the seat as the match started it', () => {
+      expect(store.setCharacter(11, 'knight')).toEqual({ ok: false, error: 'ROOM_IN_MATCH' });
+      expect(ok(store.viewOf('AAAA')).slots[1]!.character).toBe('archer');
+    });
+
+    it('refuses a readiness change', () => {
+      expect(store.setReady(11, Readiness.NOT_READY)).toEqual({ ok: false, error: 'ROOM_IN_MATCH' });
+    });
+
+    it('takes both again once the match has ended', () => {
+      store.endMatch('AAAA');
+      expect(ok(store.setCharacter(11, 'knight')).slots[1]!.character).toBe('knight');
+      expect(ok(store.setReady(11, Readiness.READY)).slots[1]!.ready).toBe(true);
+    });
+  });
+
   describe('map selection', () => {
     beforeEach(() => {
       ok(store.create(10, 'alex'));

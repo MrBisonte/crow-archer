@@ -316,10 +316,21 @@ export class RoomStore {
     return slot === -1 ? null : { room, slot };
   }
 
-  /** Shared shape for the per-seat setters: find, mutate, return the new view. */
+  /**
+   * Shared shape for the per-seat setters: find, mutate, return the new view.
+   *
+   * A seat is sealed for as long as the match runs, and both setters are sealed
+   * with it rather than the pick alone. The pick is what the running world was
+   * built from, so changing it mid-match leaves the lobby describing a roster
+   * nobody is playing. Readiness is worse: it is cleared when a match ends, not
+   * when one begins, so every seat is still ready while the match is on and a
+   * SET_READY arriving here passes allReady and starts the match a second time,
+   * on a fresh seed, under the one being played.
+   */
   #updateSeat(conn: ConnectionId, change: (seat: Seat) => void): RoomResult<RoomView> {
     const found = this.#locate(conn);
     if (!found) return err('NOT_IN_ROOM');
+    if (found.room.phase === RoomPhase.IN_MATCH) return err('ROOM_IN_MATCH');
     const seat = found.room.seats[found.slot];
     if (!seat) return err('NOT_IN_ROOM');
 

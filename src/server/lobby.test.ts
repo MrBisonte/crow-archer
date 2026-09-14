@@ -251,6 +251,31 @@ describe('Lobby', () => {
     });
   });
 
+  describe('while a match is running', () => {
+    beforeEach(() => {
+      greet(1, 'alex'); greet(2, 'sam');
+      lobby.receive(1, { type: 'CREATE_ROOM' });
+      lobby.receive(2, { type: 'JOIN_ROOM', code: 'AAAA' });
+      lobby.receive(1, { type: 'SET_READY', ready: true });
+      lobby.receive(2, { type: 'SET_READY', ready: true });   // the match begins here
+    });
+
+    it('refuses a character pick, telling only the sender', () => {
+      const out = lobby.receive(2, { type: 'SET_CHARACTER', character: 'knight' });
+      expect(only(out, 2)).toMatchObject({ type: 'ERROR', code: 'ROOM_IN_MATCH' });
+      expect(to(out, 1)).toEqual([]);                          // nobody else is disturbed
+    });
+
+    it('does not start a second match when a seat readies again', () => {
+      // Readiness survives MATCH_START -- it is cleared when the match ends --
+      // so an unguarded SET_READY finds every seat ready and starts the match
+      // over, on a fresh seed, under a match that is already being played.
+      const out = lobby.receive(2, { type: 'SET_READY', ready: true });
+      expect(out.map((o) => o.message.type)).not.toContain('MATCH_START');
+      expect(only(out, 2)).toMatchObject({ type: 'ERROR', code: 'ROOM_IN_MATCH' });
+    });
+  });
+
   describe('disconnect', () => {
     it('frees the seat and tells the rest', () => {
       greet(1, 'alex'); greet(2, 'sam');
