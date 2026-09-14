@@ -35,8 +35,17 @@ import { Lobby, randomRoomCode, type Outbound } from './lobby';
 import { RoomStore, type ConnectionId } from './room';
 import { Match, TICK_HZ } from './match';
 
-/** Rooms one process will hold. Past this, CREATE_ROOM answers SERVER_FULL. */
-const MAX_ROOMS = 500;
+/**
+ * Rooms one process will hold. Past this, CREATE_ROOM answers SERVER_FULL.
+ *
+ * Ten, not the 500 this started at. Rooms live in this process's memory and
+ * the deployed machine has 256 MB, so the old number was a cap that could
+ * never be reached without the machine dying first — which answers a player
+ * with a dead socket instead of "the server has no room to spare". Ten is a
+ * number the box can actually hold, and raising it is a line to change once
+ * the machine is bigger. See fly.toml.
+ */
+const MAX_ROOMS = 10;
 
 /** Milliseconds of simulated time in one tick. */
 const TICK_MS = 1000 / TICK_HZ;
