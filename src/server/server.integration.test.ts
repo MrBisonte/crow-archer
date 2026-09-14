@@ -4,9 +4,15 @@
  * clients gather in one lobby and see each other's picks?
  */
 
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
+import { FLIGHT_PATH, MAX_BODY_BYTES } from '../dev/flight-path';
+import { PAGES_ORIGIN, SERVER_ORIGIN } from '../net/server-url';
 import { Team } from '../sim/team';
 import { Button } from '../sim/input';
 import { PLAYER_MAX_HP } from '../sim/arena';
@@ -634,5 +640,106 @@ describe('serving the client', () => {
       socket.on('open', () => resolve(new Error('the server upgraded a page request')));
     });
     expect(failure.message).not.toContain('upgraded');
+  });
+});
+
+/**
+ * The flight route on the deployed server, driven through a real port.
+ *
+ * The line format and the cap are pure and tested where they live
+ * (src/dev/flight-path.ts); what is only observable here is the wiring — the
+ * method, the origin rules, the header on the way back, and the fact that a
+ * record reaches the disk.
+ */
+describe('receiving a flight record', () => {
+  let server: RunningServer;
+  let dir: string;
+
+  const post = async (body: string, headers: Record<string, string> = {}) =>
+    fetch(`http://127.0.0.1:${server.port}${FLIGHT_PATH}`, { method: 'POST', body, headers });
+
+  /** Every line in this run's log, which is the only file in the directory. */
+  const lines = async (): Promise<Record<string, unknown>[]> => {
+    const [name] = await readdir(dir);
+    if (name === undefined) return [];
+    const text = await readFile(join(dir, name), 'utf8');
+    return text.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+  };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'crow-flight-'));
+    server = await startServer({ port: 0, flightDir: dir });
+  });
+
+  afterEach(async () => {
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('appends one line per record, stamped with its own receive time', async () => {
+    const before = Date.now();
+    expect((await post('{"kind":"beat","raf":7}')).status).toBe(204);
+    expect((await post('{"kind":"bye"}')).status).toBe(204);
+
+    const written = await lines();
+    expect(written.map((l) => l['kind'])).toEqual(['beat', 'bye']);
+    expect(written[0]?.['raf']).toBe(7);
+    expect(written[0]?.['srv']).toBeGreaterThanOrEqual(before);
+  });
+
+  it('writes nothing at all until a record arrives', async () => {
+    // A directory made at startup would appear beside every server anyone
+    // ever starts, including each of the dozens this suite starts.
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('answers the Pages origin with the header that lets the reply be read', async () => {
+    // Without it the page's own fetch rejects, the recorder counts a failure,
+    // and after five it stops sending — so the header is what keeps a
+    // cross-origin recorder alive, not just what lets it read a 204.
+    const res = await post('{"kind":"beat"}', { origin: PAGES_ORIGIN });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe(PAGES_ORIGIN);
+  });
+
+  it('answers its own origin too, since the Fly build posts cross-origin-shaped', async () => {
+    const res = await post('{"kind":"beat"}', { origin: SERVER_ORIGIN });
+    expect(res.headers.get('access-control-allow-origin')).toBe(SERVER_ORIGIN);
+  });
+
+  it('refuses an origin off the list, and writes nothing for it', async () => {
+    // A browser would discard the reply either way. Refusing is about the
+    // file: an open sink on a public URL is a file anyone can fill.
+    const res = await post('{"kind":"beat"}', { origin: 'https://evil.example.com' });
+    expect(res.status).toBe(403);
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    expect(await lines()).toEqual([]);
+  });
+
+  it('refuses a body that is not a JSON object', async () => {
+    expect((await post('[1,2]')).status).toBe(400);
+    expect((await post('not json')).status).toBe(400);
+    expect(await lines()).toEqual([]);
+  });
+
+  it('refuses a body over the cap rather than appending it', async () => {
+    const huge = JSON.stringify({ kind: 'beat', pad: 'x'.repeat(MAX_BODY_BYTES + 1) });
+    // The connection is destroyed mid-body, so the client may see the 413 or
+    // see the socket go; either way what matters is that nothing was written.
+    await post(huge).catch(() => undefined);
+    expect(await lines()).toEqual([]);
+  });
+
+  it('answers 405 to anything but a POST, so a browsed URL is not a record', async () => {
+    const res = await fetch(`http://127.0.0.1:${server.port}${FLIGHT_PATH}`);
+    expect(res.status).toBe(405);
+  });
+
+  it('keeps the route off every other path', async () => {
+    const res = await fetch(`http://127.0.0.1:${server.port}/__flightlog`, {
+      method: 'POST',
+      body: '{"kind":"beat"}',
+    });
+    expect(res.status).toBe(404);
   });
 });

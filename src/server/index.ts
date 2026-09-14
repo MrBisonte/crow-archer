@@ -10,15 +10,21 @@
  *
  * All lobby behaviour lives in lobby.ts and room.ts, which have no I/O and are
  * covered by unit tests. Keep this file thin enough that there is nothing here
- * worth testing through a real port.
+ * worth testing through a real port: the flight route's own decisions — the
+ * body cap, the line format — live in src/dev/flight-path.ts for that reason,
+ * and what is left here is plumbing, which the integration test drives.
  */
 
-import { createServer } from 'node:http';
+import { appendFile, mkdir } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
+import { FLIGHT_PATH, MAX_BODY_BYTES, toLine } from '../dev/flight-path';
 import { WS_PATH, type PlayerId, type RoomCode, type Snapshot } from '../net/protocol';
+import { PAGES_ORIGIN, SERVER_ORIGIN } from '../net/server-url';
 import type { InputCommand } from '../sim/input';
 import { BattleWorld } from '../sim/battle-world';
 import { noiseFor } from '../sim/noise';
@@ -47,6 +53,25 @@ const MAX_CATCHUP_TICKS = 5;
 /** Frames larger than this are refused before they are parsed. */
 const MAX_FRAME_BYTES = 8 * 1024;
 
+/**
+ * Where flight records land when nothing says otherwise: the same gitignored
+ * directory the dev sink writes, so running this server locally behaves the
+ * way `npm run dev` does. The deployment points FLIGHT_LOG_DIR at a volume,
+ * because a machine that restarts mid-hunt would otherwise take the evidence
+ * with it — see fly.toml.
+ */
+const DEFAULT_FLIGHT_DIR = '_flightlogs';
+
+/**
+ * The page origins allowed to file a flight record. An allowlist and not `*`:
+ * the log is a file on a volume, and a sink open to the web is a sink anyone
+ * can fill. Both entries are deployment facts read from their one home in
+ * ../net/server-url, which is where the client reads them to decide where to
+ * point — a disagreement between the two would present as a CORS error rather
+ * than as the typo it is.
+ */
+const FLIGHT_ORIGINS: readonly string[] = [PAGES_ORIGIN, SERVER_ORIGIN];
+
 export interface ServerOptions {
   port: number;
   maxRooms?: number;
@@ -61,6 +86,11 @@ export interface ServerOptions {
    * test can hand over a page without a build on disk to point at.
    */
   clientPage?: ClientPage;
+  /**
+   * Where flight records are appended. Injected for the same reason again: a
+   * test needs a directory it owns. The deployment passes a volume mount.
+   */
+  flightDir?: string;
 }
 
 /** The path a load balancer polls to decide the process is alive. */
@@ -119,12 +149,81 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
 
   const clientPage = options.clientPage ?? new FileClientPage();
 
-  // Three routes, so they are read here rather than routed through a table
+  // One file per process start, as the dev sink does it: a restart opens a new
+  // log rather than interleaving two runs into one file with no boundary.
+  const flightDir = options.flightDir ?? DEFAULT_FLIGHT_DIR;
+  const flightFile = join(
+    flightDir,
+    `session-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`,
+  );
+  // Made on the first record rather than at startup, so a server nobody
+  // records against leaves no directory behind — which is every test run.
+  let flightDirReady: Promise<unknown> | null = null;
+  const appendFlight = (line: string): Promise<void> => {
+    flightDirReady ??= mkdir(flightDir, { recursive: true });
+    return flightDirReady.then(() => appendFile(flightFile, line));
+  };
+
+  /**
+   * Takes one flight record from the page (src/dev/flight-recorder.ts).
+   *
+   * The recorder posts a bare string with no custom header, so its requests are
+   * CORS-simple and never preflight — there is no OPTIONS handler here because
+   * no browser asks for one. What a cross-origin page does need is the
+   * allow-origin header coming back: without it the page's own `fetch` rejects,
+   * the recorder counts a failure, and after five it stops sending altogether.
+   *
+   * An origin off the list is refused rather than merely denied that header. A
+   * browser would discard the response either way, but the line would already
+   * be in the log, and the point of the list is what gets written. A request
+   * with no Origin at all is not a browser — curl, a probe, this test suite —
+   * and CORS was never a defence against those.
+   */
+  const receiveFlight = (req: IncomingMessage, res: ServerResponse): void => {
+    if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+    const origin = req.headers.origin;
+    if (origin !== undefined && !FLIGHT_ORIGINS.includes(origin)) {
+      res.writeHead(403, { 'content-type': 'text/plain' }).end('origin not allowed');
+      return;
+    }
+    const cors = origin === undefined ? {} : { 'access-control-allow-origin': origin };
+    // Buffers, decoded once at the end: a multi-byte character split across a
+    // chunk boundary decodes to replacement characters if each chunk is
+    // stringified on its own, which corrupts a log nobody would question.
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) { res.writeHead(413, cors).end(); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (res.writableEnded) return;   // the cap already answered
+      let line: string;
+      try {
+        line = `${toLine(Buffer.concat(chunks).toString('utf8'), Date.now())}\n`;
+      } catch {
+        res.writeHead(400, cors).end();
+        return;
+      }
+      void appendFlight(line)
+        .then(() => { res.writeHead(204, cors).end(); })
+        // A full disk is the server's fault, not the page's, and saying so is
+        // what stops the recorder giving up on a sink that is coming back.
+        .catch(() => { res.writeHead(500, cors).end(); });
+    });
+  };
+
+  // Four routes, so they are read here rather than routed through a table
   // that would have one entry per line and a lookup between them.
   const http = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
     if (path === HEALTH_PATH) {
       res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
+      return;
+    }
+    if (path === FLIGHT_PATH) {
+      receiveFlight(req, res);
       return;
     }
     if (path !== '/' && path !== '/index.html') {
@@ -352,7 +451,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // PORT is what every host this deploys to assigns, so it is read and not
   // configured. 8082 is the local default the client falls back to.
   const port = Number(process.env['PORT'] ?? 8082);
-  void startServer({ port }).then((server) => {
+  // FLIGHT_LOG_DIR is a volume mount in the deployment so a restart does not
+  // take the log with it; unset, records land where the dev sink's do.
+  void startServer({ port, flightDir: process.env['FLIGHT_LOG_DIR'] }).then((server) => {
     process.stdout.write(`crow-archer on http://localhost:${server.port} (socket ${WS_PATH})\n`);
   });
 }
