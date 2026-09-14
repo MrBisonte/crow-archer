@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { FLIGHT_PATH, flightEndpoint } from './flight-path';
 import { classify, clientId, mintClientId, stamp } from './flight-recorder';
 import type { Pulse } from './flight-recorder';
 
@@ -81,6 +82,24 @@ describe('classify', () => {
     // Entering play from the intro: t has not moved yet and should not alarm.
     const prev = pulse({ state: 'stage_intro' });
     expect(classify(prev, pulse({ lastTs: 1500 }), true, true)).toBeNull();
+  });
+});
+
+describe('where the recorder posts', () => {
+  it('stays relative wherever the page came from a server', () => {
+    // The vite dev server and the deployed one both serve the page and answer
+    // the sink, so neither needs an origin named and both keep the address
+    // they have always used.
+    expect(flightEndpoint({ protocol: 'http:', host: 'localhost:8081' })).toBe(FLIGHT_PATH);
+    expect(flightEndpoint({ protocol: 'https:', host: 'crow-archer.fly.dev' })).toBe(FLIGHT_PATH);
+  });
+
+  it('names the deployed server from a static host, which answers no route', () => {
+    // Relative here resolves to mrbisonte.github.io/__flight, which 404s —
+    // the whole reason the endpoint is a decision rather than a constant.
+    expect(flightEndpoint({ protocol: 'https:', host: 'mrbisonte.github.io' })).toBe(
+      'https://crow-archer.fly.dev/__flight',
+    );
   });
 });
 
