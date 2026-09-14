@@ -14,9 +14,13 @@ boot();
 const canvas = document.getElementById('game');
 if (canvas) keepCanvasFitted(canvas, window);
 
-// A monitored playtest ships the diagnostic log to the dev server as it
-// happens — src/dev/flight-recorder.ts is the how and the why. Behind the DEV
-// gate the release build carries none of it; ?rec=0 opts a dev session out.
-if (import.meta.env.DEV && new URLSearchParams(location.search).get('rec') !== '0') {
+// A monitored playtest ships the diagnostic log to a server as it happens —
+// src/dev/flight-recorder.ts is the how and the why. Opt-in everywhere, the
+// published build included: the recorder used to be absent from a release, and
+// now that it is not, "on unless you say otherwise" would mean recording every
+// stranger who opens a public link. Nobody asked to be telemetry. `?rec=1` is
+// the whole switch, and the import is dynamic so a page without it pays
+// nothing but the bytes.
+if (new URLSearchParams(location.search).get('rec') === '1') {
   void import('./dev/flight-recorder').then((m) => m.startFlightRecorder());
 }
