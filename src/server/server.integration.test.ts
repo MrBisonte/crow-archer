@@ -707,6 +707,18 @@ describe('receiving a flight record', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe(SERVER_ORIGIN);
   });
 
+  it('accepts the page it served itself, whatever address that page was reached at', async () => {
+    // The case a play session found and curl could not. A browser sends Origin
+    // on every POST, its own page included, so an allowlist of two deployment
+    // addresses refused the server's own page on localhost, on 127.0.0.1 and
+    // on anything else that is not those two.
+    const own = `http://127.0.0.1:${server.port}`;
+    const res = await post('{"kind":"hello"}', { origin: own });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe(own);
+    expect(await lines()).toHaveLength(1);
+  });
+
   it('refuses an origin off the list, and writes nothing for it', async () => {
     // A browser would discard the reply either way. Refusing is about the
     // file: an open sink on a public URL is a file anyone can fill.

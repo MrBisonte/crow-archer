@@ -64,6 +64,32 @@ const MAX_CATCHUP_TICKS = 5;
 const MAX_FRAME_BYTES = 8 * 1024;
 
 /**
+ * May a page at this origin file a flight record against this host?
+ *
+ * Yes when the two are the same origin, whatever that origin happens to be.
+ * The server is reached at localhost, at 127.0.0.1, at a LAN address and at
+ * its deployed name, and a page it served itself is not a cross-origin caller
+ * on any of them. Yes again when the origin is one of the deployments named
+ * in FLIGHT_ORIGINS, which is the genuinely cross-origin case: the published
+ * static build posting to the server that runs nothing for it.
+ *
+ * Exported for the test that pins the same-origin case, which a request made
+ * without an Origin header cannot reach.
+ */
+export function isOriginAllowed(origin: string, host: string | undefined): boolean {
+  if (FLIGHT_ORIGINS.includes(origin)) return true;
+  if (host === undefined) return false;
+  // Compare hosts, not whole origins: the scheme a proxy terminated is not
+  // something this process can see, and http/https of the same host is still
+  // the same deployment.
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;   // A malformed Origin is not one of ours.
+  }
+}
+
+/**
  * Where flight records land when nothing says otherwise: the same gitignored
  * directory the dev sink writes, so running this server locally behaves the
  * way `npm run dev` does. The deployment points FLIGHT_LOG_DIR at a volume,
@@ -188,11 +214,17 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
    * be in the log, and the point of the list is what gets written. A request
    * with no Origin at all is not a browser — curl, a probe, this test suite —
    * and CORS was never a defence against those.
+   *
+   * Same origin is always allowed, and it has to be said rather than assumed: a
+   * browser sends Origin on every POST, its own page included, so a list of
+   * two deployment addresses refused the server's own page on every host but
+   * those two. It cost a play session to find, because curl sends no Origin and
+   * so takes the branch above rather than this one.
    */
   const receiveFlight = (req: IncomingMessage, res: ServerResponse): void => {
     if (req.method !== 'POST') { res.writeHead(405).end(); return; }
     const origin = req.headers.origin;
-    if (origin !== undefined && !FLIGHT_ORIGINS.includes(origin)) {
+    if (origin !== undefined && !isOriginAllowed(origin, req.headers.host)) {
       res.writeHead(403, { 'content-type': 'text/plain' }).end('origin not allowed');
       return;
     }
