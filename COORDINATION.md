@@ -124,6 +124,18 @@ session saying so. Replace it with the real value.
   has a deterministic repro and can sweep the fix the same way. The same four
   seeds fail with `Figures`'s branch stashed, so it is nobody's recent diff.
 
+  **It has a SECOND symptom, and the same cause.** `Abilities` hit
+  `game.test.ts`'s "does not stand the torch inside the chest" — the sibling
+  case, a torch on the chest's own tile rather than beyond reach of it — in a
+  pre-commit gate on a change proven behaviour-inert by a full `CONFIG` dump.
+  Re-swept both predicates over the same 500 pinned seeds: `102, 151, 206,
+  428` out of reach (reproducing `Figures`'s four exactly), and **`374` puts a
+  torch ON the chest**, 0.2% per carved maze and so about 2% per run over the
+  ten the test carves. Whoever takes the placement now has a deterministic
+  repro for each half, and a fix has to answer both: one says the reach
+  constant is wrong for a diagonal, the other says the walk can stop on the
+  tile it started from.
+
 - **The wizard's homing bolt only steers at crows.** `game.js` around line 4703:
   the target is the boss when one is in play, and otherwise the nearest of
   `crows`. Nothing walks `skeletons` or `soldiers`, so a bolt flies straight
