@@ -14,32 +14,38 @@ key. Both were diagnosed from log lines of the kinds documented below.
 
 ## Overview
 
-The system has four parts.
+The system has five parts. There are two sinks, not one: the recorder ships in
+the published build now, so a session can be recorded from a page a developer's
+machine did not serve.
 
 | Part | File | Role |
 |---|---|---|
 | recorder | `src/dev/flight-recorder.ts` | Runs in the game page. Sends telemetry once per second and raises alarms. |
-| sink | `src/dev/flight-sink.ts` | A vite dev-server plugin. Receives telemetry and appends it to the log file. |
-| flight log | `_flightlogs/session-<start>.jsonl` | The recorded session. One JSON object per line. |
+| dev sink | `src/dev/flight-sink.ts` | A vite dev-server plugin. Answers `/__flight` under `npm run dev`. |
+| deployed sink | `src/server/index.ts` | The same route on the production server, for the published build. |
+| flight log | `session-<start>.jsonl` | The recorded session. One JSON object per line. |
 | watcher | `scripts/flight-watch.mjs` | Follows the newest log and prints one line per notable record. |
 
 ```mermaid
 flowchart LR
-  page["game page<br/>src/dev/flight-recorder.ts"] -->|"POST /__flight<br/>beat 1/s, alarm, err, bye"| sink["vite dev server<br/>src/dev/flight-sink.ts"]
-  sink -->|"append line, add srv stamp"| log["_flightlogs/session-(start).jsonl"]
+  page["game page<br/>src/dev/flight-recorder.ts"] -->|"POST /__flight<br/>beat 1/s, alarm, err, bye"| sink["a sink: the vite dev server,<br/>or src/server/index.ts"]
+  sink -->|"append line, add srv stamp"| log["session-(start).jsonl"]
   log --> watch["scripts/flight-watch.mjs"]
   watch -->|"one line per event"| reader["terminal, or an agent monitor"]
 ```
 
-The endpoint path `/__flight` is defined once, in `src/dev/flight-path.ts`,
-and imported by both halves.
+`src/dev/flight-path.ts` is the one home for everything the three have to
+agree on: the endpoint path `/__flight`, the 1 MB body cap, and `toLine`,
+which is the line a sink writes. It also decides the address a page posts to —
+relative wherever the page came from a server, and the deployed server by name
+from GitHub Pages, which serves the game and answers no route of its own.
 
 ### Topology
 
 The complete system, producers to consumers:
 
 ```
-+---------------------------- game page (dev build only) ---------------------+
++------------------------- game page, opted in with ?rec=1 -------------------+
 |                                                                             |
 |  producers                          src/sim/log.ts                          |
 |    game.js transitionTo()   info --+                                        |
@@ -64,11 +70,14 @@ The complete system, producers to consumers:
                     after 5 consecutive failures
                                        |
                                        v
-+---------------------------- vite dev server --------------------------------+
-|  src/dev/flight-sink.ts   plugin, apply 'serve'; absent from builds         |
-|    /__flight middleware:  non-POST -> 405, body over 1 MB -> dropped,       |
-|    non-object JSON -> 400, else wrap {...body, srv: Date.now()} -> 204      |
-|    append one line -> _flightlogs/session-<server-start>.jsonl              |
++------------------------------- a sink --------------------------------------+
+|  src/dev/flight-sink.ts   vite plugin, apply 'serve'; absent from builds    |
+|  src/server/index.ts      the same route on the deployed server             |
+|    /__flight:  non-POST -> 405, body over 1 MB -> dropped, non-object       |
+|    JSON -> 400, else wrap {...body, srv: Date.now()} -> 204                 |
+|    deployed only: an Origin off the allowlist -> 403, an allowed one is     |
+|    echoed back as access-control-allow-origin                               |
+|    append one line -> <log dir>/session-<server-start>.jsonl                |
 +--------------------------------------+--------------------------------------+
                                        |
                                        |  poll every 500 ms: pick the newest
@@ -94,10 +103,18 @@ Component notes, top to bottom:
   imports `game.js`; it reads `window.__game`.
 - Beats use `fetch` with `keepalive`. Alarms, errors and the goodbye prefer
   `navigator.sendBeacon`, which the browser completes even while the page
-  unloads. Both carry one JSON object per request.
-- The sink is the only writer of the log file. It answers 405 to non-POST,
-  400 to a body that is not a JSON object, and 204 on append. It creates
-  `_flightlogs/` on first use.
+  unloads. Both carry one JSON object per request. Both send a bare string
+  with no custom header, so a cross-origin post is a CORS "simple request"
+  and no browser preflights it — there is no `OPTIONS` handler and none is
+  owed. What a cross-origin page does need is the allow-origin header coming
+  back: without it `fetch` rejects, the recorder counts a failure, and after
+  five it stops sending.
+- A sink is the only writer of its log file. It answers 405 to non-POST,
+  400 to a body that is not a JSON object, and 204 on append. It creates the
+  log directory on first use. The deployed one additionally refuses an
+  `Origin` outside its allowlist — `PAGES_ORIGIN` and `SERVER_ORIGIN` in
+  `src/net/server-url.ts`, which is where the client reads them too — because
+  an open sink on a public URL is a file anyone can fill.
 - The watcher is stateless across restarts except for its read offset; on
   attach it re-reads the newest file from the start, so its first burst is
   history.
@@ -131,8 +148,10 @@ Component notes, top to bottom:
    At startup the server prints `flight sink: <file>`. That file is the log
    for this server run.
 
-3. Hand the player the URL. The recorder is on by default under `npm run
-   dev`. The query parameter `rec=0` disables it for one page session.
+3. Hand the player the URL **with `?rec=1` on it**. The recorder is off
+   unless that parameter says otherwise, in every build — a page handed out
+   without it records nothing, which is the point: a public link should not
+   collect telemetry from whoever opens it.
 
 4. Optionally follow the log live:
 
@@ -145,9 +164,10 @@ Component notes, top to bottom:
    stop during a run. An agent runs the same script as a background monitor
    and receives one notification per line.
 
-> **Note.** One game page at a time. Beats carry no client identifier, so
-> two open pages interleave into one file and gap detection misreads them
-> as one page.
+> **Note.** Two open pages still interleave into one file, and the watcher's
+> gap detection reads the interleaving as one page. Every record carries a
+> per-page `cid`, so a log can be split by page after the fact — but the
+> watcher does not do it live. One game page at a time while you are watching.
 
 > **Note.** The watcher follows the newest `.jsonl` file in the directory
 > and reads it from the start when it attaches. The first burst of output
@@ -163,9 +183,17 @@ Component notes, top to bottom:
 
 ## The flight log
 
-The sink writes `_flightlogs/session-<start>.jsonl`, where `<start>` is the
-server start time in ISO format with `:` and `.` replaced by `-`. One file
-per dev-server run. The directory is gitignored.
+A sink writes `session-<start>.jsonl`, where `<start>` is the server start
+time in ISO format with `:` and `.` replaced by `-`. One file per server run,
+so a restart opens a new log rather than interleaving two runs with no
+boundary between them.
+
+Where that file lands depends on which sink took the record.
+
+| Sink | Directory |
+|---|---|
+| vite dev server | `_flightlogs/` beside `package.json`. Gitignored. |
+| deployed server | `$FLIGHT_LOG_DIR`, a Fly volume mounted at `/data/flightlogs` so the log survives a restart (`fly.toml`). Unset, it falls back to `_flightlogs/` beside the process. |
 
 Each line is one JSON object: the body of one POST from the page, plus one
 field the sink adds.
@@ -606,7 +634,8 @@ node -e "const l=require('fs').readFileSync(process.argv[1],'utf8').trim().split
 ```
 
 where
-- `<file>` is a path under `_flightlogs/`.
+- `<file>` is a path to a `session-*.jsonl` log; see
+  [The flight log](#the-flight-log) for where a sink puts one.
 
 All records inside a wall-clock window, for chasing a human report:
 
@@ -620,15 +649,29 @@ where
 
 ## The release build
 
-The production build contains no recorder code. `src/main.js` imports
-`src/dev/flight-recorder.ts` dynamically inside an `import.meta.env.DEV`
-conditional, so `vite build` excludes the module and everything only it
-imports. The sink plugin declares `apply: 'serve'`, so build output has no
-`/__flight` route. There is no runtime flag to disable because the code is
-absent from the artifact.
+The production build contains the recorder, and running it there is the whole
+reason this section changed: a bug nobody can reproduce on a dev server is the
+one worth recording from the build a player actually opened.
 
-`?rec=0` disables the recorder for one dev page session. That is the only
-switch that exists.
+`src/main.js` imports `src/dev/flight-recorder.ts` dynamically when the URL
+says `?rec=1`, and only then. That is the single switch, in every build. There
+is no build-time gate any more, so "which build is this?" is no longer a
+question anyone has to answer before reading a log — it is on or it is not,
+and the `hello` record's `href` says which URL turned it on.
+
+Two things follow from where the page came from.
+
+- **Served by the deployed server** (`crow-archer.fly.dev`): the post is
+  same-origin and the route is right there. Nothing to configure.
+- **Served by GitHub Pages**: Pages runs no server, so the recorder posts to
+  the deployed one by name and the request is cross-origin. It lands because
+  that route answers `access-control-allow-origin` for the Pages origin. A
+  page opened from a downloaded `crow-archer.html` reaches nothing at all —
+  a `file://` page has no origin to post from, and the recorder gives up
+  after five failed sends.
+
+Cost of carrying it: 463.29 kB to 468.67 kB of artifact, 152.22 kB to
+154.48 kB gzipped.
 
 ## Planned work: verbosity levels
 
@@ -645,16 +688,20 @@ in the single-file artifact. The requested shape:
 | `beats` | the above plus `beat` without `events` |
 | `full` | everything, as today |
 
+Two of the original constraints have since been met by other work, and are
+recorded here as done rather than deleted, because they were the reason the
+levels were asked for. The release build now carries the recorder and
+defaults to sending nothing, and its sink origin is explicit
+(`src/net/server-url.ts`); and every record carries a per-page `cid`, which
+lifts the one-page-at-a-time restriction above.
+
 Constraints for whoever builds it:
 
 - One constant table in `flight-recorder.ts` maps level to behavior. No
   scattered conditionals.
-- A non-dev build defaults to `off` and requires an explicit sink origin
-  before sending anything anywhere.
-- The `import.meta.env.DEV` exclusion for the normal release must survive
-  unchanged.
-- Add a per-page client id to `hello` and `beat` in the same change. That
-  lifts the one-page-at-a-time restriction above.
+- `?rec=1` is today's switch and would become `?rec=full`. Keep `1` working
+  or change the playbook's launch step in the same commit; a stale recipe
+  hands a player a URL that records nothing and says so nowhere.
 
 ## Resuming this work
 

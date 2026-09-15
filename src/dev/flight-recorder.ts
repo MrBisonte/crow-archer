@@ -17,8 +17,11 @@
  *   `movementBlockers()` attached, so a stuck run names its captor.
  * - `error` / `unhandledrejection` listeners flush immediately, stack attached.
  *
- * Dev-only: main.js imports this dynamically behind `import.meta.env.DEV`, so
- * the release build carries none of it; `?rec=0` opts a dev session out.
+ * Opt-in everywhere, published build included: main.js imports this
+ * dynamically only when the URL says `?rec=1`. A public page that recorded
+ * every stranger who opened it would be collecting telemetry nobody asked for,
+ * so the switch is a deliberate one a monitored session turns on, not a build
+ * flag. Where the records go is `flightEndpoint`'s decision, not this module's.
  * It reads the game through `window.__game` rather than importing game.js —
  * the recorder observes the page a player has, it is not part of the sim.
  */
@@ -26,7 +29,7 @@
 import { log } from '../sim/log';
 import type { LogEvent } from '../sim/log';
 
-import { FLIGHT_PATH } from './flight-path';
+import { flightEndpoint } from './flight-path';
 
 /** What `devHooks.pulse()` answers once a beat: the run's vitals in one read. */
 export interface Pulse {
@@ -179,10 +182,13 @@ export function stamp(payload: Record<string, unknown>): Record<string, unknown>
 function send(payload: Record<string, unknown>, urgent = false): void {
   if (failures >= MAX_SEND_FAILURES) return;
   const body = JSON.stringify(stamp(payload));
+  // Read per send rather than once at module load: this module is imported by
+  // tests in node, where there is no `location` to ask.
+  const url = flightEndpoint(location);
   // sendBeacon survives a closing page, which is what `urgent` means here.
   if (urgent && typeof navigator.sendBeacon === 'function'
-      && navigator.sendBeacon(FLIGHT_PATH, body)) return;
-  void fetch(FLIGHT_PATH, { method: 'POST', body, keepalive: urgent })
+      && navigator.sendBeacon(url, body)) return;
+  void fetch(url, { method: 'POST', body, keepalive: urgent })
     .then((r) => { failures = r.ok ? 0 : failures + 1; })
     .catch(() => { failures += 1; });
 }

@@ -9,6 +9,8 @@
  * Lives inside the vite dev server because `npm run dev` already IS the
  * controlled instance a monitored playtest runs on; a second process would be
  * one more thing to forget. `apply: 'serve'` keeps it out of builds entirely.
+ * The deployed server answers the same path for the published build — see
+ * src/server/index.ts — and both read the format from src/dev/flight-path.ts.
  */
 
 import { appendFile, mkdir } from 'node:fs/promises';
@@ -16,24 +18,8 @@ import { join } from 'node:path';
 
 import type { Plugin } from 'vite';
 
-import { FLIGHT_PATH } from './flight-path';
-
-/** A request body big enough to need more than this is a bug, not a beat. */
-const MAX_BODY_BYTES = 1_000_000;
-
-/**
- * One received body as the line to append: parsed, wrapped, re-serialised.
- * The server stamp wins a collision — the receive time is the one fact the
- * client cannot testify to. Throws on anything that is not a JSON object,
- * which the route answers with a 400.
- */
-export function toLine(body: string, receivedAt: number): string {
-  const parsed: unknown = JSON.parse(body);
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('flight payload must be a JSON object');
-  }
-  return JSON.stringify({ ...parsed, srv: receivedAt });
-}
+import { readBody } from './flight-body';
+import { FLIGHT_PATH, MAX_BODY_BYTES, toLine } from './flight-path';
 
 export function flightSink(): Plugin {
   return {
@@ -46,17 +32,11 @@ export function flightSink(): Plugin {
       server.config.logger.info(`flight sink: ${file}`);
       server.middlewares.use(FLIGHT_PATH, (req, res) => {
         if (req.method !== 'POST') { res.statusCode = 405; res.end(); return; }
-        let body = '';
-        req.on('data', (chunk: Buffer) => {
-          body += chunk;
-          if (body.length > MAX_BODY_BYTES) req.destroy();
-        });
-        req.on('end', () => {
-          void ready
-            .then(() => appendFile(file, `${toLine(body, Date.now())}\n`))
-            .then(() => { res.statusCode = 204; res.end(); })
-            .catch(() => { res.statusCode = 400; res.end(); });
-        });
+        void Promise.all([readBody(req, MAX_BODY_BYTES), ready])
+          .then(([body]) => appendFile(file, `${toLine(body, Date.now())}\n`))
+          .then(() => { res.statusCode = 204; res.end(); })
+          // A body over the cap lands here too, on a socket already hung up.
+          .catch(() => { res.statusCode = 400; res.end(); });
       });
     },
   };
