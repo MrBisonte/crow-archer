@@ -22,7 +22,13 @@ import {
   type PlayerStart,
   type PlayerTeam,
 } from '../net/protocol';
-import { SECONDARY_AMMO_MAX, ShotFlavourCode, packPlayerState, packShotState } from '../net/entity-state';
+import {
+  AbilityPhase,
+  SECONDARY_AMMO_MAX,
+  ShotFlavourCode,
+  packPlayerState,
+  packShotState,
+} from '../net/entity-state';
 import { ARENA_H, ARENA_W, CHARACTER_STATS, PLAYER_RADIUS, direction } from './arena';
 import { Terrain, type MapKind, type NoiseFactory } from './arena-map';
 import { slide } from './collide';
@@ -351,6 +357,11 @@ export class BattleWorld implements World {
           aim: f.aim,
           swing: f.swing ? 1 - f.swing.left / f.swing.spec.durationTicks : 0,
           secondaryAmmo: this.#secondaryAmmoOf(f),
+          // Nothing drives these yet: the wire carries them one commit ahead
+          // of the abilities that set them, so a bisect can tell a packing
+          // fault from a simulation one.
+          ability: AbilityPhase.NONE,
+          marked: false,
         }),
       })),
       ...this.#shots.map((s) => ({

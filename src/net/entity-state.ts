@@ -37,6 +37,42 @@ const SWING_SHIFT = 10;
 export const SECONDARY_AMMO_MAX = 7;
 const SECONDARY_AMMO_SHIFT = 14;
 
+/**
+ * What a body is doing with its THIRD ability, in two bits.
+ *
+ * An enum and not two flags, because these are phases of one ability and a
+ * body can only be in one of them: a knight winding up a charge is not also
+ * dashing it. Both phases change what the body may do — winding roots it,
+ * surging carries it and makes it briefly untouchable — so a client that
+ * cannot see them draws someone standing still who is not, and draws someone
+ * crossing the map with no reason given.
+ *
+ * `WINDING` is the knight's charge held and the archer's draw held. `SURGING`
+ * is the knight's dash running and the wizard's blink i-frames; one is a body
+ * travelling fast and the other a body that has just arrived, and what they
+ * share is the part a client has to draw — brief, committed, untouchable.
+ */
+export const AbilityPhase = {
+  NONE: 0,
+  WINDING: 1,
+  SURGING: 2,
+} as const;
+
+export type AbilityPhase = (typeof AbilityPhase)[keyof typeof AbilityPhase];
+
+const ABILITY_SHIFT = SECONDARY_AMMO_SHIFT + 3;
+const ABILITY_MASK = 0b11;
+
+/**
+ * Whether the ranger has this body marked, in the one bit above the phase.
+ *
+ * A flag and not a phase: being marked is something done TO a body by someone
+ * else, so it can be true at the same time as anything that body is doing.
+ * On the wire for the reason `secondaryAmmo` is: a mark nobody can see is a
+ * mark that costs the ranger a full meter and tells the fight nothing.
+ */
+const MARKED_BIT = 1 << (ABILITY_SHIFT + 2);
+
 const TAU = Math.PI * 2;
 
 export interface PlayerVisualState {
@@ -48,6 +84,10 @@ export interface PlayerVisualState {
   swing: number;
   /** Rounds of the secondary weapon left. Zero for anyone not carrying one. */
   secondaryAmmo: number;
+  /** Which phase of the third ability this body is in. */
+  ability: AbilityPhase;
+  /** Whether a ranger currently has this body marked. */
+  marked: boolean;
 }
 
 /** Packs a player's drawable state into the one number the snapshot carries. */
@@ -59,7 +99,14 @@ export function packPlayerState(v: PlayerVisualState): number {
   const aim = Math.min(AIM_STEPS - 1, Math.floor(turns * AIM_STEPS));
   const swing = Math.min(SWING_STEPS - 1, Math.max(0, Math.floor(v.swing * SWING_STEPS)));
   const rounds = Math.min(SECONDARY_AMMO_MAX, Math.max(0, Math.floor(v.secondaryAmmo)));
-  return flags | (aim << AIM_SHIFT) | (swing << SWING_SHIFT) | (rounds << SECONDARY_AMMO_SHIFT);
+  return (
+    flags |
+    (aim << AIM_SHIFT) |
+    (swing << SWING_SHIFT) |
+    (rounds << SECONDARY_AMMO_SHIFT) |
+    (v.ability << ABILITY_SHIFT) |
+    (v.marked ? MARKED_BIT : 0)
+  );
 }
 
 /** Reads back what packPlayerState wrote. */
@@ -72,6 +119,8 @@ export function unpackPlayerState(state: number): PlayerVisualState {
     aim: (aim / AIM_STEPS) * TAU,
     swing: swing / SWING_STEPS,
     secondaryAmmo: (state >> SECONDARY_AMMO_SHIFT) & SECONDARY_AMMO_MAX,
+    ability: ((state >> ABILITY_SHIFT) & ABILITY_MASK) as AbilityPhase,
+    marked: (state & MARKED_BIT) !== 0,
   };
 }
 

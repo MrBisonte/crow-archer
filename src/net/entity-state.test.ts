@@ -1,18 +1,32 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ShotFlavourCode,
+  AbilityPhase,
   packPlayerState,
   packShotState,
+  SECONDARY_AMMO_MAX,
+  ShotFlavourCode,
   unpackPlayerState,
   unpackShotState,
+  type PlayerVisualState,
 } from './entity-state';
 
 const TAU = Math.PI * 2;
 
+/** A body doing nothing in particular, so a case states only what it is about. */
+const RESTING: PlayerVisualState = {
+  dead: false,
+  shielded: false,
+  aim: 0,
+  swing: 0,
+  secondaryAmmo: 0,
+  ability: AbilityPhase.NONE,
+  marked: false,
+};
+
 describe('player state packing', () => {
-  const roundTrip = (v: Parameters<typeof packPlayerState>[0]) =>
-    unpackPlayerState(packPlayerState(v));
+  const roundTrip = (v: Partial<PlayerVisualState>) =>
+    unpackPlayerState(packPlayerState({ ...RESTING, ...v }));
 
   it('carries the flags back', () => {
     expect(roundTrip({ dead: true, shielded: false, aim: 0, swing: 0, secondaryAmmo: 0 })).toMatchObject({
@@ -85,8 +99,45 @@ describe('player state packing', () => {
     expect(Math.abs(back.aim - 3)).toBeLessThan(TAU / 256 + 1e-9);
   });
 
+  it.each(Object.entries(AbilityPhase))('carries the %s phase back as itself', (_name, ability) => {
+    expect(roundTrip({ ability }).ability).toBe(ability);
+  });
+
+  it('carries the mark, so a marked body can be drawn as one', () => {
+    expect(roundTrip({ marked: true }).marked).toBe(true);
+    expect(roundTrip({ marked: false }).marked).toBe(false);
+  });
+
+  it('keeps the phase and the mark clear of every other field', () => {
+    const back = roundTrip({
+      dead: true,
+      shielded: true,
+      aim: 3,
+      swing: 0.5,
+      secondaryAmmo: 7,
+      ability: AbilityPhase.SURGING,
+      marked: true,
+    });
+    expect(back.dead).toBe(true);
+    expect(back.shielded).toBe(true);
+    expect(back.secondaryAmmo).toBe(7);
+    expect(back.ability).toBe(AbilityPhase.SURGING);
+    expect(back.marked).toBe(true);
+    expect(Math.abs(back.aim - 3)).toBeLessThan(TAU / 256 + 1e-9);
+    expect(Math.abs(back.swing - 0.5)).toBeLessThan(1 / 16 + 1e-9);
+  });
+
   it('packs to a non-negative integer, which is what the wire encodes', () => {
-    const packed = packPlayerState({ dead: true, shielded: true, aim: 5.9, swing: 0.9, secondaryAmmo: 0 });
+    const packed = packPlayerState({
+      ...RESTING,
+      dead: true,
+      shielded: true,
+      aim: 5.9,
+      swing: 0.9,
+      secondaryAmmo: SECONDARY_AMMO_MAX,
+      ability: AbilityPhase.SURGING,
+      marked: true,
+    });
     expect(Number.isInteger(packed)).toBe(true);
     expect(packed).toBeGreaterThanOrEqual(0);
   });
