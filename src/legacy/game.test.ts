@@ -24,6 +24,7 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
+import { onGuardGround } from '../sim/guards';
 import { ONE_SECOND, aimAt, clearArena, press, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
@@ -5488,40 +5489,45 @@ describe('the retinue holds the barrier gates', () => {
   });
 
   /**
-   * Drags a body off its post by `reach` pixels, onto ground it can stand on.
+   * Drags a body somewhere it does not belong, so that coming home is required.
    *
-   * A blind offset is the bug this replaces. `moveGuard` checks the
-   * DESTINATION tile, so a guard dropped inside rock has both halves of every
-   * step refused: it sits entombed, the walk home never begins, and the test
-   * reads that as "it did not come home".
-   *
-   * The map seed alone does not pin whether that happens. WHERE the guard is
-   * standing when the drag lands depends on the fight that just ran, so any
+   * The drag this replaces was a blind `+120, +60` -- 134 px against a
+   * `guardPostLeash` of 170. A guard's duty ground is the capsule joining its
+   * post to the hero, so a guard standing on its post and dragged 134 px is
+   * STILL ON DUTY GROUND and has no reason to walk anywhere. The test then
+   * asserted it walked more than 20 px, and passed only when the guard
+   * happened to be standing far enough off its post for post-plus-drag to
+   * clear 170. Whether it was depends on the fight that just ran, so any
    * change to how that fight goes -- a balance figure, an i-frame window, a
-   * difficulty rung -- moves the drop, and on some maps moves it into a wall.
-   * That is what put this test in CI red on a branch that never touched the
-   * bastion.
+   * difficulty rung -- decides this test. That is what put it in CI red on a
+   * branch that never touched the bastion, at a stubbornly identical 17.18 px:
+   * not a flake, a guard that was never asked to move.
    *
-   * The distance is held and only the direction is searched, so the drag stays
-   * the 134 px the assertions below are written against and well inside the
-   * 170 px leash. Being entombed is a real case and worth a test; the one
-   * immediately after this covers it deliberately, by going and finding a
-   * solid tile rather than hoping for one.
+   * So the drop is chosen against the rule rather than by a fixed offset: the
+   * nearest radius, in sixteen directions, that is walkable and off duty
+   * ground for EVERY gate and the hero. Off every gate rather than off this
+   * guard's own post is the stricter question and needs no private field to
+   * ask. The smallest such radius keeps the walk home short enough for the
+   * settle below.
    */
-  function dragToOpenGround(body: { x: number; y: number }, dx: number, dy: number): { x: number; y: number } {
-    const c = g.config() as { tileSize: number; rows: number; cols: number };
+  function dragOffDuty(body: { x: number; y: number }): { x: number; y: number } {
+    const c = g.config() as { tileSize: number; rows: number; cols: number; guardPostLeash: number };
     const tiles = g.tiles() as { get: (row: number, col: number) => TileId };
-    const reach = Math.hypot(dx, dy), from = Math.atan2(dy, dx);
-    for (let step = 0; step < 8; step++) {
-      const angle = from + step * (Math.PI / 4);
-      const x = body.x + Math.cos(angle) * reach, y = body.y + Math.sin(angle) * reach;
-      const col = Math.floor(x / c.tileSize), row = Math.floor(y / c.tileSize);
-      if (row < 1 || row >= c.rows - 1 || col < 1 || col >= c.cols - 1) continue;
-      if (!tilePassable(tiles.get(row, col))) continue;
-      body.x = x; body.y = y;
-      return { x, y };
+    const hero = g.player() as { x: number; y: number };
+    const posts = gates();
+    for (let reach = c.guardPostLeash + 24; reach <= c.guardPostLeash * 3; reach += 24) {
+      for (let step = 0; step < 16; step++) {
+        const angle = step * (Math.PI / 8);
+        const x = body.x + Math.cos(angle) * reach, y = body.y + Math.sin(angle) * reach;
+        const col = Math.floor(x / c.tileSize), row = Math.floor(y / c.tileSize);
+        if (row < 1 || row >= c.rows - 1 || col < 1 || col >= c.cols - 1) continue;
+        if (!tilePassable(tiles.get(row, col))) continue;
+        if (posts.some((p) => onGuardGround(p, hero, x, y, c.guardPostLeash))) continue;
+        body.x = x; body.y = y;
+        return { x, y };
+      }
     }
-    throw new Error('no open ground ' + Math.round(reach) + 'px from the guard, in any of eight directions');
+    throw new Error('nowhere off duty ground within ' + c.guardPostLeash * 3 + 'px of the guard');
   }
 
   it('returns to its post after leaving it to fight', () => {
@@ -5531,18 +5537,18 @@ describe('the retinue holds the barrier gates', () => {
     // 20 in the full suite, drawing a cover-heavy map only once the ~300 tests
     // before it had advanced Math.random first. A fixed seed removes both.
     //
-    // The seed is NOT what keeps the drag out of a wall, though it was read
-    // that way once: it fixes the map, and the drop point moves with the guard,
-    // which moves with the fight. dragToOpenGround is what pins that.
+    // The seed fixes the MAP and nothing downstream of it. Where the guard is
+    // standing after the fight below, and so where the drag puts it, is not
+    // the seed's to pin -- dragOffDuty is.
     Math.random = mulberry32(20260903);
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
     const body = g.guards()[0];
-    // Drag it off, the way chasing something would -- onto ground it can
-    // stand on. See dragToOpenGround: a fixed +120,+60 lands in rock on some
-    // maps, and an entombed guard cannot start the walk this test is about.
-    const dropped = dragToOpenGround(body, 120, 60);
+    // Drag it somewhere it does not belong, the way chasing something would.
+    // See dragOffDuty: a fixed offset inside the leash asks the guard for
+    // nothing, which is what this test spent its life measuring.
+    const dropped = dragOffDuty(body);
     g.clearSiegeWave();
     g.stepSim(600);
     // Quiet before asking, for the reason the resting-formation test above is:
