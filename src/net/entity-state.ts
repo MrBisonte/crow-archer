@@ -84,6 +84,8 @@ export const ShotFlavourCode = {
   BOLT: 1,
   DYNAMITE: 2,
   SATCHEL: 3,
+  /** The sapper's third-key shot: fast, straight, and it passes through bodies. */
+  PIERCE: 4,
 } as const;
 
 export type ShotFlavourCode = (typeof ShotFlavourCode)[keyof typeof ShotFlavourCode];
@@ -107,11 +109,23 @@ export interface ShotWireState {
   fiery: boolean;
 }
 
+/**
+ * The flavour field, and why it is three bits rather than the two it was.
+ *
+ * Four flavours fitted a 2-bit field exactly, which is another way of saying a
+ * fifth one silently aliased onto the first: `4 & 0b11` is 0, so the sapper's
+ * piercing shot would have unpacked as an arrow with nothing to say it had.
+ * Widening moves every field above it along by one, which is why the shifts
+ * below are derived from the widths rather than written out — a field that
+ * grows again should not need four numbers edited in step.
+ */
 const FLAVOUR_SHIFT = 1;
+const FLAVOUR_BITS = 3;
+const FLAVOUR_MASK = (1 << FLAVOUR_BITS) - 1;
 const FUSE_STEPS = 16;
-const FUSE_SHIFT = 3;
-const SHOT_AIM_SHIFT = 7;
-const SHOT_FIERY_BIT = 1 << 15;
+const FUSE_SHIFT = FLAVOUR_SHIFT + FLAVOUR_BITS;
+const SHOT_AIM_SHIFT = FUSE_SHIFT + 4;
+const SHOT_FIERY_BIT = 1 << (SHOT_AIM_SHIFT + 8);
 
 export function packShotState(v: ShotWireState): number {
   const turns = ((v.aim % TAU) + TAU) % TAU / TAU;
@@ -129,7 +143,7 @@ export function packShotState(v: ShotWireState): number {
 export function unpackShotState(state: number): ShotWireState {
   return {
     team: (state & 1) as 0 | 1,
-    flavour: ((state >> FLAVOUR_SHIFT) & 0b11) as ShotFlavourCode,
+    flavour: ((state >> FLAVOUR_SHIFT) & FLAVOUR_MASK) as ShotFlavourCode,
     fuse: ((state >> FUSE_SHIFT) & (FUSE_STEPS - 1)) / FUSE_STEPS,
     aim: (((state >> SHOT_AIM_SHIFT) & (AIM_STEPS - 1)) / AIM_STEPS) * TAU,
     fiery: (state & SHOT_FIERY_BIT) !== 0,

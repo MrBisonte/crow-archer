@@ -100,12 +100,21 @@ describe('shot state packing', () => {
     expect(roundTrip({ team: 1, flavour: ShotFlavourCode.ARROW, aim: 0, fuse: 0, fiery: false }).team).toBe(1);
   });
 
-  it.each([
-    ['an arrow', ShotFlavourCode.ARROW],
-    ['a bolt', ShotFlavourCode.BOLT],
-    ['dynamite', ShotFlavourCode.DYNAMITE],
-  ])('carries %s back as itself', (_name, flavour) => {
+  // Every declared code, not a hand-picked three: the list this walks IS the
+  // enum, so a flavour added without room in the field fails here by name
+  // rather than unpacking as whichever one it aliases onto.
+  it.each(Object.entries(ShotFlavourCode))('carries %s back as itself', (_name, flavour) => {
     expect(roundTrip({ team: 1, flavour, aim: 2, fuse: 0.5, fiery: false }).flavour).toBe(flavour);
+  });
+
+  it('keeps the widest flavour clear of every other field', () => {
+    const widest = Math.max(...Object.values(ShotFlavourCode)) as ShotFlavourCode;
+    const back = roundTrip({ team: 1, flavour: widest, aim: 4, fuse: 0.5, fiery: true });
+    expect(back.flavour).toBe(widest);
+    expect(back.team).toBe(1);
+    expect(back.fiery).toBe(true);
+    expect(Math.abs(back.aim - 4)).toBeLessThan(TAU / 256 + 1e-9);
+    expect(Math.abs(back.fuse - 0.5)).toBeLessThan(1 / 16 + 1e-9);
   });
 
   it('carries the direction of travel, so a shot points where it is going', () => {
