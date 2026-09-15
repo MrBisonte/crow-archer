@@ -545,7 +545,8 @@ describe('sapper', () => {
         'to { kind: \'none\' } unconditionally',
     );
     it.todo(
-      'the Shift piercing shot (legacy\'s third input) — ' +
+      'the Shift shock round (legacy\'s third input; NOT piercing — ' +
+        'updateSapperShots splices it on the first thing it touches) — ' +
         'CONFIG.sapperShotCooldown(10s), sapperShotSpeed(600), ' +
         'sapperShotLifetime(1.5s), sapperShotDamageMult(3x), ' +
         'sapperShotBossDamage(3), plus the early-detonation combo against ' +

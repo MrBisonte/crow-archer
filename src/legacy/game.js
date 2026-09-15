@@ -600,15 +600,17 @@ const CONFIG = {
   // triggers at a stride rather than at a bomb's own contact radius --
   // something that has to touch it is a bomb with a long fuse, not a mine.
   sapperMineSecs: 20, sapperMineTriggerRadius: 26,
-  // Shift: a fast piercing shot. A direct hit is a clean multiple of a normal
-  // one; catching the sapper's own live bomb in flight instead detonates it
-  // early into a bigger blast, its damage highest at the centre and falling
-  // off toward the edge — the reward for threading the harder shot.
+  // Shift: a fast shock round, spent on the first thing it touches — it does
+  // NOT pierce, whatever this comment said for a year. A direct hit is a clean
+  // multiple of a normal one; catching the sapper's own live bomb in flight
+  // instead detonates it early into a bigger blast, its damage highest at the
+  // centre and falling off toward the edge — the reward for threading the
+  // harder shot. See updateSapperShots, which splices on the first hit.
   sapperShotCooldown: 10, sapperShotSpeed: 600, sapperShotLifetime: 1.5,
   sapperShotDamageMult: 3, sapperShotBossDamage: 3,
   sapperComboRadiusMult: 1.33, sapperComboFalloffMax: 10, sapperComboFalloffMin: 2,
   // Chain detonation: a bomb going off lights every other bomb near it, and
-  // those light the next. It finishes the combo the piercing shot already
+  // those light the next. It finishes the combo the shock round already
   // started -- his shot detonates one of his own bombs -- by making the pouch
   // itself the weapon rather than needing a shot threaded through it.
   //
@@ -7420,7 +7422,7 @@ function updateDynamites(dt) {
  *
  * Called from the blast rather than from the bomb, so anything that sets a
  * bomb off starts a chain: a fuse running out, a barrage landing on the pile,
- * or the piercing shot that already detonated one on purpose.
+ * or the shock round that already detonated one on purpose.
  *
  * Only `kind === 'bomb'` is chained, which is the sapper's own pouch. The
  * archer's dynamite and the ranger's satchel share this array and this blast

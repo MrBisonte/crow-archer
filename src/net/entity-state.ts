@@ -133,8 +133,11 @@ export const ShotFlavourCode = {
   BOLT: 1,
   DYNAMITE: 2,
   SATCHEL: 3,
-  /** The sapper's third-key shot: fast, straight, and it passes through bodies. */
-  PIERCE: 4,
+  /**
+   * The sapper's third-key round: fast, straight, spent on the first thing it
+   * touches, and the one thing that sets off his own live charge early.
+   */
+  SHOCK: 4,
 } as const;
 
 export type ShotFlavourCode = (typeof ShotFlavourCode)[keyof typeof ShotFlavourCode];
