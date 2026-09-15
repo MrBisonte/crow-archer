@@ -5487,21 +5487,62 @@ describe('the retinue holds the barrier gates', () => {
     expect(held.size, 'the retinue piled onto one gate').toBeGreaterThan(1);
   });
 
+  /**
+   * Drags a body off its post by `reach` pixels, onto ground it can stand on.
+   *
+   * A blind offset is the bug this replaces. `moveGuard` checks the
+   * DESTINATION tile, so a guard dropped inside rock has both halves of every
+   * step refused: it sits entombed, the walk home never begins, and the test
+   * reads that as "it did not come home".
+   *
+   * The map seed alone does not pin whether that happens. WHERE the guard is
+   * standing when the drag lands depends on the fight that just ran, so any
+   * change to how that fight goes -- a balance figure, an i-frame window, a
+   * difficulty rung -- moves the drop, and on some maps moves it into a wall.
+   * That is what put this test in CI red on a branch that never touched the
+   * bastion.
+   *
+   * The distance is held and only the direction is searched, so the drag stays
+   * the 134 px the assertions below are written against and well inside the
+   * 170 px leash. Being entombed is a real case and worth a test; the one
+   * immediately after this covers it deliberately, by going and finding a
+   * solid tile rather than hoping for one.
+   */
+  function dragToOpenGround(body: { x: number; y: number }, dx: number, dy: number): { x: number; y: number } {
+    const c = g.config() as { tileSize: number; rows: number; cols: number };
+    const tiles = g.tiles() as { get: (row: number, col: number) => TileId };
+    const reach = Math.hypot(dx, dy), from = Math.atan2(dy, dx);
+    for (let step = 0; step < 8; step++) {
+      const angle = from + step * (Math.PI / 4);
+      const x = body.x + Math.cos(angle) * reach, y = body.y + Math.sin(angle) * reach;
+      const col = Math.floor(x / c.tileSize), row = Math.floor(y / c.tileSize);
+      if (row < 1 || row >= c.rows - 1 || col < 1 || col >= c.cols - 1) continue;
+      if (!tilePassable(tiles.get(row, col))) continue;
+      body.x = x; body.y = y;
+      return { x, y };
+    }
+    throw new Error('no open ground ' + Math.round(reach) + 'px from the guard, in any of eight directions');
+  }
+
   it('returns to its post after leaving it to fight', () => {
     // Pin the map as well as the siege roll. The settle note below explains why
     // route length varies -- the map is seeded from Math.random -- and that
     // variance is also run-order dependent: this passed alone and flaked ~1 in
     // 20 in the full suite, drawing a cover-heavy map only once the ~300 tests
     // before it had advanced Math.random first. A fixed seed removes both.
-    // 20260903 lands the walk home 15px from a post, well inside the 170 leash.
+    //
+    // The seed is NOT what keeps the drag out of a wall, though it was read
+    // that way once: it fixes the map, and the drop point moves with the guard,
+    // which moves with the fight. dragToOpenGround is what pins that.
     Math.random = mulberry32(20260903);
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
     const body = g.guards()[0];
-    // Drag it off, the way chasing something would.
-    body.x += 120; body.y += 60;
-    const dropped = { x: body.x, y: body.y };
+    // Drag it off, the way chasing something would -- onto ground it can
+    // stand on. See dragToOpenGround: a fixed +120,+60 lands in rock on some
+    // maps, and an entombed guard cannot start the walk this test is about.
+    const dropped = dragToOpenGround(body, 120, 60);
     g.clearSiegeWave();
     g.stepSim(600);
     // Quiet before asking, for the reason the resting-formation test above is:
