@@ -63,6 +63,7 @@ import {
   secondaryWeapon,
   type BurstSpec,
   type Secondary,
+  type ShotFlavour,
   type ShotSpec,
   type SwingSpec,
   type Weapon,
@@ -1000,9 +1001,10 @@ export class BattleWorld implements World {
 }
 
 /** Wire codes for each projectile look. One entry per flavour, no branch. */
-const FLAVOUR_CODES = {
+const FLAVOUR_CODES: Record<ShotFlavour, ShotFlavourCode> = {
   arrow: ShotFlavourCode.ARROW,
   bolt: ShotFlavourCode.BOLT,
   dynamite: ShotFlavourCode.DYNAMITE,
   satchel: ShotFlavourCode.SATCHEL,
-} as const;
+  shock: ShotFlavourCode.SHOCK,
+};

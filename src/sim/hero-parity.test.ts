@@ -11,10 +11,8 @@
  * read live from BOTH runtimes (never retyped — see the two rules below)
  * and given exactly one of four relationships:
  *
- *   - shared    both sides read the very same constant. (None exist today:
- *               game.js and weapons.ts share no module, so nothing
- *               literally shares a reference — see the file-level note
- *               below.)
+ *   - shared    both sides read the very same constant, through
+ *               `./weapon-figures`, which `CONFIG` imports too.
  *   - copied    two independently-declared constants that currently hold
  *               the same value. Asserted equal so a future tune on either
  *               side that breaks the coincidence fails here, by name.
@@ -61,12 +59,39 @@
  * that confirms a structural absence rather than compares a figure (the
  * sapper's multiplayer secondary resolves to `{ kind: 'none' }` in every
  * mode) — plus 22 `it.todo()`s naming a figure or mechanic that could not
- * be compared at all, and why.
+ * be compared at all, and why. THE THIRD ABILITIES section below adds its
+ * own, and its own count.
+ *
+ * ## A note on `copied` above versus `shared` below
+ *
+ * The WEAPON rows above were written as `copied` and most of them are now
+ * `shared` in substance: `weapon-figures.ts` landed in the same round and
+ * `CONFIG` imports from it, so `CONFIG.arrowSpeed` and `Bow`'s speed are one
+ * constant read twice, not two that agree. They are deliberately NOT
+ * reclassified here — the assertion is identical either way, relabelling
+ * twenty rows would bury the abilities in churn, and a row that says `copied`
+ * about a shared figure is pessimistic rather than wrong. The THIRD ABILITY
+ * rows below are written as `shared` from the start, so the two vocabularies
+ * are not being mixed inside one section.
  */
 import { describe, expect, it } from 'vitest';
 
 import { devHooks } from '../legacy/game.js';
+import {
+  Blink,
+  Charge,
+  MARK_COOLDOWN_TICKS,
+  Mark,
+  PowerDraw,
+  ShockRound,
+  type Ability,
+  type AbilityEffect,
+  type MarkSpec,
+  type TravelSpec,
+} from './abilities';
+import { CHARACTER_STATS } from './arena';
 import { ticks } from './tick';
+import { SAPPER_COMBO_RADIUS_MULT } from './weapon-figures';
 import {
   ARROW_RADIUS,
   BOLT_RADIUS,
@@ -154,12 +179,14 @@ describe('archer', () => {
         'redesign with no legacy figure to pair against',
     );
     it.todo(
-      'charge/draw mechanic — legacy\'s archer primary has a full brace/' +
-        'power-shot system (archerDrawMaxSecs, archerPowerCooldown, ' +
-        'archerPowerSpeedMult, archerPowerPierce, archerPowerBossMult, ' +
-        'braceFillSecs/DrainMult/BossMult) triggered by holding the button; ' +
-        'Weapon.use() takes no charge argument at all — no hero\'s ' +
-        'multiplayer weapon can be held to power up',
+      'no WEAPON on either side can be held to power up: `Weapon.use()` takes ' +
+        'no charge argument at all. This row used to fold the archer\'s draw ' +
+        'in with it, which was wrong twice over — the draw is not the primary ' +
+        'in either runtime (legacy hangs it off Shift via `pressShift`, ' +
+        'multiplayer off `Button.SNIPE`, which is the same key), and it is no ' +
+        'longer missing. It is compared figure by figure under THE THIRD ' +
+        'ABILITIES below. What is still uncompared here is the BRACE ' +
+        '(braceFillSecs/DrainMult/BossMult), which has no multiplayer half',
     );
   });
 
@@ -555,4 +582,341 @@ describe('sapper', () => {
         'one weapon, PowderCharge, on the multiplayer side',
     );
   });
+});
+
+// ═══ THE THIRD ABILITIES ═════════════════════════════════════════════════════
+//
+// `Button.SNIPE` on the wire, Shift on a keyboard. Single-player routes it
+// through five functions in a row (`pressShift` in game.js); multiplayer
+// describes the five in `src/sim/abilities.ts` and `battle-world` realises
+// them. Same four relationships as above, plus the one thing this section has
+// that the weapons do not: a genuine disagreement about HOW A HOLD IS
+// MEASURED, which is structural rather than numeric and gets a row of its own
+// for each of the two held abilities.
+
+const abilityShotOf = (effects: AbilityEffect[]): ShotSpec => {
+  const e = effects[0];
+  if (!e || e.kind !== 'shot') throw new Error('expected a shot effect');
+  return e.shot;
+};
+const travelOf = (effects: AbilityEffect[]): TravelSpec => {
+  const e = effects[0];
+  if (!e || e.kind !== 'travel') throw new Error('expected a travel effect');
+  return e.travel;
+};
+const markOf = (effects: AbilityEffect[]): MarkSpec => {
+  const e = effects[0];
+  if (!e || e.kind !== 'mark') throw new Error('expected a mark effect');
+  return e.mark;
+};
+
+/**
+ * The wind-up of a held ability, in ticks, or null for one that fires on the
+ * press. Reads the ability's own trigger rather than a figure, so a hold that
+ * stopped being a hold fails here rather than silently reading zero.
+ */
+function windUpOf(ability: Ability): number | null {
+  return ability.trigger.on === 'release' ? ability.trigger.windUpTicks : null;
+}
+
+describe('archer: the power draw', () => {
+  const draw = new PowerDraw();
+  const windUp = windUpOf(draw) ?? 0;
+
+  it('draw length — shared (ARCHER_DRAW_MAX_SECS)', () => {
+    expect(windUp).toBe(ticks(CONFIG.archerDrawMaxSecs));
+  });
+  it('cooldown — shared (ARCHER_POWER_COOLDOWN_SECS)', () => {
+    expect(draw.cooldownTicks).toBe(ticks(CONFIG.archerPowerCooldown));
+  });
+  it('speed at a full draw — shared (both are arrowSpeed x archerPowerSpeedMult)', () => {
+    expect(abilityShotOf(draw.use(windUp)).speed)
+      .toBe(CONFIG.arrowSpeed * CONFIG.archerPowerSpeedMult);
+  });
+  it('speed at a tap — shared (both are a plain arrow)', () => {
+    expect(abilityShotOf(draw.use(0)).speed).toBe(CONFIG.arrowSpeed);
+  });
+  it('pierce at a full draw — shared (ARCHER_POWER_PIERCE)', () => {
+    expect(abilityShotOf(draw.use(windUp)).pierce).toBe(CONFIG.archerPowerPierce);
+  });
+  it('pierce at a tap — shared: one body, which is no piercing at all', () => {
+    // Legacy: `1 + Math.round(drawn * (splitShaft - 1))` at drawn 0.
+    expect(abilityShotOf(draw.use(0)).pierce).toBe(1);
+  });
+  it('flight lifetime — shared (ARROW_LIFE_SECS: a power shot is still an arrow)', () => {
+    expect(abilityShotOf(draw.use(windUp)).lifeTicks).toBe(ticks(CONFIG.arrowLifetime));
+  });
+
+  it('HOW THE HOLD IS MEASURED — diverged, structurally: a wall clock vs ticks', () => {
+    // `archerDrawFrac` in game.js divides `performance.now() - archerDraw.t0`
+    // by 1000 and by the full-draw seconds. A fixed-step server has no wall
+    // clock, and a hold measured against one is a figure that changes with
+    // frame rate, so `PowerDraw.use` takes the TICKS the button has been
+    // down, counted off the bitfield across InputCommands.
+    //
+    // The two therefore agree on the SECONDS a full draw takes, which is what
+    // this asserts, and disagree about a draw that spans a stall: a frame that
+    // takes 100 ms advances the legacy draw by 100 ms and the multiplayer one
+    // by one tick. Nothing can assert that second half from here --
+    // `performance.now()` is not a figure -- so it is stated.
+    expect(windUp).toBe(ticks(CONFIG.archerDrawMaxSecs));
+    expect(Number.isInteger(windUp)).toBe(true);
+  });
+
+  it('the wind-up ROOTS but does not protect — shared rule, stated two ways', () => {
+    // game.js: `if (!knightCharge.on && !archerDraw.on && !beam)` gates
+    // movement, so the draw roots him; `damagePlayer` exempts the knight's
+    // windup and NOT the archer's, so he eats what arrives. Both are true of
+    // `trigger.windUp` here, which is why it is an enum and not a flag.
+    expect(draw.trigger.on === 'release' && draw.trigger.windUp).toBe('rooted');
+  });
+
+  // COULD NOT COMPARE
+  it.todo(
+    'power-shot damage — legacy archerPowerBossMult=3 multiplies BOSS damage; ' +
+      'POWER_SHOT_DAMAGE_MULT=3 in abilities.ts multiplies ARROW_DAMAGE, a PvP ' +
+      'figure. Same number, deliberately chosen twice for two different ' +
+      'questions — see this file\'s damage note. Asserting them equal would ' +
+      'bind a boss tune to a duel',
+  );
+  it.todo(
+    'BRACE — the whole braced-stance system (braceFillSecs, braceBossMult, ' +
+      'archerBracedCooldownCut, and the DEAD EYE rite refunding the cooldown ' +
+      'on a perfect shot) has no multiplayer counterpart: `PowerDraw` knows ' +
+      'only how long the key was down',
+  );
+  it.todo(
+    'the queued pickup arrow — legacy spends one shaft per power shot and ' +
+      'inherits its behaviour (a fire power shot lays a lane, a ricochet one ' +
+      'keeps bouncing). Multiplayer has fire as a timed state on the SHOOTER ' +
+      'rather than a queued arrow type, so there is nothing to spend',
+  );
+});
+
+describe('wizard: the blink', () => {
+  const blink = new Blink();
+  const travel = travelOf(blink.use());
+
+  it('reach — shared (BLINK_REACH)', () => {
+    expect(travel.reach).toBe(CONFIG.wizBlinkDistance);
+  });
+  it('refusal threshold — shared (BLINK_MIN_REACH)', () => {
+    expect(travel.minReach).toBe(CONFIG.wizBlinkMinDistance);
+  });
+  it('cooldown — shared (BLINK_COOLDOWN_SECS)', () => {
+    expect(blink.cooldownTicks).toBe(ticks(CONFIG.wizBlinkCooldown));
+  });
+  it('i-frames on arrival — shared (BLINK_IFRAME_SECS)', () => {
+    expect(travel.invulnerableTicks).toBe(ticks(CONFIG.wizBlinkIFrames));
+  });
+  it('arrival pulse radius — shared (BLINK_PULSE_RADIUS)', () => {
+    expect(travel.pulse?.radius).toBe(CONFIG.wizBlinkPulseRadius);
+  });
+  it('arrives at once — shared mechanic: neither runtime animates the hop', () => {
+    expect(travel.durationTicks).toBe(0);
+  });
+  it('opens no terrain — shared rule', () => {
+    // Legacy's arrival calls `damageEnemiesInRadius` and nothing that smashes
+    // a tile; the storm is the wizard's excavator in both runtimes.
+    expect(travel.pulse?.destroysTerrain).toBe(false);
+  });
+
+  // COULD NOT COMPARE
+  it.todo(
+    'arrival pulse damage — legacy wizBlinkPulseBossDamage=1 is boss-only; ' +
+      'BLINK_PULSE_DAMAGE=2 in abilities.ts is a from-scratch PvP figure set ' +
+      'below the wizard\'s own bolt — see this file\'s damage note',
+  );
+  it.todo(
+    'the Focus cost — legacy spends CONFIG.wizFocusBlink(2) of a three-point ' +
+      'pool that regenerates on its own timer, and refuses the blink without ' +
+      'it. Multiplayer has no Focus at all: the wizard is gated by the ' +
+      'cooldown alone, so his blink is strictly more available there',
+  );
+  it.todo(
+    'the chain — legacy allows wizBlinkMaxHops(2) hops inside ' +
+      'shiftChainSecs(1.1), the second free of both Focus and cooldown, with ' +
+      'THIRD STEP and HELD STEP tuning each and the Thunderstep rite ' +
+      'escalating the pulse per hop (sim/blink.ts). None of it is built for ' +
+      'multiplayer: one press is one hop',
+  );
+});
+
+describe('knight: the charge', () => {
+  const charge = new Charge();
+  const windUp = windUpOf(charge) ?? 0;
+  const travel = travelOf(charge.use(windUp));
+
+  it('longest wind-up — shared (KNIGHT_CHARGE_MAX_HOLD_SECS)', () => {
+    expect(windUp).toBe(ticks(CONFIG.knightChargeMaxHoldSecs));
+  });
+  it('cooldown — shared (KNIGHT_CHARGE_COOLDOWN_SECS)', () => {
+    expect(charge.cooldownTicks).toBe(ticks(CONFIG.knightChargeCooldown));
+  });
+  it('dash duration — shared (KNIGHT_DASH_SECS)', () => {
+    expect(travel.durationTicks).toBe(ticks(CONFIG.knightChargeDashDuration));
+  });
+  it('sweep radius — shared (KNIGHT_CHARGE_RADIUS)', () => {
+    expect(travel.pulse?.radius).toBe(CONFIG.knightChargeRadius);
+  });
+  it('sweep tick rate — shared (KNIGHT_CHARGE_TICK_SECS)', () => {
+    expect(travel.pulse?.tickIntervalTicks).toBe(ticks(CONFIG.knightChargeTickRate));
+  });
+  it('the hold curve — shared (KNIGHT_CHARGE_MIN/MAX_DAMAGE_MULT, on two bases)', () => {
+    // Each runtime multiplies its OWN damage base by the same bounds: legacy
+    // knightChargeBossDamage, multiplayer CHARGE_TICK_DAMAGE. The cut is
+    // shared and the anchor is not, the CROSSBOW_BOLT_RADIUS_MULT shape, so
+    // this is asserted on the RATIO.
+    const tap = travelOf(charge.use(0)).pulse?.damage ?? 0;
+    const full = travel.pulse?.damage ?? 0;
+    expect(full / tap).toBeCloseTo(
+      CONFIG.knightChargeMaxDamageMult / CONFIG.knightChargeMinDamageMult,
+      10,
+    );
+  });
+  it('dash distance — shared derivation, off a table both runtimes read', () => {
+    // Legacy: `FEATHERS.speed() * knightChargeDashSpeedMult *
+    // knightChargeDashDuration`, and `FEATHERS.speed()` at no stacks is
+    // `CHARACTER_STATS[selectedChar].speed` — imported from src/sim/arena.ts,
+    // the very table multiplayer reads. Both derive the reach the same way
+    // from the same three figures. Asserted as the derivation rather than as a
+    // distance, so a roster retune moves both and a change to either FORMULA
+    // fails here.
+    expect(travel.reach).toBe(
+      CHARACTER_STATS.knight.speed
+        * CONFIG.knightChargeDashSpeedMult
+        * CONFIG.knightChargeDashDuration,
+    );
+  });
+  it('the wind-up protects and the DASH does not — shared rule', () => {
+    // `damagePlayer` returns early on `knightCharge.on` and says in its own
+    // comment that the dash afterwards is exposed. The multiplayer travel
+    // carries no i-frames for exactly that reason.
+    expect(charge.trigger.on === 'release' && charge.trigger.windUp)
+      .toBe('rooted-and-untouchable');
+    expect(travel.invulnerableTicks).toBe(0);
+  });
+
+  it('HOW THE HOLD IS MEASURED — diverged, structurally: a wall clock vs ticks', () => {
+    // `knightChargeFrac` divides `performance.now() - knightCharge.t0`; the
+    // same divergence, and the same reason, as the archer's draw above. The
+    // seconds agree; what a stalled frame does to a hold does not.
+    expect(windUp).toBe(ticks(CONFIG.knightChargeMaxHoldSecs));
+    expect(Number.isInteger(windUp)).toBe(true);
+  });
+
+  it('the sweep SHAPE — diverged: a wedge in legacy, a full ring in multiplayer', () => {
+    // `inKnightArc` tests a real cone of knightChargeArcRadians (45 degrees)
+    // centred on the committed angle. `BurstSpec` has no arc — it is the shape
+    // the storm and the whirlwind already resolve through `#blastAt`, which
+    // asks only for a radius. Reusing it means a dashing knight also catches
+    // what is behind him. Deliberate: the wedge exists so he does not mow down
+    // a crowd of crows he has run past, and a match holds two to four bodies.
+    // Both sides pinned so a later arc on either one is a named change.
+    expect(CONFIG.knightChargeArcRadians).toBeCloseTo(Math.PI / 4, 10);
+    expect(travel.pulse && 'arcRadians' in travel.pulse).toBe(false);
+  });
+
+  // COULD NOT COMPARE
+  it.todo(
+    'dash damage — legacy knightChargeBossDamage=2 is boss-only; ' +
+      'CHARGE_TICK_DAMAGE reuses WHIRLWIND_TICK_DAMAGE=1, a PvP figure, ' +
+      'because a knight sweeping ground at speed and one sweeping it on the ' +
+      'spot are the same swing — see this file\'s damage note',
+  );
+  it.todo(
+    'the CHAINED charge — a second press mid-dash inside shiftChainSecs(1.1) ' +
+      'with knightChainMinRoom(24) of room ahead, buying ' +
+      'knightChargeChainSpeedMult(2.0) and one whirlwind swing of ' +
+      'knightChainWhirlRadius(60). Not built for multiplayer: `Charge` has no ' +
+      'notion of a press arriving while a travel is already running',
+  );
+});
+
+describe('ranger: the mark', () => {
+  const mark = new Mark();
+  const spec = markOf(mark.use());
+
+  it('duration — shared (RANGER_MARK_SECS)', () => {
+    expect(spec.durationTicks).toBe(ticks(CONFIG.rangerMarkSecs));
+  });
+  it('reach — shared (RANGER_MARK_RADIUS)', () => {
+    expect(spec.radius).toBe(CONFIG.rangerMarkRadius);
+  });
+  it('costs a press and no ammunition — shared: a designation, not a shot', () => {
+    expect(mark.trigger.on).toBe('press');
+    expect(mark.use().every((e) => e.kind === 'mark')).toBe(true);
+  });
+
+  it('WHAT GATES IT — diverged: a full Momentum meter vs a cooldown', () => {
+    // `startRangerMark` refuses below `rangerMomentum >= 1` and zeroes the
+    // meter, which is filled by RUNNING. Multiplayer has no Momentum, so
+    // without something here the mark would be a free press. MARK_COOLDOWN
+    // is that substitute and is a figure NEITHER runtime had — a product call
+    // nobody has made, named in one place so it is one edit to change.
+    expect(mark.cooldownTicks).toBe(MARK_COOLDOWN_TICKS);
+    expect(mark.cooldownTicks).toBeGreaterThan(spec.durationTicks);
+  });
+
+  // COULD NOT COMPARE
+  it.todo(
+    'the multiplier — legacy rangerMarkCritMult=2.5 multiplies BOSS damage, ' +
+      'and CONFIG\'s own comment says why: an ordinary body has one hit point ' +
+      'and dies to any bolt, so a crit on a crow is a number nobody can see. ' +
+      'MARK_DAMAGE_MULTIPLIER=2.5 in abilities.ts multiplies damage to a ' +
+      '10-point PLAYER, which is a different question answered with the same ' +
+      'number because it is the only number anyone has stated. Flagged for a ' +
+      'product decision rather than asserted equal',
+  );
+  it.todo(
+    'what it settles on — legacy `markTarget` prefers the BOSS outright and ' +
+      'falls back to the nearest hostile of any kind; multiplayer has no boss ' +
+      'and marks the nearest enemy FIGHTER, never a crow. Not a figure, and ' +
+      'there is no boss to compare against',
+  );
+});
+
+describe('sapper: the shock round', () => {
+  const shock = new ShockRound();
+  const shot = abilityShotOf(shock.use());
+
+  it('cooldown — shared (SAPPER_SHOT_COOLDOWN_SECS)', () => {
+    expect(shock.cooldownTicks).toBe(ticks(CONFIG.sapperShotCooldown));
+  });
+  it('speed — shared (SAPPER_SHOT_SPEED)', () => {
+    expect(shot.speed).toBe(CONFIG.sapperShotSpeed);
+  });
+  it('lifetime — shared (SAPPER_SHOT_LIFE_SECS)', () => {
+    expect(shot.lifeTicks).toBe(ticks(CONFIG.sapperShotLifetime));
+  });
+  it('combo blast width — shared (SAPPER_COMBO_RADIUS_MULT)', () => {
+    expect(SAPPER_COMBO_RADIUS_MULT).toBe(CONFIG.sapperComboRadiusMult);
+  });
+  it('spent on the first thing it touches — shared: NEITHER pierces', () => {
+    // CONFIG called it "a fast piercing shot" for a year and it never was:
+    // `updateSapperShots` splices it on the first hit. The multiplayer shot
+    // leaves `pierce` unset, which is that same one body.
+    expect(shot.pierce).toBeUndefined();
+  });
+  it('stops on terrain rather than bouncing — shared', () => {
+    // `if (!tilePassable(tileAt(nx, ny))) { splice; continue; }` in legacy.
+    expect(shot.onTerrain).toBe('stop');
+    expect(shot.explodesAtRest).toBe(false);
+  });
+
+  // COULD NOT COMPARE
+  it.todo(
+    'direct-hit damage — legacy sapperShotBossDamage=3 against a boss, and ' +
+      'sapperShotDamageMult=3 as a flat amount against a body that has one ' +
+      'hit point; SHOCK_DAMAGE in abilities.ts is SAPPER_CHARGE_DAMAGE x 3, a ' +
+      'PvP figure. The MULTIPLE of a normal hit is three on both sides, which ' +
+      'is the part worth noticing, but the bases are not comparable — see ' +
+      'this file\'s damage note',
+  );
+  it.todo(
+    'the combo falloff — legacy sapperComboFalloffMax(10)/Min(2) make the ' +
+      'combo blast hottest at its centre. Multiplayer\'s `#blastAt` has no ' +
+      'falloff at all: everything inside a radius takes the same damage, for ' +
+      'every explosive in the game, so there is nothing to pair against',
+  );
 });

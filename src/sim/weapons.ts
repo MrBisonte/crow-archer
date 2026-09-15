@@ -68,9 +68,20 @@ export interface ShotSpec {
    * own offset from whatever the world decides that is.
    */
   angleOffset?: number;
+  /**
+   * Bodies this may pass through before it is spent. One, the default, is
+   * spent on the first thing it hits, which is every weapon above.
+   *
+   * Only the archer's drawn power shot reads above one, and it reads a
+   * fraction of the draw: the whole point of standing still is that the arrow
+   * does not stop at the first body. Optional rather than required for the
+   * reason `angleOffset` is -- a field every shot has to state is a field
+   * every shot has to be right about.
+   */
+  pierce?: number;
 }
 
-export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite' | 'satchel';
+export type ShotFlavour = 'arrow' | 'bolt' | 'dynamite' | 'satchel' | 'shock';
 
 /**
  * What terrain does to a shot.
