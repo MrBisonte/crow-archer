@@ -734,6 +734,14 @@ describe('wizard: the blink', () => {
       'cooldown alone, so his blink is strictly more available there',
   );
   it.todo(
+    'the probe step — cannot compare live: legacy\'s `probeAhead` walks the ' +
+      'aim line in steps of 4, a bare literal in the function body with no ' +
+      'CONFIG entry, so there is no accessor to read it through. ' +
+      'TRAVEL_PROBE_STEP=4 in battle-world.ts matches it by inspection. ' +
+      'Shared by both travels, so a mismatch would move the knight\'s dash ' +
+      'as well as the blink',
+  );
+  it.todo(
     'the chain — legacy allows wizBlinkMaxHops(2) hops inside ' +
       'shiftChainSecs(1.1), the second free of both Focus and cooldown, with ' +
       'THIRD STEP and HELD STEP tuning each and the Thunderstep rite ' +
