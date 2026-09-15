@@ -29,9 +29,17 @@ import {
   packPlayerState,
   packShotState,
 } from '../net/entity-state';
+import {
+  abilityFor,
+  type Ability,
+  type AbilityEffect,
+  type AbilityTrigger,
+  type MarkSpec,
+  type TravelSpec,
+} from './abilities';
 import { ARENA_H, ARENA_W, CHARACTER_STATS, PLAYER_RADIUS, direction } from './arena';
 import { Terrain, type MapKind, type NoiseFactory } from './arena-map';
-import { slide } from './collide';
+import { bodyFits, slide } from './collide';
 import { advanceCrow, spawnCrow, CROW_HIT_RADIUS, CROW_INTERVAL_TICKS, MAX_CROWS, type Crow } from './crows';
 import { Button, type InputCommand } from './input';
 import {
@@ -44,6 +52,7 @@ import {
 import { mulberry32, type Rng } from './rng';
 import { canDamage } from './team';
 import { ticks } from './tick';
+import { SAPPER_COMBO_RADIUS_MULT } from './weapon-figures';
 import {
   DYNAMITE_BLAST_RADIUS,
   DYNAMITE_BOUNCE,
@@ -148,6 +157,50 @@ type SecondaryState =
       wasHeld: boolean;
     };
 
+/**
+ * A fighter's third ability, and the bookkeeping its own trigger needs.
+ *
+ * Two shapes, discriminated by the trigger, rather than one object carrying
+ * both a `wasHeld` and a `windUp` of which exactly one is ever meaningful. A
+ * press-triggered ability needs to know whether this tick's press is new; a
+ * held one needs to know how many ticks it has been down, and `null` is the
+ * honest answer to "how long" when the key is up. `SecondaryState` above is
+ * the same idea for the same reason.
+ */
+type AbilityState =
+  | { readonly on: 'press'; readonly ability: Ability; cooldown: number; wasHeld: boolean }
+  | {
+      readonly on: 'release';
+      readonly ability: Ability;
+      /**
+       * The trigger, already narrowed. Carried rather than re-read off
+       * `ability` at each use: the ability's own type says a trigger may be
+       * either, so every read would need a guard that can never fire, and a
+       * guard that can never fire is a lie about what the code is checking.
+       */
+      readonly hold: Extract<AbilityTrigger, { on: 'release' }>;
+      cooldown: number;
+      /** Ticks the key has been down, or null when it is not being held. */
+      windUp: number | null;
+    };
+
+/** Turns a character's third ability into the state its trigger needs tracking. */
+function initialAbility(ability: Ability): AbilityState {
+  const trigger = ability.trigger;
+  return trigger.on === 'press'
+    ? { on: 'press', ability, cooldown: 0, wasHeld: false }
+    : { on: 'release', ability, hold: trigger, cooldown: 0, windUp: null };
+}
+
+/**
+ * How finely a travel walks the ground ahead of it, in pixels.
+ *
+ * The same four `probeAhead` uses in `game.js`, which is a bare literal there
+ * and so has no figure to bind to -- see the drift ledger's row. Fine enough
+ * that a blink lands flush against cover rather than four pixels short of it.
+ */
+const TRAVEL_PROBE_STEP = 4;
+
 /** Turns a character's secondary weapon into the mutable state a fighter tracks it with. */
 function initialSecondary(secondary: Secondary): SecondaryState {
   switch (secondary.kind) {
@@ -170,6 +223,7 @@ interface Fighter {
   readonly character: CharacterKind;
   readonly weapon: Weapon;
   readonly secondary: SecondaryState;
+  readonly third: AbilityState;
   readonly spawnX: number;
   readonly spawnY: number;
   x: number;
@@ -190,6 +244,21 @@ interface Fighter {
    * a separate immediate code path.
    */
   burst: { left: number; spec: BurstSpec; tickTimer: number } | null;
+  /**
+   * A body being carried by its own ability rather than by its legs. Null
+   * while it is walking. The step was committed when the travel began and the
+   * ground was proved clear then, so nothing here re-asks the terrain -- the
+   * knight cannot steer a dash, which is the whole of what his hold decided.
+   */
+  travel: { left: number; stepX: number; stepY: number } | null;
+  /**
+   * Ticks left of something big and brief: a dash running, or the moment after
+   * a blink. Purely so a client can draw it -- nothing in the simulation reads
+   * it, which is why it is one counter and not a second copy of the rules.
+   */
+  surge: number;
+  /** A ranger's mark riding this body, and what it multiplies. Null when clean. */
+  marked: { left: number; multiplier: number } | null;
 }
 
 interface Shot {
@@ -205,6 +274,15 @@ interface Shot {
   vy: number;
   life: number;
   damage: number;
+  /** Bodies it may still pass through. One for everything but a drawn shot. */
+  pierceLeft: number;
+  /**
+   * Who it has already gone through, so a piercing shot cannot spend a second
+   * body on the one it is still inside. Counting hits alone is not enough: an
+   * arrow at a thousand pixels a second still covers less ground in a tick
+   * than the twenty pixels a body and a shot radius come to between them.
+   */
+  struck: Set<PlayerId>;
   /**
    * Whether an armed satchel's countdown is running. False for everything
    * else. A satchel is thrown inert; a second click from its owner sets this
@@ -280,6 +358,7 @@ export class BattleWorld implements World {
         character: start.character,
         weapon: primaryWeapon(start.character),
         secondary: initialSecondary(secondaryWeapon(start.character, options.mode)),
+        third: initialAbility(abilityFor(start.character)),
         spawnX: at.x,
         spawnY: at.y,
         x: at.x,
@@ -295,6 +374,9 @@ export class BattleWorld implements World {
         respawnIn: null,
         swing: null,
         burst: null,
+        travel: null,
+        surge: 0,
+        marked: null,
       };
     });
   }
@@ -313,9 +395,12 @@ export class BattleWorld implements World {
       } else {
         // Silence is not a held button. A player who stops sending, or who
         // drops mid-wind-up, lets go of the throw rather than holding it for
-        // the rest of the match.
+        // the rest of the match. The third key is the same bargain: a dropped
+        // knight looses his charge instead of standing rooted forever.
         this.#useSecondary(f, false);
+        this.#useAbility(f, false);
       }
+      this.#advanceTravel(f);
       this.#resolveSwing(f, kills);
       this.#resolveBurst(f, kills);
     }
@@ -358,11 +443,8 @@ export class BattleWorld implements World {
           aim: f.aim,
           swing: f.swing ? 1 - f.swing.left / f.swing.spec.durationTicks : 0,
           secondaryAmmo: this.#secondaryAmmoOf(f),
-          // Nothing drives these yet: the wire carries them one commit ahead
-          // of the abilities that set them, so a bisect can tell a packing
-          // fault from a simulation one.
-          ability: AbilityPhase.NONE,
-          marked: false,
+          ability: this.#abilityPhaseOf(f),
+          marked: f.marked !== null,
         }),
       })),
       ...this.#shots.map((s) => ({
@@ -451,6 +533,20 @@ export class BattleWorld implements World {
     }
   }
 
+  /**
+   * What a client has to draw about this body's third ability.
+   *
+   * Winding wins over surging, which cannot both be true anyway: a wind-up
+   * cannot start while a travel runs, and a travel is what a wind-up becomes.
+   * Ordered rather than assumed, so the day one of those stops holding this
+   * reports the more urgent of the two rather than an arbitrary one.
+   */
+  #abilityPhaseOf(f: Fighter): AbilityPhase {
+    if (f.third.on === 'release' && f.third.windUp !== null) return AbilityPhase.WINDING;
+    if (f.surge > 0) return AbilityPhase.SURGING;
+    return AbilityPhase.NONE;
+  }
+
   // -------------------------------------------------------------------------
   // Players
   // -------------------------------------------------------------------------
@@ -459,8 +555,11 @@ export class BattleWorld implements World {
   #countDown(f: Fighter): void {
     if (f.cooldown > 0) f.cooldown--;
     if (f.secondary.kind !== 'none' && f.secondary.cooldown > 0) f.secondary.cooldown--;
+    if (f.third.cooldown > 0) f.third.cooldown--;
     if (f.invulnerable > 0) f.invulnerable--;
     if (f.fireTicks > 0) f.fireTicks--;
+    if (f.surge > 0) f.surge--;
+    if (f.marked && --f.marked.left <= 0) f.marked = null;
     if (f.swing && --f.swing.left <= 0) f.swing = null;
     if (f.respawnIn === null) return;
     if (--f.respawnIn > 0) return;
@@ -475,6 +574,11 @@ export class BattleWorld implements World {
   }
 
   #move(f: Fighter, cmd: InputCommand, dt: number): void {
+    // Rooted while the third key is held, and carried rather than walking
+    // while a travel runs. Both are the price of the ability, and both are
+    // what makes standing in the open for a second a decision.
+    if (f.travel !== null) return;
+    if (f.third.on === 'release' && f.third.windUp !== null) return;
     const { dx, dy } = direction(cmd);
     if (dx === 0 && dy === 0) return;
     const speed = CHARACTER_STATS[f.character].speed;
@@ -490,6 +594,159 @@ export class BattleWorld implements World {
       this.#apply(f, f.weapon.use());
     }
     this.#useSecondary(f, (cmd.buttons & Button.SPECIAL) !== 0);
+    this.#useAbility(f, (cmd.buttons & Button.SNIPE) !== 0);
+  }
+
+  // -------------------------------------------------------------------------
+  // The third ability
+  // -------------------------------------------------------------------------
+
+  /**
+   * Sends SNIPE to whichever ability this fighter's character holds.
+   *
+   * Exhaustive on the trigger rather than on the character: what the world has
+   * to do differently is press-versus-hold, and `abilities.ts` is where the
+   * five verbs live. A sixth hero is a row there and no edit here.
+   */
+  #useAbility(f: Fighter, held: boolean): void {
+    if (f.third.on === 'press') {
+      const fresh = held && !f.third.wasHeld;
+      f.third.wasHeld = held;
+      if (!fresh || f.third.cooldown > 0) return;
+      this.#fireAbility(f, f.third.ability.use(0));
+      return;
+    }
+    if (held) {
+      if (f.third.windUp === null) {
+        // A wind-up that cannot be paid for never starts, so the key does not
+        // root someone for a second and then refuse at the end of it.
+        if (f.third.cooldown > 0 || f.travel !== null) return;
+        f.third.windUp = 0;
+      } else {
+        f.third.windUp = Math.min(f.third.hold.windUpTicks, f.third.windUp + 1);
+      }
+      // Renewed every tick rather than granted for the whole wind-up, so
+      // letting go ends the protection with the root that bought it.
+      if (f.third.hold.windUp === 'rooted-and-untouchable') {
+        f.invulnerable = Math.max(f.invulnerable, 2);
+      }
+      return;
+    }
+    if (f.third.windUp === null) return;
+    const heldTicks = f.third.windUp;
+    f.third.windUp = null;
+    this.#fireAbility(f, f.third.ability.use(heldTicks));
+  }
+
+  /**
+   * Turns what an ability described into world state, and spends the cooldown
+   * only if something actually happened.
+   *
+   * A blink with no room and a mark with nothing in reach both come back
+   * having done nothing, and charging four or six seconds for that reads as
+   * the button being broken rather than as the wall being solid. The
+   * single-player game draws the same line in `tryWizardBlink`.
+   */
+  #fireAbility(f: Fighter, effects: readonly AbilityEffect[]): void {
+    let acted = false;
+    for (const effect of effects) {
+      switch (effect.kind) {
+        case 'shot':
+          this.#launch(f, effect.shot);
+          acted = true;
+          break;
+        case 'travel':
+          acted = this.#beginTravel(f, effect.travel) || acted;
+          break;
+        case 'mark':
+          acted = this.#placeMark(f, effect.mark) || acted;
+          break;
+      }
+    }
+    if (acted) f.third.cooldown = f.third.ability.cooldownTicks;
+  }
+
+  /**
+   * Walks the aim line and puts the body at the last point it still fits in.
+   *
+   * Stepped rather than jumped-and-checked, so a travel never crosses a wall
+   * and never ends inside one: it closes on cover instead of passing through
+   * it, which is what keeps terrain worth standing behind. Straight out of
+   * `probeAhead` in `game.js`, including its four-pixel step.
+   */
+  #probeAhead(f: Fighter, reach: number): { x: number; y: number; moved: number } {
+    const cos = Math.cos(f.aim);
+    const sin = Math.sin(f.aim);
+    let best = { x: f.x, y: f.y, moved: 0 };
+    for (let travelled = TRAVEL_PROBE_STEP; travelled <= reach; travelled += TRAVEL_PROBE_STEP) {
+      const x = Math.min(Math.max(f.x + cos * travelled, PLAYER_RADIUS), ARENA_W - PLAYER_RADIUS);
+      const y = Math.min(Math.max(f.y + sin * travelled, PLAYER_RADIUS), ARENA_H - PLAYER_RADIUS);
+      if (!bodyFits(this.terrain, x, y, PLAYER_RADIUS)) break;
+      best = { x, y, moved: Math.hypot(x - f.x, y - f.y) };
+    }
+    return best;
+  }
+
+  /**
+   * Commits a body to crossing ground it did not walk. False when there is no
+   * room, which is a refusal and costs nothing.
+   *
+   * A duration of zero arrives at once and the pulse lands where it arrived; a
+   * duration above zero hands the step to `#advanceTravel` and the pulse rides
+   * along, because `#resolveBurst` reads the body's position every tick.
+   */
+  #beginTravel(f: Fighter, spec: TravelSpec): boolean {
+    const to = this.#probeAhead(f, spec.reach);
+    if (to.moved < spec.minReach) return false;
+    f.invulnerable = Math.max(f.invulnerable, spec.invulnerableTicks);
+    f.surge = Math.max(spec.invulnerableTicks, spec.durationTicks);
+    if (spec.durationTicks <= 0) {
+      f.x = to.x;
+      f.y = to.y;
+    } else {
+      f.travel = {
+        left: spec.durationTicks,
+        stepX: (to.x - f.x) / spec.durationTicks,
+        stepY: (to.y - f.y) / spec.durationTicks,
+      };
+    }
+    if (spec.pulse) {
+      f.burst = { left: Math.max(1, spec.pulse.durationTicks), spec: spec.pulse, tickTimer: 0 };
+    }
+    return true;
+  }
+
+  /** One tick of a travel already committed to. Nothing re-asks the terrain. */
+  #advanceTravel(f: Fighter): void {
+    const travel = f.travel;
+    if (!travel) return;
+    f.x += travel.stepX;
+    f.y += travel.stepY;
+    if (--travel.left <= 0) f.travel = null;
+  }
+
+  /**
+   * Marks the nearest enemy in reach. False when there is nobody to mark,
+   * which costs the ranger nothing.
+   *
+   * Fighters only, never a crow: the mark multiplies what a body takes, and a
+   * crow dies to one hit of anything, so marking one would be a full cooldown
+   * spent on a number nobody can see. `markTarget` in `game.js` makes the same
+   * point about crows and answers it with the boss, which does not exist here.
+   */
+  #placeMark(f: Fighter, spec: MarkSpec): boolean {
+    let best: Fighter | null = null;
+    let bestDist = spec.radius * spec.radius;
+    for (const target of this.#fighters) {
+      if (target.respawnIn !== null || !canDamage(f.team, target.team)) continue;
+      const d = (target.x - f.x) ** 2 + (target.y - f.y) ** 2;
+      if (d > bestDist) continue;
+      bestDist = d;
+      best = target;
+    }
+    if (!best) return false;
+    best.marked = { left: spec.durationTicks, multiplier: spec.damageMultiplier };
+    return true;
   }
 
   /** Sends SPECIAL to whichever secondary this fighter carries, if any. */
@@ -591,35 +848,45 @@ export class BattleWorld implements World {
         };
         continue;
       }
-      const spec = effect.shot;
-      // Relative to the aim, so a burst weapon can fan several shots from one
-      // use without the weapon itself knowing the absolute angle.
-      const angle = f.aim + (spec.angleOffset ?? 0);
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      // Clear of the thrower, so nothing is hit before it has left the hand.
-      // Unless that puts it inside a wall: someone with their back to rock
-      // would otherwise fire shot after shot that died on the tick it was made,
-      // with nothing on screen to say why.
-      const reach = PLAYER_RADIUS + spec.radius + 1;
-      const muzzleX = f.x + cos * reach;
-      const muzzleY = f.y + sin * reach;
-      const clear = !this.terrain.blocksShot(muzzleX, muzzleY);
-      this.#shots.push({
-        id: this.#nextShotId++,
-        owner: f.id,
-        team: f.team,
-        spec,
-        x: clear ? muzzleX : f.x,
-        y: clear ? muzzleY : f.y,
-        vx: cos * spec.speed * speedScale,
-        vy: sin * spec.speed * speedScale,
-        life: spec.lifeTicks,
-        fiery: f.fireTicks > 0,
-        damage: this.#damageOf(f, spec.damage),
-        armed: false,
-      });
+      this.#launch(f, effect.shot, speedScale);
     }
+  }
+
+  /**
+   * One shot, made and aimed. The single path from a `ShotSpec` to something
+   * in the air, so a weapon and an ability cannot disagree about where a
+   * muzzle is or what a shot is worth.
+   */
+  #launch(f: Fighter, spec: ShotSpec, speedScale = 1): void {
+    // Relative to the aim, so a burst weapon can fan several shots from one
+    // use without the weapon itself knowing the absolute angle.
+    const angle = f.aim + (spec.angleOffset ?? 0);
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    // Clear of the thrower, so nothing is hit before it has left the hand.
+    // Unless that puts it inside a wall: someone with their back to rock
+    // would otherwise fire shot after shot that died on the tick it was made,
+    // with nothing on screen to say why.
+    const reach = PLAYER_RADIUS + spec.radius + 1;
+    const muzzleX = f.x + cos * reach;
+    const muzzleY = f.y + sin * reach;
+    const clear = !this.terrain.blocksShot(muzzleX, muzzleY);
+    this.#shots.push({
+      id: this.#nextShotId++,
+      owner: f.id,
+      team: f.team,
+      spec,
+      x: clear ? muzzleX : f.x,
+      y: clear ? muzzleY : f.y,
+      vx: cos * spec.speed * speedScale,
+      vy: sin * spec.speed * speedScale,
+      life: spec.lifeTicks,
+      fiery: f.fireTicks > 0,
+      damage: this.#damageOf(f, spec.damage),
+      pierceLeft: spec.pierce ?? 1,
+      struck: new Set(),
+      armed: false,
+    });
   }
 
   /**
@@ -710,10 +977,10 @@ export class BattleWorld implements World {
   // -------------------------------------------------------------------------
 
   #advanceShots(dt: number, kills: Kill[]): void {
-    // Checked before anything else moves this tick, so a satchel struck by
-    // its owner's own bolt goes off here and never also runs its fuse or
+    // Checked before anything else moves this tick, so an explosive struck by
+    // its owner's own shot goes off here and never also runs its fuse or
     // flight for the tick it was hit.
-    this.#detonateStruckSatchels(kills);
+    this.#detonateOwnExplosives(kills);
 
     const surviving: Shot[] = [];
     for (const shot of this.#shots) {
@@ -764,27 +1031,32 @@ export class BattleWorld implements World {
   }
 
   /**
-   * A bolt landing on its own thrower's satchel sets it off immediately,
-   * armed or not: the one way the ranger detonates on demand rather than
-   * waiting out the arm countdown.
+   * A shot landing on its own owner's explosive sets it off then and there.
+   *
+   * Two pairs and one walk. The ranger's bolt on her own satchel is how she
+   * detonates on demand rather than waiting out the arm countdown; the
+   * sapper's shock round on his own charge is the whole reason that ability
+   * exists, and it goes off wider for having been threaded. Written twice,
+   * the second would be the first with two words changed.
    */
-  #detonateStruckSatchels(kills: Kill[]): void {
-    const struck = new Set<number>();
-    for (const bolt of this.#shots) {
-      if (bolt.spec.flavour !== 'arrow') continue;
-      const satchel = this.#shots.find(
+  #detonateOwnExplosives(kills: Kill[]): void {
+    const spent = new Set<number>();
+    for (const shot of this.#shots) {
+      const pairing = OWN_DETONATOR[shot.spec.flavour];
+      if (!pairing) continue;
+      const charge = this.#shots.find(
         (s) =>
-          s.spec.flavour === 'satchel' &&
-          !struck.has(s.id) &&
-          s.owner === bolt.owner &&
-          withinRadius(bolt.x, bolt.y, s.x, s.y, SATCHEL_TRIGGER_RADIUS),
+          s.spec.flavour === pairing.sets &&
+          !spent.has(s.id) &&
+          s.owner === shot.owner &&
+          withinRadius(shot.x, shot.y, s.x, s.y, SATCHEL_TRIGGER_RADIUS),
       );
-      if (!satchel) continue;
-      struck.add(satchel.id);
-      struck.add(bolt.id);
-      this.#explode(satchel, kills);
+      if (!charge) continue;
+      spent.add(charge.id);
+      spent.add(shot.id);
+      this.#explode(charge, kills, pairing.radiusScale);
     }
-    if (struck.size > 0) this.#shots = this.#shots.filter((s) => !struck.has(s.id));
+    if (spent.size > 0) this.#shots = this.#shots.filter((s) => !spent.has(s.id));
   }
 
   /**
@@ -860,6 +1132,7 @@ export class BattleWorld implements World {
     if (shot.spec.flavour === 'satchel') return false;
     for (const target of this.#fighters) {
       if (target.respawnIn !== null || !canDamage(shot.team, target.team)) continue;
+      if (shot.struck.has(target.id)) continue;
       if (!withinRadius(shot.x, shot.y, target.x, target.y, shot.spec.radius + PLAYER_RADIUS)) {
         continue;
       }
@@ -870,7 +1143,10 @@ export class BattleWorld implements World {
       if (this.#wound(target, shot.damage)) {
         kills.push({ victim: target.id, killer: shot.owner, killerTeam: shot.team });
       }
-      return true;
+      shot.struck.add(target.id);
+      // A drawn shot carries on through. Everything else has one body in it,
+      // so this is the ordinary path as well as the pierced one.
+      return --shot.pierceLeft <= 0;
     }
     return this.#killCrowNear(shot.x, shot.y, CROW_HIT_RADIUS);
   }
@@ -882,11 +1158,20 @@ export class BattleWorld implements World {
    * That is generous, and the alternative is a weapon nobody dares use in a
    * corridor.
    */
-  #explode(shot: Shot, kills: Kill[]): void {
+  #explode(shot: Shot, kills: Kill[], radiusScale = 1): void {
     // Recorded before anything is resolved, so a blast that hits nothing is
     // still seen. A weapon you cannot see go off is a weapon nobody trusts.
     this.#blasts.push({ id: this.#nextBlastId++, x: shot.x, y: shot.y, left: BLAST_TICKS });
-    this.#blastAt(shot.x, shot.y, DYNAMITE_BLAST_RADIUS, shot.damage, shot.team, shot.owner, kills, true);
+    this.#blastAt(
+      shot.x,
+      shot.y,
+      DYNAMITE_BLAST_RADIUS * radiusScale,
+      shot.damage,
+      shot.team,
+      shot.owner,
+      kills,
+      true,
+    );
   }
 
   /**
@@ -938,11 +1223,29 @@ export class BattleWorld implements World {
       target.shielded = false;
       return false;
     }
-    target.hp -= amount;
+    // The mark lands here and nowhere else. Every source of damage in the
+    // world reaches health through this one subtraction, so a marked body
+    // takes more from a bolt, a blast, a spear and a dash alike -- and from
+    // anyone, not only from the ranger who marked them. Applied after the
+    // shield for the same reason the shield comes after immunity: a
+    // multiplier that could strip a shield faster would be multiplying
+    // something that is not health.
+    target.hp -= target.marked ? amount * target.marked.multiplier : amount;
     if (target.hp > 0) return false;
     target.hp = 0;
     target.respawnIn = RESPAWN_TICKS;
     target.swing = null;
+    // Nothing about the third ability survives the body that was using it. A
+    // dash still running would carry a corpse; a wind-up still held would come
+    // back three seconds later at a spawn point, loosed at whatever is
+    // standing there; a mark still riding the body would follow it home. All
+    // cleared HERE rather than at the respawn, because a body is down for
+    // three seconds before it returns and all three are wrong for every one
+    // of them.
+    target.travel = null;
+    target.surge = 0;
+    target.marked = null;
+    if (target.third.on === 'release') target.third.windUp = null;
     return true;
   }
 
@@ -999,6 +1302,19 @@ export class BattleWorld implements World {
     return this.#mode;
   }
 }
+
+/**
+ * Which shot sets off which of its owner's own explosives, and how much wider
+ * than usual that blast is.
+ *
+ * Data rather than two nearly identical loops: the pairing is the only thing
+ * that differs between the ranger detonating her satchel and the sapper
+ * threading his charge. `Partial`, because most shots set nothing off.
+ */
+const OWN_DETONATOR: Partial<Record<ShotFlavour, { readonly sets: ShotFlavour; readonly radiusScale: number }>> = {
+  arrow: { sets: 'satchel', radiusScale: 1 },
+  shock: { sets: 'dynamite', radiusScale: SAPPER_COMBO_RADIUS_MULT },
+};
 
 /** Wire codes for each projectile look. One entry per flavour, no branch. */
 const FLAVOUR_CODES: Record<ShotFlavour, ShotFlavourCode> = {

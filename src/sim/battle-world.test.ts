@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { EntityKind, type PlayerStart } from '../net/protocol';
-import { unpackPlayerState, unpackShotState } from '../net/entity-state';
+import {
+  AbilityPhase,
+  ShotFlavourCode,
+  unpackPlayerState,
+  unpackShotState,
+} from '../net/entity-state';
+import { SHOCK_DAMAGE } from './abilities';
+import { ticks } from './tick';
+import * as FIGURES from './weapon-figures';
 import { MAP_COLS, MAP_ROWS, TILE_SIZE, Terrain } from './arena-map';
 import { CHARACTER_STATS } from './arena';
 
@@ -26,6 +34,7 @@ import {
   BOLT_DAMAGE,
   CROSSBOW_BOLT_COUNT,
   DYNAMITE_CHARGE_TICKS,
+  DYNAMITE_FUSE_TICKS,
   SATCHEL_ARM_FUSE_TICKS,
   SATCHEL_CARRIED,
   SATCHEL_IDLE_TICKS,
@@ -836,6 +845,363 @@ describe('BattleWorld', () => {
       const w = battle();
       w.remove(1);
       expect(players(w).some((p) => p.id === 1)).toBe(false);
+    });
+  });
+});
+
+/**
+ * The third key, for every hero that has one.
+ *
+ * Every case below presses `Button.SNIPE` on a real `InputCommand`, which is
+ * the only door a player has: there is no `world.blink()` to call instead, and
+ * a test that used one could not tell whether the bit was wired at all.
+ */
+describe('the third ability', () => {
+  /**
+   * Holds SNIPE for `n` ticks and then lets go, which is what a hold is.
+   *
+   * `n` ticks of the key being down is `n - 1` COMPLETED ticks of wind-up, so
+   * a full draw asks for one more than the figure says.
+   */
+  function holdSnipe(w: BattleWorld, id: number, angle: number, n: number): void {
+    hold(w, n, id, cmd(Button.SNIPE, angle));
+    hold(w, 1, id, cmd(0, angle, 2));
+  }
+  const fullyHeld = (secs: number) => ticks(secs) + 1;
+
+  const phaseOf = (w: BattleWorld, id: number) => unpackPlayerState(player(w, id).state).ability;
+  const isMarked = (w: BattleWorld, id: number) => unpackPlayerState(player(w, id).state).marked;
+  const shielded = (w: BattleWorld, id: number) => unpackPlayerState(player(w, id).state).shielded;
+
+  describe('the archer draws', () => {
+    it('is rooted while the key is down', () => {
+      const w = battle({ characters: ['archer', 'archer'], at: DUEL_SEATS });
+      // Measured from the tick AFTER the press, not from before it: `#move`
+      // runs ahead of `#act` in the step, so the tick the key goes down still
+      // carries the step it had already been given. One tick of slop, and the
+      // same one a keydown listener has in the single-player game.
+      hold(w, 1, 0, cmd(Button.SNIPE | Button.RIGHT, 0));
+      const rooted = player(w, 0).x;
+      hold(w, 30, 0, cmd(Button.SNIPE | Button.RIGHT, 0, 2));
+      expect(player(w, 0).x).toBe(rooted);
+    });
+
+    it('walks again the moment the shot is away', () => {
+      const w = battle({ characters: ['archer', 'archer'], at: DUEL_SEATS });
+      hold(w, 30, 0, cmd(Button.SNIPE, 0));
+      const from = player(w, 0).x;
+      hold(w, 30, 0, cmd(Button.RIGHT, 0, 2));
+      expect(player(w, 0).x).toBeGreaterThan(from);
+    });
+
+    it('says WINDING on the wire, so a client can draw the root', () => {
+      const w = battle({ characters: ['archer', 'archer'], at: DUEL_SEATS });
+      hold(w, 10, 0, cmd(Button.SNIPE, 0));
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.WINDING);
+      hold(w, 1, 0, cmd(0, 0, 2));
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.NONE);
+    });
+
+    it('sends one arrow through two bodies at a full draw', () => {
+      const w = battle({
+        characters: ['archer', 'archer', 'archer'],
+        teams: [Team.A, Team.B, Team.B],
+        at: [{ x: 200, y: 240 }, { x: 420, y: 240 }, { x: 560, y: 240 }],
+      });
+      holdSnipe(w, 0, 0, fullyHeld(FIGURES.ARCHER_DRAW_MAX_SECS));
+      hold(w, 60, 0, cmd(0, 0, 3));
+      expect(shielded(w, 1)).toBe(false);
+      expect(shielded(w, 2)).toBe(false);
+    });
+
+    it('stops at the first body on a tap, which is what the hold is buying', () => {
+      const w = battle({
+        characters: ['archer', 'archer', 'archer'],
+        teams: [Team.A, Team.B, Team.B],
+        at: [{ x: 200, y: 240 }, { x: 420, y: 240 }, { x: 560, y: 240 }],
+      });
+      holdSnipe(w, 0, 0, 1);
+      hold(w, 120, 0, cmd(0, 0, 3));
+      expect(shielded(w, 1)).toBe(false);
+      expect(shielded(w, 2)).toBe(true);
+    });
+
+    it('refuses a second draw until the cooldown is up', () => {
+      const w = battle({
+        characters: ['archer', 'archer'],
+        at: [{ x: 200, y: 240 }, { x: 420, y: 240 }],
+      });
+      holdSnipe(w, 0, 0, 1);
+      hold(w, 120, 0, cmd(0, 0, 3));
+      const flying = shots(w).length;
+      holdSnipe(w, 0, 0, 1);
+      expect(shots(w).length).toBe(flying);
+    });
+  });
+
+  describe('the wizard blinks', () => {
+    it('crosses ground it did not walk, the moment the key goes down', () => {
+      const w = battle({ characters: ['wizard', 'archer'], at: DUEL_SEATS });
+      const from = player(w, 0).x;
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(player(w, 0).x - from).toBeCloseTo(FIGURES.BLINK_REACH, 0);
+    });
+
+    it('lands untouchable, and says SURGING while it lasts', () => {
+      const w = battle({ characters: ['wizard', 'archer'], at: DUEL_SEATS });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.SURGING);
+      hold(w, ticks(FIGURES.BLINK_IFRAME_SECS) + 1, 0, cmd(0, 0, 2));
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.NONE);
+    });
+
+    it('hits whoever was standing where it lands', () => {
+      const w = battle({
+        characters: ['wizard', 'archer'],
+        at: [{ x: 200, y: 240 }, { x: 200 + FIGURES.BLINK_REACH, y: 240 }],
+      });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(shielded(w, 1)).toBe(false);
+    });
+
+    it('stops against cover rather than passing through it', () => {
+      const terrain = clearGround();
+      const w = battle({ characters: ['wizard', 'archer'], terrain, at: DUEL_SEATS });
+      const from = player(w, 0);
+      const col = Math.floor(from.x / TILE_SIZE) + 2;
+      for (let r = 0; r < MAP_ROWS; r++) terrain.map.set(r, col, TILE.ROCK);
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(player(w, 0).x).toBeLessThan(col * TILE_SIZE);
+    });
+
+    it('costs nothing when there is no room, so a wall does not eat the key', () => {
+      const terrain = clearGround();
+      const w = battle({ characters: ['wizard', 'archer'], terrain, at: DUEL_SEATS });
+      const from = player(w, 0);
+      // Walled off one tile east, which is inside the refusal threshold.
+      const col = Math.floor(from.x / TILE_SIZE) + 1;
+      for (let r = 0; r < MAP_ROWS; r++) terrain.map.set(r, col, TILE.ROCK);
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(player(w, 0).x).toBe(from.x);
+      // Straight back the other way, with no wait: a refused hop spent no
+      // cooldown, so this one lands.
+      hold(w, 1, 0, cmd(0, Math.PI, 2));
+      hold(w, 1, 0, cmd(Button.SNIPE, Math.PI, 3));
+      expect(from.x - player(w, 0).x).toBeCloseTo(FIGURES.BLINK_REACH, 0);
+    });
+  });
+
+  describe('the knight charges', () => {
+    it('is rooted and untouchable while the key is down', () => {
+      const w = battle({ characters: ['knight', 'archer'], at: DUEL_SEATS });
+      const at = face(w);
+      const inputs = new Map([
+        [0, cmd(Button.SNIPE | Button.RIGHT, at.angle)],
+        [1, cmd(Button.FIRE, at.angle + Math.PI)],
+      ]);
+      // One tick to get the wind-up started; see the archer's root above for
+      // why the measurement begins after it rather than before.
+      w.step(DT, inputs);
+      const rooted = player(w, 0).x;
+      for (let i = 0; i < 90; i++) w.step(DT, inputs);
+      expect(player(w, 0).x).toBe(rooted);
+      expect(shielded(w, 0)).toBe(true);
+    });
+
+    it('is carried forward once the key comes up', () => {
+      const w = battle({ characters: ['knight', 'archer'], at: DUEL_SEATS });
+      const from = player(w, 0).x;
+      holdSnipe(w, 0, 0, 30);
+      hold(w, ticks(FIGURES.KNIGHT_DASH_SECS), 0, cmd(0, 0, 3));
+      expect(player(w, 0).x - from).toBeGreaterThan(200);
+    });
+
+    it('says SURGING for the whole dash, and cannot be steered out of it', () => {
+      const w = battle({ characters: ['knight', 'archer'], at: DUEL_SEATS });
+      holdSnipe(w, 0, 0, 30);
+      const started = player(w, 0).y;
+      hold(w, 10, 0, cmd(Button.DOWN, 0, 3));
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.SURGING);
+      expect(player(w, 0).y).toBe(started);
+    });
+
+    it('wounds what it runs through', () => {
+      const w = battle({
+        characters: ['knight', 'archer'],
+        at: [{ x: 200, y: 240 }, { x: 380, y: 240 }],
+      });
+      holdSnipe(w, 0, 0, 30);
+      hold(w, ticks(FIGURES.KNIGHT_DASH_SECS), 0, cmd(0, 0, 3));
+      expect(shielded(w, 1)).toBe(false);
+    });
+  });
+
+  describe('the ranger marks', () => {
+    it('settles on the nearest enemy, and the wire says so', () => {
+      const w = battle({ characters: ['ranger', 'archer'], at: DUEL_SEATS });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(isMarked(w, 1)).toBe(true);
+      expect(isMarked(w, 0)).toBe(false);
+    });
+
+    it('wears off on its own', () => {
+      const w = battle({ characters: ['ranger', 'archer'], at: DUEL_SEATS });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      hold(w, ticks(FIGURES.RANGER_MARK_SECS) + 2, 0, cmd(0, 0, 2));
+      expect(isMarked(w, 1)).toBe(false);
+    });
+
+    it('makes every hit on the marked body hurt more', () => {
+      const leftAfterVolleys = (marked: boolean): number => {
+        const w = battle({
+          characters: ['ranger', 'archer'],
+          at: [{ x: 200, y: 240 }, { x: 420, y: 240 }],
+        });
+        if (marked) hold(w, 1, 0, cmd(Button.SNIPE, 0));
+        hold(w, 200, 0, cmd(Button.FIRE, 0, 2));
+        return player(w, 1).hp;
+      };
+      expect(leftAfterVolleys(true)).toBeLessThan(leftAfterVolleys(false));
+    });
+
+    it('costs nothing when nobody is in reach', () => {
+      const far = FIGURES.RANGER_MARK_RADIUS + 120;
+      const w = battle({
+        characters: ['ranger', 'archer'],
+        at: [{ x: 120, y: 240 }, { x: 120 + far, y: 240 }],
+      });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(isMarked(w, 1)).toBe(false);
+      // Walk into range and press again straight away. A refused mark that
+      // had spent its cooldown would leave this one twelve seconds away.
+      hold(w, 60, 0, cmd(Button.RIGHT, 0, 2));
+      hold(w, 1, 0, cmd(0, 0, 3));
+      hold(w, 1, 0, cmd(Button.SNIPE, 0, 4));
+      expect(isMarked(w, 1)).toBe(true);
+    });
+  });
+
+  describe('the sapper fires a shock round', () => {
+    it('puts a SHOCK-flavoured shot in the air', () => {
+      const w = battle({ characters: ['sapper', 'archer'], at: DUEL_SEATS });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      const round = shots(w)
+        .map((s) => unpackShotState(s.state))
+        .filter((s) => s.flavour === ShotFlavourCode.SHOCK);
+      expect(round).toHaveLength(1);
+    });
+
+    it('is spent on the first body it reaches', () => {
+      const w = battle({
+        characters: ['sapper', 'archer', 'archer'],
+        teams: [Team.A, Team.B, Team.B],
+        at: [{ x: 200, y: 240 }, { x: 420, y: 240 }, { x: 560, y: 240 }],
+      });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      hold(w, 60, 0, cmd(0, 0, 2));
+      expect(shielded(w, 1)).toBe(false);
+      expect(shielded(w, 2)).toBe(true);
+    });
+
+    it('takes SHOCK_DAMAGE off a body whose shield has already gone', () => {
+      // An ally strips the shield first, so this measures the round and not
+      // the shield it would otherwise have been spent on.
+      const w = battle({
+        characters: ['sapper', 'archer', 'archer'],
+        teams: [Team.A, Team.A, Team.B],
+        at: [{ x: 200, y: 240 }, { x: 140, y: 240 }, { x: 420, y: 240 }],
+      });
+      w.step(DT, new Map([[1, cmd(Button.FIRE, 0)]]));
+      hold(w, 60, 1, cmd(0, 0, 2));
+      expect(shielded(w, 2)).toBe(false);
+      const before = player(w, 2).hp;
+      hold(w, 1, 0, cmd(Button.SNIPE, 0, 3));
+      hold(w, 60, 0, cmd(0, 0, 4));
+      expect(before - player(w, 2).hp).toBe(SHOCK_DAMAGE);
+    });
+
+    it('sets off his own charge early, which is what the round is for', () => {
+      // Thrown NORTH, at nobody. Aimed down the duel line the charge reaches
+      // the other fighter and goes off on the hit, which is early for a reason
+      // that has nothing to do with the shock round -- the first version of
+      // this test passed with the whole combo deleted.
+      const north = -Math.PI / 2;
+      const w = battle({ characters: ['sapper', 'archer'], at: DUEL_SEATS });
+      hold(w, 1, 0, cmd(Button.FIRE, north));
+      hold(w, 20, 0, cmd(0, north, 2));            // let it get clear of him
+      hold(w, 1, 0, cmd(Button.SNIPE, north, 3));  // and the round after it
+      let elapsed = 22;
+      while (elapsed < DYNAMITE_FUSE_TICKS && blasts(w).length === 0) {
+        hold(w, 1, 0, cmd(0, north, 4));
+        elapsed++;
+      }
+      expect(blasts(w).length).toBeGreaterThan(0);
+      expect(elapsed).toBeLessThan(DYNAMITE_FUSE_TICKS);
+    });
+
+    it('lets the charge run its own fuse when no round is threaded at it', () => {
+      const north = -Math.PI / 2;
+      const w = battle({ characters: ['sapper', 'archer'], at: DUEL_SEATS });
+      hold(w, 1, 0, cmd(Button.FIRE, north));
+      hold(w, DYNAMITE_FUSE_TICKS - 4, 0, cmd(0, north, 2));
+      expect(blasts(w)).toHaveLength(0);
+    });
+  });
+
+  describe('whoever is holding it', () => {
+    it('lets go of a wind-up when the player stops sending input at all', () => {
+      const w = battle({ characters: ['knight', 'archer'], at: DUEL_SEATS });
+      const from = player(w, 0).x;
+      hold(w, 30, 0, cmd(Button.SNIPE, 0));
+      hold(w, ticks(FIGURES.KNIGHT_DASH_SECS), 0, null);
+      expect(player(w, 0).x - from).toBeGreaterThan(200);
+    });
+
+    it('drops a wind-up when the body holding it goes down', () => {
+      // The archer's draw roots him and does NOT protect him, so this is the
+      // one wind-up that can be interrupted by dying. Asserted while he is
+      // down rather than after he is back: a body is out for three seconds,
+      // and a charge held across all of it would be loosed at whatever is
+      // standing at his spawn.
+      const w = battle({
+        characters: ['archer', 'archer'],
+        at: [{ x: 200, y: 240 }, { x: 420, y: 240 }],
+      });
+      const at = face(w);
+      const inputs = new Map([
+        [0, cmd(Button.SNIPE, at.angle)],
+        [1, cmd(Button.FIRE, at.angle + Math.PI)],
+      ]);
+      w.step(DT, inputs);
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.WINDING);
+      let died = 0;
+      for (let t = 1; t <= 600; t++) {
+        w.step(DT, inputs);
+        if (unpackPlayerState(player(w, 0).state).dead) { died = t; break; }
+      }
+      expect(died).toBeGreaterThan(0);
+      expect(phaseOf(w, 0)).toBe(AbilityPhase.NONE);
+    });
+
+    it('does not let a mark outlive the body it was riding', () => {
+      const w = battle({
+        characters: ['ranger', 'archer'],
+        at: [{ x: 200, y: 240 }, { x: 420, y: 240 }],
+      });
+      hold(w, 1, 0, cmd(Button.SNIPE, 0));
+      expect(isMarked(w, 1)).toBe(true);
+      // Shoot until it dies, then wait out the respawn. Deliberately stopped
+      // well before the mark's own eight seconds are up, so what clears it
+      // here is the death and not the timer.
+      let died = 0;
+      for (let t = 1; t <= ticks(FIGURES.RANGER_MARK_SECS) / 2; t++) {
+        hold(w, 1, 0, cmd(Button.FIRE, 0, 2));
+        if (unpackPlayerState(player(w, 1).state).dead) { died = t; break; }
+      }
+      expect(died).toBeGreaterThan(0);
+      hold(w, RESPAWN_TICKS + 1, 0, cmd(0, 0, 3));
+      expect(unpackPlayerState(player(w, 1).state).dead).toBe(false);
+      expect(isMarked(w, 1)).toBe(false);
     });
   });
 });
