@@ -64,3 +64,12 @@ primary_region = 'ams'
 [[vm]]
   size = 'shared-cpu-1x'
   memory = '256mb'
+
+# Storage alerts. The sink stops accepting records at 80% of this volume and
+# mails a warning as it crosses 60, 70, 80 and 90. Both variables are secrets
+# rather than env, because one is a URL somebody could post to:
+#
+#   fly secrets set FLIGHT_ALERT_WEBHOOK=https://... FLIGHT_ALERT_EMAIL=you@example.com
+#
+# With neither set the alert is written to stdout, which is `fly logs`. The
+# deploy is not blocked on having somewhere to send mail.

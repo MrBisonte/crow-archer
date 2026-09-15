@@ -755,3 +755,48 @@ describe('receiving a flight record', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('the flight route when the volume is full', () => {
+  it('answers 507 and writes nothing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'flight-full-'));
+    const server = await startServer({
+      port: 0,
+      flightDir: dir,
+      clientPage: { read: async () => '<html></html>' },
+      storageGuard: async () => false,
+      notify: async () => {},
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/__flight`, {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'hello', wall: 1 }),
+      });
+      expect(res.status).toBe(507);
+      const files = await readdir(dir).catch(() => []);
+      expect(files.filter((f) => f.endsWith('.jsonl'))).toEqual([]);
+    } finally {
+      await server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still calls a malformed record the page fault, not the disk', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'flight-full-'));
+    const server = await startServer({
+      port: 0,
+      flightDir: dir,
+      clientPage: { read: async () => '<html></html>' },
+      storageGuard: async () => false,
+      notify: async () => {},
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/__flight`, {
+        method: 'POST', body: 'not json',
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -31,6 +31,8 @@ import { BattleWorld } from '../sim/battle-world';
 import { noiseFor } from '../sim/noise';
 import type { WorldFactory } from '../sim/world';
 import { FileClientPage, type ClientPage } from './client-page';
+import { checkStorage, storageGuard, webhookNotifier, type Notify }
+  from './flight-storage';
 import { Lobby, randomRoomCode, type Outbound } from './lobby';
 import { RoomStore, type ConnectionId } from './room';
 import { Match, TICK_HZ } from './match';
@@ -62,6 +64,9 @@ const MAX_CATCHUP_TICKS = 5;
 
 /** Frames larger than this are refused before they are parsed. */
 const MAX_FRAME_BYTES = 8 * 1024;
+
+/** How often the volume is measured for the alert bands. */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * May a page at this origin file a flight record against this host?
@@ -127,6 +132,13 @@ export interface ServerOptions {
    * test needs a directory it owns. The deployment passes a volume mount.
    */
   flightDir?: string;
+  /**
+   * Whether the volume has room for another record. Injected so a test can say
+   * "full" without filling a disk.
+   */
+  storageGuard?: () => Promise<boolean>;
+  /** Where a storage alert goes. Injected so a test needs no network. */
+  notify?: Notify;
 }
 
 /** The path a load balancer polls to decide the process is alive. */
@@ -200,6 +212,26 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     return flightDirReady.then(() => appendFile(flightFile, line));
   };
 
+  // One tab left open writes a record a second, about 86 MB a day, and a full
+  // volume takes the process down with it. The guard stops at STOP_AT; the
+  // daily check mails somebody while there is still room to act.
+  const flightAccepts = options.storageGuard ?? storageGuard(flightDir);
+  const notify = options.notify ?? webhookNotifier();
+  const dailyCheck = setInterval(() => {
+    void checkStorage(flightDir, notify).then((band) => {
+      if (band !== null) {
+        process.stdout.write(`flight storage: alerted at ${(band * 100).toFixed(0)}%\n`);
+      }
+    }).catch(() => {
+      // A volume that cannot be read is not a reason to stop serving. The
+      // guard answers 0 in the same case and the writes themselves still fail
+      // loudly if the disk is really gone.
+    });
+  }, DAY_MS);
+  // Node keeps the process alive for a pending timer, and a daily one would
+  // hold a test suite open for a day.
+  dailyCheck.unref();
+
   /**
    * Takes one flight record from the page (src/dev/flight-recorder.ts).
    *
@@ -230,12 +262,18 @@ export function startServer(options: ServerOptions): Promise<RunningServer> {
     }
     const cors = origin === undefined ? {} : { 'access-control-allow-origin': origin };
     void readBody(req, MAX_BODY_BYTES).then(
-      (body) => {
+      async (body) => {
         let line: string;
         try {
           line = `${toLine(body, Date.now())}\n`;
         } catch {
           res.writeHead(400, cors).end();
+          return;
+        }
+        // Checked after parsing, so a malformed record still reads 400 rather
+        // than blaming the disk, and before writing, which is the point.
+        if (!await flightAccepts()) {
+          res.writeHead(507, cors).end();
           return;
         }
         return appendFlight(line).then(
