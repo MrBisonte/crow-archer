@@ -88,3 +88,88 @@ export const SATCHEL_IDLE_LIFE_SECS = 60;
 
 /** Slower than every primary but the wizard's bolt. */
 export const SAPPER_CHARGE_COOLDOWN_SECS = 1.1;
+
+// ═══ The third abilities ════════════════════════════════════════════════════
+//
+// One key, five abilities: `Button.SNIPE` on the wire, Shift on a keyboard.
+// Each hero's is a different verb, so unlike the weapons above there is little
+// shared BETWEEN them — what is shared is each one's figures across the two
+// runtimes, which is the whole reason they are here rather than typed out
+// twice. `src/sim/abilities.ts` describes what they make; `CONFIG` runs the
+// single-player game off the same numbers.
+//
+// Damage is missing from every block below, deliberately and for the reason
+// stated at the top of this file: legacy's third-ability damage figures are
+// boss damage against a 10-20 HP sponge, and multiplayer's are designed
+// against a 10 HP player. `src/sim/hero-parity.test.ts` records each of those
+// pairs as uncomparable rather than pretending they are one figure.
+
+// ── The archer's power shot ─────────────────────────────────────────────────
+
+/** How long the draw takes to reach full. A tap gets the bottom of every range. */
+export const ARCHER_DRAW_MAX_SECS = 1.0;
+export const ARCHER_POWER_COOLDOWN_SECS = 5;
+/** Speed at a full draw, as a multiple of a plain arrow's. A tap is 1x. */
+export const ARCHER_POWER_SPEED_MULT = 2;
+/** Bodies a fully drawn shot passes through. A tap pierces one, i.e. not at all. */
+export const ARCHER_POWER_PIERCE = 3;
+
+// ── The wizard's blink ──────────────────────────────────────────────────────
+
+/** Five tiles: far enough to break contact with anything that walks. */
+export const BLINK_REACH = 160;
+/**
+ * Below this the hop is refused outright rather than half-taken.
+ *
+ * A blink face-first into a wall would otherwise spend the whole cooldown on
+ * two pixels of travel, which reads as the button being broken rather than as
+ * the wall being solid.
+ */
+export const BLINK_MIN_REACH = 32;
+export const BLINK_COOLDOWN_SECS = 6;
+/** How long arriving leaves him untouchable. */
+export const BLINK_IFRAME_SECS = 0.3;
+/** The pulse an arrival lets off: an escape that punishes whoever was chasing. */
+export const BLINK_PULSE_RADIUS = 56;
+
+// ── The knight's charge ─────────────────────────────────────────────────────
+
+/** Longest the windup can be held. He is rooted for all of it. */
+export const KNIGHT_CHARGE_MAX_HOLD_SECS = 3;
+export const KNIGHT_CHARGE_COOLDOWN_SECS = 4;
+/** How long the dash runs once the windup is released. */
+export const KNIGHT_DASH_SECS = 1.5;
+/** How much faster than his own walk the dash carries him. */
+export const KNIGHT_DASH_SPEED_MULT = 1.6;
+/** How far either side of him the dash reaches while it runs. */
+export const KNIGHT_CHARGE_RADIUS = 90;
+/** Seconds between the dash's damage ticks, as the whirlwind has. */
+export const KNIGHT_CHARGE_TICK_SECS = 0.2;
+/**
+ * What the windup is worth, at no hold and at a full one.
+ *
+ * The bounds of the curve, not a damage: each runtime applies them to its own
+ * damage base, the way `CROSSBOW_BOLT_RADIUS_MULT` is a shared cut applied to
+ * two different anchors.
+ */
+export const KNIGHT_CHARGE_MIN_DAMAGE_MULT = 1.3;
+export const KNIGHT_CHARGE_MAX_DAMAGE_MULT = 2;
+
+// ── The ranger's mark ───────────────────────────────────────────────────────
+
+/** How long a mark rides its target. */
+export const RANGER_MARK_SECS = 8;
+/** How far a target may be and still be marked. */
+export const RANGER_MARK_RADIUS = 420;
+
+// ── The sapper's shock round ────────────────────────────────────────────────
+
+export const SAPPER_SHOT_COOLDOWN_SECS = 10;
+/** The fastest thing either runtime fires. */
+export const SAPPER_SHOT_SPEED = 600;
+export const SAPPER_SHOT_LIFE_SECS = 1.5;
+/**
+ * How much wider a charge goes off when the shock round sets it off early,
+ * rather than on its own fuse. The payoff for threading the harder shot.
+ */
+export const SAPPER_COMBO_RADIUS_MULT = 1.33;

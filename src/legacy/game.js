@@ -414,10 +414,10 @@ const CONFIG = {
   // What a full brace takes off the power shot's wait, as a fraction.
   archerBracedCooldownCut: 0.4,
 
-  archerDrawMaxSecs: 1.0,
-  archerPowerCooldown: 5,
-  archerPowerSpeedMult: 2,   // 500 px/s at a tap, 1000 fully drawn
-  archerPowerPierce: 3,      // bodies it passes through: 1 at a tap
+  archerDrawMaxSecs: FIGURES.ARCHER_DRAW_MAX_SECS,
+  archerPowerCooldown: FIGURES.ARCHER_POWER_COOLDOWN_SECS,
+  archerPowerSpeedMult: FIGURES.ARCHER_POWER_SPEED_MULT,   // 500 px/s at a tap, 1000 fully drawn
+  archerPowerPierce: FIGURES.ARCHER_POWER_PIERCE,      // bodies it passes through: 1 at a tap
   archerPowerBossMult: 3,    // against a boss, versus a plain arrow's 1
 
   // Crow density and the player's ability to answer it. Every value here is
@@ -606,9 +606,11 @@ const CONFIG = {
   // instead detonates it early into a bigger blast, its damage highest at the
   // centre and falling off toward the edge — the reward for threading the
   // harder shot. See updateSapperShots, which splices on the first hit.
-  sapperShotCooldown: 10, sapperShotSpeed: 600, sapperShotLifetime: 1.5,
+  sapperShotCooldown: FIGURES.SAPPER_SHOT_COOLDOWN_SECS,
+  sapperShotSpeed: FIGURES.SAPPER_SHOT_SPEED,
+  sapperShotLifetime: FIGURES.SAPPER_SHOT_LIFE_SECS,
   sapperShotDamageMult: 3, sapperShotBossDamage: 3,
-  sapperComboRadiusMult: 1.33, sapperComboFalloffMax: 10, sapperComboFalloffMin: 2,
+  sapperComboRadiusMult: FIGURES.SAPPER_COMBO_RADIUS_MULT, sapperComboFalloffMax: 10, sapperComboFalloffMin: 2,
   // Chain detonation: a bomb going off lights every other bomb near it, and
   // those light the next. It finishes the combo the shock round already
   // started -- his shot detonates one of his own bombs -- by making the pouch
@@ -676,18 +678,21 @@ const CONFIG = {
   // Charge: hold Shift to wind up (rooted, invulnerable), release to advance
   // swinging. Damage scales with hold time against the boss only; crows and
   // skeletons die outright in the arc, same as every other knight melee hit.
-  knightChargeMaxHoldSecs: 3, knightChargeCooldown: 4,
+  knightChargeMaxHoldSecs: FIGURES.KNIGHT_CHARGE_MAX_HOLD_SECS,
+  knightChargeCooldown: FIGURES.KNIGHT_CHARGE_COOLDOWN_SECS,
   // The dash outruns his own legs, which is the whole reason the slowest hero
   // on the roster has one. It ran at 0.5 for a long time: 75 px/s, slower than
   // every other hero WALKING, and 112 px of travel against a 90 px reach --
   // releasing put him barely further forward than he could already hit from,
   // after a windup that rooted him for up to three seconds. At 1.6 it carries
   // 360 px, which is four spear lengths and an actual gap closed.
-  knightChargeDashDuration: 1.5, knightChargeDashSpeedMult: 1.6,
-  knightChargeMinDamageMult: 1.3, knightChargeMaxDamageMult: 2,
-  knightChargeBossDamage: 2, knightChargeRadius: 90,
+  knightChargeDashDuration: FIGURES.KNIGHT_DASH_SECS,
+  knightChargeDashSpeedMult: FIGURES.KNIGHT_DASH_SPEED_MULT,
+  knightChargeMinDamageMult: FIGURES.KNIGHT_CHARGE_MIN_DAMAGE_MULT,
+  knightChargeMaxDamageMult: FIGURES.KNIGHT_CHARGE_MAX_DAMAGE_MULT,
+  knightChargeBossDamage: 2, knightChargeRadius: FIGURES.KNIGHT_CHARGE_RADIUS,
   knightChargeArcRadians: Math.PI / 4,  // total sweep, so ±half that off aimAngle
-  knightChargeTickRate: 0.2,
+  knightChargeTickRate: FIGURES.KNIGHT_CHARGE_TICK_SECS,
   // Chained charge: a second press mid-dash, inside shiftChainSecs and with
   // room left ahead, commits him harder in the direction he already picked.
   // The dash goes from fast to faster, and he lands one whirlwind swing where
@@ -728,8 +733,10 @@ const CONFIG = {
   wizFocusRegenSecs: 2,
   wizFocusBolt: 1,
   wizFocusBlink: 2,
-  wizBlinkDistance: 160, wizBlinkCooldown: 6, wizBlinkIFrames: 0.3,
-  wizBlinkMinDistance: 32,
+  wizBlinkDistance: FIGURES.BLINK_REACH,
+  wizBlinkCooldown: FIGURES.BLINK_COOLDOWN_SECS,
+  wizBlinkIFrames: FIGURES.BLINK_IFRAME_SECS,
+  wizBlinkMinDistance: FIGURES.BLINK_MIN_REACH,
   // A blink may be chained once, into a second hop, if the key comes down
   // again inside shiftChainSecs and there is somewhere to go. Two is the cap
   // on purpose: three would cross the arena on one cooldown, and the point of
@@ -738,7 +745,7 @@ const CONFIG = {
   // The pulse each arrival lets off. Small enough that it is an escape which
   // punishes whoever was chasing, rather than a repositioning nuke: it clears
   // the ring of crows that closed in, and takes one point off a boss.
-  wizBlinkPulseRadius: 56, wizBlinkPulseBossDamage: 1,
+  wizBlinkPulseRadius: FIGURES.BLINK_PULSE_RADIUS, wizBlinkPulseBossDamage: 1,
   // Thunderstep: how much wider each further hop of a chain arrives, as a
   // fraction of the base radius. The damage step is a whole base hit and is
   // not a dial -- see escalatedPulse in sim/blink.ts for why one of them is a
@@ -835,9 +842,9 @@ const CONFIG = {
   // Boss damage and not damage generally, because an ordinary body has one
   // hit point and dies to any bolt: a crit on a crow is a number nobody can
   // see. The mark is his answer to the thing 0.7 a bolt cannot dent.
-  rangerMarkSecs: 8,
+  rangerMarkSecs: FIGURES.RANGER_MARK_SECS,
   rangerMarkCritMult: 2.5,
-  rangerMarkRadius: 420,
+  rangerMarkRadius: FIGURES.RANGER_MARK_RADIUS,
   crossbowSpreadRadians: FIGURES.CROSSBOW_SPREAD_RADIANS,   // 3° between bolts
   // The crossbow reloads, which is the whole point of a crossbow and the one
   // thing it did not do. Before this the arrow cap was its only pacing, and a
