@@ -8274,19 +8274,24 @@ const MAZE_LOCKS = {
 };
 
 /**
- * An open tile next to `at`, for standing one thing beside another.
+ * An open tile immediately next to `at`, for standing one thing beside another.
  *
- * nearestOpenTile answers with `at`'s own tile when that tile is open, which
- * it always is for anything already placed — so the offset is what asks for a
- * neighbour, and the loop is for the case where the first direction is wall.
- * Falls back to `at` itself, which overlaps rather than throws: on a grid with
- * no neighbouring open tile there is nowhere else to stand.
+ * Checks all eight neighbours for passability directly and returns the first
+ * open one. It does NOT go through nearestOpenTile: that answers with the
+ * nearest open tile to a point, so a walled neighbour sent it two or more tiles
+ * out (a landmark that no longer read as beside the chest) and a fully walled
+ * ring sent it back to `at` itself (two sprites on one tile). Falls back to
+ * `at` only when every neighbour is wall, which a reachable tile in a carved
+ * maze never is; it overlaps rather than throws.
  */
 function tileBeside(at) {
   const ts = CONFIG.tileSize;
-  for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, -1]]) {
-    const t = nearestOpenTile(at.x + dx * ts, at.y + dy * ts);
-    if (t.x !== at.x || t.y !== at.y) return t;
+  for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const x = at.x + dx * ts, y = at.y + dy * ts;
+    if (tilePassable(tileAt(x, y))) {
+      const c = Math.floor(x / ts), r = Math.floor(y / ts);
+      return { x: c * ts + ts / 2, y: r * ts + ts / 2 };
+    }
   }
   return at;
 }
@@ -8314,9 +8319,17 @@ function newMazeRun() {
   // reach the chest with no way to light it. The rest stay scattered, and
   // finding those still has to feel like luck.
   const torches = [torch(tileBeside(chest))];
+  // A scattered torch that lands on the chest or on another torch is a wasted
+  // landmark and two sprites on one tile. openTileAwayFrom only keeps its
+  // distance from the spawn, so re-roll one that lands on a tile already taken.
+  const torchTaken = (p) =>
+    (p.x === chest.x && p.y === chest.y) || torches.some((t) => t.x === p.x && t.y === p.y);
   for (let i = 1; i < CONFIG.mazeTorchCount; i++) {
-    const at = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeTorchMinDistance);
-    if (at) torches.push(torch(at));
+    let at = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeTorchMinDistance);
+    for (let tries = 0; at && torchTaken(at) && tries < 12; tries++) {
+      at = openTileAwayFrom(spawn.x, spawn.y, CONFIG.mazeTorchMinDistance);
+    }
+    if (at && !torchTaken(at)) torches.push(torch(at));
   }
   return {
     locks: {

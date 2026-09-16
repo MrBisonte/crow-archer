@@ -5193,16 +5193,34 @@ describe('the maze gives the player something to steer by', () => {
   afterEach(() => { g.setMode('brawl'); g.pickMap('forest'); });
 
   /** Ten freshly carved mazes, as the objective sees them. */
+  // Deterministic and large. The generator seeds each map from Math.random, so an
+  // unseeded sample flaked: a torch landing on the chest or two tiles off it turned
+  // up about one full run in four. Pin the RNG and take enough maps that those rare
+  // placements are always in the sample, so the assertions below are a real guard,
+  // not a coin toss. Memoised: generated once, read by every case here. Seed and
+  // size are load-bearing -- both defects are present in this sample with the fixes
+  // reverted. See LESSONS.jsonl, topic 'maze-beacon'.
+  let _sample: { chest: { x: number; y: number };
+                 torches: { x: number; y: number; lit: boolean }[] }[] | null = null;
   const mazes = (): { chest: { x: number; y: number };
                       torches: { x: number; y: number; lit: boolean }[] }[] => {
-    g.setMode('brawl');
-    g.go('playing');
-    return Array.from({ length: 10 }, () => {
-      g.generateMap('maze');
-      const run = g.maze();
-      expect(run, 'the maze should have an objective').not.toBeNull();
-      return run as never;
-    });
+    if (_sample) return _sample;
+    const rng = mulberry32(0xC0FFEE);
+    const realRandom = Math.random;
+    Math.random = () => rng();
+    try {
+      g.setMode('brawl');
+      g.go('playing');
+      _sample = Array.from({ length: 500 }, () => {
+        g.generateMap('maze');
+        const run = g.maze();
+        expect(run, 'the maze should have an objective').not.toBeNull();
+        return run as never;
+      });
+    } finally {
+      Math.random = realRandom;
+    }
+    return _sample;
   };
 
   it('stands a torch with the chest, on every map it carves', () => {
