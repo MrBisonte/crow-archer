@@ -34,7 +34,7 @@ Survive the flock, kill the Crow King, then the two dark bosses waiting in his c
 [The manual](https://mrbisonte.github.io/crow-archer/manual.html): the same manual, styled. Start here if you just want to play.
 
 ```
- © 2026 CROW ARCHER · MIT LICENCE · NO ENGINE, NO ACCOUNT, NO TRACKING
+ © 2026 CROW ARCHER · MIT LICENCE · NO ENGINE, NO ACCOUNT, NO ADS, PRIVATE BY DEFAULT
 
  CROW ARCHER
  SURVIVE THE FLOCK — GAME MANUAL
@@ -50,11 +50,13 @@ Section 02 shows one character at a time. Click an icon to read that kit.
 
 ## Play
 
-[Play in the browser](https://mrbisonte.github.io/crow-archer/), or [download it](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) and play offline, no install.
+**Single-player, in your browser.** [Play now on GitHub Pages](https://mrbisonte.github.io/crow-archer/): a static page, no server, nothing to install. Or [download `crow-archer.html`](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) from the [latest release](https://github.com/MrBisonte/crow-archer/releases/latest) and play offline; every dependency is inlined, so it runs with the network off.
 
-**Single-player**, offline, no server: download [`crow-archer.html`](https://github.com/MrBisonte/crow-archer/releases/latest/download/crow-archer.html) from the [latest release](https://github.com/MrBisonte/crow-archer/releases/latest) and open it in any modern browser. Every dependency is inlined, so it plays with the network off.
+**Multiplayer, on the live server.** [Play at crow-archer.fly.dev](https://crow-archer.fly.dev/): up to four players, co-op or 2v2. It is a live shared server, and a small one at about ten rooms, so it is online while you play. See [Multiplayer](#multiplayer) for how a room works, or run your own from source below.
 
-**Multiplayer** needs a server. See [Multiplayer](#multiplayer).
+The character screen also picks a difficulty: three rungs, the same crows on each, a faster chase as you climb. The top rung is the original tuning.
+
+**Private by default.** The game sends nothing unless the URL includes `?rec=1`, which turns on a diagnostic recorder; it stays quiet unless you ask. No ads, no account, no outside trackers. With the recorder on, gameplay beats post to the project's server, keyed only by an id minted for the page load.
 
 To run either from source:
 
