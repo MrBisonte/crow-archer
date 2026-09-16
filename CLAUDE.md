@@ -109,6 +109,16 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   before handing off. A siege runs in `'playing'`, so a tail that
   assumes `'boss_fight'` will load the castle mid-wave.
 
+## Feel
+
+- **Tuning a difficulty down?** Instrument what the run actually loses to
+  before picking a knob. Crow density was the obvious one and was never the
+  problem: thinning it made the easy rungs boring, while a white crow at 300
+  against a 250 top speed meant no hero had ever been able to break away from
+  one. Three of the four figures that decide a chase sat under a comment
+  claiming the pace preset owned them, and were in no preset
+  (`the-crowd-was-never-the-difficulty`).
+
 ## Tests
 
 - **A comment says a feature is disabled because it is unfinished?** Read the
@@ -119,6 +129,13 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **A feature with a front door and a back door?** At least one test comes in
   the front. Every siege test opened with `setMode('siege')`, so not one of them
   could tell whether the menu row a player presses reached anything.
+- **A climb that reads its wait out of `CONFIG`?** That is not independence
+  from the figure. Retuning the pace preset's escalation interval broke three
+  commander tests that never name it: a longer wave gave the garrison time to
+  kill an idle hero, and gave a lull time to open a ceremony -- and a run parked
+  on a ceremony screen never advances a wave. Heal on a cadence, dismiss the
+  ceremony, stop on the event
+  (`retuning-a-shared-figure-breaks-tests-that-never-name-it`).
 - **Advancing a siege?** `clearSiegeWave()` *deletes* the field;
   `killSiegeBoss()` *kills* through the real death sequence. Ten waves
   cleared the first way never enters a death sequence at all, which is

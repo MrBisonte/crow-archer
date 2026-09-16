@@ -57,6 +57,20 @@ export function stepPast(n: number): void {
 }
 
 /**
+ * Presses a hotkey the way a real key-up/key-down pair would, then runs one
+ * step so the handler that reads `keys` sees and consumes it.
+ *
+ * `devHooks.key` dispatches a DOM KeyboardEvent, which needs a browser; this
+ * drives the same `keys` map directly, which is what the vitest `node`
+ * environment allows. It lives here rather than in one suite because a screen
+ * with a hotkey is testable from the front door only through this.
+ */
+export function press(key: string): void {
+  (g.keys() as Record<string, boolean>)[key] = true;
+  g.stepSim(1);
+}
+
+/**
  * Points the aim ray at a world position by moving the pointer.
  *
  * Writing `player.aimAngle` directly holds for exactly zero frames: the sim

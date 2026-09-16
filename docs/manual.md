@@ -145,6 +145,31 @@ Demolition. The only hero whose opening move is thrown at a place rather than at
 
 ## Game loop
 
+### Difficulty
+
+Three rungs -- CALM, FAST, NIGHTMARE -- picked on the character screen with the
+up and down arrows, and remembered between runs. FAST is the default.
+
+**The crowd is not what changes.** Every rung fields the same number of crows,
+arriving on the same cadence, up to the same cap. What changes is what happens
+when one notices you: how fast it closes, how long it stays on you, and how much
+faster than that the escalation clock is allowed to make it. Plus two that are
+about surviving the hit rather than avoiding it -- HANDICAP's strength and the
+window after a hit in which nothing else can land -- and the ammo, which is the
+one thing that moves in your favour on the easier rungs.
+
+The white crow is the figure that mattered. At 300 it is faster than every hero
+on the roster (the ranger is quickest at 250, the knight slowest at 150), and the
+escalation cap doubles it, so nobody outruns one at any point in any run. CALM
+runs it at 190 against a cap of 1: the archer, sapper and ranger can break away,
+the wizard and knight still cannot, and it never gets faster than it started.
+
+NIGHTMARE is not a new difficulty. It is the game as it shipped through round 9,
+figure for figure -- the version the ladder exists because nobody was winning --
+and `src/legacy/pace-ladder.test.ts` fails if a tune moves it, or if an easier
+rung ever thins the field out instead. `PACE_PRESETS` in `src/legacy/game.js` is
+the one home for every figure a rung carries.
+
 ### Single-player
 
 ```mermaid
@@ -266,7 +291,7 @@ flowchart LR
 | **STREAK** | Announcer chain: Double Kill, Multi Kill, Mega Kill, Ultra Kill, Monster Kill |
 | **FEATHERS** | Meta-currency earned from kills, persisted in `localStorage`. Spend on the upgrade tree (`src/sim/upgrades.ts`) in the inventory screen: arrow capacity, HP, pitchfork range, move speed, tool capacity, arrows per pickup, a feather bounty, and a shield on every run |
 | **TALENTS** | Per-character trees bought with mastery, which bosses pay and kills never do. What you own is live; a capstone rite at the top rank is sealed once a run, at the start of a level. See [Talents](talents.md) |
-| **HANDICAP** | `CONFIG.handicap` (0 to 100) rubber-bands crow speed and drop rate for accessibility |
+| **HANDICAP** | Rubber-bands crow speed and drop rate against the player's health. `CONFIG.handicap` (0 to 100) is set by the difficulty rung, and is 0 -- inert -- on NIGHTMARE |
 | **BOUNTIES** | Two active micro-objectives tied to kill streaks, bonus rewards on completion |
 
 ## Map

@@ -214,6 +214,8 @@ const CONFIG = {
   // in CHARACTER_STATS (src/sim/arena.ts), and FEATHERS stacks purchased
   // levels on the selected row. A shared figure kept here would be a second
   // home for a number nobody reads, free to be tuned to no effect.
+  // playerHitFlashSecs is the i-frame window after a hit and the flash drawn
+  // during it, and the pace preset owns it now - edit PACE_PRESETS, not this.
   playerRadius: 8, playerHitFlashSecs: 0.3,
   // Enemy hit feedback. The sprite goes flat white for hitFlashWhiteSecs and
   // the knock offset decays across the whole hitFlashSecs, so the recoil
@@ -421,6 +423,9 @@ const CONFIG = {
   crowPassiveSpeed: 60, crowAggroSpeed: 200, crowAggroTimeout: 4,
   crowStartCount: 5, crowMax: 12, crowEscalationInterval: 12,
   whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 300,
+  // How much faster than crowAggroSpeed the escalation clock is allowed to make
+  // a chase -- see waveCrowAggroMult, which used to hold the 2 itself.
+  crowAggroMultCap: 2,
 
   // Which preset to run. Override at runtime with ?pace=nightmare.
   pace: 'fast',
@@ -1054,15 +1059,66 @@ const CONFIG = {
  * Nightmare needed its own. Drop rates are untouched, since more crows already
  * means more drops.
  *
- * Nightmare's baseArrows and arrowRestore are both 25% over their prior values
- * (24->30, 5->6): Nightmare was staying unwinnable because ammo ran out before
- * the crow density did, and this is the small, direct answer rather than a
- * full re-derivation of the density-to-ammo ratio the other two presets use.
+ * The three rows are a difficulty ladder, and `nightmare` is its top rung: it
+ * holds, figure for figure, the game that shipped as the default through round
+ * 9. Nothing was invented above it, because nothing needed to be - that version
+ * was already the one nobody was winning.
+ *
+ * THE DENSITY IS NOT THE LADDER. Every rung fields the same crows, arriving on
+ * the same cadence, up to the same cap. A first cut tuned those down and the
+ * easier rungs came out boring rather than kinder, which is the whole lesson:
+ * what was making the game unwinnable was never how many crows there were, it
+ * was what happened when one noticed you. So the rows below differ on four
+ * things and the crowd is not one of them:
+ *
+ *   - how fast a crow that has seen you closes, normal and white
+ *   - how long it stays on you (`crowAggroTimeout`)
+ *   - how much faster than that it gets as the run escalates
+ *     (`crowAggroMultCap`, read by waveCrowAggroMult)
+ *   - `handicap` and `playerHitFlashSecs`, which are about surviving the hit
+ *     rather than about avoiding it
+ *
+ * The white crow is the figure that mattered. At 300 it is faster than every
+ * hero on the roster -- the ranger is quickest at 250 and the knight slowest at
+ * 150 -- and the escalation cap doubles it, so nobody outruns one at any point
+ * in any run. That is preserved exactly on nightmare, because it is what the
+ * top rung is FOR. On calm it is 190 against a cap of 1, which is a white crow
+ * the archer, sapper and ranger can break away from and the wizard and knight
+ * still cannot. Three of the five, and never late-run.
+ *
+ * The ammo is the one thing that still moves with the player rather than
+ * against him: calm carries nightmare's field with more to answer it.
+ *
+ * `handicap` is what HANDICAP reads: below full health crows slow by up to 30%
+ * and drops get likelier, and at full health they speed up 12%. It was 0
+ * everywhere, so the whole module was inert. It stays 0 on nightmare, and has
+ * to: the 12% is a speed-up, so any other value makes the top rung harder than
+ * the version it exists to preserve.
+ *
+ * `playerHitFlashSecs` is the window after a hit in which nothing can land
+ * another one. It is also the flash drawn during it, which is the point rather
+ * than a coupling to unpick: the tell that you are briefly safe lasts exactly
+ * as long as being briefly safe.
  */
 const PACE_PRESETS = {
-  calm:      { crowStartCount:  5, crowEscalationInterval: 12, crowMax: 12, crowAggroTimeout:  4, crowPassiveSpeed:  60, maxArrowsInFlight: 3, baseArrows: 10, baseDynamites: 3, arrowRestore: 5 },
-  fast:      { crowStartCount:  9, crowEscalationInterval:  4.5, crowMax: 18, crowAggroTimeout:  7, crowPassiveSpeed:  85, maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5 },
-  nightmare: { crowStartCount: 12, crowEscalationInterval:  2.5, crowMax: 22, crowAggroTimeout: 10, crowPassiveSpeed: 100, maxArrowsInFlight: 8, baseArrows: 30, baseDynamites: 5, arrowRestore: 6 },
+  // The field, identical on every rung. Kept as preset fields rather than moved
+  // back into CONFIG so that the row a reader opens says what the rung fields,
+  // and so making one rung thinner stays a one-line edit if it is ever wanted.
+  //                crows  every  cap  | the chase: normal, white, how long, how much worse it gets
+  //                                   | the answer: in flight, arrows, charges, refill
+  //                                   | the mistake: rubber band, i-frames
+  calm:      { crowStartCount: 9, crowEscalationInterval: 4.5, crowMax: 18, crowPassiveSpeed: 85,
+               crowAggroSpeed: 150, whiteCrowPassiveSpeed:  90, whiteCrowAggroSpeed: 190, crowAggroTimeout: 3.5, crowAggroMultCap: 1,
+               maxArrowsInFlight: 5, baseArrows: 18, baseDynamites: 5, arrowRestore: 6,
+               handicap: 60, playerHitFlashSecs: 0.5 },
+  fast:      { crowStartCount: 9, crowEscalationInterval: 4.5, crowMax: 18, crowPassiveSpeed: 85,
+               crowAggroSpeed: 175, whiteCrowPassiveSpeed: 105, whiteCrowAggroSpeed: 240, crowAggroTimeout: 5,   crowAggroMultCap: 1.5,
+               maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5,
+               handicap: 30, playerHitFlashSecs: 0.4 },
+  nightmare: { crowStartCount: 9, crowEscalationInterval: 4.5, crowMax: 18, crowPassiveSpeed: 85,
+               crowAggroSpeed: 200, whiteCrowPassiveSpeed: 120, whiteCrowAggroSpeed: 300, crowAggroTimeout: 7,   crowAggroMultCap: 2,
+               maxArrowsInFlight: 5, baseArrows: 16, baseDynamites: 4, arrowRestore: 5,
+               handicap:  0, playerHitFlashSecs: 0.3 },
 };
 
 /**
@@ -1079,6 +1135,14 @@ function applyPace(name) {
   CONFIG.crowMax               = preset.crowMax;
   CONFIG.crowAggroTimeout      = preset.crowAggroTimeout;
   CONFIG.crowPassiveSpeed      = preset.crowPassiveSpeed;
+  // The chase. Three of these four sat under the comment on CONFIG saying the
+  // preset owned them and were never in it, which is how the figure that
+  // decides whether anyone can get away stayed the same on every difficulty
+  // the game had.
+  CONFIG.crowAggroSpeed        = preset.crowAggroSpeed;
+  CONFIG.whiteCrowPassiveSpeed = preset.whiteCrowPassiveSpeed;
+  CONFIG.whiteCrowAggroSpeed   = preset.whiteCrowAggroSpeed;
+  CONFIG.crowAggroMultCap      = preset.crowAggroMultCap;
   CONFIG.maxArrowsInFlight     = preset.maxArrowsInFlight;
   CONFIG.baseArrows            = preset.baseArrows;
   CONFIG.baseDynamites         = preset.baseDynamites;
@@ -1093,6 +1157,12 @@ function applyPace(name) {
   // The ranger's satchel count matches the archer's dynamite count — same
   // tool tier, nothing asked for a different number.
   CONFIG.resources.satchels.max  = preset.baseDynamites;
+  // The two that are about the player rather than the field. Both were fixed
+  // figures until the ladder needed somewhere to put forgiveness that is not
+  // "fewer crows": HANDICAP was written, tested and then left switched off at
+  // 0, and the i-frame window had never been a dial at all.
+  CONFIG.handicap              = preset.handicap;
+  CONFIG.playerHitFlashSecs    = preset.playerHitFlashSecs;
   // The ranger's ceiling has to sit above the archer's cap, or it becomes the
   // tighter of the two and paces him again -- which is the bug the magazine
   // replaced, arriving from the other side. Checked here because a preset is
@@ -1110,6 +1180,33 @@ function applyPace(name) {
 }
 
 applyPace(CONFIG.pace);
+
+/** The rungs, easiest first. The ladder's order is the object's own, so adding
+ *  a rung is adding a row and nothing else. */
+const PACE_ORDER = Object.keys(PACE_PRESETS);
+
+const PACE_LS_KEY = 'crow_archer_pace_v1';
+
+/** Restores the rung the player last chose, the way TALENTS restores its bank.
+ *  Called from boot, before the ?pace= override, so the query string still
+ *  wins over the save. */
+function loadPace() {
+  try {
+    const saved = localStorage.getItem(PACE_LS_KEY);
+    if (saved && PACE_PRESETS[saved]) applyPace(saved);
+  } catch (_) { /* a hostile save reads as no save */ }
+}
+
+/** Steps one rung and remembers where it stopped. Clamped rather than wrapped:
+ *  a held key that rolls off NIGHTMARE into CALM is how a player starts a run
+ *  on a difficulty they did not pick. */
+function cyclePace(dir) {
+  const i = PACE_ORDER.indexOf(CONFIG.pace);
+  const next = PACE_ORDER[Math.max(0, Math.min(PACE_ORDER.length - 1, i + dir))];
+  if (next === CONFIG.pace) return;
+  applyPace(next);
+  try { localStorage.setItem(PACE_LS_KEY, next); } catch (_) {}
+}
 
 // ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 
@@ -5199,13 +5296,18 @@ function waveCrowHpMult() {
 
 /**
  * How much faster an aggro'd crow should close in right now. Same idea as
- * waveCrowHpMult, on a slower every-3-waves cadence, and capped far lower
- * (2x, around wave 22): HP just costs more hits, but a crow fast enough
- * would stop being dodgeable at all, which is a different kind of hard.
+ * waveCrowHpMult, on a slower every-3-waves cadence, and capped far lower: HP
+ * just costs more hits, but a crow fast enough would stop being dodgeable at
+ * all, which is a different kind of hard.
+ *
+ * The cap is `CONFIG.crowAggroMultCap` and the difficulty rung sets it, because
+ * "stops being dodgeable at all" was exactly the complaint. It is 2 on
+ * nightmare -- reached around wave 22, and what the game always ran on -- and 1
+ * on calm, where a chase is as fast at wave 30 as it was at wave 1.
  */
 function waveCrowAggroMult() {
   if (!modeRule(gameMode).waveScaling) return 1;
-  return Math.min(2, Math.pow(1.1, Math.floor((wave - 1) / 3)));
+  return Math.min(CONFIG.crowAggroMultCap, Math.pow(1.1, Math.floor((wave - 1) / 3)));
 }
 
 function spawnCrow() {
@@ -15914,7 +16016,8 @@ function _clickTalentTree(e) {
 }
 
 function drawCharSelect(t) {
-  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──', `MODE: ${modeRule(gameMode).label}`);
+  _selectionScreenBackdrop('── CHOOSE YOUR CHAMPION ──',
+    `MODE: ${modeRule(gameMode).label}  ·  ${CONFIG.pace.toUpperCase()}`);
   const { slots, selected, stripTop, hintY } = charSelectLayout();
 
   CHAR_PANELS.forEach((p, i) => _drawCharPanel(slots[i], p, i === selected, t));
@@ -15925,7 +16028,7 @@ function drawCharSelect(t) {
   // says so, which made this screen the inconsistent one.
   ctx.textAlign = 'center';
   ctx.fillStyle = '#6f8a6c'; ctx.font = '12px "Courier New",monospace';
-  ctx.fillText('CLICK OR ← →  SWITCH    ENTER  CONFIRM    ESC  BACK',
+  ctx.fillText('CLICK OR ← →  HERO    ↑ ↓  DIFFICULTY    ENTER  CONFIRM    ESC  BACK',
     CONFIG.canvasW / 2, hintY);
 }
 
@@ -16637,6 +16740,11 @@ function stepGame(dt) {
       // Reads CHAR_PANELS rather than its own list, so a character exists on
       // screen and here at once — see the comment on CHAR_PANELS.
       selectedChar = cyclePanelSelection(CHAR_PANELS, selectedChar, 'char');
+      // Two axes on one screen: left and right pick the hero, up and down pick
+      // the rung. A three-valued choice did not earn a screen of its own, and
+      // the pair of arrows this screen never read was already free.
+      if (keys['ArrowUp'])   { cyclePace(+1); keys['ArrowUp']   = false; }
+      if (keys['ArrowDown']) { cyclePace(-1); keys['ArrowDown'] = false; }
       // Waves lets the player pick the ground; brawl's map is fixed, so it
       // skips straight to the run the way it always has.
       if (keys['Enter']) { transitionTo(picksItsMap(gameMode) ? 'mapselect' : 'playing'); keys['Enter']=false; }
@@ -16931,6 +17039,10 @@ export const devHooks = {
   hitstopLadder: () => HITSTOP,
   config: () => CONFIG,
   setPace: (name) => applyPace(name),
+
+  // The ladder itself, so a test asks the game what the rungs are rather than
+  // keeping a second copy of the list it is checking.
+  paceOrder: () => PACE_ORDER,
   /**
    * The frame tracer, for a headless run that wants the numbers rather than
    * the overlay. `level` takes the same values ?perf does; 'ops' installs the
@@ -17323,6 +17435,14 @@ export const devHooks = {
   // The wave counter and the banner it raises, so a test can watch escalation
   // happen through the real timer rather than asserting on a draw call.
   wave: () => wave,
+  /** The escalation clock, driven straight rather than waited out. A run has to
+   *  reach wave 22 for the chase multiplier to hit its cap, which is minutes of
+   *  simulation to check one number. */
+  setWave(n) { wave = n; },
+  /** How much faster than its base an aggro'd crow closes right now. The cap on
+   *  this is the rung's, and it is the figure behind "they stop being
+   *  dodgeable" -- see waveCrowAggroMult. */
+  aggroMult: () => waveCrowAggroMult(),
   waveBanner: () => ({ secs: waveAnnounce, text: waveAnnounceText }),
   // The two screens that decide what a player can reach at all. Exposed
   // because a mode or a map whose rules are complete but whose entry is
@@ -17500,8 +17620,10 @@ export function boot() {
 
   const query = new URLSearchParams(location.search);
 
-  // The pace preset is already applied at import; this only layers the ?pace=
-  // override on top, and applyPace is plain assignment so re-running is safe.
+  // The pace preset is already applied at import; this layers the saved rung
+  // and then the ?pace= override on top, in that order, so a query string still
+  // beats a save. applyPace is plain assignment, so re-running is safe.
+  loadPace();
   applyPace(query.get('pace') ?? CONFIG.pace);
 
   canvas = document.getElementById('game');

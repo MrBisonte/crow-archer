@@ -24,7 +24,8 @@ import { Team } from '../sim/team';
 import { DEFAULT_REGROWTH, regrowthDelay } from '../sim/regrowth';
 import { COMMANDER_WAVE, SOLDIER_STATS, waveComposition } from '../sim/soldiers';
 import { TILE, tilePassable, type TileId } from '../sim/tilemap';
-import { ONE_SECOND, aimAt, clearArena, stepPast } from './arena-testkit';
+import { onGuardGround } from '../sim/guards';
+import { ONE_SECOND, aimAt, clearArena, press, stepPast } from './arena-testkit';
 import { boot, devHooks as g } from './game.js';
 import { ANIM_FRAMES, type PixelGrid } from '../render/pixel-grid';
 import { variationProfile, type VariationProfile } from '../render/sound-variation';
@@ -232,15 +233,6 @@ describe('wizard homing bolts', () => {
     expect(angleGap(heading, toDecoy)).toBeGreaterThan(0.5);
   });
 });
-
-/** Presses a hotkey the way a real key-up/key-down pair would, then runs one
- * step so the handler that reads `keys` sees and consumes it. `devHooks.key`
- * dispatches a DOM KeyboardEvent, which needs a browser; this drives the same
- * `keys` map directly, which is what the vitest `node` environment allows. */
-function press(key: string): void {
-  (g.keys() as Record<string, boolean>)[key] = true;
-  g.stepSim(1);
-}
 
 /** Reaches mapselect the real way: the menu hotkey is what sets `gameMode`,
  * so a shortcut through `g.go('mapselect')` would leave a stale gameMode
@@ -549,6 +541,26 @@ describe('the cavern garrison', () => {
 
 describe('the commander', () => {
   /** Runs a cavern waves run forward until its wave counter reaches `wave`. */
+  /**
+   * Takes whatever ceremony has opened, the way a player would: ENTER confirms
+   * a chooser, B hands the talent screen back.
+   *
+   * Emptying the garrison is exactly the lull `openChooserWhenClear` waits for,
+   * so the climb below opens any pick the run has queued -- and a run parked on
+   * a ceremony screen does not advance a wave, so without this the commander
+   * never arrives and `go('boss_fight')` throws on an illegal transition out of
+   * 'chooser'. It surfaced when the pace preset's interval was retuned, which
+   * is the tell that this climb was passing on how long the field stayed busy
+   * rather than on anything it asserts.
+   */
+  function dismissCeremony(): void {
+    for (let i = 0; i < 4; i++) {
+      if (g.state() === 'chooser') press('Enter');
+      else if (g.state() === 'talents') press('b');
+      else return;
+    }
+  }
+
   function runToWave(wave: number): void {
     g.go('menu');
     press('w');
@@ -560,8 +572,22 @@ describe('the commander', () => {
     // run is not decided by a spearman while the clock advances.
     for (let i = 0; i < wave; i++) {
       g.soldiers().length = 0;
-      g.stepSim(g.config().crowEscalationInterval * ONE_SECOND + 2);
+      // Healed every half second rather than once a wave: nobody is holding the
+      // keys, and the garrison that spawns at the end of an interval has the
+      // whole of the next one to work on an idle hero -- see devHooks.healHero.
+      const frames = Math.ceil(g.config().crowEscalationInterval * ONE_SECOND) + 2;
+      for (let f = 0; f < frames; f += 30) {
+        g.healHero();
+        g.stepSim(Math.min(30, frames - f));
+      }
+      dismissCeremony();
     }
+  }
+
+  /** Rides the commander's entrance out. Bounded, and stops on the boss rather
+   *  than on a frame count. */
+  function waitForCommander(): void {
+    for (let i = 0; i < 20 && !g.boss(); i++) { dismissCeremony(); g.healHero(); g.stepSim(30); }
   }
 
   it('does not ride out while the garrison is still holding', () => {
@@ -574,7 +600,7 @@ describe('the commander', () => {
     runToWave(COMMANDER_WAVE);
     // The entrance is a state of its own; walk it the way the brawl tests do.
     expect(['boss_entrance', 'boss_fight']).toContain(g.state());
-    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    waitForCommander();
     expect(g.boss().kind).toBe('commander');
   });
 
@@ -587,7 +613,7 @@ describe('the commander', () => {
 
   it('holds his charge for at least the minimum gap, however the roll lands', () => {
     runToWave(COMMANDER_WAVE);
-    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    waitForCommander();
     g.go('boss_fight');
     const boss = g.boss();
 
@@ -602,7 +628,7 @@ describe('the commander', () => {
 
   it('commits a charge to the heading it picked, not to where the player went', () => {
     runToWave(COMMANDER_WAVE);
-    for (let i = 0; i < 20 && !g.boss(); i++) g.stepSim(30);
+    waitForCommander();
     g.go('boss_fight');
     const boss = g.boss();
     const player = g.player() as { x: number; y: number };
@@ -5480,21 +5506,67 @@ describe('the retinue holds the barrier gates', () => {
     expect(held.size, 'the retinue piled onto one gate').toBeGreaterThan(1);
   });
 
+  /**
+   * Drags a body somewhere it does not belong, so that coming home is required.
+   *
+   * The drag this replaces was a blind `+120, +60` -- 134 px against a
+   * `guardPostLeash` of 170. A guard's duty ground is the capsule joining its
+   * post to the hero, so a guard standing on its post and dragged 134 px is
+   * STILL ON DUTY GROUND and has no reason to walk anywhere. The test then
+   * asserted it walked more than 20 px, and passed only when the guard
+   * happened to be standing far enough off its post for post-plus-drag to
+   * clear 170. Whether it was depends on the fight that just ran, so any
+   * change to how that fight goes -- a balance figure, an i-frame window, a
+   * difficulty rung -- decides this test. That is what put it in CI red on a
+   * branch that never touched the bastion, at a stubbornly identical 17.18 px:
+   * not a flake, a guard that was never asked to move.
+   *
+   * So the drop is chosen against the rule rather than by a fixed offset: the
+   * nearest radius, in sixteen directions, that is walkable and off duty
+   * ground for EVERY gate and the hero. Off every gate rather than off this
+   * guard's own post is the stricter question and needs no private field to
+   * ask. The smallest such radius keeps the walk home short enough for the
+   * settle below.
+   */
+  function dragOffDuty(body: { x: number; y: number }): { x: number; y: number } {
+    const c = g.config() as { tileSize: number; rows: number; cols: number; guardPostLeash: number };
+    const tiles = g.tiles() as { get: (row: number, col: number) => TileId };
+    const hero = g.player() as { x: number; y: number };
+    const posts = gates();
+    for (let reach = c.guardPostLeash + 24; reach <= c.guardPostLeash * 3; reach += 24) {
+      for (let step = 0; step < 16; step++) {
+        const angle = step * (Math.PI / 8);
+        const x = body.x + Math.cos(angle) * reach, y = body.y + Math.sin(angle) * reach;
+        const col = Math.floor(x / c.tileSize), row = Math.floor(y / c.tileSize);
+        if (row < 1 || row >= c.rows - 1 || col < 1 || col >= c.cols - 1) continue;
+        if (!tilePassable(tiles.get(row, col))) continue;
+        if (posts.some((p) => onGuardGround(p, hero, x, y, c.guardPostLeash))) continue;
+        body.x = x; body.y = y;
+        return { x, y };
+      }
+    }
+    throw new Error('nowhere off duty ground within ' + c.guardPostLeash * 3 + 'px of the guard');
+  }
+
   it('returns to its post after leaving it to fight', () => {
     // Pin the map as well as the siege roll. The settle note below explains why
     // route length varies -- the map is seeded from Math.random -- and that
     // variance is also run-order dependent: this passed alone and flaked ~1 in
     // 20 in the full suite, drawing a cover-heavy map only once the ~300 tests
     // before it had advanced Math.random first. A fixed seed removes both.
-    // 20260903 lands the walk home 15px from a post, well inside the 170 leash.
+    //
+    // The seed fixes the MAP and nothing downstream of it. Where the guard is
+    // standing after the fight below, and so where the drag puts it, is not
+    // the seed's to pin -- dragOffDuty is.
     Math.random = mulberry32(20260903);
     openSiege();
     g.clearSiegeWave();
     g.stepSim(600);
     const body = g.guards()[0];
-    // Drag it off, the way chasing something would.
-    body.x += 120; body.y += 60;
-    const dropped = { x: body.x, y: body.y };
+    // Drag it somewhere it does not belong, the way chasing something would.
+    // See dragOffDuty: a fixed offset inside the leash asks the guard for
+    // nothing, which is what this test spent its life measuring.
+    const dropped = dragOffDuty(body);
     g.clearSiegeWave();
     g.stepSim(600);
     // Quiet before asking, for the reason the resting-formation test above is:
