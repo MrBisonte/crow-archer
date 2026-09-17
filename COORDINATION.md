@@ -65,7 +65,8 @@ you into the integration branch yet. Merger maintains that column, not you.
 
 | Session | Branch | Task | Status | Head | Base | In r12 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `Merger` | `integration/round-12` | Assemble round 12; open the PR on Alex's word | `started` | `see tip` | current | n/a | 09-17 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `4c0a622` (`v0.3.2`). Empty so far; folds round-12 work as it finishes. |
+| `Merger` | `integration/round-12` | Assemble round 12; open the PR on Alex's word | `started` | `see tip` | current | n/a | 09-17 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `4c0a622` (`v0.3.2`). Folded `feat/bastion-fifth-tower` (the 5th tower). Folds further round-12 work as it finishes. |
+| `Bastion-5th` | `feat/bastion-fifth-tower` | The bastion's fifth tower: a centre-line strongpoint (2+2+1) | `finished` | `f80d261` | current | **yes** | 09-17 | Session `bold-leavitt-ddc832-5b`, cut from `master` `4c0a622` (v0.3.2). One HUT on the centre line (`TOWER_COL+2`): the 33-row grid goes 4 to 5, the 21-row keeps 2. Gate-green: typecheck 0, 2394 tests / 91 files. Held for Alex's ten-wave play-test (is 5 too easy to hold?) and his push go. Suggests tag v0.3.3. Forced one test-isolation fix (`talents-run.test.ts` leaked `gameMode='siege'`); lesson `a-leaked-game-mode-rebuilds-towers-under-a-later-test`. |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.

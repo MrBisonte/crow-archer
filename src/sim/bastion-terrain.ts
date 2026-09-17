@@ -76,7 +76,8 @@ const TOWER_COL = 3;
  * The walkway behind the towers: one column, kept clear of scatter for its
  * whole height.
  *
- * Not decoration. Every tower's west neighbour is on this column, and the
+ * Not decoration. Every flank tower's west neighbour is on this
+ * column (the centre tower's is the spawn block, always clear), and the
  * column meets both flank lanes, so "can the siege reach a tower" reduces to
  * "is the skeleton intact" and never to a probability. The alternative was to
  * scatter freely and repair afterwards with a connectivity pass, the way
@@ -142,12 +143,15 @@ const TOWER_STRIDE = 3 + TOWER_SPAN;
  * Deterministic tower positions for a grid of this size. Exported so the
  * renderer and the guard placement find the same tiles the generator used.
  *
- * The count follows the grid's HEIGHT, not its area. The towers stand in one
+ * The count follows the grid's HEIGHT, not its area. The flank towers stand in one
  * column and spread along it, so a taller grid genuinely has more west wall to
  * hold; a wider one does not, and BARRIER_REACH_COLS above is the same
  * decision seen from the barrier's side — extra width is open ground for the
  * siege to cross, not a proportionally larger keep. Scaling this by area would
- * quietly reverse that.
+ * quietly reverse that. A wall tall enough for more than one pair also
+ * carries a single tower on the centre line, forward of that column and on
+ * the axis the hero spawns on, so a big enough keep stands an odd count: the
+ * mirrored pairs plus the one that anchors the middle.
  *
  * Always returns at least two sites, which the type states, because a caller
  * asking where the towers are cannot do anything useful with "maybe none". On a
@@ -185,6 +189,22 @@ export function towerSites(
     const south = mid + spread + step * TOWER_STRIDE;
     if (north < 1 || south > last) break;
     sites.push({ row: north, col }, { row: south, col });
+  }
+  // One tower on the centre line itself, added once the wall already fields
+  // more than its innermost pair -- so the shipped 21-row grid keeps its two
+  // and a taller one gains a fifth. The paired towers above are even by
+  // construction, so both flanks stay matched; this one sits ON the axis the
+  // hero spawns on, softening neither. It is the exception the pair rule points
+  // at, not a breach of it: an odd FLANK tower is the hazard, an odd tower on
+  // the mirror line is not.
+  //
+  // Two columns forward of the others, east of the spawn block, because a
+  // centre tower in TOWER_COL would fall inside isSpawnZone's clear and be
+  // erased with the hero's start. Its west neighbour is that always-clear
+  // block rather than the spine, which is what keeps it reachable.
+  const centreCol = TOWER_COL + 2;
+  if (sites.length > 2 && centreCol + TOWER_SPAN <= cols - 1) {
+    sites.push({ row: mid, col: centreCol });
   }
   return sites;
 }
@@ -501,10 +521,12 @@ function raiseTowers(grid: TileGrid, rows: number, cols: number): void {
  * two flank lanes, the gaps between the barrier's sections, and the ring of
  * tiles around each tower.
  *
- * The first three are a skeleton joining the corridor to both towers that no
+ * The first three are a skeleton joining the corridor to every tower that no
  * seed can cut — a lane runs from the corridor to the walkway through a flank
- * gap, the walkway runs the height of the map, and every tower has its west
- * neighbour on it. That is why this generator needs no connectivity repair:
+ * gap, the walkway runs the height of the map, and every flank tower has its west
+ * neighbour on it; the centre tower hangs off the spawn block instead, which
+ * frameArena keeps clear for the same guarantee. That is why this generator
+ * needs no connectivity repair:
  * the path is reserved before anything is scattered rather than rebuilt after
  * something ate it.
  *

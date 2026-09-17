@@ -563,13 +563,31 @@ describe('towerSites', () => {
     }
   });
 
+  // The fifth tower: the odd one the count is named for. It stands on the
+  // centre line the hero spawns on and forward of the paired wall, so it
+  // anchors the middle and softens neither flank -- both keep their pair.
+  it('anchors the centre line with a fifth tower, forward of the paired wall', () => {
+    const sites = towerSites(MAP_ROWS, MAP_COLS);
+    const mid = Math.floor(MAP_ROWS / 2);
+    const onAxis = sites.filter((s) => s.row === mid);
+    const flanks = sites.filter((s) => s.row !== mid);
+    expect(onAxis, 'no tower on the centre line').toHaveLength(1);
+    expect(flanks.filter((s) => s.row < mid), 'the north flank is not a pair').toHaveLength(2);
+    expect(flanks.filter((s) => s.row > mid), 'the south flank is not a pair').toHaveLength(2);
+    expect(onAxis[0]!.col, 'the centre tower is not forward of the paired wall').toBeGreaterThan(
+      Math.max(...flanks.map((s) => s.col)),
+    );
+  });
+
   // The hero spawns on the centre line, so an uneven wall would leave one
   // flank quietly softer than the other for the whole siege.
   it('mirrors north and south about the centre line', () => {
     for (const rows of GRIDS) {
       const mid = Math.floor(rows / 2);
       const offsets = rowsAt(rows).map((row) => row - mid);
-      const mirrored = [...offsets].reverse().map((d) => -d);
+      // Negate each offset to mirror it, but keep 0 as +0 rather than -0:
+      // the lone centre tower sits at offset 0, and toEqual holds them apart.
+      const mirrored = [...offsets].reverse().map((d) => (d === 0 ? 0 : -d));
       expect(offsets, `the wall is lopsided on a ${rows}-row grid`).toEqual(mirrored);
     }
   });

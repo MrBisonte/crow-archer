@@ -99,6 +99,13 @@ beforeEach(() => {
   // a talent left owned by an earlier test is a talent this one is measuring
   // the base of while it is live.
   for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+  // Mode is a module global that persists across tests just as grants do,
+  // and setMode only writes it. Left on 'siege' by an earlier test, re-entering
+  // play here rebuilds the bastion -- towers and all -- under whatever map this
+  // test lays down, and clearArena wipes only the tiles. A leftover tower on the
+  // hero's row then shoots a body a later test parks in open ground (the centre
+  // tower did, against CHARGE THROUGH). Reset it so no test inherits one.
+  g.setMode('brawl');
   g.go('playing');
   g.generateMap('forest');
   // Open ground: a blink refuses a hop with no room, and the storm tests
