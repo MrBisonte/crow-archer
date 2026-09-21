@@ -1,11 +1,11 @@
-# CROW ARCHER — working rules
+# CROW ARCHER: working rules
 
 Triggers and the action each one requires. Rationale lives in `docs/`;
 this file links rather than restates, so there is one home per fact.
 
 Read this before writing code. `docs/design-patterns.md` is 465 lines of
-reasoning and nothing makes you read it before writing a draw function —
-which is how the rule at its line 216 was broken by the person who had
+reasoning and nothing makes you read it before writing a draw function.
+That is how the rule at its line 216 was broken, by the person who had
 just read it.
 
 ## Coordination: do this before your first commit
@@ -29,6 +29,13 @@ just read it.
   or resolve a gap. A structural collision is resolved by the author of the
   branch that caused it, with both diffs open. Not by whoever merges last.
 
+## Writing a PR, commit, or squash message
+
+- **Writing any of them?** Follow
+  [`docs/pr-writing-standard.md`](docs/pr-writing-standard.md). Record what
+  changed and why in Simplified Technical English: no first person, no process
+  or tooling narration, no em dashes, verification as bare numbers.
+
 ## Lessons: write down what cost you time
 
 - **A trap, a bug, or a practice here just cost you real time?** Append one
@@ -39,7 +46,7 @@ just read it.
 - **Tempted to restate a lesson as a rule in this file?** Keep one home for
   each: this file is the imperative rule (*when X, do Y*), `LESSONS.jsonl` is
   the dated episode that earned it. Link the two by the lesson's `id`.
-- **Editing `LESSONS.jsonl`?** Append only — never rewrite a past line.
+- **Editing `LESSONS.jsonl`?** Append only. Never rewrite a past line.
   Several sessions share it, and an append rarely collides where a rewrite
   clobbers, the same reason the session ledger is written the way it is.
 
@@ -58,7 +65,7 @@ just read it.
 | Figures quoted in `docs/balance.md` match `CONFIG` | `src/legacy/ultimate-doc.test.ts` |
 | Everything below | nothing. You. |
 
-Run `npm run hooks:install` once per clone **and once per worktree** —
+Run `npm run hooks:install` once per clone **and once per worktree**:
 the hook path is per-worktree, so a fresh worktree starts unguarded.
 
 ## Sprites
@@ -101,10 +108,10 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 ## The bastion
 
 - **Gating siege behaviour?** Branch on `mapPopulation() === 'siege'`,
-  never `gameMode === 'siege'`. The bastion is reachable two ways — the
-  S menu and the maze door as the campaign's last stage — and a mode
-  check leaves one of them inert. That exact bug already shipped once
-  for Waves + Castle; see `src/sim/game-mode.ts`.
+  never `gameMode === 'siege'`. The bastion is reachable two ways: the
+  S menu, and the maze door as the campaign's last stage. A mode check
+  leaves one of them inert. That exact bug already shipped once for
+  Waves + Castle; see `src/sim/game-mode.ts`.
 - **Adding a stage-transition tail?** Check whether a siege is running
   before handing off. A siege runs in `'playing'`, so a tail that
   assumes `'boss_fight'` will load the castle mid-wave.
@@ -150,8 +157,8 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Driving a long run?** `devHooks.healHero()`. Nobody is holding the
   keys, so an idle hero dies and the test measures that instead.
 - **A siege test that reads ranks?** `g.setSiegeRng(mulberry32(seed))`
-  in `beforeEach`. Unpinned, the retinue roll decides the assertion —
-  this flaked five runs in twelve.
+  in `beforeEach`. Unpinned, the retinue roll decides the assertion.
+  This flaked five runs in twelve.
 - **Asserting a table's shape?** Compare the exact key set, not
   `toHaveLength(n)`. A length check catches a deletion and misses an
   addition.
@@ -175,11 +182,11 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   relies on a rule elsewhere to make an earlier test's leftovers harmless is
   one rule change away from measuring the wrong thing
   (`inert-leftovers-go-live-with-the-rule`).
-- **Green alone, red in the suite?** Not flake — two causes, both real
+- **Green alone, red in the suite?** Not flake: two causes, both real
   (`green-alone-red-in-suite`). **Aim with `aimAt`**, never by assigning
   `player.aimAngle`: `updatePlayer` copies the angle from the pointer every
   step, so the field is overwritten with wherever the last test left the
-  mouse. And **park a target with `heldTimer`** — crow speed and aggression
+  mouse. And **park a target with `heldTimer`**: crow speed and aggression
   climb with the run's escalation clock, which earlier tests have already
   advanced, so a crow that sits still alone outruns your measurement in a
   suite. Counting survivors is the wrong assertion while waves spawn:
@@ -198,7 +205,7 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 
 ## Feel
 
-- **Giving something a capacity — a magazine, a clip, a charge count?** Give it
+- **Giving something a capacity (a magazine, a clip, a charge count)?** Give it
   a RATE too, and measure the frames the burst occupies. Four volleys with no
   rate left in four frames, so the clip read as one shot and the reload after
   it read as a jam (`a-magazine-with-no-rate-reads-as-one-shot`).
@@ -225,7 +232,7 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **Quoting a `CONFIG` figure in prose?** Put it in a `docs/balance.md`
   table as a cell holding only the backticked name, with the number in the
   next cell. `src/legacy/ultimate-doc.test.ts` binds every figure written
-  that way to the value the game runs on, in both directions — a tuned
+  that way to the value the game runs on, in both directions. A tuned
   constant with the document left alone is the failure that leaves no diff
   to notice. Prose is deliberately not scanned: the document quotes
   historical values in sentences that are true.
@@ -234,7 +241,7 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 
 - **Gating a command on another's success?** Never through a pipe.
   `tsc | grep error && git commit` runs the commit *because grep
-  succeeded* — a pipeline's exit status is its last command's. Capture
+  succeeded*: a pipeline's exit status is its last command's. Capture
   exit codes into variables and branch on those.
 - **Scripting an edit?** Assert the match count. A `str.replace()` that
   matches nothing returns the string unchanged and reports success;
