@@ -73,13 +73,9 @@ session saying so. Replace it with the real value.
 
 ## Open findings, owned by nobody
 
-- **`MASTERY_AWARDS.boss_down` may be dead.** `src/sim/talents.ts` prices four
-  milestones, but production awards only `stage_cleared`, `siege_cleared` and
-  `run_won`; bosses go through `bossMastery(kind)` and the `BOSS_MASTERY` table
-  instead. `boss_down` survives only in two test files, one of which is *named*
-  for banking it. So either the entry is dead and the type should lose it, or
-  there are two pricing paths for one event and they can disagree. Ownerless
-  since the round-5 row that raised it retired.
+None. The last one, `MASTERY_AWARDS.boss_down`, is answered in code:
+`src/sim/talents.ts` keeps it as the milestone type's default and says
+nothing pays it, and `docs/talents.md` says the same.
 
 ## Landed
 
