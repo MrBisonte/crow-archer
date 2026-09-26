@@ -125,6 +125,13 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   one. Three of the four figures that decide a chase sat under a comment
   claiming the pace preset owned them, and were in no preset
   (`the-crowd-was-never-the-difficulty`).
+- **Giving something a capacity (a magazine, a clip, a charge count)?** Give it
+  a RATE too, and measure the frames the burst occupies. Four volleys with no
+  rate left in four frames, so the clip read as one shot and the reload after
+  it read as a jam (`a-magazine-with-no-rate-reads-as-one-shot`).
+- **A report describes a FEEL rather than a number?** Instrument the timing.
+  "It reads as one shot" was exactly right about the feel and said nothing
+  about the count, which was correct throughout.
 
 ## Tests
 
@@ -139,7 +146,7 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
 - **A climb that reads its wait out of `CONFIG`?** That is not independence
   from the figure. Retuning the pace preset's escalation interval broke three
   commander tests that never name it: a longer wave gave the garrison time to
-  kill an idle hero, and gave a lull time to open a ceremony -- and a run parked
+  kill an idle hero, and gave a lull time to open a ceremony. A run parked
   on a ceremony screen never advances a wave. Heal on a cadence, dismiss the
   ceremony, stop on the event
   (`retuning-a-shared-figure-breaks-tests-that-never-name-it`).
@@ -203,16 +210,6 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   exonerate a grant, and revert each new guard to check it can fail at all
   (`a-flake-you-cannot-reproduce-still-has-named-causes`).
 
-## Feel
-
-- **Giving something a capacity (a magazine, a clip, a charge count)?** Give it
-  a RATE too, and measure the frames the burst occupies. Four volleys with no
-  rate left in four frames, so the clip read as one shot and the reload after
-  it read as a jam (`a-magazine-with-no-rate-reads-as-one-shot`).
-- **A report describes a FEEL rather than a number?** Instrument the timing.
-  "It reads as one shot" was exactly right about the feel and said nothing
-  about the count, which was correct throughout.
-
 ## Deleting a rule
 
 - **Deleting a gameplay rule?** Look at what its short-circuit SKIPS, not only
@@ -222,8 +219,8 @@ the hook path is per-worktree, so a fresh worktree starts unguarded.
   When a deletion produces failures by the hundred, read one of them properly
   before reverting.
 - **Changing what makes state EFFECTIVE?** The breakage is not where you
-  edited. Anything the old rule rendered inert -- a leftover grant, a stale
-  flag -- goes live the moment the rule does, so look where shared state was
+  edited. Anything the old rule rendered inert (a leftover grant, a stale
+  flag) goes live the moment the rule does, so look where shared state was
   being kept harmless by the property you just removed
   (`inert-leftovers-go-live-with-the-rule`).
 
