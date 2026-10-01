@@ -7,8 +7,8 @@ losing each other's work.
 **Current round: `integration/round-12`, cut from `master` at `4c0a622`.**
 Round 10 shipped as `v0.3.0` (PR #45), round 11 as `v0.3.1` (the public flight
 sink plus the maze-beacon fix #47), and the difficulty ladder as `v0.3.2`
-(PR #46). Round 12 is open. The five-tower bastion is the first item and runs
-in a separate session; it logs its own row before its first commit. That branch
+(PR #46). Round 12 is open and holds the five-tower bastion and the blink refusal fix,
+held for Alex's play-test before it tags `v0.3.3`. That branch
 name is written here once; everything else refers to "the current integration
 branch" so this file is the only thing that has to change when a round closes.
 
@@ -65,8 +65,9 @@ you into the integration branch yet. Merger maintains that column, not you.
 
 | Session | Branch | Task | Status | Head | Base | In r12 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `Merger` | `integration/round-12` | Assemble round 12; open the PR on Alex's word | `started` | `see tip` | current | n/a | 09-17 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `4c0a622` (`v0.3.2`). Folded `feat/bastion-fifth-tower` (the 5th tower). Folds further round-12 work as it finishes. |
+| `Merger` | `integration/round-12` | Assemble round 12; open the PR on Alex's word | `started` | `see tip` | current | n/a | 09-17 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `4c0a622` (`v0.3.2`). Folded `feat/bastion-fifth-tower` (the 5th tower) and `fix/blink-refusal-reasons`. Folds further round-12 work as it finishes. |
 | `Bastion-5th` | `feat/bastion-fifth-tower` | The bastion's fifth tower: a centre-line strongpoint (2+2+1) | `finished` | `f80d261` | current | **yes** | 09-17 | Session `bold-leavitt-ddc832-5b`, cut from `master` `4c0a622` (v0.3.2). One HUT on the centre line (`TOWER_COL+2`): the 33-row grid goes 4 to 5, the 21-row keeps 2. Gate-green: typecheck 0, 2394 tests / 91 files. Held for Alex's ten-wave play-test (is 5 too easy to hold?) and his push go. Suggests tag v0.3.3. Forced one test-isolation fix (`talents-run.test.ts` leaked `gameMode='siege'`); lesson `a-leaked-game-mode-rebuilds-towers-under-a-later-test`. |
+| `Merger` | `fix/blink-refusal-reasons` | A refused wizard blink says why | `finished` | `2c639a4` | current | **yes** | 10-01 | Cut from `master` `4c0a622`. The Shift input path is sound; the blink refused silently for want of Focus (bolts spend the same pool), of room toward the mouse, or of cooldown. The Focus and room refusals now show `NOT ENOUGH FOCUS` and `NOWHERE TO LAND`; the cooldown refusal stays quiet behind its HUD chip. Each reason line reverted alone fails its own test. Gate after the fold: typecheck 0, 2395 tests / 91 files. **Open for Alex:** the blink cooldown carries across a map change, frozen through the boss death and the stage intro; reset it when a stage starts? |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.
