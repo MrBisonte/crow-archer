@@ -1302,6 +1302,10 @@ function beginNewLevel() {
   // screen without naming an intro is on the castle's.
   const next = (STAGE_INTROS[pendingIntro] || STAGE_INTROS.castle).next;
   pendingIntro = null;
+  // A new stage starts the blink ready. Its cooldown only runs in play, so a
+  // blink spent late in a boss fight would still be cooling here, frozen
+  // through the death and this title.
+  wizBlinkCD = 0;
   // 'playing' is assigned directly for the reason showStageIntro gives above --
   // transitionTo would call initGame() and wipe the run that just cleared the
   // stage. An entrance is the opposite case: it has a banner to stage, and

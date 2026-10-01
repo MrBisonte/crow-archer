@@ -2217,3 +2217,31 @@ describe('every rite-earning death reaches a screen that shows the rite', () => 
     });
   }
 });
+
+describe('a new stage', () => {
+  it('opens with the blink ready, even when the boss fight left it cooling', () => {
+    // Every ladder at its top, so the boss death has nothing to sell and hands
+    // straight to the next stage's title.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.spawnBossNow(2);
+    g.go('boss_fight');
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * ts;
+    p.y = 6.5 * ts;
+    p.aimAngle = 0;
+    g.blink();
+    expect(g.wizBlink().cd, 'the blink did not fire').toBeGreaterThan(0);
+
+    const boss = g.boss() as { hp: number; x: number; y: number };
+    boss.hp = 1;
+    g.blast(boss.x, boss.y);
+    stepPast(Math.ceil(1.5 * ONE_SECOND));
+    expect(g.state()).toBe('stage_intro');
+    // The cooldown only runs in play, so the death and the title freeze it.
+    expect(g.wizBlink().cd, 'nothing was left cooling to carry').toBeGreaterThan(0);
+
+    expect(g.dismissIntro()).toBe(true);
+    expect(g.wizBlink().cd).toBe(0);
+  });
+});
