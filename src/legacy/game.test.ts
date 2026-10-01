@@ -1294,6 +1294,14 @@ function wizardAt(col: number, row: number): { x: number; y: number; aimAngle: n
   return p;
 }
 
+/** Every refusal from here on, with the reason it gave, if it gave one. */
+type Blocked = { type: string; reason?: string };
+function watchBlocked(): Blocked[] {
+  const seen: Blocked[] = [];
+  g.onEvent((e: Blocked) => { if (e.type === 'ACTION_BLOCKED') seen.push(e); });
+  return seen;
+}
+
 describe('the wizard blink', () => {
   it('carries the wizard down the aim line, the whole distance on open ground', () => {
     const p = wizardAt(6, 6);
@@ -1318,17 +1326,36 @@ describe('the wizard blink', () => {
     expect(p.x + c.playerRadius).toBeLessThanOrEqual(wallCol * c.tileSize);
   });
 
-  it('refuses a blink with nowhere to go, and charges nothing for it', () => {
+  it('refuses a blink with nowhere to go, charges nothing for it, and says why', () => {
     const c = g.config();
     const p = wizardAt(6, 6);
     // Hard against the western border, facing into it.
     p.x = c.tileSize + c.playerRadius;
     p.aimAngle = Math.PI;
     const from = p.x;
+    const seen = watchBlocked();
 
     g.blink();
     expect(p.x).toBe(from);
     expect(g.wizBlink().cd).toBe(0);
+    expect(seen.map((e) => e.reason).filter(Boolean)).toEqual([g.blockedReasons().NO_LANDING]);
+  });
+
+  it('refuses a blink the Focus cannot pay for, and says so', () => {
+    // Bolts spend the same pool, so two of them leave one point and a blink
+    // costs two. The refusal has to name Focus: a buzz alone reads as a
+    // dropped key.
+    const c = g.config();
+    const p = wizardAt(6, 6);
+    const inv = g.inv() as { focus: number };
+    inv.focus = c.wizFocusBlink - 1;
+    const from = p.x;
+    const seen = watchBlocked();
+
+    g.blink();
+    expect(p.x).toBe(from);
+    expect(inv.focus).toBe(c.wizFocusBlink - 1);
+    expect(seen.map((e) => e.reason).filter(Boolean)).toEqual([g.blockedReasons().NO_FOCUS]);
   });
 
   it('chains a second hop straight away, and refuses a third', () => {
@@ -1347,9 +1374,12 @@ describe('the wizard blink', () => {
     expect(second - first).toBeCloseTo(c.wizBlinkDistance, 0);
     expect(g.wizBlink().hops).toBe(0);
 
-    // Two is the cap, however fast the third press comes.
+    // Two is the cap, however fast the third press comes. That refusal is the
+    // cooldown's, and it stays quiet: the HUD chip is already counting it down.
+    const seen = watchBlocked();
     g.blink();
     expect(p.x).toBe(second);
+    expect(seen.map((e) => e.reason)).toEqual([undefined]);
   });
 
   it('will not chain once the window has lapsed', () => {
@@ -3163,14 +3193,6 @@ describe('the ranger crossbow', () => {
 });
 
 describe('a refused ultimate says why', () => {
-  type Blocked = { type: string; reason?: string };
-
-  function watch(): Blocked[] {
-    const seen: Blocked[] = [];
-    g.onEvent((e: Blocked) => { if (e.type === 'ACTION_BLOCKED') seen.push(e); });
-    return seen;
-  }
-
   function onTheField(hero: string): void {
     g.pick(hero);
     g.go('playing');
@@ -3183,7 +3205,7 @@ describe('a refused ultimate says why', () => {
   it('names the pick when the timer is spent and nothing has been chosen', () => {
     onTheField('archer');
     g.setUltimateCD(0);
-    const seen = watch();
+    const seen = watchBlocked();
     g.special('key');
     const reasons = seen.map((e) => e.reason).filter(Boolean);
     expect(reasons).toContain(g.blockedReasons().UNPICKED);
@@ -3195,7 +3217,7 @@ describe('a refused ultimate says why', () => {
     // A pick waiting in the queue is a different answer from never having had
     // one, and the two used to be the same silence.
     g.chooserQueue().push({ kind: 'ultimate', offers: ['headshot'], cursor: 0 });
-    const seen = watch();
+    const seen = watchBlocked();
     g.special('key');
     expect(seen.map((e) => e.reason)).toContain(g.blockedReasons().WAITING_LULL);
   });
@@ -3204,7 +3226,7 @@ describe('a refused ultimate says why', () => {
     onTheField('archer');
     g.setUltimateSlot(g.ULTIMATE_SLOT.FIRST);
     g.setUltimateCD(30);
-    const seen = watch();
+    const seen = watchBlocked();
     g.special('key');
     expect(seen.filter((e) => e.reason).length).toBe(0);
   });
@@ -3255,7 +3277,7 @@ describe('a refused ultimate says why', () => {
         inv.arrows = 0; inv.focus = 0; inv.dynamites = 0; inv.satchels = 0;
         g.setMomentum(0);
 
-        const seen = watch();
+        const seen = watchBlocked();
         g.special('key');
         for (const e of seen) {
           refusals++;
