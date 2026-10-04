@@ -148,8 +148,8 @@ classDiagram
     Knight ..> Weapon : returns Spear
     Ranger ..> Weapon : returns Crossbow
 
-    note for Character "Every subclass must override\nweapon() and paint().\nNothing forces speed or maxHp\nto differ, only permits it."
-    note for Ranger "A class instance does not survive\nJSON. The wire still carries\nCharacterKind; the server has to\nlook up or rebuild Ranger on receipt."
+    note for Character "Every subclass must override<br>weapon() and paint().<br>Nothing forces speed or maxHp<br>to differ, only permits it."
+    note for Ranger "A class instance does not survive<br>JSON. The wire still carries<br>CharacterKind; the server has to<br>look up or rebuild Ranger on receipt."
 ```
 
 Under this shape, `Ranger` has to exist as a class and implement every
@@ -264,14 +264,14 @@ The fix is not a new cache. `src/render/stamps.ts` already has one.
 
 ```mermaid
 flowchart LR
-    grid["PixelGrid\n(archerGrid(), knightGrid(kind), ...\nmemoized once per kind)"]
-    painter["gridPainter(grid, scale)\nreturns a StampPainter"]
+    grid["PixelGrid<br>(archerGrid(), knightGrid(kind), ...<br>memoized once per kind)"]
+    painter["gridPainter(grid, scale)<br>returns a StampPainter"]
     getcall["stamps.get(key, w, h, painter)"]
-    cached["cached HTMLCanvasElement\n(painter runs once per key)"]
-    frame["drawKnight() / drawWizard() / drawPlayer(),\nevery frame:\nctx.drawImage(canvas, x, y)"]
+    cached["cached HTMLCanvasElement<br>(painter runs once per key)"]
+    frame["drawKnight() / drawWizard() / drawPlayer(),<br>every frame:<br>ctx.drawImage(canvas, x, y)"]
 
     grid --> painter --> getcall --> cached --> frame
-    getcall -. "key already in stamps' Map?\nskip the painter entirely" .-> cached
+    getcall -. "key already in stamps' Map?<br>skip the painter entirely" .-> cached
 ```
 
 ### The alternative considered
@@ -391,20 +391,20 @@ type that was never meant to hold freeform text in the first place.
 
 ```mermaid
 flowchart LR
-    call["log.info('transitionTo', 'menu -> charselect', {...})"]
-    gate{"level >= floor?"}
-    drop(["dropped — one comparison, no allocation"])
-    ring["ring buffer\n(oldest drops past capacity)"]
-    console["console.log/warn/error\n(if >= consoleLevel)"]
-
-    call --> gate
-    gate -- no --> drop
-    gate -- yes --> ring
-    ring --> console
-
     bus["events.emit(gameplayFact)"]
     attach["attachToEvents subscription"]
-    bus --> attach --> call
+    logCall["log.info('transitionTo', 'menu to charselect', {...})"]
+    gate{"level >= floor?"}
+    drop(["dropped: one comparison, no allocation"])
+    ring["ring buffer<br/>oldest drops past capacity"]
+    console["console.log/warn/error<br/>if >= consoleLevel"]
+
+    bus --> attach
+    attach --> logCall
+    logCall --> gate
+    gate -->|no| drop
+    gate -->|yes| ring
+    ring --> console
 ```
 
 A disabled call — the default in real play, floor at `'warn'` — costs
@@ -555,13 +555,13 @@ flowchart LR
         m2["darkArcherHP / ...Wizard / ...Knight"]:::gone
         m3["darkKnightHP / ...Wizard / ...Knight"]:::gone
         m4["commanderHP / ...Wizard / ...Knight"]:::gone
-        tern["selectedChar === 'wizard' ? w :\nselectedChar === 'knight' ? k : normal"]:::gone
+        tern["selectedChar === 'wizard' ? w :<br>selectedChar === 'knight' ? k : normal"]:::gone
         m1 & m2 & m3 & m4 --> tern
     end
 
     subgraph AFTER["after: 4 numbers and 5, neither one indexed by the other"]
-        pools["BOSS_HP_KEY, into CONFIG\ncrowking 10, dark_archer 12,\ndark_knight 16, commander 20"]
-        dials["CHARACTER_STATS[kind].bossDamageMult\nwizard 2.5, knight 1.5, archer 1.4,\nsapper 1.2, ranger 0.8"]
+        pools["BOSS_HP_KEY, into CONFIG<br>crowking 10, dark_archer 12,<br>dark_knight 16, commander 20"]
+        dials["CHARACTER_STATS[kind].bossDamageMult<br>wizard 2.5, knight 1.5, archer 1.4,<br>sapper 1.2, ranger 0.8"]
     end
 
     tern -.-> pools
