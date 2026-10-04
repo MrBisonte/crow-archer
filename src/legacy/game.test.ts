@@ -1703,6 +1703,31 @@ describe('the knight charge', () => {
     expect(p.x).toBeGreaterThan(start);
   });
 
+  // The charge was the one cooldown on the knight's keys that nothing on the
+  // HUD counted. Its chip is the shape every other cooldown uses: live while
+  // the dash runs, then counting the cooldown down.
+  it('carries a charge chip in the knight lane, live while dashing, then cooling', () => {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    g.crows().length = 0;
+    expect(g.lane()).toEqual(['whirlwind', 'knightCharge', 'block', 'fireSword', 'ult', 'shield']);
+    type Chip = { glyph: string; lit: boolean; label: string; frac: number | null };
+    const chip = (): Chip => g.chip('knightCharge') as Chip;
+    expect(chip().label).toBe('READY');
+
+    g.startKnightCharge();
+    g.releaseKnightCharge();
+    expect(chip().lit).toBe(true);
+    expect(chip().label).toBe(g.knightCharge().dashTimer.toFixed(1) + 's');
+
+    for (let i = 0; i < 4 * ONE_SECOND && g.knightCharge().dashing; i++) g.stepSim(1);
+    expect(g.knightCharge().dashing).toBe(false);
+    expect(chip().lit).toBe(false);
+    expect(chip().frac).not.toBeNull();
+    expect(chip().label).toBe(g.knightCharge().cooldown.toFixed(1) + 's');
+  });
+
   // The charge is how the slowest hero reaches a boss that orbits him, so the
   // dash has to outrun his own legs. It ran at half his walking speed for a
   // long time -- 75 px/s, slower than every other hero walking, and 112 px of
@@ -3104,6 +3129,33 @@ describe('the ranger crossbow', () => {
     }
   });
 
+  // The chip counts the reload, so the refusal speaks once per reload rather
+  // than on every press. The first press is the one that reads as a dropped
+  // key, and a click-through of eleven presses would stack eleven labels.
+  it('says RELOADING on the first refused press of each reload, and only the first', () => {
+    // Compared below against undefined as well, so a missing row would match.
+    const reloading = (g.blockedReasons() as Record<string, string>).RELOADING;
+    expect(reloading, 'BLOCKED has no RELOADING').toBeTruthy();
+    rangerOnPace('fast', 0);
+    g.crows().length = 0;
+    const press = (): void => { topUp(); g.shoot(); stepPast(1); };
+
+    emptyMagazine(0);
+    expect(reloadLeft()).toBeGreaterThan(0);
+    let seen = watchBlocked();
+    press();
+    press();
+    expect(seen.map((e) => e.reason)).toEqual([reloading, undefined]);
+
+    // The next reload says it again.
+    for (let i = 0; i < 2 * ONE_SECOND && reloadLeft() > 0; i++) g.stepSim(1);
+    expect(reloadLeft()).toBe(0);
+    emptyMagazine(0);
+    seen = watchBlocked();
+    press();
+    expect(seen.map((e) => e.reason)).toEqual([reloading]);
+  });
+
   // The reload was audible to nobody and visible nowhere: it arrived as a
   // second of silence with no cause on screen, which is how it was reported.
   it('announces the reload once per magazine, and says how long it is', () => {
@@ -3291,7 +3343,7 @@ describe('a refused ultimate says why', () => {
   });
 });
 
-describe('a refusal no HUD chip counts says why', () => {
+describe('a refused press says why', () => {
   /**
    * A hero on open ground in the west of the field, aiming due east, with
    * nothing hostile on it.
@@ -3365,7 +3417,7 @@ describe('a refusal no HUD chip counts says why', () => {
     expect(reasons(seen)).toEqual([why().NO_TARGET]);
   });
 
-  it('says the charge is not ready while it cools, because no chip counts it', () => {
+  it('says the charge is not ready while it cools, as well as on its chip', () => {
     heroOnClearField('knight');
     g.shift();
     g.shiftUp();
@@ -3378,14 +3430,21 @@ describe('a refusal no HUD chip counts says why', () => {
     expect(reasons(seen)).toEqual([why().CHARGE_NOT_READY]);
   });
 
-  it('says the spear is not ready while it recovers, because no chip counts it', () => {
+  // Not a refusal at all. The recovery is the knight's attack rate, the way
+  // the shot cooldown is the crossbow's, so an early press is early, not wrong.
+  it('lets an early spear press pass in silence, as the crossbow does an early shot', () => {
     heroOnClearField('knight');
     (g.inv() as Record<string, number>).knightJavelins = 0;
     g.shoot(); stepPast(1);
     expect((g.bloodlust() as { cooldown: number }).cooldown).toBeGreaterThan(0);
+    const fired: string[] = [];
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED') fired.push(String(e.kind));
+    });
     const seen = watchBlocked();
     g.shoot(); stepPast(1);
-    expect(reasons(seen)).toEqual([why().SPEAR_NOT_READY]);
+    expect(seen).toEqual([]);
+    expect(fired).toEqual([]);
   });
 
   it('names the shots in the air when the bow is at its in-flight cap', () => {
