@@ -4,13 +4,12 @@ Every session working this repo owns a row here. Keeping it current is not
 optional and not a courtesy: it is how several branches reach `origin` without
 losing each other's work.
 
-**Current round: `integration/round-12`, cut from `master` at `4c0a622`.**
-Round 10 shipped as `v0.3.0` (PR #45), round 11 as `v0.3.1` (the public flight
-sink plus the maze-beacon fix #47), and the difficulty ladder as `v0.3.2`
-(PR #46). Round 12 holds the five-tower bastion and two blink fixes. Alex
-play-tested it 10-04 and signed off; its PR tags `v0.3.3`. That branch
-name is written here once; everything else refers to "the current integration
-branch" so this file is the only thing that has to change when a round closes.
+**Current round: `integration/round-13`, cut from `master` at `13994a7`.**
+Round 12 shipped as `v0.3.3` (PR #52): the fifth bastion tower and two blink
+fixes. Round 13 holds the refusal reasons and Alex's three refusal calls. Alex
+play-checked it 10-04 and signed off; its PR tags `v0.3.4`. That branch name is written here once; everything else
+refers to "the current integration branch" so this file is the only thing that
+has to change when a round closes.
 
 
 **Merger is the coordinating session.** Alex has given it authority to ask any
@@ -60,14 +59,14 @@ is one thing: `origin` stays clean, and `master` above all.
 ## The ledger
 
 `Head` is your branch tip, short SHA. `Base` is `current` if you are cut from
-`master` at `4c0a622`, `STALE` otherwise. `In r12` is whether Merger has merged
+`master` at `13994a7`, `STALE` otherwise. `In r13` is whether Merger has merged
 you into the integration branch yet. Merger maintains that column, not you.
 
-| Session | Branch | Task | Status | Head | Base | In r12 | Updated | Notes |
+| Session | Branch | Task | Status | Head | Base | In r13 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `Merger` | `integration/round-12` | Assemble round 12; open the PR on Alex's word | `started` | `see tip` | current | n/a | 09-17 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `4c0a622` (`v0.3.2`). Folded `feat/bastion-fifth-tower` (the 5th tower), `fix/blink-refusal-reasons` and `feat/blink-ready-each-stage`. Folds further round-12 work as it finishes. |
-| `Bastion-5th` | `feat/bastion-fifth-tower` | The bastion's fifth tower: a centre-line strongpoint (2+2+1) | `finished` | `f80d261` | current | **yes** | 09-17 | Session `bold-leavitt-ddc832-5b`, cut from `master` `4c0a622` (v0.3.2). One HUT on the centre line (`TOWER_COL+2`): the 33-row grid goes 4 to 5, the 21-row keeps 2. Gate-green: typecheck 0, 2394 tests / 91 files. Alex play-tested it 10-04: five towers are fine. Suggests tag v0.3.3. Forced one test-isolation fix (`talents-run.test.ts` leaked `gameMode='siege'`); lesson `a-leaked-game-mode-rebuilds-towers-under-a-later-test`. |
-| `Merger` | `fix/blink-refusal-reasons` | A refused wizard blink says why | `finished` | `2c639a4` | current | **yes** | 10-01 | Cut from `master` `4c0a622`. The Shift input path is sound; the blink refused silently for want of Focus (bolts spend the same pool), of room toward the mouse, or of cooldown. The Focus and room refusals now show `NOT ENOUGH FOCUS` and `NOWHERE TO LAND`; the cooldown refusal stays quiet behind its HUD chip. Each reason line reverted alone fails its own test. **Alex 10-01: reset it at a new stage.** Done on `feat/blink-ready-each-stage` (`af4bead`): `beginNewLevel` clears the cooldown, and a boss-fight test that carried 4.8 s into the next stage fails with that line reverted. Gate after both folds: typecheck 0, 2396 tests / 91 files. |
+| `Merger` | `integration/round-13` | Assemble round 13; open the PR on Alex's word | `started` | `see tip` | current | n/a | 10-04 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `13994a7` (`v0.3.3`). Folded `fix/refusal-reasons` and `fix/refusal-tuning`. |
+| `Refusals` | `fix/refusal-reasons` | Every refusal outside a HUD chip says why | `finished` | `c5466a8` | `integration/round-12` `8646cf2` | **yes** | 10-04 | Session `local_aa25de04`, started by Merger. Cut from `integration/round-12` `f7b98bd` for `watchBlocked()`, rebased onto `8646cf2`. Checkout `labs/robinhood-refusal-reasons`. Ten bare refusals now carry a `BLOCKED` reason; the nine that a HUD chip counts stay quiet. New reasons: `NO BOMBS`, `NO ROOM AHEAD`, `NO TARGET IN RANGE`, `TOO MANY SHOTS IN THE AIR`, `CHARGE NOT READY`, `SPEAR NOT READY`. Each reason line reverted alone fails its own test. Gate: typecheck 0, 2409 tests / 91 files. Round 12 was signed off before this branch, so Merger picks round 12 or 13. Folded into round 13 by cherry-pick: `ee377ab` (code) and `9a5e9cd` (lessons); its two ledger commits targeted round 12's ledger, so this row moved by hand. Alex play-checked it 10-04 and signed off. |
+| `Refusal-calls` | `fix/refusal-tuning` | Alex's three refusal calls: reload, knight charge, spear | `finished` | `5961f9c` | current | **yes** | 10-04 | Session `local_aa25de04`. Cut from `integration/round-13` `bad4873`. Checkout `labs/robinhood-refusal-tuning`. Reload says `RELOADING` once per reload; the knight's charge gets a lane-D chip (new `dash` glyph, sixth slot like the sapper's) and keeps `CHARGE NOT READY`; an early spear press goes silent and `SPEAR NOT READY` is removed. Each changed line reverted alone fails its own test. Gate: typecheck 0, 2411 tests / 91 files. Alex play-checked it 10-04 and signed off. |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.
@@ -80,6 +79,9 @@ nothing pays it, and `docs/talents.md` says the same.
 
 ## Landed
 
+- **`v0.3.3`** (`13994a7`, PR #52): round 12. The fifth bastion tower, a refused
+  blink names its reason, a new stage starts the blink ready, and the
+  Integration PR section in the writing standard.
 - **`v0.3.2`** (`8bcc083`, PR #46): the difficulty ladder. Three rungs on the
   character screen; `nightmare` holds the pre-ladder figures, and the ladder
   moves the chase, not the crowd.

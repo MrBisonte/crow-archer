@@ -1426,19 +1426,31 @@ function openChooserWhenClear(dt) {
 let chooserWait = 0;
 
 /**
- * Why an ultimate or the wizard's blink would not fire, in the player's words.
+ * Why a press was refused, in the player's words.
  *
  * One home, because these strings are the only thing standing between a
  * refusal and "the key is broken" -- which is what a playtest called it. Each
- * one names a fix that exists: more arrows, a full meter, more Focus,
- * somewhere to stand.
+ * one names a fix that exists: more arrows or bombs, a full meter, more Focus,
+ * somewhere to stand, a target in range, fewer shots in the air, or time.
+ *
+ * A refusal for a cooldown that a HUD chip counts carries no reason. The chip
+ * already says how long, and a floater that repeats it on every press is noise.
+ * Two cooldowns speak anyway: the crossbow reload on its first refused press,
+ * which is the one that reads as a dropped key, and the knight's charge on
+ * every press, beside its chip.
  */
 const BLOCKED = {
   NO_ARROWS: 'NO ARROWS',
+  NO_BOMBS: 'NO BOMBS',
   NEEDS_METER: 'NEEDS A FULL METER',
   NO_FOCUS: 'NOT ENOUGH FOCUS',
   NO_LANDING: 'NOWHERE TO LAND',
   NO_ROOM: 'NO ROOM FOR THE LINE',
+  NO_ROOM_AHEAD: 'NO ROOM AHEAD',
+  NO_TARGET: 'NO TARGET IN RANGE',
+  IN_FLIGHT: 'TOO MANY SHOTS IN THE AIR',
+  RELOADING: 'RELOADING',
+  CHARGE_NOT_READY: 'CHARGE NOT READY',
   UNPICKED: 'ULTIMATE NOT CHOSEN YET',
   WAITING_LULL: 'PICK OPENS WHEN THE FIELD CLEARS',
 };
@@ -2128,6 +2140,8 @@ let crossbowShotCD = 0;
  * every time he ran a few more pixels while waiting.
  */
 let crossbowReloadFull = 0;
+/** The reason the current beat gives its first refused press, then nothing. */
+let reloadNotice;
 
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
@@ -3194,7 +3208,7 @@ function releaseArcherDraw() {
 
   // A power shot spends one unit of whatever is queued, exactly as an ordinary
   // shot does, so a fully drawn fire arrow is a fire arrow that also pierces.
-  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ARROWS }); return; }
   const type = spendShaft();
 
   // DEAD EYE: the most committed thing he can do stops costing him the next
@@ -3921,7 +3935,7 @@ function tryKnightChainCharge() {
   // whirlwind out of a charge that is over in everything but the timer.
   if (probeAhead(player.x, player.y, knightDash.angle, CONFIG.knightChainMinRoom * 2).moved
       < CONFIG.knightChainMinRoom) {
-    events.emit({ type: 'ACTION_BLOCKED' });
+    events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ROOM_AHEAD });
     return true;
   }
 
@@ -3954,9 +3968,9 @@ function markTarget() {
 /** Ranger-only, on the key the net gave up. Costs the whole meter. */
 function startRangerMark() {
   if (selectedChar !== 'ranger' || !inGame()) return;
-  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NEEDS_METER }); return; }
   const target = markTarget();
-  if (!target) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (!target) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_TARGET }); return; }
   rangerMark = { ref: target, timer: CONFIG.rangerMarkSecs };
   // Spent, and the meter says so with the same flash it uses for any other
   // loss of the cap.
@@ -4006,7 +4020,7 @@ function releaseShift() {
  * Winds up in place; releaseKnightCharge() converts the hold into the dash. */
 function startKnightCharge() {
   if (selectedChar !== 'knight' || knightCharge.on || knightDash.timer > 0 || !inGame()) return;
-  if (knightChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (knightChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.CHARGE_NOT_READY }); return; }
   knightCharge.on = true;
   knightCharge.t0 = performance.now();
 }
@@ -5783,7 +5797,7 @@ function tryShoot() {
   if (selectedChar === 'knight') { tryKnightAttack(); return; }
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   if (selectedChar === 'sapper') { trySapperCharge(); return; }
-  if (!hasShaft()) { tryPitchfork(); return; }
+  if (!hasShaft()) { tryPitchfork(BLOCKED.NO_ARROWS); return; }
   const volley = braceVolleyCount();
   // Gated on ONE arrow's worth of room, then the whole volley flies even if it
   // overshoots the cap by a couple.
@@ -5795,7 +5809,7 @@ function tryShoot() {
   // shot waits for one. The cap exists to stop the bow being held down, which
   // is about how often he may press, and this keeps that identical whether he
   // is braced or not. The overshoot is bounded by the volley itself.
-  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.IN_FLIGHT }); return; }
   // One shaft for the whole volley, which is the crossbow's rule too. The
   // brace is what is being spent here -- it took a second and a quarter of
   // standing still in a game that spends most of its time chasing him.
@@ -5823,8 +5837,15 @@ function tryShoot() {
  * bolts in a narrow spread instead of one full-strength arrow.
  */
 function tryCrossbowBolt() {
-  if (!hasShaft()) { tryPitchfork(); return; }
-  if (crossbowReload > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (!hasShaft()) { tryPitchfork(BLOCKED.NO_ARROWS); return; }
+  // Its chip counts the beat, so it speaks once per reload: the first press is
+  // the one that reads as a dropped key, and a label on every press of a
+  // click-through would stack.
+  if (crossbowReload > 0) {
+    events.emit({ type: 'ACTION_BLOCKED', reason: reloadNotice });
+    reloadNotice = undefined;
+    return;
+  }
   // Silent, unlike the reload. A reload is a state the player is waiting out
   // and worth a sound; out-clicking a weapon's own rate of fire is not a
   // refusal, it is the weapon, and buzzing at every fast tap would say the
@@ -5836,7 +5857,7 @@ function tryCrossbowBolt() {
   // The ceiling, and only the ceiling. maxArrowsInFlight used to decide
   // whether a volley could fire at all, which cost him a third of his output
   // on `fast` and every shot on `calm`. The magazine paces him now.
-  if (arrows.length + bolts > CONFIG.crossbowCeiling) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (arrows.length + bolts > CONFIG.crossbowCeiling) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.IN_FLIGHT }); return; }
   const type = spendShaft();
   const half = (bolts - 1) / 2;
   for (let i = 0; i < bolts; i++) {
@@ -5860,6 +5881,7 @@ function tryCrossbowBolt() {
     crossbowMag = CONFIG.crossbowMagazine;
     crossbowReload = CONFIG.crossbowReloadSecs * crossbowReloadMult();
     crossbowReloadFull = crossbowReload;
+    reloadNotice = BLOCKED.RELOADING;
     events.emit({ type: 'WEAPON_RELOADING', kind: 'crossbow', secs: crossbowReload,
       x: player.x, y: player.y });
   }
@@ -5874,7 +5896,7 @@ function tryWizardBolt() {
   // than sometimes producing nothing: a press that does nothing at all reads
   // as the button being broken.
 
-  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.IN_FLIGHT }); return; }
   if (!boltFree) inv.focus -= CONFIG.wizFocusBolt;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
@@ -5907,9 +5929,13 @@ function tryWizardBolt() {
  * empty Focus, and the only thing that differs between them is the art and how
  * long the cooldown runs. A separate function per weapon would be two copies
  * of a swing, which is how the two of them come to disagree about reach.
+ *
+ * `empty` is the BLOCKED reason for the pool that ran dry. A press while the
+ * swing recovers refuses with it, because the pool is the fix: a pickup or a
+ * Focus point puts the real weapon back in hand at once.
  */
-function tryFallbackMelee(kind) {
-  if (pfCooldown > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+function tryFallbackMelee(kind, empty) {
+  if (pfCooldown > 0) { events.emit({ type: 'ACTION_BLOCKED', reason: empty }); return; }
   pfKind     = kind;
   pfCooldown = CONFIG.pitchforkCooldown * (kind === 'broom' ? CONFIG.broomCooldownMult : 1);
   pfSwing    = CONFIG.pitchforkSwingDuration;
@@ -5919,10 +5945,10 @@ function tryFallbackMelee(kind) {
 }
 
 /** The three quiver heroes' fallback. See tryFallbackMelee. */
-function tryPitchfork() { tryFallbackMelee('pitchfork'); }
+function tryPitchfork(empty) { tryFallbackMelee('pitchfork', empty); }
 
 /** The wizard's, on a cooldown half again as long. See tryFallbackMelee. */
-function tryBroom() { tryFallbackMelee('broom'); }
+function tryBroom() { tryFallbackMelee('broom', BLOCKED.NO_FOCUS); }
 
 function tryKnightAttack() {
   // Javelin throw when stocked — ranged piercing projectile
@@ -5940,8 +5966,10 @@ function tryKnightAttack() {
     events.emit({ type: 'WEAPON_FIRED', kind: 'javelin' });
     return;
   }
-  // Melee spear thrust
-  if (knightSpearCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // Melee spear thrust. Silent while it recovers, the way the crossbow is silent
+  // inside its rate of fire: the recovery IS the knight's attack rate, so an
+  // early press is early, not wrong. See tryCrossbowBolt.
+  if (knightSpearCD > 0) return;
   // Divided, not subtracted: "+10% attack speed" is a rate, so three stacks
   // is 1.0 / 1.3 = 0.77 s between swings rather than 0.70.
   knightSpearCD       = CONFIG.knightSpearCooldown / knightBloodlustMult();
@@ -6434,7 +6462,7 @@ function throwOneCharge() {
  * burst a placement tool rather than a rate increase.
  */
 function trySapperCharge() {
-  if (!hasBomb()) { tryPitchfork(); return; }
+  if (!hasBomb()) { tryPitchfork(BLOCKED.NO_BOMBS); return; }
   if (sapperChargeCD > 0 || sapperBurstLeft > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   throwOneCharge();
   sapperBurstThrown = 1;
@@ -14452,6 +14480,17 @@ const GLYPH = {
       ctx.lineTo(m + s*a, m + s*0.22);
       ctx.stroke();
     }); },
+  // A head driving right with two speed lines behind it: the knight's charge.
+  // His whole body moves, so it takes momentum's speed lines rather than a
+  // projectile's shaft. The sweep's own wedge drawn this small reads as a
+  // triangle pointing backwards.
+  dash: (s) => { const m = s/2;
+    ctx.beginPath(); ctx.moveTo(s*0.95, m); ctx.lineTo(s*0.5, m - s*0.36); ctx.lineTo(s*0.5, m + s*0.36);
+    ctx.closePath(); ctx.fill();
+    ctx.lineWidth = 2;
+    for (const dy of [-0.2, 0.2]) {
+      ctx.beginPath(); ctx.moveTo(s*0.06, m + s*dy); ctx.lineTo(s*0.4, m + s*dy); ctx.stroke();
+    } },
   crossbow: (s) => { const m = s / 2; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(s*0.26, s*0.2); ctx.lineTo(s*0.26, s*0.8); ctx.stroke();
     ctx.fillRect(s*0.26, m - s*0.06, s*0.52, s*0.12);
@@ -14506,14 +14545,15 @@ const LANE_B = {
  * Lane D per character: cooldowns and non-countable power-ups, assigned once
  * and never reordered during a run.
  *
- * The knight fills all four slots, which is what sizes the lane. Countable
- * things are deliberately absent even where they look like status: javelins,
- * laser streams and fire bolts are pools, and pools live in lane B.
+ * The lane is sized for four chips (LANE.D); the knight and the sapper carry
+ * six. Countable things are deliberately absent even where they look like
+ * status: javelins, laser streams and fire bolts are pools, and pools live in
+ * lane B.
  */
 const LANE_D = {
   archer: ['brace', 'power', 'ult', 'shield'],
   ranger: ['momentum', 'crossbow', 'net', 'ult', 'shield'],
-  knight: ['whirlwind', 'block', 'fireSword', 'ult', 'shield'],
+  knight: ['whirlwind', 'knightCharge', 'block', 'fireSword', 'ult', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'ult', 'shield'],
   sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'ult', 'shield'],
 };
@@ -14522,6 +14562,8 @@ const LANE_D = {
  *  ability is a new row instead of another arm on a growing chain. */
 const CHIP = {
   whirlwind: () => cooldownChip('spin', knightWhirlwindCD, CONFIG.knightWhirlwindCooldown, knightWhirlwindTimer),
+  // Live while the dash runs: the cooldown only starts counting once it ends.
+  knightCharge: () => cooldownChip('dash', knightChargeCD, CONFIG.knightChargeCooldown, knightDash.timer),
   block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, TALENTS.stat('towerGuard'), 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
   charge:    () => cooldownChip('dynamite', sapperChargeCD, TALENTS.stat('shortFuse'), 0),

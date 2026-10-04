@@ -1703,6 +1703,31 @@ describe('the knight charge', () => {
     expect(p.x).toBeGreaterThan(start);
   });
 
+  // The charge was the one cooldown on the knight's keys that nothing on the
+  // HUD counted. Its chip is the shape every other cooldown uses: live while
+  // the dash runs, then counting the cooldown down.
+  it('carries a charge chip in the knight lane, live while dashing, then cooling', () => {
+    g.pick('knight');
+    g.go('playing');
+    clearArena();
+    g.crows().length = 0;
+    expect(g.lane()).toEqual(['whirlwind', 'knightCharge', 'block', 'fireSword', 'ult', 'shield']);
+    type Chip = { glyph: string; lit: boolean; label: string; frac: number | null };
+    const chip = (): Chip => g.chip('knightCharge') as Chip;
+    expect(chip().label).toBe('READY');
+
+    g.startKnightCharge();
+    g.releaseKnightCharge();
+    expect(chip().lit).toBe(true);
+    expect(chip().label).toBe(g.knightCharge().dashTimer.toFixed(1) + 's');
+
+    for (let i = 0; i < 4 * ONE_SECOND && g.knightCharge().dashing; i++) g.stepSim(1);
+    expect(g.knightCharge().dashing).toBe(false);
+    expect(chip().lit).toBe(false);
+    expect(chip().frac).not.toBeNull();
+    expect(chip().label).toBe(g.knightCharge().cooldown.toFixed(1) + 's');
+  });
+
   // The charge is how the slowest hero reaches a boss that orbits him, so the
   // dash has to outrun his own legs. It ran at half his walking speed for a
   // long time -- 75 px/s, slower than every other hero walking, and 112 px of
@@ -3104,6 +3129,33 @@ describe('the ranger crossbow', () => {
     }
   });
 
+  // The chip counts the reload, so the refusal speaks once per reload rather
+  // than on every press. The first press is the one that reads as a dropped
+  // key, and a click-through of eleven presses would stack eleven labels.
+  it('says RELOADING on the first refused press of each reload, and only the first', () => {
+    // Compared below against undefined as well, so a missing row would match.
+    const reloading = (g.blockedReasons() as Record<string, string>).RELOADING;
+    expect(reloading, 'BLOCKED has no RELOADING').toBeTruthy();
+    rangerOnPace('fast', 0);
+    g.crows().length = 0;
+    const press = (): void => { topUp(); g.shoot(); stepPast(1); };
+
+    emptyMagazine(0);
+    expect(reloadLeft()).toBeGreaterThan(0);
+    let seen = watchBlocked();
+    press();
+    press();
+    expect(seen.map((e) => e.reason)).toEqual([reloading, undefined]);
+
+    // The next reload says it again.
+    for (let i = 0; i < 2 * ONE_SECOND && reloadLeft() > 0; i++) g.stepSim(1);
+    expect(reloadLeft()).toBe(0);
+    emptyMagazine(0);
+    seen = watchBlocked();
+    press();
+    expect(seen.map((e) => e.reason)).toEqual([reloading]);
+  });
+
   // The reload was audible to nobody and visible nowhere: it arrived as a
   // second of silence with no cause on screen, which is how it was reported.
   it('announces the reload once per magazine, and says how long it is', () => {
@@ -3289,6 +3341,190 @@ describe('a refused ultimate says why', () => {
     // Not vacuous: at least the two ammo-gated ones and the meter-gated one.
     expect(refusals).toBeGreaterThanOrEqual(3);
   });
+});
+
+describe('a refused press says why', () => {
+  /**
+   * A hero on open ground in the west of the field, aiming due east, with
+   * nothing hostile on it.
+   *
+   * Emptied because several of these refusals turn on what is in the air or
+   * in range: a crow that eats an arrow or wanders into the mark's reach
+   * changes the answer. West, so a shot aimed east stays in the air.
+   */
+  function heroOnClearField(hero: string): { x: number; y: number } {
+    g.pick(hero);
+    g.go('playing');
+    clearArena();
+    const p = g.player() as { x: number; y: number };
+    p.x = 4.5 * g.config().tileSize;
+    aimAt(p.x + 400, p.y);
+    stepPast(2);
+    g.crows().length = 0;
+    g.skeletons().length = 0;
+    g.soldiers().length = 0;
+    return p;
+  }
+
+  /** The reasons the watched refusals gave, the silent ones dropped. */
+  const reasons = (seen: Blocked[]): string[] =>
+    seen.map((e) => e.reason).filter((r): r is string => !!r);
+
+  const why = (): Record<string, string> => g.blockedReasons();
+
+  it('names the quiver when a drawn power shot has nothing to loose', () => {
+    heroOnClearField('archer');
+    const inv = g.inv() as Record<string, number>;
+    inv.arrows = 0; inv.fireArrows = 0; inv.ricochetArrows = 0;
+    g.shift();
+    const seen = watchBlocked();
+    g.shiftUp();
+    expect(reasons(seen)).toEqual([why().NO_ARROWS]);
+  });
+
+  it('names the wall when a chained charge has no room left ahead', () => {
+    const c = g.config();
+    const p = heroOnClearField('knight');
+    // Hard against the western border, committed into it.
+    p.x = c.tileSize + c.playerRadius;
+    aimAt(p.x - 400, p.y);
+    g.stepSim(1);
+    g.shift();
+    g.shiftUp();
+    const seen = watchBlocked();
+    g.shift();
+    expect(g.knightCharge().chained).toBe(false);
+    expect(reasons(seen)).toEqual([why().NO_ROOM_AHEAD]);
+  });
+
+  it('names the meter when the mark is pressed below a full one', () => {
+    heroOnClearField('ranger');
+    g.setMomentum(0.5);
+    const seen = watchBlocked();
+    g.mark();
+    expect(g.rangerMark()).toBeNull();
+    expect(reasons(seen)).toEqual([why().NEEDS_METER]);
+  });
+
+  it('names the range when a full meter has nothing to mark', () => {
+    heroOnClearField('ranger');
+    g.setMomentum(1);
+    const seen = watchBlocked();
+    g.mark();
+    expect(g.rangerMark()).toBeNull();
+    // Refused, so not spent.
+    expect((g.momentum() as { level: number }).level).toBe(1);
+    expect(reasons(seen)).toEqual([why().NO_TARGET]);
+  });
+
+  it('says the charge is not ready while it cools, as well as on its chip', () => {
+    heroOnClearField('knight');
+    g.shift();
+    g.shiftUp();
+    for (let i = 0; i < 4 * ONE_SECOND && g.knightCharge().dashing; i++) g.stepSim(1);
+    expect(g.knightCharge().dashing).toBe(false);
+    expect(g.knightCharge().cooldown).toBeGreaterThan(0);
+    const seen = watchBlocked();
+    g.shift();
+    expect(g.knightCharge().charging).toBe(false);
+    expect(reasons(seen)).toEqual([why().CHARGE_NOT_READY]);
+  });
+
+  // Not a refusal at all. The recovery is the knight's attack rate, the way
+  // the shot cooldown is the crossbow's, so an early press is early, not wrong.
+  it('lets an early spear press pass in silence, as the crossbow does an early shot', () => {
+    heroOnClearField('knight');
+    (g.inv() as Record<string, number>).knightJavelins = 0;
+    g.shoot(); stepPast(1);
+    expect((g.bloodlust() as { cooldown: number }).cooldown).toBeGreaterThan(0);
+    const fired: string[] = [];
+    g.onEvent((e: { type: string; kind?: string }) => {
+      if (e.type === 'WEAPON_FIRED') fired.push(String(e.kind));
+    });
+    const seen = watchBlocked();
+    g.shoot(); stepPast(1);
+    expect(seen).toEqual([]);
+    expect(fired).toEqual([]);
+  });
+
+  it('names the shots in the air when the bow is at its in-flight cap', () => {
+    heroOnClearField('archer');
+    const cap = g.config().maxArrowsInFlight;
+    const inv = g.inv() as Record<string, number>;
+    for (let i = 0; i < 2 * cap && g.arrows().length < cap; i++) {
+      inv.arrows = 99;
+      g.shoot(); stepPast(1);
+    }
+    expect(g.arrows().length).toBeGreaterThanOrEqual(cap);
+    const seen = watchBlocked();
+    g.shoot(); stepPast(1);
+    expect(reasons(seen)).toEqual([why().IN_FLIGHT]);
+  });
+
+  it('names the shots in the air when the crossbow is at its ceiling', () => {
+    // No legal burst reaches the ceiling ('keeps a ceiling no legal burst can
+    // reach'), so the air is filled by hand with copies of one real volley.
+    heroOnClearField('ranger');
+    const inv = g.inv() as Record<string, number>;
+    inv.arrows = 99;
+    g.shoot(); stepPast(1);
+    const air = g.arrows() as object[];
+    const bolt = air[0];
+    if (bolt === undefined) throw new Error('the volley never left');
+    while (air.length < g.config().crossbowCeiling) air.push({ ...bolt });
+    // Past the crossbow's own rate, which refuses silently and answers first.
+    const shot = (): number => (g.crossbow() as { shot: number }).shot;
+    for (let i = 0; i < ONE_SECOND && shot() > 0; i++) g.stepSim(1);
+    expect(shot()).toBe(0);
+    const seen = watchBlocked();
+    g.shoot(); stepPast(1);
+    expect(reasons(seen)).toEqual([why().IN_FLIGHT]);
+  });
+
+  it('names the shots in the air when the staff is at its in-flight cap', () => {
+    // Casting alone never reaches the cap: a bolt expires before the cooldown
+    // lets enough more leave. So the air is filled by hand with copies of one
+    // real bolt.
+    heroOnClearField('wizard');
+    g.shoot(); stepPast(1);
+    const air = g.arrows() as object[];
+    const bolt = air[0];
+    if (bolt === undefined) throw new Error('the bolt never left');
+    while (air.length < g.config().maxArrowsInFlight) air.push({ ...bolt });
+    // Past the bolt cooldown, which its chip counts and which answers first.
+    const ready = (): boolean => (g.chip('bolt') as { lit: boolean }).lit;
+    for (let i = 0; i < 2 * ONE_SECOND && !ready(); i++) g.stepSim(1);
+    expect(ready()).toBe(true);
+    const seen = watchBlocked();
+    g.shoot(); stepPast(1);
+    expect(reasons(seen)).toEqual([why().IN_FLIGHT]);
+  });
+
+  // The swing a hero falls back on when the pool runs dry. Pressed again while
+  // it recovers, the refusal names the pool: refilling it puts the real weapon
+  // back in hand at once, and waiting out the swing does not.
+  for (const { hero, pool, swing, reason } of [
+    { hero: 'archer', pool: ['arrows', 'fireArrows', 'ricochetArrows'], swing: 'pitchfork', reason: 'NO_ARROWS' },
+    { hero: 'ranger', pool: ['arrows', 'fireArrows', 'ricochetArrows'], swing: 'pitchfork', reason: 'NO_ARROWS' },
+    { hero: 'sapper', pool: ['bombs', 'fireBombs', 'iceBombs'], swing: 'pitchfork', reason: 'NO_BOMBS' },
+    { hero: 'wizard', pool: ['focus'], swing: 'broom', reason: 'NO_FOCUS' },
+  ]) {
+    it(`names the empty pool when the ${hero}'s ${swing} is pressed again mid-recovery`, () => {
+      heroOnClearField(hero);
+      const inv = g.inv() as Record<string, number>;
+      // Drained before each press, not once: Focus refills on a timer.
+      const drain = (): void => { for (const k of pool) inv[k] = 0; };
+      const fired: string[] = [];
+      g.onEvent((e: { type: string; kind?: string }) => {
+        if (e.type === 'WEAPON_FIRED') fired.push(String(e.kind));
+      });
+      drain(); g.shoot(); stepPast(1);
+      expect(fired).toEqual([swing]);
+      const seen = watchBlocked();
+      drain(); g.shoot(); stepPast(1);
+      expect(reasons(seen)).toEqual([why()[reason]]);
+    });
+  }
 });
 
 describe('the ranger net', () => {
