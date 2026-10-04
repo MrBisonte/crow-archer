@@ -1426,19 +1426,29 @@ function openChooserWhenClear(dt) {
 let chooserWait = 0;
 
 /**
- * Why an ultimate or the wizard's blink would not fire, in the player's words.
+ * Why a press was refused, in the player's words.
  *
  * One home, because these strings are the only thing standing between a
  * refusal and "the key is broken" -- which is what a playtest called it. Each
- * one names a fix that exists: more arrows, a full meter, more Focus,
- * somewhere to stand.
+ * one names a fix that exists: more arrows or bombs, a full meter, more Focus,
+ * somewhere to stand, a target in range, fewer shots in the air, or time on a
+ * cooldown no chip counts.
+ *
+ * A refusal for a cooldown that a HUD chip counts carries no reason. The chip
+ * already says how long, and a floater that repeats it on every press is noise.
  */
 const BLOCKED = {
   NO_ARROWS: 'NO ARROWS',
+  NO_BOMBS: 'NO BOMBS',
   NEEDS_METER: 'NEEDS A FULL METER',
   NO_FOCUS: 'NOT ENOUGH FOCUS',
   NO_LANDING: 'NOWHERE TO LAND',
   NO_ROOM: 'NO ROOM FOR THE LINE',
+  NO_ROOM_AHEAD: 'NO ROOM AHEAD',
+  NO_TARGET: 'NO TARGET IN RANGE',
+  IN_FLIGHT: 'TOO MANY SHOTS IN THE AIR',
+  CHARGE_NOT_READY: 'CHARGE NOT READY',
+  SPEAR_NOT_READY: 'SPEAR NOT READY',
   UNPICKED: 'ULTIMATE NOT CHOSEN YET',
   WAITING_LULL: 'PICK OPENS WHEN THE FIELD CLEARS',
 };
@@ -3194,7 +3204,7 @@ function releaseArcherDraw() {
 
   // A power shot spends one unit of whatever is queued, exactly as an ordinary
   // shot does, so a fully drawn fire arrow is a fire arrow that also pierces.
-  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (!hasShaft()) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ARROWS }); return; }
   const type = spendShaft();
 
   // DEAD EYE: the most committed thing he can do stops costing him the next
@@ -3921,7 +3931,7 @@ function tryKnightChainCharge() {
   // whirlwind out of a charge that is over in everything but the timer.
   if (probeAhead(player.x, player.y, knightDash.angle, CONFIG.knightChainMinRoom * 2).moved
       < CONFIG.knightChainMinRoom) {
-    events.emit({ type: 'ACTION_BLOCKED' });
+    events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_ROOM_AHEAD });
     return true;
   }
 
@@ -3954,9 +3964,9 @@ function markTarget() {
 /** Ranger-only, on the key the net gave up. Costs the whole meter. */
 function startRangerMark() {
   if (selectedChar !== 'ranger' || !inGame()) return;
-  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (rangerMomentum < 1) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NEEDS_METER }); return; }
   const target = markTarget();
-  if (!target) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (!target) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_TARGET }); return; }
   rangerMark = { ref: target, timer: CONFIG.rangerMarkSecs };
   // Spent, and the meter says so with the same flash it uses for any other
   // loss of the cap.
@@ -4006,7 +4016,7 @@ function releaseShift() {
  * Winds up in place; releaseKnightCharge() converts the hold into the dash. */
 function startKnightCharge() {
   if (selectedChar !== 'knight' || knightCharge.on || knightDash.timer > 0 || !inGame()) return;
-  if (knightChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (knightChargeCD > 0) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.CHARGE_NOT_READY }); return; }
   knightCharge.on = true;
   knightCharge.t0 = performance.now();
 }
@@ -5783,7 +5793,7 @@ function tryShoot() {
   if (selectedChar === 'knight') { tryKnightAttack(); return; }
   if (selectedChar === 'ranger') { tryCrossbowBolt(); return; }
   if (selectedChar === 'sapper') { trySapperCharge(); return; }
-  if (!hasShaft()) { tryPitchfork(); return; }
+  if (!hasShaft()) { tryPitchfork(BLOCKED.NO_ARROWS); return; }
   const volley = braceVolleyCount();
   // Gated on ONE arrow's worth of room, then the whole volley flies even if it
   // overshoots the cap by a couple.
@@ -5795,7 +5805,7 @@ function tryShoot() {
   // shot waits for one. The cap exists to stop the bow being held down, which
   // is about how often he may press, and this keeps that identical whether he
   // is braced or not. The overshoot is bounded by the volley itself.
-  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.IN_FLIGHT }); return; }
   // One shaft for the whole volley, which is the crossbow's rule too. The
   // brace is what is being spent here -- it took a second and a quarter of
   // standing still in a game that spends most of its time chasing him.
@@ -5823,7 +5833,7 @@ function tryShoot() {
  * bolts in a narrow spread instead of one full-strength arrow.
  */
 function tryCrossbowBolt() {
-  if (!hasShaft()) { tryPitchfork(); return; }
+  if (!hasShaft()) { tryPitchfork(BLOCKED.NO_ARROWS); return; }
   if (crossbowReload > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   // Silent, unlike the reload. A reload is a state the player is waiting out
   // and worth a sound; out-clicking a weapon's own rate of fire is not a
@@ -5836,7 +5846,7 @@ function tryCrossbowBolt() {
   // The ceiling, and only the ceiling. maxArrowsInFlight used to decide
   // whether a volley could fire at all, which cost him a third of his output
   // on `fast` and every shot on `calm`. The magazine paces him now.
-  if (arrows.length + bolts > CONFIG.crossbowCeiling) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (arrows.length + bolts > CONFIG.crossbowCeiling) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.IN_FLIGHT }); return; }
   const type = spendShaft();
   const half = (bolts - 1) / 2;
   for (let i = 0; i < bolts; i++) {
@@ -5874,7 +5884,7 @@ function tryWizardBolt() {
   // than sometimes producing nothing: a press that does nothing at all reads
   // as the button being broken.
 
-  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (arrows.length >= CONFIG.maxArrowsInFlight) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.IN_FLIGHT }); return; }
   if (!boltFree) inv.focus -= CONFIG.wizFocusBolt;
   let type = 'wiz_normal';
   let dmg  = CONFIG.wizBoltDamage;
@@ -5907,9 +5917,13 @@ function tryWizardBolt() {
  * empty Focus, and the only thing that differs between them is the art and how
  * long the cooldown runs. A separate function per weapon would be two copies
  * of a swing, which is how the two of them come to disagree about reach.
+ *
+ * `empty` is the BLOCKED reason for the pool that ran dry. A press while the
+ * swing recovers refuses with it, because the pool is the fix: a pickup or a
+ * Focus point puts the real weapon back in hand at once.
  */
-function tryFallbackMelee(kind) {
-  if (pfCooldown > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+function tryFallbackMelee(kind, empty) {
+  if (pfCooldown > 0) { events.emit({ type: 'ACTION_BLOCKED', reason: empty }); return; }
   pfKind     = kind;
   pfCooldown = CONFIG.pitchforkCooldown * (kind === 'broom' ? CONFIG.broomCooldownMult : 1);
   pfSwing    = CONFIG.pitchforkSwingDuration;
@@ -5919,10 +5933,10 @@ function tryFallbackMelee(kind) {
 }
 
 /** The three quiver heroes' fallback. See tryFallbackMelee. */
-function tryPitchfork() { tryFallbackMelee('pitchfork'); }
+function tryPitchfork(empty) { tryFallbackMelee('pitchfork', empty); }
 
 /** The wizard's, on a cooldown half again as long. See tryFallbackMelee. */
-function tryBroom() { tryFallbackMelee('broom'); }
+function tryBroom() { tryFallbackMelee('broom', BLOCKED.NO_FOCUS); }
 
 function tryKnightAttack() {
   // Javelin throw when stocked — ranged piercing projectile
@@ -5941,7 +5955,7 @@ function tryKnightAttack() {
     return;
   }
   // Melee spear thrust
-  if (knightSpearCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  if (knightSpearCD > 0) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.SPEAR_NOT_READY }); return; }
   // Divided, not subtracted: "+10% attack speed" is a rate, so three stacks
   // is 1.0 / 1.3 = 0.77 s between swings rather than 0.70.
   knightSpearCD       = CONFIG.knightSpearCooldown / knightBloodlustMult();
@@ -6434,7 +6448,7 @@ function throwOneCharge() {
  * burst a placement tool rather than a rate increase.
  */
 function trySapperCharge() {
-  if (!hasBomb()) { tryPitchfork(); return; }
+  if (!hasBomb()) { tryPitchfork(BLOCKED.NO_BOMBS); return; }
   if (sapperChargeCD > 0 || sapperBurstLeft > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   throwOneCharge();
   sapperBurstThrown = 1;
