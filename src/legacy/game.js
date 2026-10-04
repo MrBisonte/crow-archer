@@ -1431,11 +1431,13 @@ let chooserWait = 0;
  * One home, because these strings are the only thing standing between a
  * refusal and "the key is broken" -- which is what a playtest called it. Each
  * one names a fix that exists: more arrows or bombs, a full meter, more Focus,
- * somewhere to stand, a target in range, fewer shots in the air, or time on a
- * cooldown no chip counts.
+ * somewhere to stand, a target in range, fewer shots in the air, or time.
  *
  * A refusal for a cooldown that a HUD chip counts carries no reason. The chip
  * already says how long, and a floater that repeats it on every press is noise.
+ * Two cooldowns speak anyway: the crossbow reload on its first refused press,
+ * which is the one that reads as a dropped key, and the knight's charge on
+ * every press, beside its chip.
  */
 const BLOCKED = {
   NO_ARROWS: 'NO ARROWS',
@@ -1447,8 +1449,8 @@ const BLOCKED = {
   NO_ROOM_AHEAD: 'NO ROOM AHEAD',
   NO_TARGET: 'NO TARGET IN RANGE',
   IN_FLIGHT: 'TOO MANY SHOTS IN THE AIR',
+  RELOADING: 'RELOADING',
   CHARGE_NOT_READY: 'CHARGE NOT READY',
-  SPEAR_NOT_READY: 'SPEAR NOT READY',
   UNPICKED: 'ULTIMATE NOT CHOSEN YET',
   WAITING_LULL: 'PICK OPENS WHEN THE FIELD CLEARS',
 };
@@ -2138,6 +2140,8 @@ let crossbowShotCD = 0;
  * every time he ran a few more pixels while waiting.
  */
 let crossbowReloadFull = 0;
+/** The reason the current beat gives its first refused press, then nothing. */
+let reloadNotice;
 
 let rangerNet = { on: false, t0: 0 };
 let rangerNetCD = 0;
@@ -5834,7 +5838,14 @@ function tryShoot() {
  */
 function tryCrossbowBolt() {
   if (!hasShaft()) { tryPitchfork(BLOCKED.NO_ARROWS); return; }
-  if (crossbowReload > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
+  // Its chip counts the beat, so it speaks once per reload: the first press is
+  // the one that reads as a dropped key, and a label on every press of a
+  // click-through would stack.
+  if (crossbowReload > 0) {
+    events.emit({ type: 'ACTION_BLOCKED', reason: reloadNotice });
+    reloadNotice = undefined;
+    return;
+  }
   // Silent, unlike the reload. A reload is a state the player is waiting out
   // and worth a sound; out-clicking a weapon's own rate of fire is not a
   // refusal, it is the weapon, and buzzing at every fast tap would say the
@@ -5870,6 +5881,7 @@ function tryCrossbowBolt() {
     crossbowMag = CONFIG.crossbowMagazine;
     crossbowReload = CONFIG.crossbowReloadSecs * crossbowReloadMult();
     crossbowReloadFull = crossbowReload;
+    reloadNotice = BLOCKED.RELOADING;
     events.emit({ type: 'WEAPON_RELOADING', kind: 'crossbow', secs: crossbowReload,
       x: player.x, y: player.y });
   }
@@ -5954,8 +5966,10 @@ function tryKnightAttack() {
     events.emit({ type: 'WEAPON_FIRED', kind: 'javelin' });
     return;
   }
-  // Melee spear thrust
-  if (knightSpearCD > 0) { events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.SPEAR_NOT_READY }); return; }
+  // Melee spear thrust. Silent while it recovers, the way the crossbow is silent
+  // inside its rate of fire: the recovery IS the knight's attack rate, so an
+  // early press is early, not wrong. See tryCrossbowBolt.
+  if (knightSpearCD > 0) return;
   // Divided, not subtracted: "+10% attack speed" is a rate, so three stacks
   // is 1.0 / 1.3 = 0.77 s between swings rather than 0.70.
   knightSpearCD       = CONFIG.knightSpearCooldown / knightBloodlustMult();
@@ -14466,6 +14480,17 @@ const GLYPH = {
       ctx.lineTo(m + s*a, m + s*0.22);
       ctx.stroke();
     }); },
+  // A head driving right with two speed lines behind it: the knight's charge.
+  // His whole body moves, so it takes momentum's speed lines rather than a
+  // projectile's shaft. The sweep's own wedge drawn this small reads as a
+  // triangle pointing backwards.
+  dash: (s) => { const m = s/2;
+    ctx.beginPath(); ctx.moveTo(s*0.95, m); ctx.lineTo(s*0.5, m - s*0.36); ctx.lineTo(s*0.5, m + s*0.36);
+    ctx.closePath(); ctx.fill();
+    ctx.lineWidth = 2;
+    for (const dy of [-0.2, 0.2]) {
+      ctx.beginPath(); ctx.moveTo(s*0.06, m + s*dy); ctx.lineTo(s*0.4, m + s*dy); ctx.stroke();
+    } },
   crossbow: (s) => { const m = s / 2; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(s*0.26, s*0.2); ctx.lineTo(s*0.26, s*0.8); ctx.stroke();
     ctx.fillRect(s*0.26, m - s*0.06, s*0.52, s*0.12);
@@ -14520,14 +14545,15 @@ const LANE_B = {
  * Lane D per character: cooldowns and non-countable power-ups, assigned once
  * and never reordered during a run.
  *
- * The knight fills all four slots, which is what sizes the lane. Countable
- * things are deliberately absent even where they look like status: javelins,
- * laser streams and fire bolts are pools, and pools live in lane B.
+ * The lane is sized for four chips (LANE.D); the knight and the sapper carry
+ * six. Countable things are deliberately absent even where they look like
+ * status: javelins, laser streams and fire bolts are pools, and pools live in
+ * lane B.
  */
 const LANE_D = {
   archer: ['brace', 'power', 'ult', 'shield'],
   ranger: ['momentum', 'crossbow', 'net', 'ult', 'shield'],
-  knight: ['whirlwind', 'block', 'fireSword', 'ult', 'shield'],
+  knight: ['whirlwind', 'knightCharge', 'block', 'fireSword', 'ult', 'shield'],
   wizard: ['bolt', 'storm', 'blink', 'ult', 'shield'],
   sapper: ['charge', 'barrage', 'sapperShot', 'chain', 'ult', 'shield'],
 };
@@ -14536,6 +14562,8 @@ const LANE_D = {
  *  ability is a new row instead of another arm on a growing chain. */
 const CHIP = {
   whirlwind: () => cooldownChip('spin', knightWhirlwindCD, CONFIG.knightWhirlwindCooldown, knightWhirlwindTimer),
+  // Live while the dash runs: the cooldown only starts counting once it ends.
+  knightCharge: () => cooldownChip('dash', knightChargeCD, CONFIG.knightChargeCooldown, knightDash.timer),
   block:     () => cooldownChip('block', playerShield ? 0 : knightBlockCD, TALENTS.stat('towerGuard'), 0),
   bolt:      () => cooldownChip('bolt', wizBoltCD, CONFIG.wizBoltCooldown, 0),
   charge:    () => cooldownChip('dynamite', sapperChargeCD, TALENTS.stat('shortFuse'), 0),
