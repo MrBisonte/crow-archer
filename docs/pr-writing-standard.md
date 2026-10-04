@@ -48,3 +48,26 @@ were false.
 
 typecheck 0. 2350 of 2350 tests pass.
 ```
+
+## Integration PR
+A PR that lands several branches together is an index, not a description.
+
+| Part | Rule |
+|---|---|
+| Round PR body | One sentence: what lands, in which order. A table, one row per branch or PR. One line for an outcome that spans them |
+| Table row | The change, in one line. A decision record is named, not restated |
+| Branch description | Stays in the branch PR. Where a branch has no PR, the row names the branch |
+| Verification | Stays in the branch PRs. CI runs on the round PR |
+| Branch PRs, after opening | Closed with a comment: `Included in #N` |
+
+Body:
+```
+Lands #22 to #29 in order. Each row links the full description.
+
+| PR | Change |
+|---|---|
+| #22 | Reference files declare `valid_from`, so history survives a fresh build. ADR 0003 |
+| #23 | Run states are Type 2, and `run_pulse` joins them as-of. ADR 0004 |
+```
+
+crow-archer squashes. With a squash merge, the squash message carries the same table, so each change stays readable in `git log`.
