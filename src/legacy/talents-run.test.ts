@@ -99,6 +99,13 @@ beforeEach(() => {
   // a talent left owned by an earlier test is a talent this one is measuring
   // the base of while it is live.
   for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, 0);
+  // Mode is a module global that persists across tests just as grants do,
+  // and setMode only writes it. Left on 'siege' by an earlier test, re-entering
+  // play here rebuilds the bastion -- towers and all -- under whatever map this
+  // test lays down, and clearArena wipes only the tiles. A leftover tower on the
+  // hero's row then shoots a body a later test parks in open ground (the centre
+  // tower did, against CHARGE THROUGH). Reset it so no test inherits one.
+  g.setMode('brawl');
   g.go('playing');
   g.generateMap('forest');
   // Open ground: a blink refuses a hop with no room, and the storm tests
@@ -2209,4 +2216,32 @@ describe('every rite-earning death reaches a screen that shows the rite', () => 
       expect(rite!.kind).toBe('rite');
     });
   }
+});
+
+describe('a new stage', () => {
+  it('opens with the blink ready, even when the boss fight left it cooling', () => {
+    // Every ladder at its top, so the boss death has nothing to sell and hands
+    // straight to the next stage's title.
+    for (const t of CHAR_TREES.wizard.talents) talents().grant(t.id, t.costs.length);
+    g.spawnBossNow(2);
+    g.go('boss_fight');
+    const ts = g.config().tileSize;
+    const p = g.player() as { x: number; y: number; aimAngle: number };
+    p.x = 6.5 * ts;
+    p.y = 6.5 * ts;
+    p.aimAngle = 0;
+    g.blink();
+    expect(g.wizBlink().cd, 'the blink did not fire').toBeGreaterThan(0);
+
+    const boss = g.boss() as { hp: number; x: number; y: number };
+    boss.hp = 1;
+    g.blast(boss.x, boss.y);
+    stepPast(Math.ceil(1.5 * ONE_SECOND));
+    expect(g.state()).toBe('stage_intro');
+    // The cooldown only runs in play, so the death and the title freeze it.
+    expect(g.wizBlink().cd, 'nothing was left cooling to carry').toBeGreaterThan(0);
+
+    expect(g.dismissIntro()).toBe(true);
+    expect(g.wizBlink().cd).toBe(0);
+  });
 });

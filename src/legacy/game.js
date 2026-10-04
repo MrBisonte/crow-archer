@@ -1302,6 +1302,10 @@ function beginNewLevel() {
   // screen without naming an intro is on the castle's.
   const next = (STAGE_INTROS[pendingIntro] || STAGE_INTROS.castle).next;
   pendingIntro = null;
+  // A new stage starts the blink ready. Its cooldown only runs in play, so a
+  // blink spent late in a boss fight would still be cooling here, frozen
+  // through the death and this title.
+  wizBlinkCD = 0;
   // 'playing' is assigned directly for the reason showStageIntro gives above --
   // transitionTo would call initGame() and wipe the run that just cleared the
   // stage. An entrance is the opposite case: it has a banner to stage, and
@@ -1422,15 +1426,17 @@ function openChooserWhenClear(dt) {
 let chooserWait = 0;
 
 /**
- * Why an ultimate would not fire, in the player's words.
+ * Why an ultimate or the wizard's blink would not fire, in the player's words.
  *
  * One home, because these strings are the only thing standing between a
  * refusal and "the key is broken" -- which is what a playtest called it. Each
- * one names a fix that exists: more arrows, a full meter, somewhere to stand.
+ * one names a fix that exists: more arrows, a full meter, more Focus,
+ * somewhere to stand.
  */
 const BLOCKED = {
   NO_ARROWS: 'NO ARROWS',
   NEEDS_METER: 'NEEDS A FULL METER',
+  NO_FOCUS: 'NOT ENOUGH FOCUS',
   NO_LANDING: 'NOWHERE TO LAND',
   NO_ROOM: 'NO ROOM FOR THE LINE',
   UNPICKED: 'ULTIMATE NOT CHOSEN YET',
@@ -3053,13 +3059,14 @@ function tryWizardBlink() {
   // A hop inside the window is paid for by the first blink and ignores the
   // cooldown the first one started; anything else has to wait it out.
   const chaining = wizBlinkHops > 0 && wizBlinkChainTimer > 0;
+  // Quiet on purpose: the HUD chip is already counting the cooldown down.
   if (!chaining && wizBlinkCD > 0) { events.emit({ type: 'ACTION_BLOCKED' }); return; }
   // The first hop costs Focus; the chained one does not. It is already paid
   // for in skill — a 1.1 s window and a fresh angle to aim — and charging for
   // it twice would make the chain the thing you can never afford, which is the
   // half of the ability with anything to learn in it.
   if (!chaining && inv.focus < CONFIG.wizFocusBlink) {
-    events.emit({ type: 'ACTION_BLOCKED' });
+    events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_FOCUS });
     return;
   }
 
@@ -3070,7 +3077,7 @@ function tryWizardBlink() {
   // than as the wall being solid. A refused hop also costs no chain: the
   // window keeps running and a hop into open ground is still available.
   if (hop.moved < CONFIG.wizBlinkMinDistance) {
-    events.emit({ type: 'ACTION_BLOCKED' });
+    events.emit({ type: 'ACTION_BLOCKED', reason: BLOCKED.NO_LANDING });
     return;
   }
 
