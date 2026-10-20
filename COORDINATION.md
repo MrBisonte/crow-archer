@@ -4,12 +4,12 @@ Every session working this repo owns a row here. Keeping it current is not
 optional and not a courtesy: it is how several branches reach `origin` without
 losing each other's work.
 
-**Current round: `integration/round-13`, cut from `master` at `13994a7`.**
-Round 12 shipped as `v0.3.3` (PR #52): the fifth bastion tower and two blink
-fixes. Round 13 holds the refusal reasons and Alex's three refusal calls. Alex
-play-checked it 10-04 and signed off; its PR tags `v0.3.4`. That branch name is written here once; everything else
-refers to "the current integration branch" so this file is the only thing that
-has to change when a round closes.
+**Current round: `integration/round-14`, cut from `master` at `df58016`.**
+Round 13 shipped as `v0.3.4` (PR #53): the refusal reasons and Alex's three
+refusal calls. Round 14 is open; its first item is
+`fix/satchel-fuse-knight-double-draw`, held for Alex's play-check. That branch
+name is written here once; everything else refers to "the current integration
+branch" so this file is the only thing that has to change when a round closes.
 
 
 **Merger is the coordinating session.** Alex has given it authority to ask any
@@ -59,15 +59,13 @@ is one thing: `origin` stays clean, and `master` above all.
 ## The ledger
 
 `Head` is your branch tip, short SHA. `Base` is `current` if you are cut from
-`master` at `13994a7`, `STALE` otherwise. `In r13` is whether Merger has merged
+`master` at `df58016`, `STALE` otherwise. `In r14` is whether Merger has merged
 you into the integration branch yet. Merger maintains that column, not you.
 
-| Session | Branch | Task | Status | Head | Base | In r13 | Updated | Notes |
+| Session | Branch | Task | Status | Head | Base | In r14 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `Merger` | `integration/round-13` | Assemble round 13; open the PR on Alex's word | `started` | `see tip` | current | n/a | 10-04 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `13994a7` (`v0.3.3`). Folded `fix/refusal-reasons` and `fix/refusal-tuning`. |
-| `Refusals` | `fix/refusal-reasons` | Every refusal outside a HUD chip says why | `finished` | `c5466a8` | `integration/round-12` `8646cf2` | **yes** | 10-04 | Session `local_aa25de04`, started by Merger. Cut from `integration/round-12` `f7b98bd` for `watchBlocked()`, rebased onto `8646cf2`. Checkout `labs/robinhood-refusal-reasons`. Ten bare refusals now carry a `BLOCKED` reason; the nine that a HUD chip counts stay quiet. New reasons: `NO BOMBS`, `NO ROOM AHEAD`, `NO TARGET IN RANGE`, `TOO MANY SHOTS IN THE AIR`, `CHARGE NOT READY`, `SPEAR NOT READY`. Each reason line reverted alone fails its own test. Gate: typecheck 0, 2409 tests / 91 files. Round 12 was signed off before this branch, so Merger picks round 12 or 13. Folded into round 13 by cherry-pick: `ee377ab` (code) and `9a5e9cd` (lessons); its two ledger commits targeted round 12's ledger, so this row moved by hand. Alex play-checked it 10-04 and signed off. |
-| `Refusal-calls` | `fix/refusal-tuning` | Alex's three refusal calls: reload, knight charge, spear | `finished` | `5961f9c` | current | **yes** | 10-04 | Session `local_aa25de04`. Cut from `integration/round-13` `bad4873`. Checkout `labs/robinhood-refusal-tuning`. Reload says `RELOADING` once per reload; the knight's charge gets a lane-D chip (new `dash` glyph, sixth slot like the sapper's) and keeps `CHARGE NOT READY`; an early spear press goes silent and `SPEAR NOT READY` is removed. Each changed line reverted alone fails its own test. Gate: typecheck 0, 2411 tests / 91 files. Alex play-checked it 10-04 and signed off. |
-| `Audit-fixes` | `fix/satchel-fuse-knight-double-draw` | Two render bugs from the 10-20 over-engineering audit: the satchel countdown and the knight effects drawn twice | `finished` | `41de458` | `master` `df58016` (`v0.3.4`) | no | 10-20 | Cut from `master` after round 13 shipped. Local only, not pushed. `48a2a16`: the multiplayer satchel counted down from 5 against a 3 s fuse; its countdowns and blast ring now read the sim figures. `41de458`: `drawKnight` drew Whirlwind and the charge dash a second time over the knight-fx painters; the inline copies are removed. Each new test fails against the old code. Gate: typecheck 0, suite green. |
+| `Merger` | `integration/round-14` | Assemble round 14; open the PR on Alex's word | `started` | `see tip` | current | n/a | 10-21 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `df58016` (`v0.3.4`). Folded `fix/satchel-fuse-knight-double-draw`. |
+| `Audit-fixes` | `fix/satchel-fuse-knight-double-draw` | Two render bugs from the 10-20 over-engineering audit: the satchel countdown and the knight effects drawn twice | `finished` | `41de458` | `master` `df58016` (`v0.3.4`) | **yes** | 10-20 | Cut from `master` after round 13 shipped. Local only, not pushed. `48a2a16`: the multiplayer satchel counted down from 5 against a 3 s fuse; its countdowns and blast ring now read the sim figures. `41de458`: `drawKnight` drew Whirlwind and the charge dash a second time over the knight-fx painters; the inline copies are removed. Each new test fails against the old code. Gate: typecheck 0, suite green. Folded into round 14 by merge; gate after the fold: typecheck 0, 2415 of 2415 tests across 92 files. Held for Alex's play-check. |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.
@@ -80,6 +78,10 @@ nothing pays it, and `docs/talents.md` says the same.
 
 ## Landed
 
+- **`v0.3.4`** (`df58016`, PR #53): round 13. A refusal names its reason unless a
+  HUD chip counts it. The crossbow says `RELOADING` once per reload, the knight's
+  charge gets a HUD chip, and an early spear press stays silent. The README names
+  crow-archer as the source of flightdeck's telemetry.
 - **`v0.3.3`** (`13994a7`, PR #52): round 12. The fifth bastion tower, a refused
   blink names its reason, a new stage starts the blink ready, and the
   Integration PR section in the writing standard.
