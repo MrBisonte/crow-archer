@@ -12185,61 +12185,9 @@ function drawKnight() {
   // drops rise with him.
   ctx.save(); ctx.translate(px, py - leapLiftPx()); ctx.scale(f, 1);
 
-  // ── Whirlwind visual (behind player) ────────────────────────────────────
-  if (knightWhirlwindTimer > 0) {
-    const wAlpha  = Math.min(1, knightWhirlwindTimer / 0.4);
-    const fsColor = inv.knightFireSwordTimer > 0;
-    for (let i = 0; i < 3; i++) {
-      const baseA = loopT * 9 + (i / 3) * Math.PI * 2;
-      ctx.save();
-      ctx.globalAlpha = wAlpha * (0.45 + 0.3 * Math.sin(loopT * 14 + i * 2.1));
-      ctx.strokeStyle = fsColor ? '#FF7A1F' : '#A0B8E8';
-      ctx.shadowColor  = fsColor ? '#FF5500' : '#6080C0';
-      ctx.shadowBlur   = 10;
-      ctx.lineWidth    = 3;
-      const r = CONFIG.knightWhirlwindRadius;
-      ctx.beginPath(); ctx.arc(0, 0, r * 0.42, baseA,          baseA + 1.15); ctx.stroke();
-      ctx.beginPath(); ctx.arc(0, 0, r * 0.72, baseA + 0.38,   baseA + 1.55); ctx.stroke();
-      ctx.beginPath(); ctx.arc(0, 0, r * 0.93, baseA + 0.65,   baseA + 1.80); ctx.stroke();
-      ctx.restore();
-    }
-  }
-
   // ── Charge windup: the wedge he is about to sweep, and where it lands him ─
   const telegraph = knightChargeTelegraph();
   if (telegraph) drawKnightChargeTelegraph(ctx, telegraph, f);
-
-  // ── Dash sweep: the blade crossing the arc, left to right, while advancing
-  if (knightDash.timer > 0) {
-    const prog  = 1 - knightDash.timer / CONFIG.knightChargeDashDuration;
-    const heavy = knightDash.frac;
-    // The wedge inKnightArc() is hitting with this instant, drawn at its own
-    // size. It used to be scaled down by how hard the charge was held, which
-    // drew a shorter blade than the one landing the hits.
-    const wedge = knightChargeWedge(knightDash.angle);
-    const ang   = mirrorAngle(wedge.angle, f);
-    const half  = wedge.half;
-    const col   = chargeCommitColour(heavy);
-    const r     = wedge.radius;
-    // Three passes across the arc over the dash, so it reads as repeated swings.
-    const sweep = (prog * 3) % 1;
-    const edge  = ang - half + sweep * half * 2;
-    const ce = Math.cos(edge), se = Math.sin(edge);
-    ctx.save();
-    ctx.strokeStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 10 + 8 * heavy;
-    // Fading wedge behind the blade: where it has already passed this sweep.
-    ctx.globalAlpha = 0.3 * (1 - sweep) + 0.15;
-    ctx.lineWidth = 3 + 3 * heavy;
-    ctx.beginPath(); ctx.arc(0, 0, r * 0.85, ang - half, edge); ctx.stroke();
-    // The blade itself.
-    ctx.globalAlpha = 0.85;
-    ctx.lineWidth = 3 + 2 * heavy;
-    ctx.beginPath();
-    ctx.moveTo(ce * 8, se * 8);
-    ctx.lineTo(ce * r, se * r);
-    ctx.stroke();
-    ctx.restore();
-  }
 
   // Ground shadow. Drawn at the ground rather than at the body: the leap
   // lifts the whole transform, and a shadow that rises with him is the exact
