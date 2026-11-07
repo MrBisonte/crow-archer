@@ -500,6 +500,115 @@ describe('the cavern garrison', () => {
     });
   });
 
+  describe("the knight's spear", () => {
+    /** A knight on cleared ground with an empty field, aimed due +x. */
+    function knightAimedEast(): { x: number; y: number } {
+      g.pick('knight');
+      emptyCavern();
+      clearArena();
+      g.healHero();
+      const p = g.player() as { x: number; y: number };
+      aimAt(p.x + 200, p.y);
+      return p;
+    }
+
+    /** One whole swing. `stepPast`, because a kill freezes the world and eats frames. */
+    function swing(): void {
+      g.shoot();
+      stepPast(Math.ceil(g.config().knightSpearSwingDuration * ONE_SECOND) + 2);
+    }
+
+    it.each([30, 46, 60, 80, 100])('wounds a spearman %i px down the aim line', (px) => {
+      const p = knightAimedEast();
+      const s = place('spearman', p.x + px, p.y);
+      s.heldTimer = 1;
+      swing();
+      expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+
+    // Not parked. It starts past the tip at full thrust, so only its own charge
+    // brings it into reach, and the swing has to catch it on the way through.
+    it('catches a spearman that charges into the swing', () => {
+      const p = knightAimedEast();
+      const s = place('spearman', p.x + 130, p.y);
+      swing();
+      expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+
+    // The shieldman is parked to hold its back to him, and has the hit points to
+    // show the count: a hit on every frame of the swing leaves a corpse.
+    it('lands once in each half of a swing, and again on the next swing', () => {
+      const p = knightAimedEast();
+      const s = place('shieldman', p.x + 60, p.y);
+      s.facing = 0;
+      s.heldTimer = 5; // past both swings: let go, it turns its guard on him
+
+      swing();
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 2);
+      expect((g.bloodlust() as { stacks: number }).stacks, 'a hit banks a stack').toBe(1);
+
+      stepPast(Math.ceil(g.config().knightSpearCooldown * ONE_SECOND) + 2);
+      swing();
+      expect(s.hp).toBe(0);
+      expect(g.soldiers()).not.toContain(s);
+    });
+
+    // What a stale record costs: struck in the first half only, then met again
+    // in the first half of the next swing, which is the same half by name.
+    it('starts each swing afresh for a soldier that left the last one early', () => {
+      const p = knightAimedEast();
+      const s = place('shieldman', p.x + 60, p.y);
+      s.facing = 0;
+      s.heldTimer = 5;
+
+      g.shoot();
+      stepPast(3);
+      expect(s.hp, 'the first half has landed').toBe(SOLDIER_STATS.shieldman.hp - 1);
+
+      s.x = p.x + 300;
+      stepPast(Math.ceil(g.config().knightSpearCooldown * ONE_SECOND) + 2);
+      s.x = p.x + 60;
+      swing();
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 3);
+    });
+
+    it("stops at a shieldman's face, and a blocked swing counts as a miss", () => {
+      const p = knightAimedEast();
+      const s = place('shieldman', p.x + 60, p.y);
+      s.facing = Math.PI;
+      s.heldTimer = 1;
+      let blocked = 0, landed = 0;
+      g.onEvent((e: { type: string }) => {
+        if (e.type === 'SHIELD_BLOCKED') blocked++;
+        if (e.type === 'MELEE_HIT') landed++;
+      });
+
+      swing();
+
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp);
+      expect(blocked, 'one block per half, not one per frame').toBe(2);
+      expect(landed).toBe(0);
+      expect((g.bloodlust() as { stacks: number }).stacks).toBe(0);
+    });
+
+    // 110 px, because the fire sword doubles the reach and the shaft moves out
+    // with it: a body at 60 px is no longer touched by either probe.
+    it.each([
+      { side: 'back', facing: 0, fires: true },
+      { side: 'guard', facing: Math.PI, fires: false },
+    ])('with the fire sword, a thrust at its $side lights a fire: $fires', ({ facing, fires }) => {
+      const p = knightAimedEast();
+      const s = place('shieldman', p.x + 110, p.y);
+      s.facing = facing;
+      s.heldTimer = 1;
+      (g.inv() as { knightFireSwordTimer: number }).knightFireSwordTimer = 8;
+
+      swing();
+
+      expect((g.fires() as unknown[]).length > 0).toBe(fires);
+    });
+  });
+
   it('sends a spearman into a committed charge once the player is close', () => {
     emptyCavern();
     const player = g.player() as { x: number; y: number };

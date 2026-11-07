@@ -1972,6 +1972,8 @@ let knightBloodlust = 0;
  * now" would empty the stacks on a swing that plainly connected.
  */
 let knightSpearConnected = false;
+/** The half of the swing in progress that each soldier was last struck in. */
+const knightSpearStruck = new Map();
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
 /**
  * The crack in flight, or null. One at a time: it is an ultimate, and a
@@ -5678,10 +5680,11 @@ function updatePlayer(dt) {
     const midX  = player.x + Math.cos(ang) * tipDist * 0.6;
     const midY  = player.y + Math.sin(ang) * tipDist * 0.6;
     const hitR2 = 22 * 22;
+    const inReach = (e) => dist2(tipX, tipY, e.x, e.y) < hitR2 || dist2(midX, midY, e.x, e.y) < hitR2;
 
     for (let j = crows.length - 1; j >= 0; j--) {
       const c = crows[j];
-      if (dist2(tipX, tipY, c.x, c.y) < hitR2 || dist2(midX, midY, c.x, c.y) < hitR2) {
+      if (inReach(c)) {
         if (fsActive) spawnFire(c.x, c.y);
         damageCrow(j);
         knightSpearConnected = true;
@@ -5690,12 +5693,26 @@ function updatePlayer(dt) {
     }
     for (let j = skeletons.length - 1; j >= 0; j--) {
       const s = skeletons[j];
-      if (dist2(tipX, tipY, s.x, s.y) < hitR2 || dist2(midX, midY, s.x, s.y) < hitR2) {
+      if (inReach(s)) {
         if (fsActive) spawnFire(s.x, s.y);
         damageSkeleton(j);
         knightSpearConnected = true;
         events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: fsActive });
       }
+    }
+    // A soldier has hit points, so this cannot be a third copy of the walks
+    // above, which test every frame and rely on the first hit killing. Hit on
+    // all 21 frames, a shieldman dies in 4 and its guard blocks on every one.
+    // One hit per half of the swing per soldier: the double strike the boss
+    // gets. A blocked hit is not a connection, as a shielded boss is not.
+    for (let j = soldiers.length - 1; j >= 0; j--) {
+      const s = soldiers[j];
+      if (!inReach(s) || knightSpearStruck.get(s) === phase2) continue;
+      knightSpearStruck.set(s, phase2);
+      if (!damageSoldier(j, 1, knockFrom(Math.cos(ang), Math.sin(ang)), ang)) continue;
+      if (fsActive) spawnFire(s.x, s.y);
+      knightSpearConnected = true;
+      events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: fsActive });
     }
     // Boss: hit once in first half (phase 1), reset and hit again in second half (phase 2)
     const canHitBoss = bossInPlay() && !boss.shield &&
@@ -5981,6 +5998,7 @@ function tryKnightAttack() {
   // landed on the first swing of a run and never again.
   knightSpearPhase2Hit = false;
   knightSpearConnected = false;
+  knightSpearStruck.clear();
   events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
 }
 
