@@ -500,17 +500,49 @@ describe('the cavern garrison', () => {
     });
   });
 
-  describe("the knight's spear", () => {
-    /** A knight on cleared ground with an empty field, aimed due +x. */
-    function knightAimedEast(): { x: number; y: number } {
-      g.pick('knight');
-      emptyCavern();
-      clearArena();
-      g.healHero();
-      const p = g.player() as { x: number; y: number };
-      aimAt(p.x + 200, p.y);
-      return p;
+  type Soldier = ReturnType<typeof place>;
+
+  /** A hero on cleared ground with an empty field, aimed due +x. */
+  function aimedEast(hero: string): { x: number; y: number } {
+    g.pick(hero);
+    emptyCavern();
+    clearArena();
+    g.healHero();
+    const p = g.player() as { x: number; y: number };
+    aimAt(p.x + 200, p.y);
+    return p;
+  }
+
+  /**
+   * Steps `frames` frames of simulation with the soldier put back on `spot()`
+   * and `facing` before every one. Pinned, because a free spearman charges into
+   * contact, a free shieldman turns its guard on the hero, and a dash carries
+   * the hero past a soldier that only stands still. Frames of hitstop are
+   * waited out, as `stepPast` does, so `frames` counts the world moving.
+   */
+  function stepPinned(
+    s: { x: number; y: number; facing: number },
+    spot: () => { x: number; y: number },
+    facing: number,
+    frames: number,
+  ): void {
+    for (let i = 0; i < frames; i++) {
+      while (g.hitstop() > 0) g.stepSim(1);
+      const at = spot();
+      s.x = at.x; s.y = at.y; s.facing = facing;
+      g.stepSim(1);
     }
+  }
+
+  /** Counts the events of each named type from here on. */
+  function countEvents(...types: string[]): Record<string, number> {
+    const seen: Record<string, number> = Object.fromEntries(types.map((t) => [t, 0]));
+    g.onEvent((e: { type: string }) => { if (e.type in seen) seen[e.type] = (seen[e.type] ?? 0) + 1; });
+    return seen;
+  }
+
+  describe("the knight's spear", () => {
+    const knightAimedEast = (): { x: number; y: number } => aimedEast('knight');
 
     /** One whole swing. `stepPast`, because a kill freezes the world and eats frames. */
     function swing(): void {
@@ -606,6 +638,170 @@ describe('the cavern garrison', () => {
       swing();
 
       expect((g.fires() as unknown[]).length > 0).toBe(fires);
+    });
+  });
+
+  // The spear's walk was not the only one written before the garrison arrived.
+  // Each of the three below dealt a soldier 0 where it killed a skeleton.
+  describe("the knight's charge", () => {
+    /** One whole dash due +x, with `s` pinned 40 px ahead of him throughout. */
+    function dashInto(p: { x: number; y: number }, s: Soldier, facing: number): void {
+      const ahead = (): { x: number; y: number } => ({ x: p.x + 40, y: p.y });
+      g.shift();
+      stepPinned(s, ahead, facing, 2); // the windup reads the pointer
+      g.shiftUp();
+      expect(g.knightCharge().dashing).toBe(true);
+      stepPinned(s, ahead, facing, 2 * ONE_SECOND);
+      expect(g.knightCharge().dashing).toBe(false);
+    }
+
+    // Free: it charges him as he winds up, and the dash has to meet it.
+    it('wounds a spearman in its path', () => {
+      const p = aimedEast('knight');
+      const s = place('spearman', p.x + 50, p.y);
+      g.shift();
+      g.stepSim(2);
+      g.shiftUp();
+      stepPast(2 * ONE_SECOND);
+      expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+
+    // Pinned ahead of him, it sits in the wedge for every sweep of the dash.
+    it('lands once on each soldier per dash, not once per sweep', () => {
+      const p = aimedEast('knight');
+      const s = place('shieldman', p.x + 40, p.y);
+      const seen = countEvents('MELEE_HIT');
+      dashInto(p, s, 0); // its back to him
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 1);
+      expect(seen.MELEE_HIT).toBe(1);
+    });
+
+    it("stops at a shieldman's face, once per dash", () => {
+      const p = aimedEast('knight');
+      const s = place('shieldman', p.x + 40, p.y);
+      const seen = countEvents('SHIELD_BLOCKED', 'MELEE_HIT');
+      dashInto(p, s, Math.PI);
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp);
+      expect(seen.SHIELD_BLOCKED, 'one block per dash, not one per sweep').toBe(1);
+      expect(seen.MELEE_HIT).toBe(0);
+    });
+
+    it('starts each dash afresh', () => {
+      const p = aimedEast('knight');
+      const home = { x: p.x, y: p.y };
+      const s = place('shieldman', p.x + 40, p.y);
+      dashInto(p, s, 0);
+      stepPinned(s, () => ({ x: p.x + 40, y: p.y }), 0,
+        Math.ceil(g.config().knightChargeCooldown * ONE_SECOND) + 2);
+      // Back to the start, so the second dash has the same open ground.
+      p.x = home.x; p.y = home.y;
+      dashInto(p, s, 0);
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 2);
+    });
+  });
+
+  describe("the knight's javelin", () => {
+    /** A knight aimed due +x with one javelin stocked, so the press throws it. */
+    function armed(): { x: number; y: number } {
+      const p = aimedEast('knight');
+      (g.inv() as { knightJavelins: number }).knightJavelins = 1;
+      return p;
+    }
+
+    it('wounds a spearman coming at him', () => {
+      const p = armed();
+      const s = place('spearman', p.x + 100, p.y);
+      g.shoot();
+      stepPast(30);
+      expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+
+    // It takes the javelin two or three frames to pass a body. Hit on each, the
+    // first soldier spends the whole pierce budget and the second is never reached.
+    it('wounds each soldier once on its way through, as many as it pierces', () => {
+      const p = armed();
+      const pierce = g.config().knightJavelinPierce;
+      const line = Array.from({ length: pierce + 1 }, (_, k) => {
+        const s = place('spearman', p.x + 80 + 60 * k, p.y);
+        s.heldTimer = 5;
+        return s;
+      });
+      const seen = countEvents('JAVELIN_BOUNCE');
+      g.shoot();
+      stepPast(60);
+      const { hp } = SOLDIER_STATS.spearman;
+      expect(line.map((s) => s.hp)).toEqual([...Array<number>(pierce).fill(hp - 1), hp]);
+      expect(seen.JAVELIN_BOUNCE).toBe(pierce);
+    });
+
+    it("stops at a shieldman's face, once", () => {
+      const p = armed();
+      const s = place('shieldman', p.x + 80, p.y);
+      s.facing = Math.PI;
+      s.heldTimer = 5;
+      const seen = countEvents('SHIELD_BLOCKED', 'JAVELIN_BOUNCE');
+      g.shoot();
+      stepPast(30);
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp);
+      expect(seen.SHIELD_BLOCKED, 'one block, not one per frame').toBe(1);
+      expect(seen.JAVELIN_BOUNCE).toBe(0);
+    });
+  });
+
+  // The pitchfork the quiver heroes swing on an empty pool, and the wizard's
+  // broom, which is the same swing.
+  describe('the fallback melee', () => {
+    const POOLS = { archer: ['arrows', 'fireArrows', 'ricochetArrows'], wizard: ['focus'] } as const;
+
+    /** Empties the hero's pool and presses, so the press swings the fallback. */
+    function dryPress(hero: keyof typeof POOLS): void {
+      const inv = g.inv() as Record<string, number>;
+      for (const k of POOLS[hero]) inv[k] = 0;
+      g.shoot();
+    }
+
+    /** One whole swing, with `s` pinned 30 px ahead of the hero. */
+    function swingAt(hero: keyof typeof POOLS, p: { x: number; y: number }, s: Soldier, facing: number): void {
+      dryPress(hero);
+      stepPinned(s, () => ({ x: p.x + 30, y: p.y }), facing,
+        Math.ceil(g.config().pitchforkSwingDuration * ONE_SECOND) + 2);
+    }
+
+    it.each(['archer', 'wizard'] as const)('the %s wounds a spearman beside the hero', (hero) => {
+      const p = aimedEast(hero);
+      const s = place('spearman', p.x + 30, p.y);
+      swingAt(hero, p, s, 0);
+      expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+
+    // The strike runs for eight frames and tests every body on each of them.
+    it('lands once on each soldier per swing', () => {
+      const p = aimedEast('archer');
+      const s = place('shieldman', p.x + 30, p.y);
+      const seen = countEvents('MELEE_HIT');
+      swingAt('archer', p, s, 0); // its back to the hero
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 1);
+      expect(seen.MELEE_HIT).toBe(1);
+    });
+
+    it("stops at a shieldman's face, once per swing", () => {
+      const p = aimedEast('archer');
+      const s = place('shieldman', p.x + 30, p.y);
+      const seen = countEvents('SHIELD_BLOCKED', 'MELEE_HIT');
+      swingAt('archer', p, s, Math.PI);
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp);
+      expect(seen.SHIELD_BLOCKED, 'one block per swing, not one per frame').toBe(1);
+      expect(seen.MELEE_HIT).toBe(0);
+    });
+
+    it('starts each swing afresh', () => {
+      const p = aimedEast('archer');
+      const s = place('shieldman', p.x + 30, p.y);
+      swingAt('archer', p, s, 0);
+      stepPinned(s, () => ({ x: p.x + 30, y: p.y }), 0,
+        Math.ceil(g.config().pitchforkCooldown * ONE_SECOND) + 2);
+      swingAt('archer', p, s, 0);
+      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 2);
     });
   });
 
