@@ -38,11 +38,7 @@ export const SOLDIER_KINDS: readonly SoldierKind[] = ['spearman', 'shieldman', '
  * outranges everything, and the spearman sits between them and closes.
  */
 export const SOLDIER_STATS: Record<SoldierKind, {
-  /**
-   * Hit points. A hit takes its full damage off, except on a shieldman: its
-   * shield keeps `shieldmanDamageCut` (game.js) of every hit its guard does
-   * not stop.
-   */
+  /** Arrows to put it down. */
   readonly hp: number;
   /** Walking speed in pixels per second. */
   readonly speed: number;

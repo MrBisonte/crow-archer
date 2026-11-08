@@ -363,11 +363,10 @@ const CONFIG = {
   // that a wave arriving is something you see coming rather than something
   // that is suddenly beside you.
   soldierSpawnMinDistance: 230, soldierMax: 16, soldierContactReach: 14,
-  // The share of a hit a shieldman's shield keeps when its guard does not stop
-  // the hit: from the flank, from behind, or from a blast with no heading. The
-  // guard still stops a hit at its face outright. At 0.3 a shieldman takes six
-  // one-point hits, not four.
-  shieldmanDamageCut: 0.3,
+  // The chance a shieldman's shield blocks a blow its guard does not stop: one
+  // from the flank or from behind. The guard still stops a blow at its face
+  // every time. A blast or a fire has no heading and is never blocked.
+  shieldmanBlockChance: 0.3,
   // The archer's volley. Slower than an ice skeleton's, because an archer
   // that also outranges you is otherwise the only thing worth answering.
   soldierArcherShotInterval: 2.4, soldierArcherBoltSpeed: 300,
@@ -781,8 +780,7 @@ const CONFIG = {
   // shieldman the archer kills in 0.33 s. Measured rather than estimated —
   // see the time-to-kill test in game.test.ts.
   //
-  // Two, so a spearman falls to one bolt. A shieldman falls to three, because
-  // its shield keeps shieldmanDamageCut of each one. It is the
+  // Two, so a spearman falls to one bolt and a shieldman to two. It is the
   // biggest single hit any hero lands on a body, which is what "hits hardest"
   // has to mean somewhere other than a boss fight, and he still kills slower
   // than the click-limited kits because his rate is what he pays for it.
@@ -7434,24 +7432,28 @@ function fireSoldierArrow(s) {
   events.emit({ type: 'SOLDIER_SHOT', x: s.x, y: s.y });
 }
 
+/** The shieldman's block roll. It reads Math.random when it rolls, so a test
+ * that seeds Math.random seeds this too; `setShieldRng` pins it outright. */
+let shieldRng = () => Math.random();
+
 /**
  * A soldier taking a hit.
  *
  * `heading` is the direction the thing that hit it was travelling, and only
- * the shieldman reads it. Returns whether the hit landed, so a caller can tell
- * a blocked arrow from a spent one. A hit that lands on a shieldman loses
- * `shieldmanDamageCut` of its damage to the shield.
+ * the shieldman reads it: its guard stops a blow at its face, and its shield
+ * blocks any other blow on a roll under `shieldmanBlockChance`. Returns whether
+ * the hit landed, so a caller can tell a blocked arrow from a spent one.
  */
 function damageSoldier(j, amount = 1, knock = null, heading = null) {
   const s = soldiers[j];
   if (!s) return false;
-  if (s.kind === 'shieldman' && heading !== null && shieldStops(s.facing, heading)) {
+  if (s.kind === 'shieldman' && heading !== null
+      && (shieldStops(s.facing, heading) || shieldRng() < CONFIG.shieldmanBlockChance)) {
     s.hitFlash = CONFIG.hitFlashSecs;
     events.emit({ type: 'SHIELD_BLOCKED', x: s.x, y: s.y });
     return false;
   }
-  const shield = s.kind === 'shieldman' ? 1 - CONFIG.shieldmanDamageCut : 1;
-  s.hp -= amount * shield * netHoldMult(s.heldTimer || 0);
+  s.hp -= amount * netHoldMult(s.heldTimer || 0);
   if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return true; }
   killSoldier(j);
   return true;
@@ -17532,8 +17534,10 @@ export const devHooks = {
   state: () => appState,
   soldiers: () => soldiers,
   /** One known hit on one known soldier. A test that has to build a projectile
-   *  to deliver a hit is measuring the projectile as well as the hit. */
-  damageSoldier(j, amount = 1) { return damageSoldier(j, amount); },
+   *  to deliver a hit is measuring the projectile as well as the hit. A
+   *  `heading` reaches the shieldman's guard and block roll; none skips both.
+   *  @param {number} j @param {number} [amount] @param {number | null} [heading] */
+  damageSoldier(j, amount = 1, heading = null) { return damageSoldier(j, amount, null, heading); },
   soldierKills: () => soldierKillCount,
   spawnSoldier(kind) { spawnSoldier(kind); },
   multiplayer: () => multiplayerSession?.describe() ?? null,
@@ -17603,6 +17607,8 @@ export const devHooks = {
   bossDeathSeq: () => bossDeathSeq,
   /** Pins the retinue rolls. Pass null to hand it back to Math.random. */
   setSiegeRng(fn) { siegeRng = fn ?? Math.random; },
+  /** Pins the shieldman's block roll. Pass null to hand it back to Math.random. */
+  setShieldRng(fn) { shieldRng = fn ?? (() => Math.random()); },
   /**
    * Puts both maze keys in hand, so a harness can reach the door without
    * playing the whole level. It grants the keys only — the locks still have to
