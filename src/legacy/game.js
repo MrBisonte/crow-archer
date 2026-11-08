@@ -12773,8 +12773,9 @@ const CROW_SPRITE = { w: 20, h: 16 };
 
 // White is a persistent enemy kind (c.white), not just the entrance's
 // blink-white telegraph — drawCrow below picks this palette for both.
+// The normal crow's rim and highlight are light because its body is as dark as the floor.
 const CROW_PALETTES = {
-  normal: { body: '#141414', bodyHi: '#3A3A3A', feather: '#2A2A2A', edge: '#000000', beak: '#FFB400', beakHi: '#FFD966' },
+  normal: { body: '#141414', bodyHi: '#64708A', feather: '#2A2A2A', edge: '#A8B8CC', beak: '#FFB400', beakHi: '#FFD966' },
   white:  { body: '#E4E4E4', bodyHi: '#FFFFFF', feather: '#C8C8C8', edge: '#A8A8A8', beak: '#FF1F1F', beakHi: '#FF6A5A' },
 };
 
@@ -17631,6 +17632,7 @@ export const devHooks = {
   },
   player: () => player,
   crows: () => crows,
+  crowGrid: (kind, frame) => crowGrid(kind, frame),
   skeletons: () => skeletons,
   mouse: () => mouse,
   /** Where the reticle is drawn, in canvas pixels. */
