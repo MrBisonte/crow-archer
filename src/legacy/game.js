@@ -66,7 +66,7 @@ import { SIGILS } from '../render/talent-sigils';
 import { paintUltimateIcon } from '../render/ultimate-icon-paint';
 import { paintUltimateAura } from '../render/ultimate-aura';
 import {
-  paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
+  beamLine, paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
   paintEarthshatterDebris, paintFullAutoTrail, paintGoldCorridor,
   paintHarpoonChain, paintLeapArc, paintLeapLanding, paintPiercePip,
   paintUltimateBlast, paintUltimateCast, paintUltimateCharge, paintVortex,
@@ -993,7 +993,7 @@ const CONFIG = {
   // a tick rather than per frame so the figure does not change with the frame
   // rate, and the boss takes it once per tick however many samples the line
   // puts on him.
-  wizBeamDuration: 2.0, wizBeamRange: 520, wizBeamWidth: 20,
+  wizBeamDuration: 2.0, wizBeamRange: 520, wizBeamWidth: 20, wizBeamMuzzlePx: 22,
   wizBeamTickRate: 0.12, wizBeamDamage: 6, wizBeamBossPerTick: 0.35,
 
   // THE LEAP. Over walls, which is the whole difference from a blink: he
@@ -8078,8 +8078,7 @@ function drawBeam() {
   // terrain: what is drawn is then exactly what was hit.
   const end = beam.end ?? beamEnd();
   const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
-  const x0 = player.x, y0 = player.y + HH;
-  const x1 = player.x + nx * end.moved, y1 = player.y + ny * end.moved;
+  const { x0, y0, x1, y1 } = beamLine(player.x, player.y + HH, nx, ny, CONFIG.wizBeamMuzzlePx, end.moved);
   ctx.save();
   ctx.lineCap = 'round';
   // Three passes, widest and darkest first: the core reads as hot because
