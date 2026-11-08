@@ -10803,6 +10803,10 @@ const FORESHADOW = (() => {
 })();
 
 // ── STREAK: UT99-style multi-kill + spree announcements ───────────────────────
+// The title sits on the border wall and its small line just under it, because a
+// banner over the field covers what can hit you.
+const STREAK_BANNER_Y = CONFIG.hudHeight + 16;
+
 const STREAK = (() => {
   const MULTI_LABELS     = ['','','DOUBLE KILL','MULTI KILL','MEGA KILL','ULTRA KILL','MONSTER KILL'];
   const SPREE_THRESHOLDS = [
@@ -10864,7 +10868,7 @@ const STREAK = (() => {
     const fadeOut = Math.min(1, _overlay.timer / 0.32);
     const alpha   = Math.min(fadeIn, fadeOut);
     const scl     = 0.82 + 0.18 * fadeIn;
-    const cy      = CONFIG.canvasH * 0.38;
+    const cy      = STREAK_BANNER_Y;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -17632,6 +17636,7 @@ export const devHooks = {
   player: () => player,
   crows: () => crows,
   crowGrid: (kind, frame) => crowGrid(kind, frame),
+  streakBannerY: () => STREAK_BANNER_Y,
   skeletons: () => skeletons,
   mouse: () => mouse,
   /** Where the reticle is drawn, in canvas pixels. */

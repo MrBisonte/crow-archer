@@ -61,3 +61,16 @@ describe('the beam leaves the hero visible', () => {
     expect(draw).not.toContain('y1 = player.y + ny');
   });
 });
+
+describe('the streak banner stays off the field', () => {
+  it('sits on the border wall', () => {
+    const c = g.config() as { hudHeight: number; tileSize: number };
+    const y = (g as unknown as { streakBannerY: () => number }).streakBannerY();
+    expect(y).toBeGreaterThanOrEqual(c.hudHeight);
+    expect(y).toBeLessThanOrEqual(c.hudHeight + c.tileSize);
+  });
+
+  it('is the height the banner draws at', () => {
+    expect(source).toMatch(/const cy\s*=\s*STREAK_BANNER_Y;/);
+  });
+});
