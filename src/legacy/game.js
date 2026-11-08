@@ -363,6 +363,10 @@ const CONFIG = {
   // that a wave arriving is something you see coming rather than something
   // that is suddenly beside you.
   soldierSpawnMinDistance: 230, soldierMax: 16, soldierContactReach: 14,
+  // The chance a shieldman's shield blocks a blow its guard does not stop: one
+  // from the flank or from behind. The guard still stops a blow at its face
+  // every time. A blast or a fire has no heading and is never blocked.
+  shieldmanBlockChance: 0.3,
   // The archer's volley. Slower than an ice skeleton's, because an archer
   // that also outranges you is otherwise the only thing worth answering.
   soldierArcherShotInterval: 2.4, soldierArcherBoltSpeed: 300,
@@ -1557,6 +1561,8 @@ let score = 0, wave = 1, gameTime = 0, escalationTimer = 0;
 // The bastion's run, or null on every other map. See the SIEGE section.
 let siegeRun = null, towers = [], guards = [], siegeExtraBosses = [], siegeSpawned = false;
 let pfCooldown = 0, pfSwing = 0, pfBossHit = false, pfHitFlash = false;
+/** The soldiers the fallback swing in progress has met. See firstContact. */
+const pfStruck = new Set();
 let fires = [], floaters = [];   // fires: burning patches; floaters: score popups
 let waveAnnounce = 0;            // countdown timer for wave banner display
 let waveAnnounceText = '';       // what the banner says while it is up
@@ -1972,6 +1978,9 @@ let knightBloodlust = 0;
  * now" would empty the stacks on a swing that plainly connected.
  */
 let knightSpearConnected = false;
+/** The soldiers each half of the swing in progress has met: the first half's,
+ * then the second's. See firstContact. */
+const knightSpearStruck = [new Set(), new Set()];
 let knightWhirlwindCD = 0, knightWhirlwindTimer = 0, knightWhirlwindTick = 0;
 /**
  * The crack in flight, or null. One at a time: it is an ultimate, and a
@@ -2035,7 +2044,7 @@ let knightBlockCD = 0;
 // knightWhirlwindTick paces the whirlwind's.
 let knightCharge = { on: false, t0: 0 };
 // No separate active flag: `timer > 0` is the live check, matching whirlwind.
-let knightDash = { timer: 0, frac: 0, angle: 0, bossHit: false };
+let knightDash = { timer: 0, frac: 0, angle: 0, bossHit: false, struck: new Set() };
 let knightChargeTick = 0, knightChargeCD = 0;
 
 // Inventory — all resource counts live here, keyed by CONFIG.resources
@@ -4032,6 +4041,7 @@ function releaseKnightCharge() {
   // queueing a dash that fires the moment play resumes.
   if (!inGame()) return;
   knightDash.bossHit = false;
+  knightDash.struck.clear();
   knightDash.chained = false;
   knightChainTimer   = CONFIG.shiftChainSecs;
   knightDash.timer   = CONFIG.knightChargeDashDuration;
@@ -5630,27 +5640,26 @@ function updatePlayer(dt) {
     // Strike phase: continuously hit every crow within range every frame (no angular check)
     if (prog >= 0.28 && prog < 0.62) {
       const r2 = FEATHERS.pfRange() ** 2;
+      // One spark at the tip per swing, whatever it lands on.
+      const flashOnce = () => {
+        if (pfHitFlash) return;
+        pfHitFlash = true;
+        const tipX = player.x + Math.cos(player.aimAngle) * 44;
+        const tipY = player.y + Math.sin(player.aimAngle) * 44;
+        events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: pfKind, fire: false });
+      };
       for (let j = crows.length - 1; j >= 0; j--) {
-        if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) {
-          damageCrow(j);
-          if (!pfHitFlash) {
-            pfHitFlash = true;
-            const tipX = player.x + Math.cos(player.aimAngle) * 44;
-            const tipY = player.y + Math.sin(player.aimAngle) * 44;
-            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: pfKind, fire: false });
-          }
-        }
+        if (dist2(player.x, player.y, crows[j].x, crows[j].y) < r2) { damageCrow(j); flashOnce(); }
       }
       for (let j = skeletons.length - 1; j >= 0; j--) {
-        if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) {
-          damageSkeleton(j);
-          if (!pfHitFlash) {
-            pfHitFlash = true;
-            const tipX = player.x + Math.cos(player.aimAngle) * 44;
-            const tipY = player.y + Math.sin(player.aimAngle) * 44;
-            events.emit({ type: 'MELEE_HIT', x: tipX, y: tipY, kind: pfKind, fire: false });
-          }
-        }
+        if (dist2(player.x, player.y, skeletons[j].x, skeletons[j].y) < r2) { damageSkeleton(j); flashOnce(); }
+      }
+      // Soldiers once per swing each, as the boss below: the strike runs for
+      // eight frames and has no angle, so a guard judges the line from the hero.
+      for (let j = soldiers.length - 1; j >= 0; j--) {
+        const s = soldiers[j];
+        if (dist2(player.x, player.y, s.x, s.y) >= r2 || !firstContact(pfStruck, s)) continue;
+        if (damageSoldier(j, 1, null, headingFromHero(s.x, s.y))) flashOnce();
       }
       if (!pfBossHit && bossInPlay() && !boss.shield &&
           dist2(player.x, player.y, boss.x, boss.y) < r2) {
@@ -5678,10 +5687,11 @@ function updatePlayer(dt) {
     const midX  = player.x + Math.cos(ang) * tipDist * 0.6;
     const midY  = player.y + Math.sin(ang) * tipDist * 0.6;
     const hitR2 = 22 * 22;
+    const inReach = (e) => dist2(tipX, tipY, e.x, e.y) < hitR2 || dist2(midX, midY, e.x, e.y) < hitR2;
 
     for (let j = crows.length - 1; j >= 0; j--) {
       const c = crows[j];
-      if (dist2(tipX, tipY, c.x, c.y) < hitR2 || dist2(midX, midY, c.x, c.y) < hitR2) {
+      if (inReach(c)) {
         if (fsActive) spawnFire(c.x, c.y);
         damageCrow(j);
         knightSpearConnected = true;
@@ -5690,12 +5700,25 @@ function updatePlayer(dt) {
     }
     for (let j = skeletons.length - 1; j >= 0; j--) {
       const s = skeletons[j];
-      if (dist2(tipX, tipY, s.x, s.y) < hitR2 || dist2(midX, midY, s.x, s.y) < hitR2) {
+      if (inReach(s)) {
         if (fsActive) spawnFire(s.x, s.y);
         damageSkeleton(j);
         knightSpearConnected = true;
         events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: fsActive });
       }
+    }
+    // A soldier has hit points, so this cannot be a third copy of the walks
+    // above, which test every frame and rely on the first hit killing. Hit on
+    // all 21 frames, a shieldman dies in 4 and its guard blocks on every one.
+    // One hit per half of the swing per soldier: the double strike the boss
+    // gets. A blocked hit is not a connection, as a shielded boss is not.
+    for (let j = soldiers.length - 1; j >= 0; j--) {
+      const s = soldiers[j];
+      if (!inReach(s) || !firstContact(knightSpearStruck[phase2 ? 1 : 0], s)) continue;
+      if (!damageSoldier(j, 1, knockFrom(Math.cos(ang), Math.sin(ang)), ang)) continue;
+      if (fsActive) spawnFire(s.x, s.y);
+      knightSpearConnected = true;
+      events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: fsActive });
     }
     // Boss: hit once in first half (phase 1), reset and hit again in second half (phase 2)
     const canHitBoss = bossInPlay() && !boss.shield &&
@@ -5767,6 +5790,14 @@ function updatePlayer(dt) {
             events.emit({ type: 'MELEE_HIT', x: list[j].x, y: list[j].y, kind: 'spear', fire: false });
             damage(j);
           }
+      // Soldiers once per dash each, as the boss below: eight sweeps would
+      // grind a shieldman down, or block eight times at its guard.
+      for (let j = soldiers.length - 1; j >= 0; j--) {
+        const s = soldiers[j];
+        if (!inKnightArc(s.x, s.y) || !firstContact(knightDash.struck, s)) continue;
+        if (!damageSoldier(j, 1, null, headingFromHero(s.x, s.y))) continue;
+        events.emit({ type: 'MELEE_HIT', x: s.x, y: s.y, kind: 'spear', fire: false });
+      }
       // Once per dash, the way a spear swing lands once. The repeat ticks are
       // there to catch enemies he advances into, not to grind the same boss
       // seven times over.
@@ -5941,6 +5972,7 @@ function tryFallbackMelee(kind, empty) {
   pfSwing    = CONFIG.pitchforkSwingDuration;
   pfBossHit  = false;
   pfHitFlash = false;
+  pfStruck.clear();
   events.emit({ type: 'WEAPON_FIRED', kind });
 }
 
@@ -5961,7 +5993,8 @@ function tryKnightAttack() {
       vy: Math.sin(player.aimAngle) * spd,
       life: 2.2, type: 'javelin', bounces: 0, initSpeed: spd,
       ...arrowTrail(0),
-      pierceLeft: CONFIG.knightJavelinPierce
+      pierceLeft: CONFIG.knightJavelinPierce,
+      struck: new WeakSet()   // the soldiers it has met; see firstContact
     });
     events.emit({ type: 'WEAPON_FIRED', kind: 'javelin' });
     return;
@@ -5981,6 +6014,7 @@ function tryKnightAttack() {
   // landed on the first swing of a run and never again.
   knightSpearPhase2Hit = false;
   knightSpearConnected = false;
+  for (const half of knightSpearStruck) half.clear();
   events.emit({ type: 'WEAPON_FIRED', kind: 'spear' });
 }
 
@@ -6793,6 +6827,18 @@ function updateArrows(dt) {
           }
         }
       }
+      // Soldiers once each: one stays under the javelin for the two or three
+      // frames it takes to pass. A guard spends a body of the budget too, as
+      // it does an arrow's in spendArrowPierce.
+      if (a.pierceLeft > 0) {
+        for (let j = soldiers.length - 1; j >= 0; j--) {
+          const s = soldiers[j];
+          if (dist2(a.x, a.y, s.x, s.y) >= CONFIG.arrowHitRadius ** 2 || !firstContact(a.struck, s)) continue;
+          if (damageSoldier(j, 1, knockFrom(a.vx, a.vy), Math.atan2(a.vy, a.vx)))
+            events.emit({ type: 'JAVELIN_BOUNCE', x: a.x, y: a.y });
+          if (--a.pierceLeft <= 0) { arrows.splice(i, 1); break; }
+        }
+      }
       continue;
     }
 
@@ -7386,17 +7432,23 @@ function fireSoldierArrow(s) {
   events.emit({ type: 'SOLDIER_SHOT', x: s.x, y: s.y });
 }
 
+/** The shieldman's block roll. It reads Math.random when it rolls, so a test
+ * that seeds Math.random seeds this too; `setShieldRng` pins it outright. */
+let shieldRng = () => Math.random();
+
 /**
  * A soldier taking a hit.
  *
  * `heading` is the direction the thing that hit it was travelling, and only
- * the shieldman reads it. Returns whether the hit landed, so a caller can tell
- * a blocked arrow from a spent one.
+ * the shieldman reads it: its guard stops a blow at its face, and its shield
+ * blocks any other blow on a roll under `shieldmanBlockChance`. Returns whether
+ * the hit landed, so a caller can tell a blocked arrow from a spent one.
  */
 function damageSoldier(j, amount = 1, knock = null, heading = null) {
   const s = soldiers[j];
   if (!s) return false;
-  if (s.kind === 'shieldman' && heading !== null && shieldStops(s.facing, heading)) {
+  if (s.kind === 'shieldman' && heading !== null
+      && (shieldStops(s.facing, heading) || shieldRng() < CONFIG.shieldmanBlockChance)) {
     s.hitFlash = CONFIG.hitFlashSecs;
     events.emit({ type: 'SHIELD_BLOCKED', x: s.x, y: s.y });
     return false;
@@ -7405,6 +7457,28 @@ function damageSoldier(j, amount = 1, knock = null, heading = null) {
   if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return true; }
   killSoldier(j);
   return true;
+}
+
+/**
+ * Whether this is the first time the blow that owns `struck` has met `body`,
+ * recording the meeting if it is.
+ *
+ * The knight's spear, his charge, his javelin and the fallback melee test every
+ * body on every frame or tick it is in reach. Against a body that dies to its
+ * first hit that is one hit. A soldier has hit points, so it would be one hit
+ * per frame, and one SHIELD_BLOCKED per frame from a shieldman's guard. A
+ * blocked meeting counts: a stopped blow does not try again a frame later.
+ */
+function firstContact(struck, body) {
+  if (struck.has(body)) return false;
+  struck.add(body);
+  return true;
+}
+
+/** The direction from the hero to (x, y): the heading of a blow that sweeps
+ * round him rather than down his aim, for a shieldman's guard to judge. */
+function headingFromHero(x, y) {
+  return Math.atan2(y - player.y, x - player.x);
 }
 
 function killSoldier(j) {
@@ -17408,8 +17482,10 @@ export const devHooks = {
   state: () => appState,
   soldiers: () => soldiers,
   /** One known hit on one known soldier. A test that has to build a projectile
-   *  to deliver a hit is measuring the projectile as well as the hit. */
-  damageSoldier(j, amount = 1) { return damageSoldier(j, amount); },
+   *  to deliver a hit is measuring the projectile as well as the hit. A
+   *  `heading` reaches the shieldman's guard and block roll; none skips both.
+   *  @param {number} j @param {number} [amount] @param {number | null} [heading] */
+  damageSoldier(j, amount = 1, heading = null) { return damageSoldier(j, amount, null, heading); },
   soldierKills: () => soldierKillCount,
   spawnSoldier(kind) { spawnSoldier(kind); },
   multiplayer: () => multiplayerSession?.describe() ?? null,
@@ -17479,6 +17555,8 @@ export const devHooks = {
   bossDeathSeq: () => bossDeathSeq,
   /** Pins the retinue rolls. Pass null to hand it back to Math.random. */
   setSiegeRng(fn) { siegeRng = fn ?? Math.random; },
+  /** Pins the shieldman's block roll. Pass null to hand it back to Math.random. */
+  setShieldRng(fn) { shieldRng = fn ?? (() => Math.random()); },
   /**
    * Puts both maze keys in hand, so a harness can reach the door without
    * playing the whole level. It grants the keys only — the locks still have to
