@@ -431,6 +431,11 @@ describe('the cavern garrison', () => {
     return s;
   }
 
+  /** What `hits` one-point hits past its guard take off a shieldman. */
+  function shieldBlow(hits: number): number {
+    return hits * (1 - g.config().shieldmanDamageCut);
+  }
+
   it('musters wave 1 of its own table on arrival, and no crows', () => {
     g.pickMap('cavern');
     g.go('playing');
@@ -497,6 +502,42 @@ describe('the cavern garrison', () => {
       });
       g.stepSim(1);
       expect(s.hp).toBeLessThan(SOLDIER_STATS.spearman.hp);
+    });
+
+    // The guard stops a blow at its face. Anything else still meets the shield,
+    // so more attacks landing on the garrison does not make it soft.
+    it('keeps at least 30% of every hit its guard does not stop', () => {
+      expect(g.config().shieldmanDamageCut).toBeGreaterThanOrEqual(0.3);
+    });
+
+    // A player's arrow is worth one.
+    it('takes the rest of an arrow from the flank', () => {
+      const shot = shootAt(Math.PI / 2);
+      expect(shot.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(1));
+    });
+
+    // Headingless, as the whirlwind's and the fire's are: no guard to beat, and
+    // the shield still keeps its share.
+    it('takes the rest of a hit with no heading, and the other kinds take all of it', () => {
+      emptyCavern();
+      const shield = place('shieldman', 400, 300);
+      const spear = place('spearman', 500, 300);
+      g.damageSoldier(g.soldiers().indexOf(shield), 1);
+      g.damageSoldier(g.soldiers().indexOf(spear), 1);
+      expect(shield.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(1));
+      expect(spear.hp).toBe(SOLDIER_STATS.spearman.hp - 1);
+    });
+
+    it('falls to no fewer than six one-point hits, where it took four', () => {
+      emptyCavern();
+      const s = place('shieldman', 400, 300);
+      let hits = 0;
+      while (g.soldiers().includes(s) && hits < 20) {
+        g.damageSoldier(g.soldiers().indexOf(s), 1);
+        hits++;
+      }
+      expect(hits).toBeGreaterThanOrEqual(6);
+      expect(hits, 'it never fell').toBeLessThan(20);
     });
   });
 
@@ -576,13 +617,12 @@ describe('the cavern garrison', () => {
       s.heldTimer = 5; // past both swings: let go, it turns its guard on him
 
       swing();
-      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 2);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(2));
       expect((g.bloodlust() as { stacks: number }).stacks, 'a hit banks a stack').toBe(1);
 
       stepPast(Math.ceil(g.config().knightSpearCooldown * ONE_SECOND) + 2);
       swing();
-      expect(s.hp).toBe(0);
-      expect(g.soldiers()).not.toContain(s);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(4));
     });
 
     // What a stale record costs: struck in the first half only, then met again
@@ -595,13 +635,13 @@ describe('the cavern garrison', () => {
 
       g.shoot();
       stepPast(3);
-      expect(s.hp, 'the first half has landed').toBe(SOLDIER_STATS.shieldman.hp - 1);
+      expect(s.hp, 'the first half has landed').toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(1));
 
       s.x = p.x + 300;
       stepPast(Math.ceil(g.config().knightSpearCooldown * ONE_SECOND) + 2);
       s.x = p.x + 60;
       swing();
-      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 3);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(3));
     });
 
     it("stops at a shieldman's face, and a blocked swing counts as a miss", () => {
@@ -672,7 +712,7 @@ describe('the cavern garrison', () => {
       const s = place('shieldman', p.x + 40, p.y);
       const seen = countEvents('MELEE_HIT');
       dashInto(p, s, 0); // its back to him
-      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 1);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(1));
       expect(seen.MELEE_HIT).toBe(1);
     });
 
@@ -696,7 +736,7 @@ describe('the cavern garrison', () => {
       // Back to the start, so the second dash has the same open ground.
       p.x = home.x; p.y = home.y;
       dashInto(p, s, 0);
-      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 2);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(2));
     });
   });
 
@@ -780,7 +820,7 @@ describe('the cavern garrison', () => {
       const s = place('shieldman', p.x + 30, p.y);
       const seen = countEvents('MELEE_HIT');
       swingAt('archer', p, s, 0); // its back to the hero
-      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 1);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(1));
       expect(seen.MELEE_HIT).toBe(1);
     });
 
@@ -801,7 +841,7 @@ describe('the cavern garrison', () => {
       stepPinned(s, () => ({ x: p.x + 30, y: p.y }), 0,
         Math.ceil(g.config().pitchforkCooldown * ONE_SECOND) + 2);
       swingAt('archer', p, s, 0);
-      expect(s.hp).toBe(SOLDIER_STATS.shieldman.hp - 2);
+      expect(s.hp).toBeCloseTo(SOLDIER_STATS.shieldman.hp - shieldBlow(2));
     });
   });
 
@@ -4654,10 +4694,11 @@ describe('time to kill a body', () => {
     return null;
   }
 
-  // The regression this exists for. One bolt to a spearman and two to a
-  // shieldman is the whole of `wizBoltBodyDamage`; at 1 it was two and four,
-  // and a shieldman took the better part of four seconds.
-  it('kills a spearman with one wizard bolt and a shieldman with two', () => {
+  // The regression this exists for. One bolt to a spearman is the whole of
+  // `wizBoltBodyDamage`; at 1 it was two, and a shieldman took four and the
+  // better part of four seconds. A shieldman takes three: its shield keeps
+  // `shieldmanDamageCut` of each bolt, so two leave it standing.
+  it('kills a spearman with one wizard bolt and a shieldman with three', () => {
     const c = g.config();
     const spearman = secondsToKill('wizard', 'spearman');
     const shieldman = secondsToKill('wizard', 'shieldman');
@@ -4668,8 +4709,8 @@ describe('time to kill a body', () => {
     // bolts is under (n-1) cooldowns plus a frame of travel, and asserting the
     // count this way survives a change to the cooldown itself.
     expect(spearman!).toBeLessThan(c.wizBoltCooldown);
-    expect(shieldman!).toBeLessThan(c.wizBoltCooldown * 2);
-    expect(shieldman!).toBeGreaterThan(c.wizBoltCooldown * 0.5);
+    expect(shieldman!).toBeLessThan(c.wizBoltCooldown * 3);
+    expect(shieldman!).toBeGreaterThan(c.wizBoltCooldown * 1.5);
   });
 
   // Stated as a ratio, because the absolute figures are a property of the

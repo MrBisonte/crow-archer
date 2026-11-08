@@ -363,6 +363,11 @@ const CONFIG = {
   // that a wave arriving is something you see coming rather than something
   // that is suddenly beside you.
   soldierSpawnMinDistance: 230, soldierMax: 16, soldierContactReach: 14,
+  // The share of a hit a shieldman's shield keeps when its guard does not stop
+  // the hit: from the flank, from behind, or from a blast with no heading. The
+  // guard still stops a hit at its face outright. At 0.3 a shieldman takes six
+  // one-point hits, not four.
+  shieldmanDamageCut: 0.3,
   // The archer's volley. Slower than an ice skeleton's, because an archer
   // that also outranges you is otherwise the only thing worth answering.
   soldierArcherShotInterval: 2.4, soldierArcherBoltSpeed: 300,
@@ -776,7 +781,8 @@ const CONFIG = {
   // shieldman the archer kills in 0.33 s. Measured rather than estimated —
   // see the time-to-kill test in game.test.ts.
   //
-  // Two, so a spearman falls to one bolt and a shieldman to two. It is the
+  // Two, so a spearman falls to one bolt. A shieldman falls to three, because
+  // its shield keeps shieldmanDamageCut of each one. It is the
   // biggest single hit any hero lands on a body, which is what "hits hardest"
   // has to mean somewhere other than a boss fight, and he still kills slower
   // than the click-limited kits because his rate is what he pays for it.
@@ -7433,7 +7439,8 @@ function fireSoldierArrow(s) {
  *
  * `heading` is the direction the thing that hit it was travelling, and only
  * the shieldman reads it. Returns whether the hit landed, so a caller can tell
- * a blocked arrow from a spent one.
+ * a blocked arrow from a spent one. A hit that lands on a shieldman loses
+ * `shieldmanDamageCut` of its damage to the shield.
  */
 function damageSoldier(j, amount = 1, knock = null, heading = null) {
   const s = soldiers[j];
@@ -7443,7 +7450,8 @@ function damageSoldier(j, amount = 1, knock = null, heading = null) {
     events.emit({ type: 'SHIELD_BLOCKED', x: s.x, y: s.y });
     return false;
   }
-  s.hp -= amount * netHoldMult(s.heldTimer || 0);
+  const shield = s.kind === 'shieldman' ? 1 - CONFIG.shieldmanDamageCut : 1;
+  s.hp -= amount * shield * netHoldMult(s.heldTimer || 0);
   if (s.hp > 0) { s.hitFlash = CONFIG.hitFlashSecs; s.knock = knock; return true; }
   killSoldier(j);
   return true;
