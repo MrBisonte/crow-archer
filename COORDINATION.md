@@ -6,11 +6,11 @@ losing each other's work.
 
 **Current round: `integration/round-14`, cut from `master` at `df58016`.**
 Round 13 shipped as `v0.3.4` (PR #53): the refusal reasons and Alex's three
-refusal calls. Round 14 is open and holds `fix/satchel-fuse-knight-double-draw` and
-`fix/knight-spear-soldiers`, both waiting on Alex's play-check. The integration
-branch's name is written here once; everything else refers to "the current
-integration branch" so this file is the only thing that has to change when a
-round closes.
+refusal calls. Round 14 is open and holds `fix/satchel-fuse-knight-double-draw`,
+`fix/knight-spear-soldiers` and `fix/visual-read`, all waiting on Alex's
+play-check. The integration branch's name is written here once; everything else
+refers to "the current integration branch" so this file is the only thing that
+has to change when a round closes.
 
 
 **Merger is the coordinating session.** Alex has given it authority to ask any
@@ -65,9 +65,10 @@ you into the integration branch yet. Merger maintains that column, not you.
 
 | Session | Branch | Task | Status | Head | Base | In r14 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `Merger` | `integration/round-14` | Assemble round 14; open the PR on Alex's word | `started` | `see tip` | current | n/a | 11-08 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `df58016` (`v0.3.4`). Folded `fix/satchel-fuse-knight-double-draw` and `fix/knight-spear-soldiers`. |
+| `Merger` | `integration/round-14` | Assemble round 14; open the PR on Alex's word | `started` | `see tip` | current | n/a | 11-08 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `df58016` (`v0.3.4`). Folded `fix/satchel-fuse-knight-double-draw`, `fix/knight-spear-soldiers` and `fix/visual-read`. |
 | `Audit-fixes` | `fix/satchel-fuse-knight-double-draw` | Two render bugs from the 10-20 over-engineering audit: the satchel countdown and the knight effects drawn twice | `finished` | `41de458` | `master` `df58016` (`v0.3.4`) | **yes** | 10-20 | Cut from `master` after round 13 shipped. Local only, not pushed. `48a2a16`: the multiplayer satchel counted down from 5 against a 3 s fuse; its countdowns and blast ring now read the sim figures. `41de458`: `drawKnight` drew Whirlwind and the charge dash a second time over the knight-fx painters; the inline copies are removed. Each new test fails against the old code. Gate: typecheck 0, suite green. Folded into round 14 by merge; gate after the fold: typecheck 0, 2415 of 2415 tests across 92 files. Held for Alex's play-check. |
 | `Spear-soldiers` | `fix/knight-spear-soldiers` | The knight's spear swing damages soldiers; then the charge, the javelin and the fallback melee; then the shieldman's 30% shield | `finished` | `225c3c5` | `master` `df58016` (`v0.3.4`) | **yes** | 11-08 | Started by session `local_52554b4c`. Extended on Alex's word to the charge dash, the javelin and the pitchfork/broom, which also dealt soldiers 0, and then to "their shields should block 30%+ of normal damage", settled as "30% chance to block". Checkout `labs/robinhood-spear-soldiers`. Spear: one hit per half of the swing per soldier. Charge, javelin, fallback swing: one hit per attack per soldier, through `firstContact`. Every soldier hit carries a heading to the shieldman's guard. A blow with a heading that the guard does not stop is blocked on a roll under `shieldmanBlockChance` 0.3, for every hero; a blast or fire with no heading never is. `225c3c5` replaces the damage cut of `ea48386`. Each fix line reverted alone fails a test (18 + 6 reverts). Gate: typecheck 0, 2438 tests / 91 files, 5 of 5 runs. Folded into round 14 by merge of `7e80e76`; gate after the fold: typecheck 0, 2442 of 2442 tests across 92 files. Held for Alex's play-check: not played in real time. |
+| `Visual-read` | `fix/visual-read` | Three read fixes: the crow rim, the beam line, the streak banner | `finished` | `7f44e71` | `master` `df58016` (`v0.3.4`) | **yes** | 11-08 | Session `local_52554b4c`. Checkout `labs/robinhood-visual-read`. `397c5c6`: the crow rim. `726c5a0`: the lance starts past the wizard and ends on the line it hits. `89898f3`: the streak banner on the border wall. Run once in the browser, with the keys not held. typecheck 0, 2419 of 2419 tests on the branch. Folded into round 14 by merge of `066b02c`; gate after the fold: typecheck 0, 2450 of 2450 tests across 93 files. Alex chose the three fixes ("F1 F2 and F3"); held for his play-check, because no one has played them by hand. |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.

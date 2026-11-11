@@ -66,7 +66,7 @@ import { SIGILS } from '../render/talent-sigils';
 import { paintUltimateIcon } from '../render/ultimate-icon-paint';
 import { paintUltimateAura } from '../render/ultimate-aura';
 import {
-  paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
+  beamLine, paintArrowRainImpacts, paintArrowRainMark, paintBeamRoots, paintBeamScorch, paintDetCord,
   paintEarthshatterDebris, paintFullAutoTrail, paintGoldCorridor,
   paintHarpoonChain, paintLeapArc, paintLeapLanding, paintPiercePip,
   paintUltimateBlast, paintUltimateCast, paintUltimateCharge, paintVortex,
@@ -997,7 +997,7 @@ const CONFIG = {
   // a tick rather than per frame so the figure does not change with the frame
   // rate, and the boss takes it once per tick however many samples the line
   // puts on him.
-  wizBeamDuration: 2.0, wizBeamRange: 520, wizBeamWidth: 20,
+  wizBeamDuration: 2.0, wizBeamRange: 520, wizBeamWidth: 20, wizBeamMuzzlePx: 22,
   wizBeamTickRate: 0.12, wizBeamDamage: 6, wizBeamBossPerTick: 0.35,
 
   // THE LEAP. Over walls, which is the whole difference from a blink: he
@@ -8152,8 +8152,7 @@ function drawBeam() {
   // terrain: what is drawn is then exactly what was hit.
   const end = beam.end ?? beamEnd();
   const nx = Math.cos(player.aimAngle), ny = Math.sin(player.aimAngle);
-  const x0 = player.x, y0 = player.y + HH;
-  const x1 = player.x + nx * end.moved, y1 = player.y + ny * end.moved;
+  const { x0, y0, x1, y1 } = beamLine(player.x, player.y + HH, nx, ny, CONFIG.wizBeamMuzzlePx, end.moved);
   ctx.save();
   ctx.lineCap = 'round';
   // Three passes, widest and darkest first: the core reads as hot because
@@ -10878,6 +10877,10 @@ const FORESHADOW = (() => {
 })();
 
 // ── STREAK: UT99-style multi-kill + spree announcements ───────────────────────
+// The title sits on the border wall and its small line just under it, because a
+// banner over the field covers what can hit you.
+const STREAK_BANNER_Y = CONFIG.hudHeight + 16;
+
 const STREAK = (() => {
   const MULTI_LABELS     = ['','','DOUBLE KILL','MULTI KILL','MEGA KILL','ULTRA KILL','MONSTER KILL'];
   const SPREE_THRESHOLDS = [
@@ -10939,7 +10942,7 @@ const STREAK = (() => {
     const fadeOut = Math.min(1, _overlay.timer / 0.32);
     const alpha   = Math.min(fadeIn, fadeOut);
     const scl     = 0.82 + 0.18 * fadeIn;
-    const cy      = CONFIG.canvasH * 0.38;
+    const cy      = STREAK_BANNER_Y;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -12795,8 +12798,9 @@ const CROW_SPRITE = { w: 20, h: 16 };
 
 // White is a persistent enemy kind (c.white), not just the entrance's
 // blink-white telegraph — drawCrow below picks this palette for both.
+// The normal crow's rim and highlight are light because its body is as dark as the floor.
 const CROW_PALETTES = {
-  normal: { body: '#141414', bodyHi: '#3A3A3A', feather: '#2A2A2A', edge: '#000000', beak: '#FFB400', beakHi: '#FFD966' },
+  normal: { body: '#141414', bodyHi: '#64708A', feather: '#2A2A2A', edge: '#A8B8CC', beak: '#FFB400', beakHi: '#FFD966' },
   white:  { body: '#E4E4E4', bodyHi: '#FFFFFF', feather: '#C8C8C8', edge: '#A8A8A8', beak: '#FF1F1F', beakHi: '#FF6A5A' },
 };
 
@@ -17657,6 +17661,8 @@ export const devHooks = {
   },
   player: () => player,
   crows: () => crows,
+  crowGrid: (kind, frame) => crowGrid(kind, frame),
+  streakBannerY: () => STREAK_BANNER_Y,
   skeletons: () => skeletons,
   mouse: () => mouse,
   /** Where the reticle is drawn, in canvas pixels. */
