@@ -648,6 +648,15 @@ describe('cover grows back', () => {
    * delay that lands mid-frame has actually elapsed by the time we look. */
   const seconds = (s: number): number => Math.ceil(s * ONE_SECOND) + 1;
 
+  /**
+   * Into a run with the ultimate already chosen. The pick is a ceremony that
+   * opens on its own timer, and a ceremony pauses the run, regrowth included.
+   * An idle archer braces, which runs that timer up to twice as fast, so half a
+   * minute of regrowth can meet it and read a sapling that never matured. After
+   * `go`, because a new run clears the pick.
+   */
+  const play = (): void => { g.go('playing'); g.setUltimateSlot('first'); };
+
   /** A tree the player is not standing on, so occupancy is not what is tested. */
   function findTree(): [number, number] {
     const tiles = g.tiles();
@@ -663,7 +672,7 @@ describe('cover grows back', () => {
   }
 
   it('takes a burnt tree back through a walkable sapling to a tree', () => {
-    g.go('playing');
+    play();
     g.generateMap('forest');
     g.respawnPlayer();
     expect(g.regrowth().active).toBe(true);
@@ -694,7 +703,7 @@ describe('cover grows back', () => {
   //
   // Occupancy has to mean "overlaps", not "is centred on".
   it('does not mature into the half of a body hanging over the next tile', () => {
-    g.go('playing');
+    play();
     g.generateMap('forest');
     g.respawnPlayer();
     const { tileSize, playerRadius } = g.config();
@@ -720,7 +729,7 @@ describe('cover grows back', () => {
   });
 
   it('matures it as soon as that body steps clear', () => {
-    g.go('playing');
+    play();
     g.generateMap('forest');
     g.respawnPlayer();
     const { tileSize } = g.config();
