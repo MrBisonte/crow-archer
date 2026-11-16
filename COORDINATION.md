@@ -4,10 +4,11 @@ Every session working this repo owns a row here. Keeping it current is not
 optional and not a courtesy: it is how several branches reach `origin` without
 losing each other's work.
 
-**Current round: `integration/round-13`, cut from `master` at `13994a7`.**
-Round 12 shipped as `v0.3.3` (PR #52): the fifth bastion tower and two blink
-fixes. Round 13 holds the refusal reasons and Alex's three refusal calls. Alex
-play-checked it 10-04 and signed off; its PR tags `v0.3.4`. That branch name is written here once; everything else
+**Current round: `integration/round-14`, cut from `master` at `df58016`.**
+Round 13 shipped as `v0.3.4` (PR #53): the refusal reasons and Alex's three
+refusal calls. Round 14 is open and holds `fix/satchel-fuse-knight-double-draw`,
+`fix/knight-spear-soldiers` and `fix/visual-read`. Alex gave the go for its PR
+on 11-16. The integration branch's name is written here once; everything else
 refers to "the current integration branch" so this file is the only thing that
 has to change when a round closes.
 
@@ -59,14 +60,16 @@ is one thing: `origin` stays clean, and `master` above all.
 ## The ledger
 
 `Head` is your branch tip, short SHA. `Base` is `current` if you are cut from
-`master` at `13994a7`, `STALE` otherwise. `In r13` is whether Merger has merged
+`master` at `df58016`, `STALE` otherwise. `In r14` is whether Merger has merged
 you into the integration branch yet. Merger maintains that column, not you.
 
-| Session | Branch | Task | Status | Head | Base | In r13 | Updated | Notes |
+| Session | Branch | Task | Status | Head | Base | In r14 | Updated | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `Merger` | `integration/round-13` | Assemble round 13; open the PR on Alex's word | `started` | `see tip` | current | n/a | 10-04 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `13994a7` (`v0.3.3`). Folded `fix/refusal-reasons` and `fix/refusal-tuning`. |
-| `Refusals` | `fix/refusal-reasons` | Every refusal outside a HUD chip says why | `finished` | `c5466a8` | `integration/round-12` `8646cf2` | **yes** | 10-04 | Session `local_aa25de04`, started by Merger. Cut from `integration/round-12` `f7b98bd` for `watchBlocked()`, rebased onto `8646cf2`. Checkout `labs/robinhood-refusal-reasons`. Ten bare refusals now carry a `BLOCKED` reason; the nine that a HUD chip counts stay quiet. New reasons: `NO BOMBS`, `NO ROOM AHEAD`, `NO TARGET IN RANGE`, `TOO MANY SHOTS IN THE AIR`, `CHARGE NOT READY`, `SPEAR NOT READY`. Each reason line reverted alone fails its own test. Gate: typecheck 0, 2409 tests / 91 files. Round 12 was signed off before this branch, so Merger picks round 12 or 13. Folded into round 13 by cherry-pick: `ee377ab` (code) and `9a5e9cd` (lessons); its two ledger commits targeted round 12's ledger, so this row moved by hand. Alex play-checked it 10-04 and signed off. |
-| `Refusal-calls` | `fix/refusal-tuning` | Alex's three refusal calls: reload, knight charge, spear | `finished` | `5961f9c` | current | **yes** | 10-04 | Session `local_aa25de04`. Cut from `integration/round-13` `bad4873`. Checkout `labs/robinhood-refusal-tuning`. Reload says `RELOADING` once per reload; the knight's charge gets a lane-D chip (new `dash` glyph, sixth slot like the sapper's) and keeps `CHARGE NOT READY`; an early spear press goes silent and `SPEAR NOT READY` is removed. Each changed line reverted alone fails its own test. Gate: typecheck 0, 2411 tests / 91 files. Alex play-checked it 10-04 and signed off. |
+| `Merger` | `integration/round-14` | Assemble round 14; open the PR on Alex's word | `started` | `see tip` | current | n/a | 11-16 | Session `local_ea47dfd7`, Merger + sole pusher. Cut from `master` `df58016` (`v0.3.4`). Folded `fix/satchel-fuse-knight-double-draw`, `fix/knight-spear-soldiers` and `fix/visual-read`. Alex's go for the round PR on 11-16. |
+| `Audit-fixes` | `fix/satchel-fuse-knight-double-draw` | Two render bugs from the 10-20 over-engineering audit: the satchel countdown and the knight effects drawn twice | `finished` | `41de458` | `master` `df58016` (`v0.3.4`) | **yes** | 10-20 | Cut from `master` after round 13 shipped. Local only, not pushed. `48a2a16`: the multiplayer satchel counted down from 5 against a 3 s fuse; its countdowns and blast ring now read the sim figures. `41de458`: `drawKnight` drew Whirlwind and the charge dash a second time over the knight-fx painters; the inline copies are removed. Each new test fails against the old code. Gate: typecheck 0, suite green. Folded into round 14 by merge; gate after the fold: typecheck 0, 2415 of 2415 tests across 92 files. Held for Alex's play-check. |
+| `Spear-soldiers` | `fix/knight-spear-soldiers` | The knight's spear swing damages soldiers; then the charge, the javelin and the fallback melee; then the shieldman's 30% shield | `finished` | `225c3c5` | `master` `df58016` (`v0.3.4`) | **yes** | 11-08 | Started by session `local_52554b4c`. Extended on Alex's word to the charge dash, the javelin and the pitchfork/broom, which also dealt soldiers 0, and then to "their shields should block 30%+ of normal damage", settled as "30% chance to block". Checkout `labs/robinhood-spear-soldiers`. Spear: one hit per half of the swing per soldier. Charge, javelin, fallback swing: one hit per attack per soldier, through `firstContact`. Every soldier hit carries a heading to the shieldman's guard. A blow with a heading that the guard does not stop is blocked on a roll under `shieldmanBlockChance` 0.3, for every hero; a blast or fire with no heading never is. `225c3c5` replaces the damage cut of `ea48386`. Each fix line reverted alone fails a test (18 + 6 reverts). Gate: typecheck 0, 2438 tests / 91 files, 5 of 5 runs. Folded into round 14 by merge of `7e80e76`; gate after the fold: typecheck 0, 2442 of 2442 tests across 92 files. Held for Alex's play-check: not played in real time. |
+| `Visual-read` | `fix/visual-read` | Three read fixes: the crow rim, the beam line, the streak banner | `finished` | `7f44e71` | `master` `df58016` (`v0.3.4`) | **yes** | 11-08 | Session `local_52554b4c`. Checkout `labs/robinhood-visual-read`. `397c5c6`: the crow rim. `726c5a0`: the lance starts past the wizard and ends on the line it hits. `89898f3`: the streak banner on the border wall. Run once in the browser, with the keys not held. typecheck 0, 2419 of 2419 tests on the branch. Folded into round 14 by merge of `066b02c`; gate after the fold: typecheck 0, 2450 of 2450 tests across 93 files. Alex chose the three fixes ("F1 F2 and F3"); held for his play-check, because no one has played them by hand. |
+| `Regrowth-test` | `fix/regrowth-test-ceremony` | The regrowth tests pin the ultimate pick, so a ceremony cannot pause them | `finished` | `cb35c79` | `master` `df58016` (`v0.3.4`) | **yes** | 11-16 | Session `local_ea47dfd7`, Merger. Round 14's CI (run 43964875306, PR #54) failed `takes a burnt tree back through a walkable sapling to a tree`: 6 (SAPLING) for 3 (TREE). The ultimate timer can cross zero inside the test's 31 s of play, the pick opens a chooser, and a chooser pauses regrowth. Seed sweep: 40 of 200 fail, 0 of 200 with the pick pinned. Checkout `labs/robinhood-deploy`. Folded into round 14 by merge of `cb35c79`; gate after the fold: typecheck 0, 2450 of 2450 tests across 93 files. |
 
 A `?` on a status means Merger inferred it from commit timing, not from the
 session saying so. Replace it with the real value.
@@ -79,6 +82,10 @@ nothing pays it, and `docs/talents.md` says the same.
 
 ## Landed
 
+- **`v0.3.4`** (`df58016`, PR #53): round 13. A refusal names its reason unless a
+  HUD chip counts it. The crossbow says `RELOADING` once per reload, the knight's
+  charge gets a HUD chip, and an early spear press stays silent. The README names
+  crow-archer as the source of flightdeck's telemetry.
 - **`v0.3.3`** (`13994a7`, PR #52): round 12. The fifth bastion tower, a refused
   blink names its reason, a new stage starts the blink ready, and the
   Integration PR section in the writing standard.

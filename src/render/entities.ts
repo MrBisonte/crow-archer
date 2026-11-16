@@ -10,6 +10,8 @@
 
 import { TEAM_COLOURS } from './palette';
 import { glowDotStamp } from './stamps';
+import { TICK_HZ } from '../sim/tick';
+import { DYNAMITE_BLAST_RADIUS, DYNAMITE_FUSE_TICKS, SATCHEL_ARM_FUSE_TICKS } from '../sim/weapons';
 
 const TAU = Math.PI * 2;
 
@@ -54,17 +56,13 @@ export interface CrowVisual {
 /** One home for the two side colours, shared with the character art and the HUD. */
 const TEAM_TINT: Readonly<Record<0 | 1, string>> = { 0: TEAM_COLOURS[0], 1: TEAM_COLOURS[1] };
 
-/** Matches the sim's blast radius. A ring you cannot trust is worse than none. */
-const BLAST_RADIUS = 90;
-
 /**
  * How long each countdown runs, in seconds. A ShotVisual carries only a
- * normalised fuse, so seconds cannot be derived from it alone — each has to
- * track its own weapon's fuse length in `src/sim/weapons.ts`, or the number
- * on screen counts down to the wrong moment.
+ * normalised fuse, so the length comes from the sim's own figure. A copy kept
+ * here counted the satchel down from 5 against a 3 s fuse.
  */
-const DYNAMITE_FUSE_SECONDS = 1.5;
-const SATCHEL_FUSE_SECONDS = 5;
+const DYNAMITE_FUSE_SECONDS = DYNAMITE_FUSE_TICKS / TICK_HZ;
+const SATCHEL_FUSE_SECONDS = SATCHEL_ARM_FUSE_TICKS / TICK_HZ;
 
 /**
  * A stable phase offset made from world position. Without one, every pickup on
@@ -184,7 +182,7 @@ function paintDynamite(ctx: CanvasRenderingContext2D, v: ShotVisual, loopT: numb
 function paintBlastRing(ctx: CanvasRenderingContext2D): void {
   ctx.globalAlpha = 0.15; ctx.strokeStyle = '#ff6600'; ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
-  ctx.beginPath(); ctx.arc(0, 0, BLAST_RADIUS, 0, TAU); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, DYNAMITE_BLAST_RADIUS, 0, TAU); ctx.stroke();
   ctx.setLineDash([]); ctx.globalAlpha = 1;
 }
 

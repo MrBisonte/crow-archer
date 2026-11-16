@@ -155,11 +155,25 @@ survival:
 |---|---|---|---|---|
 | Soldier archer (1 hp) | 0.30 s | 0.30 s | 0.28 s | 0.28 s |
 | Spearman (2 hp) | 1.50 s | 0.30 s | 0.30 s | 0.30 s |
-| Shieldman (4 hp) | 3.90 s | 1.50 s | 0.33 s | 0.57 s |
+| Shieldman (4 hp) | 3.90 s | 1.50 s | 0.33 s | 0.52 s |
 
 `wizBoltBodyDamage` is 2: a spearman falls to one bolt and a shieldman to two.
 It is the biggest single hit any hero lands on a body, which is what the
 highest damage row has to mean somewhere other than a boss fight.
+
+A shieldman's shield blocks a blow its guard does not stop, from the flank or
+from behind, on a roll under `shieldmanBlockChance`. The guard still stops a
+blow at its face every time. A blast or a fire has no heading and is never
+blocked, so earthshatter and the whirlwind land in full.
+
+| Figure | Value |
+|---|---|
+| `shieldmanBlockChance` | 0.3 |
+
+The table above is damage: the harness pins the roll to never block. With the
+roll live, the mean time to kill a shieldman over 100 seeds is 2.62 s for the
+wizard, 0.46 s for the archer and 0.59 s for the ranger. The wizard's slowest
+seed took 8.32 s.
 
 He is still the slowest of the three, and that is the design rather than a
 leftover. The archer and the ranger are click-limited, so their rate is theirs

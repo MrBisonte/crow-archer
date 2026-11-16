@@ -9,6 +9,8 @@ import {
   type ShotVisual,
 } from './entities';
 import { stamps } from './stamps';
+import { TICK_HZ } from '../sim/tick';
+import { SATCHEL_ARM_FUSE_TICKS } from '../sim/weapons';
 
 /**
  * One thing the code did to the context, in order. Property sets and method
@@ -205,6 +207,20 @@ describe('drawShot', () => {
         callsOf(dyn(fuse), 'quadraticCurveTo');
       expect(curves(0.2)).toHaveLength(2);
       expect(curves(0.2)[1]).not.toEqual(curves(0.8)[1]);
+    });
+  });
+
+  describe('satchel', () => {
+    // The bag carries only a normalised fuse, so the seconds on it come from
+    // the renderer's own copy of the fuse length. Pinned to the sim's figure:
+    // a copy that drifts counts down to the wrong moment.
+    it('counts down from the fuse the sim arms it with', () => {
+      const justArmed = recordShot({ flavour: 'satchel', fuse: 0.01 }, 0);
+      expect(textsOf(justArmed).at(-1)).toBe(String(Math.ceil(SATCHEL_ARM_FUSE_TICKS / TICK_HZ)));
+    });
+
+    it('shows no countdown before it is armed', () => {
+      expect(textsOf(recordShot({ flavour: 'satchel', fuse: 0 }, 0))).toEqual([]);
     });
   });
 });

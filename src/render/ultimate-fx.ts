@@ -956,3 +956,19 @@ export function paintFullAutoTrail(
   }
   ctx.restore();
 }
+
+/**
+ * The line THE BEAM is drawn along, given where the hero stands on the canvas and
+ * a unit aim.
+ *
+ * It starts `clearPx` out, because the lance is wide with a round cap and a start
+ * at his centre covers his whole sprite for as long as it burns. A wall nearer
+ * than that moves the start in, or the lance runs from behind the wall to its face.
+ * Both ends come from one origin, so the line is the line the tick hit along.
+ */
+export function beamLine(
+  x: number, y: number, nx: number, ny: number, clearPx: number, reach: number,
+): { x0: number; y0: number; x1: number; y1: number } {
+  const start = Math.min(clearPx, reach);
+  return { x0: x + nx * start, y0: y + ny * start, x1: x + nx * reach, y1: y + ny * reach };
+}
